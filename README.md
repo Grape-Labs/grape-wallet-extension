@@ -13,7 +13,7 @@ Grape Wallet currently includes:
 - Encrypted local vault with Web Crypto
 - Lock, unlock, idle auto-lock, and explicit lock action
 - Multi-wallet support with wallet switching
-- Built-in themes: comic, sunset, matrix, apple, aurora, champagne, liquid-chrome, obsidian
+- Built-in themes: grape, comic, sunset, matrix, apple, aurora, champagne, liquid-chrome, obsidian
 - SOL balance and SPL token holdings
 - Send SOL and SPL tokens
 - Native Jupiter-powered swaps

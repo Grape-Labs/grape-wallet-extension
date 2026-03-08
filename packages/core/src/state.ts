@@ -10,6 +10,7 @@ export const STORAGE_KEYS = {
 export type WalletSetupState = 'empty' | 'ready';
 export type GrapeNetwork = 'mainnet-beta' | 'devnet';
 export type GrapeTheme =
+  | 'grape'
   | 'comic'
   | 'sunset'
   | 'matrix'
@@ -20,6 +21,7 @@ export type GrapeTheme =
   | 'obsidian';
 
 export const SUPPORTED_THEMES = [
+  'grape',
   'comic',
   'sunset',
   'matrix',
@@ -99,6 +101,7 @@ export const DEFAULT_THEME: GrapeTheme = 'aurora';
 
 export function normalizeTheme(theme: unknown): GrapeTheme {
   switch (theme) {
+    case 'grape':
     case 'comic':
     case 'sunset':
     case 'matrix':

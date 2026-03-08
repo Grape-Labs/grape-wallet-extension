@@ -42,6 +42,7 @@ import { Connection, PublicKey } from '@solana/web3.js';
 
 import type { ApprovalRecord, CollectionHolding, TokenHolding } from '../shared/models';
 
+import { filterCollectibleTokens, sortWalletTokens } from '../shared/assets';
 import { ChromeStorageArea, permissionsStorage, sessionStorage, walletStateStorage } from '../shared/chrome';
 import {
   createJupiterSwapTransaction,
@@ -330,12 +331,13 @@ class WalletController {
           logoUri: shyftMetadata[parsed.mint as string]?.logoUri
         } satisfies TokenHolding;
       })
-      .filter((token) => Number(token.amount) > 0)
-      .sort((left, right) => Number(right.amount) - Number(left.amount));
+      .filter((token) => Number(token.amount) > 0);
+
+    const fungibleTokens = filterCollectibleTokens(tokens, collections);
 
     let pricing: Record<string, { usdPrice: number | null; priceChange24h: number | null }> = {};
     try {
-      pricing = await fetchJupiterPrices([JUPITER_SOL_MINT, ...tokens.map((token) => token.mint)]);
+      pricing = await fetchJupiterPrices([JUPITER_SOL_MINT, ...fungibleTokens.map((token) => token.mint)]);
     } catch {
       pricing = {};
     }
@@ -343,7 +345,7 @@ class WalletController {
     const nativeUsdPrice = pricing[JUPITER_SOL_MINT]?.usdPrice ?? null;
     const nativePriceChange24h = pricing[JUPITER_SOL_MINT]?.priceChange24h ?? null;
     const nativeValueUsd = nativeUsdPrice === null ? null : (lamports / 1_000_000_000) * nativeUsdPrice;
-    const pricedTokens = tokens.map((token) => {
+    const pricedTokens = fungibleTokens.map((token) => {
       const usdPrice = pricing[token.mint]?.usdPrice ?? null;
       return {
         ...token,
@@ -351,18 +353,15 @@ class WalletController {
         valueUsd: usdPrice === null ? null : Number(token.amount) * usdPrice,
         priceChange24h: pricing[token.mint]?.priceChange24h ?? null
       };
-    }).sort((left, right) => {
-      const leftValue = left.valueUsd ?? Number(left.amount);
-      const rightValue = right.valueUsd ?? Number(right.amount);
-      return rightValue - leftValue;
     });
+    const sortedTokens = sortWalletTokens(pricedTokens);
     const totalUsdValue = [nativeValueUsd, ...pricedTokens.map((token) => token.valueUsd ?? null)]
       .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
       .reduce((sum, value) => sum + value, 0);
 
     return {
       lamports,
-      tokens: pricedTokens,
+      tokens: sortedTokens,
       collections,
       totalUsdValue: Number.isFinite(totalUsdValue) ? totalUsdValue : null,
       nativePriceUsd: nativeUsdPrice,

@@ -17,9 +17,9 @@ import { PublicKey, type TransactionVersion, type Transaction, type VersionedTra
 
 import { GRAPE_WALLET_ADAPTER_ICON } from './icon';
 
-export type GrapeWalletAdapterName = 'Grape Wallet';
+export type GrapeWalletAdapterName = 'Grape';
 
-export const GRAPE_WALLET_NAME = 'Grape Wallet' as WalletName<GrapeWalletAdapterName>;
+export const GRAPE_WALLET_NAME = 'Grape' as WalletName<GrapeWalletAdapterName>;
 
 type GrapeProviderConnectOptions = {
   onlyIfTrusted?: boolean;
@@ -155,7 +155,7 @@ export class GrapeWalletAdapter extends BaseMessageSignerWalletAdapter<GrapeWall
         await provider.disconnect();
       }
     } catch (error) {
-      const wrapped = new WalletDisconnectionError(toErrorMessage(error, 'Failed to disconnect from Grape Wallet.'), error);
+      const wrapped = new WalletDisconnectionError(toErrorMessage(error, 'Failed to disconnect from Grape.'), error);
       this.emit('error', wrapped);
       throw wrapped;
     } finally {
@@ -238,7 +238,7 @@ export class GrapeWalletAdapter extends BaseMessageSignerWalletAdapter<GrapeWall
       const wrapped =
         error instanceof WalletPublicKeyError
           ? error
-          : new WalletConnectionError(toErrorMessage(error, 'Failed to connect to Grape Wallet.'), error);
+          : new WalletConnectionError(toErrorMessage(error, 'Failed to connect to Grape.'), error);
       this.emit('error', wrapped);
       throw wrapped;
     } finally {

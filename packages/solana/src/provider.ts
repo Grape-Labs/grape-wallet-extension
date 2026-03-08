@@ -20,16 +20,30 @@ function randomId(): string {
   return crypto.randomUUID();
 }
 
+function serializeForTransport(transaction: Transaction | VersionedTransaction): string {
+  if (transaction instanceof VersionedTransaction) {
+    return bytesToBase64(transaction.serialize());
+  }
+
+  return bytesToBase64(
+    transaction.serialize({
+      requireAllSignatures: false,
+      verifySignatures: false
+    })
+  );
+}
+
 export class GrapeInpageProvider {
   readonly isGrape = true;
-  readonly name = 'Grape Wallet';
+  readonly name = 'Grape';
   readonly transport: ProviderTransport;
   readonly origin: PageOrigin;
+  readonly providers: GrapeInpageProvider[];
 
   publicKey: PublicKey | null = null;
   isConnected = false;
 
-  private readonly listeners: {
+  private readonly eventListeners: {
     [K in keyof ProviderEventMap]: Set<ProviderEventMap[K]>;
   } = {
     connect: new Set(),
@@ -40,14 +54,15 @@ export class GrapeInpageProvider {
   constructor(transport: ProviderTransport, origin: PageOrigin) {
     this.transport = transport;
     this.origin = origin;
+    this.providers = [this];
   }
 
   on<K extends keyof ProviderEventMap>(event: K, listener: ProviderEventMap[K]): void {
-    this.listeners[event].add(listener);
+    this.eventListeners[event].add(listener);
   }
 
   off<K extends keyof ProviderEventMap>(event: K, listener: ProviderEventMap[K]): void {
-    this.listeners[event].delete(listener);
+    this.eventListeners[event].delete(listener);
   }
 
   once<K extends keyof ProviderEventMap>(event: K, listener: ProviderEventMap[K]): void {
@@ -56,6 +71,18 @@ export class GrapeInpageProvider {
       (listener as (...listenerArgs: Parameters<ProviderEventMap[K]>) => void)(...args);
     }) as ProviderEventMap[K];
     this.on(event, next);
+  }
+
+  addListener<K extends keyof ProviderEventMap>(event: K, listener: ProviderEventMap[K]): void {
+    this.on(event, listener);
+  }
+
+  removeListener<K extends keyof ProviderEventMap>(event: K, listener: ProviderEventMap[K]): void {
+    this.off(event, listener);
+  }
+
+  listeners<K extends keyof ProviderEventMap>(event: K): ProviderEventMap[K][] {
+    return Array.from(this.eventListeners[event]);
   }
 
   async connect(options?: { onlyIfTrusted?: boolean }): Promise<{ publicKey: PublicKey }> {
@@ -110,7 +137,7 @@ export class GrapeInpageProvider {
       method: 'signTransaction',
       origin: this.origin,
       params: {
-        transaction: bytesToBase64(transaction.serialize())
+        transaction: serializeForTransport(transaction)
       }
     });
 
@@ -121,7 +148,7 @@ export class GrapeInpageProvider {
   }
 
   async signAllTransactions<T extends Transaction | VersionedTransaction>(transactions: T[]): Promise<T[]> {
-    const serializedTransactions = transactions.map((transaction) => bytesToBase64(transaction.serialize()));
+    const serializedTransactions = transactions.map((transaction) => serializeForTransport(transaction));
     const result = await this.transport.request<{ transactions: string[] }>({
       id: randomId(),
       method: 'signAllTransactions',
@@ -146,7 +173,7 @@ export class GrapeInpageProvider {
       method: 'signAndSendTransaction',
       origin: this.origin,
       params: {
-        transaction: bytesToBase64(transaction.serialize())
+        transaction: serializeForTransport(transaction)
       }
     });
   }
@@ -165,11 +192,35 @@ export class GrapeInpageProvider {
       }
       return this.signMessage(message) as Promise<T>;
     }
+    if (args.method === 'signTransaction') {
+      const transaction = args.params?.transaction;
+      if (!(transaction instanceof Transaction) && !(transaction instanceof VersionedTransaction)) {
+        throw new Error('signTransaction requires a Transaction or VersionedTransaction.');
+      }
+      return this.signTransaction(transaction) as Promise<T>;
+    }
+    if (args.method === 'signAllTransactions') {
+      const transactions = args.params?.transactions;
+      if (
+        !Array.isArray(transactions) ||
+        transactions.some((transaction) => !(transaction instanceof Transaction) && !(transaction instanceof VersionedTransaction))
+      ) {
+        throw new Error('signAllTransactions requires an array of Transaction or VersionedTransaction values.');
+      }
+      return this.signAllTransactions(transactions as Array<Transaction | VersionedTransaction>) as Promise<T>;
+    }
+    if (args.method === 'signAndSendTransaction') {
+      const transaction = args.params?.transaction;
+      if (!(transaction instanceof Transaction) && !(transaction instanceof VersionedTransaction)) {
+        throw new Error('signAndSendTransaction requires a Transaction or VersionedTransaction.');
+      }
+      return this.signAndSendTransaction(transaction) as Promise<T>;
+    }
     throw new Error(`Unsupported provider request method: ${args.method}`);
   }
 
   private emit<K extends keyof ProviderEventMap>(event: K, ...args: Parameters<ProviderEventMap[K]>): void {
-    for (const listener of this.listeners[event]) {
+    for (const listener of this.eventListeners[event]) {
       (listener as (...listenerArgs: Parameters<ProviderEventMap[K]>) => void)(...args);
     }
   }

@@ -12,7 +12,6 @@ function injectInpageScript() {
   script.src = chrome.runtime.getURL('assets/inpage.js');
   script.type = 'module';
   (document.head || document.documentElement).appendChild(script);
-  script.remove();
 }
 
 function getFaviconUrl(): string | undefined {
@@ -52,4 +51,3 @@ port.onMessage.addListener((message) => {
     '*'
   );
 });
-

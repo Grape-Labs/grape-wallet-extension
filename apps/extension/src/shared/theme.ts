@@ -1,6 +1,7 @@
 import { DEFAULT_THEME, STORAGE_KEYS, normalizeTheme, type GrapeTheme } from '@grape/core';
 
 export const THEMES: Array<{ id: GrapeTheme; label: string }> = [
+  { id: 'grape', label: 'Grape' },
   { id: 'comic', label: 'Comic' },
   { id: 'sunset', label: 'Sunset' },
   { id: 'matrix', label: 'Matrix' },

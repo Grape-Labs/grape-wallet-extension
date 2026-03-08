@@ -44,7 +44,8 @@ const COMMON_SWAP_TOKENS = [
 ] as const;
 const SOLANA_LOGO_URL =
   'https://media.solana-cdn.com/image/width=100/https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/solana/info/logo.png';
-const GRAPE_LOGO_URL = chrome.runtime.getURL('icons/grape-avatar.png');
+const GRAPE_LOGO_URL = chrome.runtime.getURL('icons/verification-avatar.png');
+const GRAPE_THEME_LOGO_URL = chrome.runtime.getURL('icons/verification-128.png');
 
 function parseInitialView(): PopupView {
   const nextView = new URLSearchParams(window.location.search).get('view');
@@ -211,6 +212,26 @@ function TokenRow(props: { token: TokenHolding; onSelect: () => void }) {
   );
 }
 
+function AssetSkeletonRow() {
+  return (
+    <div className="token-item token-item-skeleton">
+      <div className="token-leading">
+        <div className="token-avatar skeleton-block skeleton-avatar" />
+        <div className="token-copy">
+          <div className="skeleton-block skeleton-line skeleton-line-title" />
+          <div className="token-subline">
+            <div className="skeleton-block skeleton-line skeleton-line-subtitle" />
+          </div>
+        </div>
+      </div>
+      <div className="token-amount-group">
+        <div className="skeleton-block skeleton-line skeleton-line-value" />
+        <div className="skeleton-block skeleton-line skeleton-line-subvalue" />
+      </div>
+    </div>
+  );
+}
+
 function CollectibleCard(props: { collection: CollectionHolding }) {
   const previewItems = props.collection.items.slice(0, 3);
   const coverImage = props.collection.imageUri ?? previewItems[0]?.imageUri;
@@ -294,6 +315,7 @@ function PopupPage() {
   const [swapError, setSwapError] = useState<string | null>(null);
   const [quotingSwap, setQuotingSwap] = useState(false);
   const [submittingSwap, setSubmittingSwap] = useState(false);
+  const [assetsLoading, setAssetsLoading] = useState(false);
 
   const surface = document.body.dataset.surface ?? 'page';
   const isPopupSurface = surface === 'popup';
@@ -302,14 +324,20 @@ function PopupPage() {
     const nextState = await sendRuntimeMessage<WalletStateResponse>({ type: 'wallet_get_state' });
     setState(nextState);
     if (nextState.wallet.setup === 'ready' && !nextState.session.locked) {
-      const nextAssets = await sendRuntimeMessage<WalletAssetsResponse>({ type: 'wallet_get_assets' });
-      setAssets(nextAssets);
+      setAssetsLoading(true);
+      try {
+        const nextAssets = await sendRuntimeMessage<WalletAssetsResponse>({ type: 'wallet_get_assets' });
+        setAssets(nextAssets);
+      } finally {
+        setAssetsLoading(false);
+      }
     } else {
       setAssets({
         lamports: null,
         tokens: [],
         collections: []
       });
+      setAssetsLoading(false);
     }
   };
 
@@ -650,8 +678,8 @@ function PopupPage() {
       <div className="unlock-welcome-shell">
         <Card className="unlock-welcome-card">
           <div className="unlock-welcome-brand">
-            <img className="unlock-welcome-logo" src={GRAPE_LOGO_URL} alt="Grape Wallet" />
-            <h2>Grape Wallet</h2>
+            <img className="unlock-welcome-logo" src={GRAPE_LOGO_URL} alt="Grape" />
+            <h2>Grape</h2>
           </div>
 
           <div className="unlock-welcome-form">
@@ -696,6 +724,11 @@ function PopupPage() {
     return (
       <>
         <Card className="wallet-home-card">
+          {wallet.selectedTheme === 'grape' ? (
+            <div className="wallet-home-brand-mark" aria-hidden="true">
+              <img src={GRAPE_THEME_LOGO_URL} alt="" />
+            </div>
+          ) : null}
           <div className="wallet-home-topbar">
             <div className="wallet-home-network">
               <StatusPill tone={wallet.selectedNetwork === 'devnet' ? 'warning' : 'success'}>{wallet.selectedNetwork}</StatusPill>
@@ -710,7 +743,7 @@ function PopupPage() {
 
           <div className="portfolio-copy">
             <div className="portfolio-label">Total Balance</div>
-            <div className="hero-balance">{portfolioValue}</div>
+            {assetsLoading ? <div className="skeleton-block skeleton-line skeleton-hero-balance" /> : <div className="hero-balance">{portfolioValue}</div>}
           </div>
 
           <div className="wallet-home-header compact wallet-home-header-compact">
@@ -762,41 +795,51 @@ function PopupPage() {
 
           <Tabs.Content value="tokens">
             <Card className="asset-panel-card">
-              <button type="button" className="token-row-button" onClick={() => openSend('sol')}>
-                <div className="token-item token-item-interactive">
-                  <div className="token-leading">
-                    <TokenAvatar token={{ symbol: 'SOL' }} fallbackLabel="S" sol />
-                    <div className="token-copy">
-                      <strong className="token-name">Solana</strong>
-                      <div className="token-subline">
-                        <span className="token-subtitle">{homeBalance}</span>
-                        {solChange ? (
-                          <span className={`token-change ${assets.nativePriceChange24h && assets.nativePriceChange24h < 0 ? 'negative' : 'positive'}`.trim()}>
-                            {solChange}
-                          </span>
-                        ) : null}
+              {assetsLoading ? (
+                <div className="token-list">
+                  <AssetSkeletonRow />
+                  <AssetSkeletonRow />
+                  <AssetSkeletonRow />
+                </div>
+              ) : (
+                <>
+                  <button type="button" className="token-row-button" onClick={() => openSend('sol')}>
+                    <div className="token-item token-item-interactive">
+                      <div className="token-leading">
+                        <TokenAvatar token={{ symbol: 'SOL' }} fallbackLabel="S" sol />
+                        <div className="token-copy">
+                          <strong className="token-name">Solana</strong>
+                          <div className="token-subline">
+                            <span className="token-subtitle">{homeBalance}</span>
+                            {solChange ? (
+                              <span className={`token-change ${assets.nativePriceChange24h && assets.nativePriceChange24h < 0 ? 'negative' : 'positive'}`.trim()}>
+                                {solChange}
+                              </span>
+                            ) : null}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="token-amount-group">
+                        <div className="token-amount">{solValue ?? homeBalance}</div>
+                        {solValue ? <div className="token-subtitle token-amount-subtitle">{homeBalance}</div> : null}
                       </div>
                     </div>
-                  </div>
-                  <div className="token-amount-group">
-                    <div className="token-amount">{solValue ?? homeBalance}</div>
-                    {solValue ? <div className="token-subtitle token-amount-subtitle">{homeBalance}</div> : null}
-                  </div>
-                </div>
-              </button>
+                  </button>
 
-              {assets.tokens.length === 0 ? (
+                  {assets.tokens.length === 0 ? (
                 <p className="muted">No SPL token balances found yet.</p>
               ) : (
-                <div className="token-list">
-                  {assets.tokens.map((token) => (
-                    <TokenRow
-                      key={`${token.mint}:${token.programId}`}
-                      token={token}
-                      onSelect={() => openSend(`${token.mint}:${token.programId}`)}
-                    />
-                  ))}
-                </div>
+                    <div className="token-list">
+                      {assets.tokens.map((token) => (
+                        <TokenRow
+                          key={`${token.mint}:${token.programId}`}
+                          token={token}
+                          onSelect={() => openSend(`${token.mint}:${token.programId}`)}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </>
               )}
             </Card>
           </Tabs.Content>
@@ -1165,18 +1208,20 @@ function PopupPage() {
                   <ChevronDown className="send-select-chevron" size={18} />
                 </div>
 
-                <input
-                  className="swap-leg-amount"
-                  value={swapAmount}
-                  onChange={(event) => {
-                    setSwapAmount(event.target.value);
-                    setSwapQuote(null);
-                    setSwapResult(null);
-                  }}
-                  placeholder="0"
-                  inputMode="decimal"
-                  aria-label="Swap amount"
-                />
+                <div className="swap-leg-value-row">
+                  <input
+                    className="swap-leg-amount"
+                    value={swapAmount}
+                    onChange={(event) => {
+                      setSwapAmount(event.target.value);
+                      setSwapQuote(null);
+                      setSwapResult(null);
+                    }}
+                    placeholder="0"
+                    inputMode="decimal"
+                    aria-label="Swap amount"
+                  />
+                </div>
               </div>
             </section>
 
@@ -1225,7 +1270,9 @@ function PopupPage() {
                   <ChevronDown className="send-select-chevron" size={18} />
                 </div>
 
-                <div className="swap-leg-quote">{quoteOutputValue}</div>
+                <div className="swap-leg-value-row">
+                  <div className="swap-leg-quote">{quoteOutputValue}</div>
+                </div>
               </div>
             </section>
           </div>

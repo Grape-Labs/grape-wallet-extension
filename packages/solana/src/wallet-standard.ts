@@ -1,4 +1,5 @@
 import { base64ToBytes, bytesToBase64 } from '@grape/core';
+import bs58 from 'bs58';
 
 import type { GrapeInpageProvider } from './provider';
 
@@ -28,7 +29,7 @@ export type WalletStandardAccount = {
 
 export type WalletStandardWallet = {
   version: '1.0.0';
-  name: 'Grape Wallet';
+  name: 'Grape';
   icon: string;
   chains: string[];
   features: Record<string, unknown>;
@@ -72,7 +73,7 @@ export function createWalletStandardWallet(
 
   const walletBase: Omit<WalletStandardWallet, 'accounts'> = {
     version: '1.0.0',
-    name: 'Grape Wallet',
+    name: 'Grape',
     icon: GRAPE_WALLET_ICON,
     chains,
     features: {
@@ -91,12 +92,12 @@ export function createWalletStandardWallet(
       },
       'standard:events': {
         version: '1.0.0',
-        on: (event: 'change', listener: () => void) => {
+        on: (event: 'change', listener: (properties: { accounts?: WalletStandardAccount[] }) => void) => {
           if (event !== 'change') {
             return () => {};
           }
 
-          const handleChange = () => listener();
+          const handleChange = () => listener({ accounts: getAccounts() });
           provider.on('accountChanged', handleChange);
           provider.on('disconnect', handleChange);
           return () => {
@@ -106,14 +107,18 @@ export function createWalletStandardWallet(
         }
       },
       'solana:signMessage': {
-        version: '1.0.0',
-        signMessage: async (...inputs: Array<{ message: Uint8Array }>) => {
+        version: '1.1.0',
+        signMessage: async (...inputs: Array<{ account: WalletStandardAccount; message: Uint8Array }>) => {
           const outputs = [];
           for (const input of inputs) {
+            if (input.account.address !== provider.publicKey?.toBase58()) {
+              throw new Error('Requested account does not match the active Grape account.');
+            }
             const signed = await provider.signMessage(input.message);
             outputs.push({
               signedMessage: input.message,
-              signature: signed.signature
+              signature: signed.signature,
+              signatureType: 'ed25519' as const
             });
           }
           return outputs;
@@ -121,9 +126,13 @@ export function createWalletStandardWallet(
       },
       'solana:signTransaction': {
         version: '1.0.0',
-        signTransaction: async (...inputs: Array<{ transaction: Uint8Array }>) => {
+        supportedTransactionVersions: ['legacy', 0] as const,
+        signTransaction: async (...inputs: Array<{ account: WalletStandardAccount; transaction: Uint8Array }>) => {
           const outputs = [];
           for (const input of inputs) {
+            if (input.account.address !== provider.publicKey?.toBase58()) {
+              throw new Error('Requested account does not match the active Grape account.');
+            }
             const signed = await provider.transport.request<{ transaction: string }>({
               id: crypto.randomUUID(),
               method: 'signTransaction',
@@ -141,9 +150,13 @@ export function createWalletStandardWallet(
       },
       'solana:signAndSendTransaction': {
         version: '1.0.0',
-        signAndSendTransaction: async (...inputs: Array<{ transaction: Uint8Array }>) => {
+        supportedTransactionVersions: ['legacy', 0] as const,
+        signAndSendTransaction: async (...inputs: Array<{ account: WalletStandardAccount; transaction: Uint8Array; chain: string }>) => {
           const outputs = [];
           for (const input of inputs) {
+            if (input.account.address !== provider.publicKey?.toBase58()) {
+              throw new Error('Requested account does not match the active Grape account.');
+            }
             const sent = await provider.transport.request<{ signature: string }>({
               id: crypto.randomUUID(),
               method: 'signAndSendTransaction',
@@ -153,7 +166,7 @@ export function createWalletStandardWallet(
               }
             });
             outputs.push({
-              signature: sent.signature
+              signature: bs58.decode(sent.signature)
             });
           }
           return outputs;
@@ -175,11 +188,20 @@ export function createWalletStandardWallet(
 export function registerWalletStandard(wallet: WalletStandardWallet): void {
   const register = ({ register: performRegister }: WalletStandardRegisterDetail) => performRegister(wallet);
 
-  window.dispatchEvent(new RegisterWalletEvent(register));
-  window.addEventListener('wallet-standard:app-ready', (event: Event) => {
-    const detail = (event as CustomEvent<WalletStandardRegisterDetail>).detail;
-    register(detail);
-  });
+  try {
+    window.dispatchEvent(new RegisterWalletEvent(register));
+  } catch (error) {
+    console.error('wallet-standard:register-wallet event could not be dispatched', error);
+  }
+
+  try {
+    window.addEventListener('wallet-standard:app-ready', (event: Event) => {
+      const detail = (event as CustomEvent<WalletStandardRegisterDetail>).detail;
+      register(detail);
+    });
+  } catch (error) {
+    console.error('wallet-standard:app-ready event listener could not be added', error);
+  }
 }
 
 function defineLegacyProvider(name: 'grape' | 'grapeSolana' | 'solana', provider: GrapeInpageProvider, overwrite = true) {
@@ -201,6 +223,38 @@ function defineLegacyProvider(name: 'grape' | 'grapeSolana' | 'solana', provider
   }
 }
 
+function attachToExistingLegacyProviderList(provider: GrapeInpageProvider) {
+  const existing = window.solana;
+  if (!existing || existing === provider || typeof existing !== 'object') {
+    return;
+  }
+
+  const existingWithProviders = existing as GrapeInpageProvider & { providers?: GrapeInpageProvider[] };
+  if (!Array.isArray(existingWithProviders.providers)) {
+    return;
+  }
+
+  const currentProviders = existingWithProviders.providers;
+  if (currentProviders.includes(provider)) {
+    return;
+  }
+
+  try {
+    Object.defineProperty(existingWithProviders, 'providers', {
+      configurable: true,
+      enumerable: false,
+      writable: true,
+      value: [...currentProviders, provider]
+    });
+  } catch {
+    try {
+      existingWithProviders.providers = [...currentProviders, provider];
+    } catch {
+      // Avoid mutating another wallet object if it rejects extension.
+    }
+  }
+}
+
 export function initializeWalletStandard(
   provider: GrapeInpageProvider,
   chains: string[] = Object.values(SOLANA_CHAIN_IDS)
@@ -210,5 +264,6 @@ export function initializeWalletStandard(
   defineLegacyProvider('grape', provider);
   defineLegacyProvider('grapeSolana', provider);
   defineLegacyProvider('solana', provider, false);
+  attachToExistingLegacyProviderList(provider);
   return wallet;
 }
