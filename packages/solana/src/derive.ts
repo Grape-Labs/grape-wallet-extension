@@ -20,6 +20,14 @@ export type ImportedSolanaPrivateKeyAccount = {
   publicKey: string;
 };
 
+export type ExportedSoftwareWalletSecret = {
+  kind: 'mnemonic' | 'private-key';
+  publicKey: string;
+  derivationPath: string;
+  privateKeyBase58: string;
+  mnemonic?: string;
+};
+
 export function deriveSolanaAccount0(mnemonic: string): DerivedSolanaAccount {
   const normalizedMnemonic = normalizeMnemonic(mnemonic);
   if (!validateWalletMnemonic(normalizedMnemonic)) {
@@ -74,6 +82,31 @@ export function resolveSolanaVaultSecret(secret: VaultSecret): Keypair {
   }
 
   return importSolanaPrivateKey(secret.secretKey).keypair;
+}
+
+export function exportSolanaSoftwareWalletSecret(secret: VaultSecret): ExportedSoftwareWalletSecret {
+  if (secret.kind === 'mnemonic') {
+    const derived = deriveSolanaAccount0(secret.mnemonic);
+    return {
+      kind: 'mnemonic',
+      publicKey: derived.publicKey,
+      derivationPath: derived.derivationPath,
+      privateKeyBase58: bs58.encode(derived.keypair.secretKey),
+      mnemonic: derived.mnemonic
+    };
+  }
+
+  if (secret.kind === 'private-key') {
+    const imported = importSolanaPrivateKey(secret.secretKey);
+    return {
+      kind: 'private-key',
+      publicKey: imported.publicKey,
+      derivationPath: imported.derivationPath,
+      privateKeyBase58: bs58.encode(imported.keypair.secretKey)
+    };
+  }
+
+  throw new Error('Hardware-backed wallets cannot be exported.');
 }
 
 function decodePrivateKey(privateKey: string): Uint8Array {

@@ -54,8 +54,17 @@ function createManifestPlugin(mainnetRpcUrl: string): Plugin {
           type: 'module'
         },
         options_page: 'options.html',
-        permissions: ['storage'],
-        host_permissions: [toHostPermission(mainnetRpcUrl), 'https://api.devnet.solana.com/*'],
+        side_panel: {
+          default_path: 'sidepanel.html'
+        },
+        permissions: ['storage', 'sidePanel'],
+        host_permissions: [
+          toHostPermission(mainnetRpcUrl),
+          'https://api.devnet.solana.com/*',
+          'https://lite-api.jup.ag/*',
+          'https://api.jup.ag/*',
+          'https://api.shyft.to/*'
+        ],
         content_scripts: [
           {
             matches: ['<all_urls>'],
@@ -107,6 +116,8 @@ export default defineConfig(({ mode }) => {
       rollupOptions: {
         input: {
           popup: resolve(extensionRoot, 'popup.html'),
+          wallet: resolve(extensionRoot, 'wallet.html'),
+          sidepanel: resolve(extensionRoot, 'sidepanel.html'),
           onboarding: resolve(extensionRoot, 'onboarding.html'),
           unlock: resolve(extensionRoot, 'unlock.html'),
           approval: resolve(extensionRoot, 'approval.html'),

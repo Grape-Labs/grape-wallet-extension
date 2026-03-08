@@ -12,6 +12,21 @@ function UnlockPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
 
+  function resolveNextPath() {
+    const redirect = new URLSearchParams(window.location.search).get('redirect');
+    return redirect?.trim() ? redirect : 'wallet.html';
+  }
+
+  function handleUnlockSuccess() {
+    const surface = document.body.dataset.surface;
+    if (surface === 'popup') {
+      closeCurrentWindow();
+      return;
+    }
+
+    window.location.href = chrome.runtime.getURL(resolveNextPath());
+  }
+
   return (
     <PageShell title="Unlock" subtitle="Enter your password to open your wallet.">
       <Card title="Wallet locked">
@@ -26,7 +41,7 @@ function UnlockPage() {
                   type: 'wallet_unlock',
                   password
                 });
-                closeCurrentWindow();
+                handleUnlockSuccess();
               } catch (nextError) {
                 setError(nextError instanceof Error ? nextError.message : 'Unable to unlock wallet.');
               }

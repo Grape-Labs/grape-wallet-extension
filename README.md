@@ -1,102 +1,206 @@
 # Grape Wallet
 
-Chromium-first Solana browser extension wallet MVP built as a pnpm workspace.
+Chromium-first Solana wallet extension built as a `pnpm` workspace with Manifest V3, React, TypeScript, Wallet Standard support, and a thin legacy injected provider layer.
 
-## Verified standards references
+## What It Does
 
-Implementation was aligned against official sources before coding:
+Grape Wallet currently includes:
 
-- Chrome Extensions Manifest V3 manifest reference: https://developer.chrome.com/docs/extensions/reference/manifest
-- Chrome extension service worker basics: https://developer.chrome.com/docs/extensions/develop/concepts/service-workers/basics
-- Wallet Standard official repository: https://github.com/wallet-standard/wallet-standard
-- Solana Wallet Standard official repository: https://github.com/anza-xyz/wallet-standard
+- Create a new 12-word Solana wallet
+- Import from mnemonic
+- Import from private key
+- Import Ledger accounts over WebHID
+- Encrypted local vault with Web Crypto
+- Lock, unlock, idle auto-lock, and explicit lock action
+- Multi-wallet support with wallet switching
+- Built-in themes: comic, sunset, matrix, apple, aurora, champagne, liquid-chrome, obsidian
+- SOL balance and SPL token holdings
+- Send SOL and SPL tokens
+- Native Jupiter-powered swaps
+- Receive flow with QR code and copy address
+- Saved recent recipients
+- Connect/sign approvals for dApps
+- Wallet Standard registration
+- Legacy injected provider compatibility with `window.grape`
+- Popup, expanded tab view, side panel, onboarding, unlock, approval, send, and settings surfaces
+- Export for software wallets
 
-## Workspace
+## Standards And Official References
+
+The implementation was aligned against official sources:
+
+- Chrome Extensions Manifest V3:
+  https://developer.chrome.com/docs/extensions/reference/manifest
+- Chrome extension service worker basics:
+  https://developer.chrome.com/docs/extensions/develop/concepts/service-workers/basics
+- Chrome side panel API:
+  https://developer.chrome.com/docs/extensions/reference/api/sidePanel
+- Wallet Standard:
+  https://github.com/wallet-standard/wallet-standard
+- Solana Wallet Standard:
+  https://github.com/anza-xyz/wallet-standard
+
+## Workspace Layout
 
 ```text
-apps/extension      MV3 extension app, React pages, background worker, content/inpage bridge
-packages/core       Vault crypto, storage models, permissions, approval state, typed messages
-packages/solana     Mnemonic/account derivation, signing, transaction summaries, provider adapters
-packages/wallet-adapter Dedicated Solana wallet-adapter package for dApps
-packages/ui         Shared React UI primitives
+apps/extension
+  MV3 extension app, React pages, background worker, content script, inpage provider
+
+packages/core
+  Vault crypto, storage models, permissions, approval state, typed runtime contracts
+
+packages/solana
+  Mnemonic/private-key derivation, Ledger support, signing, transaction helpers, provider logic
+
+packages/ui
+  Shared UI primitives
+
+packages/wallet-adapter
+  Dedicated @grape/wallet-adapter package for dApps
 ```
 
-## Package choices
+## Tech Choices
 
-- `react` + `vite`: lightweight multi-entry build for popup, onboarding, unlock, approval, options, background, content script, and inpage script.
-- `@scure/bip39`: maintained mnemonic generation and validation.
-- `micro-ed25519-hdkey`: browser-safe Solana SLIP-0010 account derivation at `m/44'/501'/0'/0'`.
-- `@solana/web3.js`: Solana RPC, keypair, transaction serialization, and submission.
-- `tweetnacl`: detached message signatures for `signMessage`.
-- `zod`: typed runtime validation for background/provider messaging.
-- `@solana/wallet-adapter-base`: dedicated wallet-adapter integration surface for dApps that want an explicit Grape adapter.
-- Web Crypto API: PBKDF2 key derivation and AES-GCM vault encryption.
+- `react` + `vite`
+  Multi-entry extension build without Next.js
+- `@solana/web3.js`
+  Solana RPC, transactions, keypairs, and account utilities
+- `@scure/bip39`
+  Mnemonic generation and validation
+- `micro-ed25519-hdkey`
+  Solana derivation path support for `m/44'/501'/0'/0'`
+- `zod`
+  Runtime-validated typed messaging
+- `qrcode`
+  Receive QR generation
+- Jupiter Price API V3 and Jupiter Swap API
+  priced assets and native wallet swap execution
+- Shyft Wallet API
+  optional token metadata, symbols, and logos for wallet assets
+- `@radix-ui/react-dropdown-menu` and `@radix-ui/react-tabs`
+  Lightweight UI primitives
+- `lucide-react`
+  Extension UI icon set
+- Web Crypto API
+  PBKDF2 + AES-GCM encryption for the vault
 
-## MVP features
+## Prerequisites
 
-- Create a 12-word mnemonic wallet and derive account 0.
-- Import a mnemonic wallet.
-- Encrypt mnemonic secrets at rest with PBKDF2 + AES-GCM.
-- Popup, onboarding, unlock, approval, and options pages.
-- Background service worker, content script, and inpage provider injection.
-- Per-origin connection approvals and site revocation.
-- `connect`, `disconnect`, `signMessage`, `signTransaction`, `signAllTransactions`, `signAndSendTransaction`.
-- Wallet Standard registration plus a thin legacy injected provider layer with `isGrape`.
-- Dedicated `@grape/wallet-adapter` package for explicit wallet-adapter integration.
-- Network switch between `devnet` and `mainnet-beta`.
-- Balance fetch for the active account.
-- Idle auto-lock and explicit lock action.
+- Node.js 20+
+- `pnpm` 10+
+- Chrome or another Chromium browser
 
-## Scripts
+## Setup
+
+Install dependencies from the repo root:
 
 ```bash
 pnpm install
+```
+
+Create a local environment file:
+
+```bash
+cp .env.example .env
+```
+
+Set your mainnet RPC endpoint in `.env`:
+
+```bash
+VITE_GRAPE_MAINNET_RPC_URL=https://your-mainnet-rpc.example.com/?api-key=replace-me
+VITE_GRAPE_JUP_API_KEY=your-jupiter-api-key
+VITE_GRAPE_SHYFT_API_KEY=your-shyft-api-key
+```
+
+Notes:
+
+- `.env` is ignored by Git
+- this keeps the RPC URL out of GitHub, but not out of the shipped extension bundle
+- if the RPC key must be hidden from end users, use a backend/proxy instead of a client-side build variable
+- Jupiter pricing uses `api.jup.ag` when `VITE_GRAPE_JUP_API_KEY` is set and falls back to `lite-api.jup.ag` otherwise
+- Shyft metadata uses `wallet/all_tokens` to enrich wallet tokens with names, symbols, and logos when `VITE_GRAPE_SHYFT_API_KEY` is set
+
+## Scripts
+
+Run these from the repo root:
+
+```bash
 pnpm lint
 pnpm typecheck
 pnpm test
 pnpm build
 ```
 
-## Environment
-
-Create a repo-root `.env` file from `.env.example`:
+For rebuild-on-change during extension development:
 
 ```bash
-cp .env.example .env
+pnpm dev
 ```
 
-Set your custom mainnet RPC endpoint:
+## Build The Extension
+
+Create the unpacked build:
 
 ```bash
-VITE_GRAPE_MAINNET_RPC_URL=https://your-mainnet-rpc.example.com/?api-key=replace-me
+pnpm build
 ```
 
-Notes:
+The extension output is written to:
 
-- `.env` is ignored by Git.
-- The endpoint is hidden from the repository, but not from end users of the extension. Browser extensions ship client-side code, so a determined user can inspect the built bundle and recover the RPC URL.
-- If you need the RPC fully hidden from end users, you need a backend/proxy rather than a build-time `.env`.
+```text
+apps/extension/dist
+```
 
-## Load unpacked in Chrome
+## Load Unpacked In Chrome
 
-1. Run `pnpm build`.
-2. Open `chrome://extensions`.
-3. Enable Developer Mode.
-4. Click Load unpacked.
-5. Select `apps/extension/dist`.
+1. Run `pnpm build`
+2. Open `chrome://extensions`
+3. Enable `Developer mode`
+4. Click `Load unpacked`
+5. Select `apps/extension/dist`
 
-## Development notes
+If you make changes:
 
-- Popup entry: `apps/extension/popup.html`
-- Background worker: `apps/extension/src/background/index.ts`
-- Content script: `apps/extension/src/content-script/index.ts`
-- Injected provider: `apps/extension/src/inpage/index.ts`
-- Wallet-adapter package: `packages/wallet-adapter`
-- Build output: `apps/extension/dist`
+1. rebuild with `pnpm build` or run `pnpm dev`
+2. go back to `chrome://extensions`
+3. click `Reload` on Grape Wallet
 
-## Using `@grape/wallet-adapter`
+If Chrome keeps stale icons or stale assets cached, remove the extension and load unpacked again from `apps/extension/dist`.
 
-For dApps that already use `@solana/wallet-adapter-react`, import the dedicated adapter:
+## First Run
+
+After loading the extension:
+
+1. Click the Grape Wallet extension icon
+2. Create a new wallet or import an existing one
+3. Set your password
+4. Back up the recovery phrase if you created/imported a mnemonic wallet
+5. Switch network between `devnet` and `mainnet-beta` as needed
+
+You can also open the wallet in:
+
+- the expanded browser tab view
+- the Chrome side panel
+
+Those actions are available from the wallet menu.
+
+## dApp Integration
+
+Grape exposes:
+
+- Wallet Standard registration for modern dApps
+- a legacy injected provider for compatibility
+
+Legacy compatibility surfaces include:
+
+- `window.grape`
+- `window.grapeSolana`
+- `window.solana` when no other injected wallet already owns that slot
+- `isGrape = true`
+
+### Dedicated Wallet Adapter
+
+This repo also includes a dedicated workspace package:
 
 ```ts
 import { GrapeWalletAdapter } from '@grape/wallet-adapter';
@@ -104,25 +208,116 @@ import { GrapeWalletAdapter } from '@grape/wallet-adapter';
 const wallets = [new GrapeWalletAdapter()];
 ```
 
-The adapter detects the injected `window.grape` provider, presents itself as `Grape Wallet`, and supports:
+The package source lives in:
 
-- `connect`
-- `disconnect`
-- `signMessage`
-- `signTransaction`
-- `signAllTransactions`
+```text
+packages/wallet-adapter
+```
 
-## Security notes
+If you want external dApps to install it with `npm` or `pnpm`, publish that package to npm.
 
-- Mnemonics are never written to `localStorage`.
-- Vault data is stored encrypted in `chrome.storage.local`.
-- Signing is never auto-approved.
-- Approval UI shows origin and site favicon when available.
-- Transaction approval warns on unknown programs and incomplete parsing cases.
-- Manifest V3 CSP stays self-hosted with no remote code execution.
+## Security Model
 
-## Current MVP tradeoffs
+Current protections:
 
-- The extension tracks an unlocked session state, but signing still asks for the password in the approval window. This avoids persisting a decrypted signer across MV3 worker suspension.
-- Transaction parsing is intentionally conservative. Unknown programs are warned, not decoded.
-- The derivation library is browser-safe and functional, but npm currently marks it deprecated. It should be swapped once a verified browser-safe maintained replacement is selected.
+- wallet secrets are encrypted at rest with Web Crypto
+- plaintext secrets are not stored in `localStorage`
+- connection approval is required per origin
+- signing approval is required per request
+- explicit lock and idle auto-lock are implemented
+- approval UI shows the requesting origin and request details
+- strict MV3-compatible CSP, no remote code execution
+
+Important tradeoffs:
+
+- this has not been externally security-audited
+- browser extension wallets always carry extension/runtime attack surface
+- transaction parsing is intentionally conservative and may warn on unknown programs
+- Ledger support is present, but message signing is intentionally not supported in this MVP
+- export is only available for software wallets, never Ledger
+
+Practical guidance:
+
+- reasonable for development, devnet, and low-risk testing
+- not yet something to treat as production-hardened custody for meaningful funds
+
+## Current Feature Summary
+
+### Wallet management
+
+- create wallet
+- import mnemonic
+- import private key
+- import Ledger
+- add more wallets
+- switch between wallets
+- export mnemonic/private key for software wallets
+- switch between built-in visual themes
+
+### Assets
+
+- view active public key
+- view SOL balance
+- view SPL token holdings
+- send SOL
+- send SPL tokens
+- swap supported assets through Jupiter on mainnet-beta
+- receive via address QR code
+
+### dApp flows
+
+- connect / disconnect
+- per-origin permissions
+- sign message
+- sign transaction
+- sign all transactions
+- sign and send transaction
+
+### Extension surfaces
+
+- popup
+- expanded wallet tab
+- side panel
+- onboarding
+- unlock
+- approval
+- send
+- options/settings
+- background service worker
+- content script
+- inpage provider injection
+
+## Testing
+
+The repo includes tests for:
+
+- vault encryption
+- permissions
+- approval state
+- typed message routing
+- provider behavior
+- derivation/import flows
+- transfer helpers
+
+Run all tests with:
+
+```bash
+pnpm test
+```
+
+## Key Paths
+
+```text
+apps/extension/src/background/index.ts
+apps/extension/src/content-script/index.ts
+apps/extension/src/inpage/index.ts
+apps/extension/src/pages/popup/main.tsx
+apps/extension/src/pages/options/main.tsx
+packages/core/src
+packages/solana/src
+packages/wallet-adapter/src
+```
+
+## Status
+
+This is an MVP extension wallet with real signing, approvals, send/receive, import/export, Ledger import, and dApp connectivity. The architecture is intentionally modular and testable, but the project still needs deeper security hardening and production-readiness work before it should be trusted with serious funds.

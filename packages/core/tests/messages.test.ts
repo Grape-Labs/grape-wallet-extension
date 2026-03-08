@@ -39,4 +39,28 @@ describe('message routing contracts', () => {
 
     expect(message.type).toBe('approval_respond');
   });
+
+  it('validates swap runtime messages used by the wallet popup', () => {
+    const quoteMessage = runtimeMessageSchema.parse({
+      type: 'wallet_get_swap_quote',
+      amount: '1.25',
+      slippageBps: 50,
+      inputAsset: { kind: 'sol' },
+      outputMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
+    });
+
+    const executeMessage = runtimeMessageSchema.parse({
+      type: 'wallet_execute_swap',
+      quoteResponse: {
+        inputMint: 'So11111111111111111111111111111111111111112',
+        inAmount: '1250000000',
+        outputMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+        outAmount: '1234000',
+        slippageBps: 50
+      }
+    });
+
+    expect(quoteMessage.type).toBe('wallet_get_swap_quote');
+    expect(executeMessage.type).toBe('wallet_execute_swap');
+  });
 });

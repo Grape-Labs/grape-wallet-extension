@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { migrateWalletState, rememberWalletRecipient, type WalletProfile } from '../src/state';
+import { migrateWalletState, normalizeTheme, rememberWalletRecipient, type WalletProfile } from '../src/state';
 
 const vaultRecord = {
   version: 1 as const,
@@ -42,6 +42,7 @@ describe('wallet state', () => {
     });
 
     expect(migrated.wallets[0]?.recentRecipients).toEqual([]);
+    expect(migrated.selectedTheme).toBe('aurora');
   });
 
   it('stores recent recipients uniquely and most-recent-first', () => {
@@ -67,5 +68,12 @@ describe('wallet state', () => {
 
     expect(deduped.recentRecipients.map((recipient) => recipient.address)).toEqual(['old-address', 'new-address']);
     expect(deduped.recentRecipients[0]?.lastUsedAt).toBe(3);
+  });
+
+  it('maps removed themes to the closest supported theme', () => {
+    expect(normalizeTheme('modern')).toBe('aurora');
+    expect(normalizeTheme('space')).toBe('liquid-chrome');
+    expect(normalizeTheme('dark')).toBe('obsidian');
+    expect(normalizeTheme('light')).toBe('champagne');
   });
 });

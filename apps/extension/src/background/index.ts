@@ -24,6 +24,7 @@ import {
   buildSolTransferTransaction,
   buildSplTokenTransferTransaction,
   estimateLegacyTransactionFee,
+  exportSolanaSoftwareWalletSecret,
   resolveSolanaVaultSecret,
   parseDecimalAmount,
   signAndSendLedgerTransaction,
@@ -39,16 +40,28 @@ import {
 } from '@grape/solana';
 import { Connection, PublicKey } from '@solana/web3.js';
 
-import type { ApprovalRecord, TokenHolding } from '../shared/models';
+import type { ApprovalRecord, CollectionHolding, TokenHolding } from '../shared/models';
 
 import { ChromeStorageArea, permissionsStorage, sessionStorage, walletStateStorage } from '../shared/chrome';
+import {
+  createJupiterSwapTransaction,
+  fetchJupiterPrices,
+  fetchJupiterQuote,
+  JUPITER_SOL_MINT,
+  type JupiterQuoteResponse
+} from '../shared/jupiter';
 import { getRpcEndpoint } from '../shared/rpc';
+import { fetchShyftCollections, fetchShyftWalletTokens, hasShyftApiKey } from '../shared/shyft';
 
 const approvalsStorage = new ChromeStorageArea<Record<string, ApprovalRecord>>(chrome.storage.local, STORAGE_KEYS.approvals, {});
 const TOKEN_PROGRAM_IDS = [
   'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
   'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb'
 ] as const;
+const KNOWN_TOKEN_SYMBOLS: Record<string, string> = {
+  [JUPITER_SOL_MINT]: 'SOL',
+  EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v: 'USDC'
+};
 
 type PendingResolver = {
   resolve: (value: unknown) => void;
@@ -225,6 +238,15 @@ class WalletController {
     return this.getStateResponse();
   }
 
+  async setTheme(theme: import('@grape/core').GrapeTheme) {
+    const walletState = await this.getWalletState();
+    await walletStateStorage.set({
+      ...walletState,
+      selectedTheme: theme
+    });
+    return this.getStateResponse();
+  }
+
   async selectWallet(walletId: string) {
     const walletState = await this.getWalletState();
     const selectedWallet = walletState.wallets.find((wallet) => wallet.id === walletId);
@@ -270,14 +292,23 @@ class WalletController {
 
     const owner = new PublicKey(activeAccount.publicKey);
     const connection = new Connection(getRpcEndpoint(walletState.selectedNetwork), 'confirmed');
-    const [lamports, ...tokenResponses] = await Promise.all([
+    const [lamports, shyftMetadataResult, shyftCollectionsResult, ...tokenResponses] = await Promise.all([
       connection.getBalance(owner),
+      hasShyftApiKey()
+        ? fetchShyftWalletTokens(walletState.selectedNetwork, activeAccount.publicKey).catch(() => ({}))
+        : Promise.resolve({}),
+      hasShyftApiKey()
+        ? fetchShyftCollections(walletState.selectedNetwork, activeAccount.publicKey).catch(() => [])
+        : Promise.resolve([]),
       ...TOKEN_PROGRAM_IDS.map((programId) =>
         connection.getParsedTokenAccountsByOwner(owner, {
           programId: new PublicKey(programId)
         })
       )
     ]);
+
+    const shyftMetadata = shyftMetadataResult as Record<string, { name?: string; symbol?: string; logoUri?: string }>;
+    const collections = shyftCollectionsResult as CollectionHolding[];
 
     const tokens = tokenResponses
       .flatMap((response) => response.value)
@@ -293,15 +324,50 @@ class WalletController {
           mint: parsed.mint as string,
           amount: tokenAmount.uiAmountString ?? tokenAmount.amount,
           decimals: tokenAmount.decimals,
-          programId: accountInfo.account.owner.toBase58()
+          programId: accountInfo.account.owner.toBase58(),
+          name: shyftMetadata[parsed.mint as string]?.name,
+          symbol: shyftMetadata[parsed.mint as string]?.symbol ?? KNOWN_TOKEN_SYMBOLS[parsed.mint as string],
+          logoUri: shyftMetadata[parsed.mint as string]?.logoUri
         } satisfies TokenHolding;
       })
       .filter((token) => Number(token.amount) > 0)
       .sort((left, right) => Number(right.amount) - Number(left.amount));
 
+    let pricing: Record<string, { usdPrice: number | null; priceChange24h: number | null }> = {};
+    try {
+      pricing = await fetchJupiterPrices([JUPITER_SOL_MINT, ...tokens.map((token) => token.mint)]);
+    } catch {
+      pricing = {};
+    }
+
+    const nativeUsdPrice = pricing[JUPITER_SOL_MINT]?.usdPrice ?? null;
+    const nativePriceChange24h = pricing[JUPITER_SOL_MINT]?.priceChange24h ?? null;
+    const nativeValueUsd = nativeUsdPrice === null ? null : (lamports / 1_000_000_000) * nativeUsdPrice;
+    const pricedTokens = tokens.map((token) => {
+      const usdPrice = pricing[token.mint]?.usdPrice ?? null;
+      return {
+        ...token,
+        priceUsd: usdPrice,
+        valueUsd: usdPrice === null ? null : Number(token.amount) * usdPrice,
+        priceChange24h: pricing[token.mint]?.priceChange24h ?? null
+      };
+    }).sort((left, right) => {
+      const leftValue = left.valueUsd ?? Number(left.amount);
+      const rightValue = right.valueUsd ?? Number(right.amount);
+      return rightValue - leftValue;
+    });
+    const totalUsdValue = [nativeValueUsd, ...pricedTokens.map((token) => token.valueUsd ?? null)]
+      .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+      .reduce((sum, value) => sum + value, 0);
+
     return {
       lamports,
-      tokens
+      tokens: pricedTokens,
+      collections,
+      totalUsdValue: Number.isFinite(totalUsdValue) ? totalUsdValue : null,
+      nativePriceUsd: nativeUsdPrice,
+      nativeValueUsd,
+      nativePriceChange24h
     };
   }
 
@@ -309,6 +375,37 @@ class WalletController {
     const permissions = await permissionsStorage.get();
     await permissionsStorage.set(revokeOriginPermissions(permissions, origin));
     return this.getStateResponse();
+  }
+
+  async exportWalletSecret(password: string) {
+    const { selectedWallet } = await this.ensureReadyWallet();
+    const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
+    if (!activeAccount) {
+      throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
+    }
+
+    if (selectedWallet.signer.kind !== 'software') {
+      throw new RpcError('EXPORT_UNAVAILABLE', 'Hardware wallets cannot be exported from Grape Wallet.');
+    }
+
+    const secret = await unlockVaultRecord(selectedWallet.vault, password).catch(() => {
+      throw new RpcError('INVALID_PASSWORD', 'Password is incorrect.');
+    });
+    const exported = exportSolanaSoftwareWalletSecret(secret);
+
+    if (exported.publicKey !== activeAccount.publicKey) {
+      throw new RpcError('EXPORT_FAILED', 'Exported wallet does not match the selected account.');
+    }
+
+    return {
+      walletId: selectedWallet.id,
+      walletName: selectedWallet.name,
+      publicKey: exported.publicKey,
+      derivationPath: exported.derivationPath,
+      kind: exported.kind,
+      privateKeyBase58: exported.privateKeyBase58,
+      mnemonic: exported.mnemonic
+    };
   }
 
   async sendTransfer(input: { recipient: string; amount: string; password?: string; asset: SendAsset }) {
@@ -381,6 +478,91 @@ class WalletController {
       amount: input.amount,
       asset: input.asset,
       network: walletState.selectedNetwork
+    };
+  }
+
+  async getSwapQuote(input: { amount: string; slippageBps: number; inputAsset: SendAsset; outputMint: string }) {
+    const { walletState } = await this.ensureReadyWallet();
+    if (walletState.selectedNetwork !== 'mainnet-beta') {
+      throw new RpcError('SWAP_UNAVAILABLE', 'Native swaps are currently available only on mainnet-beta.');
+    }
+
+    const connection = new Connection(getRpcEndpoint(walletState.selectedNetwork), 'confirmed');
+    const inputMint = input.inputAsset.kind === 'sol' ? JUPITER_SOL_MINT : input.inputAsset.mint;
+    if (inputMint === input.outputMint) {
+      throw new RpcError('INVALID_SWAP', 'Choose a different output token.');
+    }
+
+    const inputDecimals = input.inputAsset.kind === 'sol' ? 9 : input.inputAsset.decimals;
+    const quoteResponse = await fetchJupiterQuote({
+      inputMint,
+      outputMint: input.outputMint,
+      amount: parseDecimalAmount(input.amount, inputDecimals).toString(),
+      slippageBps: input.slippageBps
+    });
+    const outputDecimals = await getMintDecimals(connection, input.outputMint);
+
+    return {
+      quoteResponse,
+      inputMint,
+      outputMint: input.outputMint,
+      inputAmountUi: input.amount,
+      outputAmountUi: formatUiAmount(quoteResponse.outAmount, outputDecimals),
+      priceImpactPct: typeof quoteResponse.priceImpactPct === 'string' ? quoteResponse.priceImpactPct : null,
+      routeLabels: Array.isArray(quoteResponse.routePlan)
+        ? quoteResponse.routePlan
+            .map((route) => (typeof route?.swapInfo?.label === 'string' ? route.swapInfo.label : null))
+            .filter((label): label is string => !!label)
+        : [],
+      slippageBps: input.slippageBps
+    };
+  }
+
+  async executeSwap(input: { quoteResponse: JupiterQuoteResponse; password?: string }) {
+    const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    if (walletState.selectedNetwork !== 'mainnet-beta') {
+      throw new RpcError('SWAP_UNAVAILABLE', 'Native swaps are currently available only on mainnet-beta.');
+    }
+
+    const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
+    if (!activeAccount) {
+      throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
+    }
+
+    const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
+    const connection = new Connection(getRpcEndpoint(walletState.selectedNetwork), 'confirmed');
+    const swap = await createJupiterSwapTransaction({
+      quoteResponse: input.quoteResponse,
+      userPublicKey: activeAccount.publicKey
+    });
+
+    let signature: string;
+    try {
+      signature =
+        selectedWallet.signer.kind === 'ledger'
+          ? await signAndSendLedgerSerializedTransaction(
+              swap.swapTransaction,
+              activeAccount.publicKey,
+              selectedWallet.signer.derivationPath,
+              getRpcEndpoint(walletState.selectedNetwork)
+            )
+          : await signAndSendSerializedTransaction(
+              swap.swapTransaction,
+              resolveSolanaVaultSecret(secret),
+              getRpcEndpoint(walletState.selectedNetwork)
+            );
+    } catch (error) {
+      throw normalizeSigningError(error);
+    }
+
+    await this.setSessionState({ locked: false, lastActivityAt: Date.now() });
+
+      return {
+      signature,
+      inputMint: input.quoteResponse.inputMint,
+      outputMint: input.quoteResponse.outputMint,
+      inputAmountUi: formatUiAmount(input.quoteResponse.inAmount, await getMintDecimals(connection, input.quoteResponse.inputMint)),
+      outputAmountUi: formatUiAmount(input.quoteResponse.outAmount, await getMintDecimals(connection, input.quoteResponse.outputMint))
     };
   }
 
@@ -700,6 +882,37 @@ function normalizeSigningError(error: unknown) {
   return new RpcError('TRANSACTION_FAILED', 'Transaction failed.');
 }
 
+async function getMintDecimals(connection: Connection, mint: string): Promise<number> {
+  if (mint === JUPITER_SOL_MINT) {
+    return 9;
+  }
+
+  const accountInfo = await connection.getParsedAccountInfo(new PublicKey(mint), 'confirmed');
+  const parsedData = accountInfo.value?.data;
+  if (!parsedData || typeof parsedData !== 'object' || !('parsed' in parsedData)) {
+    return 9;
+  }
+
+  const parsed = parsedData.parsed;
+  if (!parsed || typeof parsed !== 'object' || !('info' in parsed) || !parsed.info || typeof parsed.info !== 'object') {
+    return 9;
+  }
+
+  return 'decimals' in parsed.info && typeof parsed.info.decimals === 'number' ? parsed.info.decimals : 9;
+}
+
+function formatUiAmount(rawAmount: string, decimals: number): string {
+  const amount = Number(rawAmount);
+  if (!Number.isFinite(amount)) {
+    return rawAmount;
+  }
+
+  return (amount / 10 ** decimals).toLocaleString(undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: Math.min(Math.max(decimals, 0), 6)
+  });
+}
+
 const controller = new WalletController();
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -751,6 +964,9 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
         case 'wallet_set_network':
           sendResponse(await controller.setNetwork(message.network));
           break;
+        case 'wallet_set_theme':
+          sendResponse(await controller.setTheme(message.theme));
+          break;
         case 'wallet_select':
           sendResponse(await controller.selectWallet(message.walletId));
           break;
@@ -772,6 +988,27 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
               asset: message.asset
             })
           );
+          break;
+        case 'wallet_get_swap_quote':
+          sendResponse(
+            await controller.getSwapQuote({
+              amount: message.amount,
+              slippageBps: message.slippageBps,
+              inputAsset: message.inputAsset,
+              outputMint: message.outputMint
+            })
+          );
+          break;
+        case 'wallet_execute_swap':
+          sendResponse(
+            await controller.executeSwap({
+              quoteResponse: message.quoteResponse,
+              password: message.password
+            })
+          );
+          break;
+        case 'wallet_export_secret':
+          sendResponse(await controller.exportWalletSecret(message.password));
           break;
         case 'wallet_list_permissions':
           sendResponse((await controller.getStateResponse()).permissions);

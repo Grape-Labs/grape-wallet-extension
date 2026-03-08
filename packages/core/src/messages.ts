@@ -15,6 +15,16 @@ const sendAssetSchema = z.discriminatedUnion('kind', [
   })
 ]);
 
+const jupiterQuoteResponseSchema = z
+  .object({
+    inputMint: z.string().min(32),
+    inAmount: z.string().min(1),
+    outputMint: z.string().min(32),
+    outAmount: z.string().min(1),
+    slippageBps: z.number().int().positive()
+  })
+  .passthrough();
+
 export const pageOriginSchema = z.object({
   origin: z.string().url(),
   href: z.string().url(),
@@ -121,6 +131,10 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     network: z.enum(['mainnet-beta', 'devnet'])
   }),
   z.object({
+    type: z.literal('wallet_set_theme'),
+    theme: z.enum(['comic', 'sunset', 'matrix', 'apple', 'aurora', 'champagne', 'liquid-chrome', 'obsidian'])
+  }),
+  z.object({
     type: z.literal('wallet_select'),
     walletId: z.string().min(1)
   }),
@@ -140,6 +154,22 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     amount: decimalAmountSchema,
     password: z.string().min(1).optional(),
     asset: sendAssetSchema
+  }),
+  z.object({
+    type: z.literal('wallet_get_swap_quote'),
+    amount: decimalAmountSchema,
+    slippageBps: z.number().int().min(1).max(5000),
+    inputAsset: sendAssetSchema,
+    outputMint: z.string().min(32)
+  }),
+  z.object({
+    type: z.literal('wallet_execute_swap'),
+    quoteResponse: jupiterQuoteResponseSchema,
+    password: z.string().min(1).optional()
+  }),
+  z.object({
+    type: z.literal('wallet_export_secret'),
+    password: z.string().min(1)
   }),
   z.object({
     type: z.literal('wallet_list_permissions')

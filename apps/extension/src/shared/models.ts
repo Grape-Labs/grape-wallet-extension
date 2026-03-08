@@ -10,6 +10,7 @@ import type {
   WalletState
 } from '@grape/core';
 import type { TransactionSummary } from '@grape/solana';
+import type { JupiterQuoteResponse } from './jupiter';
 
 export type ApprovalRecord = {
   id: string;
@@ -41,12 +42,37 @@ export type TokenHolding = {
   amount: string;
   decimals: number;
   programId: string;
+  name?: string;
   symbol?: string;
+  logoUri?: string;
+  priceUsd?: number | null;
+  valueUsd?: number | null;
+  priceChange24h?: number | null;
+};
+
+export type CollectibleItem = {
+  mint: string;
+  name?: string;
+  imageUri?: string;
+};
+
+export type CollectionHolding = {
+  id: string;
+  name: string;
+  symbol?: string;
+  imageUri?: string;
+  itemCount: number;
+  items: CollectibleItem[];
 };
 
 export type WalletAssetsResponse = {
   lamports: number | null;
   tokens: TokenHolding[];
+  collections?: CollectionHolding[];
+  totalUsdValue?: number | null;
+  nativePriceUsd?: number | null;
+  nativeValueUsd?: number | null;
+  nativePriceChange24h?: number | null;
 };
 
 export type SendTransferResponse = {
@@ -55,4 +81,33 @@ export type SendTransferResponse = {
   amount: string;
   asset: SendAsset;
   network: WalletState['selectedNetwork'];
+};
+
+export type WalletExportResponse = {
+  walletId: string;
+  walletName: string;
+  publicKey: string;
+  derivationPath: string;
+  kind: 'mnemonic' | 'private-key';
+  privateKeyBase58: string;
+  mnemonic?: string;
+};
+
+export type WalletSwapQuoteResponse = {
+  quoteResponse: JupiterQuoteResponse;
+  inputMint: string;
+  outputMint: string;
+  inputAmountUi: string;
+  outputAmountUi: string;
+  priceImpactPct: string | null;
+  routeLabels: string[];
+  slippageBps: number;
+};
+
+export type WalletSwapExecuteResponse = {
+  signature: string;
+  inputMint: string;
+  outputMint: string;
+  inputAmountUi: string;
+  outputAmountUi: string;
 };

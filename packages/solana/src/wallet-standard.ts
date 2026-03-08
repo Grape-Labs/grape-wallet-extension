@@ -5,6 +5,14 @@ import type { GrapeInpageProvider } from './provider';
 import { GRAPE_WALLET_ICON } from './constants';
 import { SOLANA_CHAIN_IDS } from './constants';
 
+declare global {
+  interface Window {
+    grape?: GrapeInpageProvider;
+    grapeSolana?: GrapeInpageProvider;
+    solana?: GrapeInpageProvider;
+  }
+}
+
 type WalletStandardRegisterDetail = {
   register(wallet: WalletStandardWallet): void;
 };
@@ -24,7 +32,7 @@ export type WalletStandardWallet = {
   icon: string;
   chains: string[];
   features: Record<string, unknown>;
-  accounts: WalletStandardAccount[];
+  readonly accounts: WalletStandardAccount[];
 };
 
 class RegisterWalletEvent extends Event {
@@ -40,25 +48,29 @@ export function createWalletStandardWallet(
   provider: GrapeInpageProvider,
   chains: string[] = Object.values(SOLANA_CHAIN_IDS)
 ): WalletStandardWallet {
-  const account = provider.publicKey
-    ? {
-        address: provider.publicKey.toBase58(),
-        publicKey: provider.publicKey.toBytes(),
-        chains,
-        features: [
-          'standard:connect',
-          'standard:disconnect',
-          'standard:events',
-          'solana:signMessage',
-          'solana:signTransaction',
-          'solana:signAndSendTransaction'
-        ],
-        label: 'Account 1',
-        icon: GRAPE_WALLET_ICON
-      }
-    : undefined;
+  function getAccounts(): WalletStandardAccount[] {
+    return provider.publicKey
+      ? [
+          {
+            address: provider.publicKey.toBase58(),
+            publicKey: provider.publicKey.toBytes(),
+            chains,
+            features: [
+              'standard:connect',
+              'standard:disconnect',
+              'standard:events',
+              'solana:signMessage',
+              'solana:signTransaction',
+              'solana:signAndSendTransaction'
+            ],
+            label: 'Account 1',
+            icon: GRAPE_WALLET_ICON
+          }
+        ]
+      : [];
+  }
 
-  return {
+  const walletBase: Omit<WalletStandardWallet, 'accounts'> = {
     version: '1.0.0',
     name: 'Grape Wallet',
     icon: GRAPE_WALLET_ICON,
@@ -69,20 +81,7 @@ export function createWalletStandardWallet(
         connect: async ({ silent }: { silent?: boolean } = {}) => {
           const response = await provider.connect({ onlyIfTrusted: silent });
           return {
-            accounts: [
-              {
-                address: response.publicKey.toBase58(),
-                publicKey: response.publicKey.toBytes(),
-                chains,
-                features: [
-                  'solana:signMessage',
-                  'solana:signTransaction',
-                  'solana:signAndSendTransaction'
-                ],
-                label: 'Account 1',
-                icon: GRAPE_WALLET_ICON
-              }
-            ]
+            accounts: getAccounts()
           };
         }
       },
@@ -160,9 +159,17 @@ export function createWalletStandardWallet(
           return outputs;
         }
       }
-    },
-    accounts: account ? [account] : []
+    }
   };
+
+  const wallet = walletBase as unknown as WalletStandardWallet;
+
+  Object.defineProperty(wallet, 'accounts', {
+    enumerable: true,
+    get: getAccounts
+  });
+
+  return wallet;
 }
 
 export function registerWalletStandard(wallet: WalletStandardWallet): void {
@@ -173,4 +180,35 @@ export function registerWalletStandard(wallet: WalletStandardWallet): void {
     const detail = (event as CustomEvent<WalletStandardRegisterDetail>).detail;
     register(detail);
   });
+}
+
+function defineLegacyProvider(name: 'grape' | 'grapeSolana' | 'solana', provider: GrapeInpageProvider, overwrite = true) {
+  if (!overwrite && name in window && window[name]) {
+    return;
+  }
+
+  try {
+    Object.defineProperty(window, name, {
+      configurable: true,
+      enumerable: false,
+      writable: true,
+      value: provider
+    });
+  } catch {
+    if (overwrite || !window[name]) {
+      window[name] = provider;
+    }
+  }
+}
+
+export function initializeWalletStandard(
+  provider: GrapeInpageProvider,
+  chains: string[] = Object.values(SOLANA_CHAIN_IDS)
+): WalletStandardWallet {
+  const wallet = createWalletStandardWallet(provider, chains);
+  registerWalletStandard(wallet);
+  defineLegacyProvider('grape', provider);
+  defineLegacyProvider('grapeSolana', provider);
+  defineLegacyProvider('solana', provider, false);
+  return wallet;
 }

@@ -113,6 +113,9 @@ importers:
       bs58:
         specifier: ^6.0.0
         version: 6.0.0
+      buffer:
+        specifier: ^6.0.3
+        version: 6.0.3
       micro-ed25519-hdkey:
         specifier: ^0.1.2
         version: 0.1.2

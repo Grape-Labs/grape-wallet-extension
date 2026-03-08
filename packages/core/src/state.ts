@@ -9,6 +9,26 @@ export const STORAGE_KEYS = {
 
 export type WalletSetupState = 'empty' | 'ready';
 export type GrapeNetwork = 'mainnet-beta' | 'devnet';
+export type GrapeTheme =
+  | 'comic'
+  | 'sunset'
+  | 'matrix'
+  | 'apple'
+  | 'aurora'
+  | 'champagne'
+  | 'liquid-chrome'
+  | 'obsidian';
+
+export const SUPPORTED_THEMES = [
+  'comic',
+  'sunset',
+  'matrix',
+  'apple',
+  'aurora',
+  'champagne',
+  'liquid-chrome',
+  'obsidian'
+] as const satisfies readonly GrapeTheme[];
 
 export type VaultRecord = {
   version: 1;
@@ -54,6 +74,7 @@ export type WalletState = {
   wallets: WalletProfile[];
   selectedWalletId?: string;
   selectedNetwork: GrapeNetwork;
+  selectedTheme: GrapeTheme;
   idleTimeoutMs: number;
 };
 
@@ -63,6 +84,7 @@ export type LegacyWalletState = {
   accounts?: WalletAccount[];
   selectedAccountId?: string;
   selectedNetwork?: GrapeNetwork;
+  selectedTheme?: GrapeTheme;
   idleTimeoutMs?: number;
 };
 
@@ -73,12 +95,38 @@ export type SessionState = {
 
 export const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 export const MAX_RECENT_RECIPIENTS = 8;
+export const DEFAULT_THEME: GrapeTheme = 'aurora';
+
+export function normalizeTheme(theme: unknown): GrapeTheme {
+  switch (theme) {
+    case 'comic':
+    case 'sunset':
+    case 'matrix':
+    case 'apple':
+    case 'aurora':
+    case 'champagne':
+    case 'liquid-chrome':
+    case 'obsidian':
+      return theme;
+    case 'modern':
+      return 'aurora';
+    case 'space':
+      return 'liquid-chrome';
+    case 'dark':
+      return 'obsidian';
+    case 'light':
+      return 'champagne';
+    default:
+      return DEFAULT_THEME;
+  }
+}
 
 export function createEmptyWalletState(): WalletState {
   return {
     setup: 'empty',
     wallets: [],
     selectedNetwork: 'devnet',
+    selectedTheme: DEFAULT_THEME,
     idleTimeoutMs: DEFAULT_IDLE_TIMEOUT_MS
   };
 }
@@ -125,6 +173,7 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
       wallets: input.wallets.map(normalizeWalletProfile),
       selectedWalletId: input.selectedWalletId ?? input.wallets[0]?.id,
       selectedNetwork: input.selectedNetwork ?? 'devnet',
+      selectedTheme: normalizeTheme(input.selectedTheme),
       idleTimeoutMs: input.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS
     };
   }
@@ -146,6 +195,7 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
       ],
       selectedWalletId: 'wallet-1',
       selectedNetwork: input.selectedNetwork ?? 'devnet',
+      selectedTheme: normalizeTheme(input.selectedTheme),
       idleTimeoutMs: input.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS
     };
   }
@@ -154,6 +204,7 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
     setup: 'empty',
     wallets: [],
     selectedNetwork: input.selectedNetwork ?? 'devnet',
+    selectedTheme: normalizeTheme(input.selectedTheme),
     idleTimeoutMs: input.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS
   };
 }

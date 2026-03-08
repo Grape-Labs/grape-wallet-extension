@@ -5,8 +5,9 @@ import {
   deriveSolanaAccount0,
   generateWalletMnemonic,
   importSolanaPrivateKey,
+  LEDGER_ACCOUNT_SCAN_BATCH_SIZE,
   normalizeMnemonic,
-  requestLedgerAccount,
+  requestLedgerAccounts,
   validateSolanaPrivateKey,
   validateWalletMnemonic
 } from '@grape/solana';
@@ -14,6 +15,7 @@ import {
 import type { WalletStateResponse } from '../../shared/models';
 
 import { sendRuntimeMessage } from '../../shared/chrome';
+import { getRpcEndpoint } from '../../shared/rpc';
 
 type OnboardingViewProps = {
   compact?: boolean;
@@ -23,6 +25,23 @@ type OnboardingViewProps = {
 type SetupMode = 'create' | 'import';
 type ImportMethod = 'mnemonic' | 'private-key' | 'ledger';
 type SetupStep = 1 | 2 | 3;
+type LedgerCandidate = {
+  index: number;
+  publicKey: string;
+  derivationPath: string;
+  lamports: number;
+};
+
+function formatLamports(lamports: number) {
+  return `${(lamports / 1_000_000_000).toLocaleString(undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 4
+  })} SOL`;
+}
+
+function formatAddress(address: string) {
+  return `${address.slice(0, 4)}...${address.slice(-4)}`;
+}
 
 export function OnboardingView(props: OnboardingViewProps) {
   const searchParams = useMemo(() => new URLSearchParams(window.location.search), []);
@@ -34,6 +53,10 @@ export function OnboardingView(props: OnboardingViewProps) {
   const [importMnemonic, setImportMnemonic] = useState('');
   const [importPrivateKey, setImportPrivateKey] = useState('');
   const [ledgerAccount, setLedgerAccount] = useState<{ publicKey: string; derivationPath: string } | null>(null);
+  const [ledgerAccounts, setLedgerAccounts] = useState<LedgerCandidate[]>([]);
+  const [ledgerScanCount, setLedgerScanCount] = useState(LEDGER_ACCOUNT_SCAN_BATCH_SIZE);
+  const [network, setNetwork] = useState<'mainnet-beta' | 'devnet'>('devnet');
+  const [scanningLedger, setScanningLedger] = useState(false);
   const [importMethod, setImportMethod] = useState<ImportMethod>('mnemonic');
   const [confirmBackup, setConfirmBackup] = useState(false);
   const [password, setPassword] = useState('');
@@ -51,6 +74,17 @@ export function OnboardingView(props: OnboardingViewProps) {
     }
   }, [requestedMode]);
 
+  useEffect(() => {
+    void (async () => {
+      try {
+        const state = await sendRuntimeMessage<WalletStateResponse>({ type: 'wallet_get_state' });
+        setNetwork(state.wallet.selectedNetwork);
+      } catch {
+        setNetwork('devnet');
+      }
+    })();
+  }, []);
+
   const mnemonic = useMemo(
     () => normalizeMnemonic(mode === 'create' || importMethod === 'mnemonic' ? (mode === 'create' ? generatedMnemonic : importMnemonic) : ''),
     [generatedMnemonic, importMnemonic, importMethod, mode]
@@ -66,6 +100,28 @@ export function OnboardingView(props: OnboardingViewProps) {
           : !!ledgerAccount;
 
   const isPasswordStepValid = !submitting && password.length >= 8 && password === passwordConfirm;
+
+  async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
+    try {
+      setScanningLedger(true);
+      setError(null);
+      const accounts = await requestLedgerAccounts({
+        rpcEndpoint: getRpcEndpoint(network),
+        startIndex: 0,
+        count: nextScanCount
+      });
+      setLedgerScanCount(nextScanCount);
+      setLedgerAccounts(accounts);
+      const selected = accounts.find((account) => account.publicKey === ledgerAccount?.publicKey) ?? accounts[0] ?? null;
+      setLedgerAccount(selected ? { publicKey: selected.publicKey, derivationPath: selected.derivationPath } : null);
+    } catch (nextError) {
+      setLedgerAccounts([]);
+      setLedgerAccount(null);
+      setError(nextError instanceof Error ? nextError.message : 'Unable to scan Ledger accounts.');
+    } finally {
+      setScanningLedger(false);
+    }
+  }
 
   async function handleSubmit() {
     try {
@@ -266,25 +322,53 @@ export function OnboardingView(props: OnboardingViewProps) {
                 </label>
               ) : (
                 <div className="stack">
-                  <p className="muted">Connect your Ledger, unlock it, and open the Solana app before continuing.</p>
-                  <Button
-                    tone="secondary"
-                    onClick={async () => {
-                      try {
-                        setError(null);
-                        const account = await requestLedgerAccount();
-                        setLedgerAccount(account);
-                      } catch (nextError) {
-                        setError(nextError instanceof Error ? nextError.message : 'Unable to connect to Ledger.');
-                      }
-                    }}
-                  >
-                    {ledgerAccount ? 'Reconnect Ledger' : 'Connect Ledger'}
-                  </Button>
-                  {ledgerAccount ? (
+                  <p className="muted">Connect your Ledger, unlock it, open the Solana app, then scan derived accounts on {network}.</p>
+                  <div className="inline wrap-actions">
+                    <Button tone="secondary" onClick={() => void scanLedgerAccounts()} disabled={scanningLedger}>
+                      {scanningLedger ? 'Scanning...' : ledgerAccounts.length > 0 ? 'Rescan Ledger' : 'Scan Ledger accounts'}
+                    </Button>
+                    {ledgerAccounts.length > 0 ? (
+                      <Button
+                        tone="secondary"
+                        onClick={() => void scanLedgerAccounts(ledgerScanCount + LEDGER_ACCOUNT_SCAN_BATCH_SIZE)}
+                        disabled={scanningLedger}
+                      >
+                        Scan more
+                      </Button>
+                    ) : null}
+                  </div>
+                  {ledgerAccounts.length > 0 ? (
                     <div className="stack">
-                      <div className="muted">Ledger account</div>
-                      <div className="mono">{ledgerAccount.publicKey}</div>
+                      <div className="space-between">
+                        <span className="muted">Detected accounts</span>
+                        <span className="muted">Sorted by SOL balance</span>
+                      </div>
+                      <div className="stack">
+                        {ledgerAccounts.map((account) => {
+                          const isActive = ledgerAccount?.publicKey === account.publicKey;
+                          return (
+                            <button
+                              key={`${account.publicKey}:${account.derivationPath}`}
+                              type="button"
+                              className={`choice-card ${isActive ? 'active' : ''}`.trim()}
+                              onClick={() => {
+                                setLedgerAccount({
+                                  publicKey: account.publicKey,
+                                  derivationPath: account.derivationPath
+                                });
+                                setError(null);
+                              }}
+                            >
+                              <div className="space-between">
+                                <strong>Ledger account {account.index}</strong>
+                                <span>{formatLamports(account.lamports)}</span>
+                              </div>
+                              <span className="muted mono">{formatAddress(account.publicKey)}</span>
+                              <span className="muted mono">{account.derivationPath}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
                   ) : null}
                 </div>

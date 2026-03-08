@@ -1,9 +1,18 @@
 import { base64ToBytes, RpcError } from '@grape/core';
 import { PublicKey, Transaction, VersionedTransaction, Connection } from '@solana/web3.js';
+import { Buffer } from 'buffer';
 
 import { parseSerializedTransaction, serializeSignedTransaction } from './signing';
 
 export const LEDGER_DEFAULT_DERIVATION_PATH = `44'/501'/0'/0'`;
+export const LEDGER_ACCOUNT_SCAN_BATCH_SIZE = 8;
+
+export type LedgerDiscoveredAccount = {
+  index: number;
+  publicKey: string;
+  derivationPath: string;
+  lamports: number;
+};
 
 type LedgerTransportModule = {
   default: {
@@ -32,6 +41,56 @@ export async function requestLedgerAccount(path = LEDGER_DEFAULT_DERIVATION_PATH
     const result = await solana.getAddress(path, false);
     const publicKey = normalizeLedgerAddress(result.address);
     return { publicKey, derivationPath: path };
+  } catch (error) {
+    throw normalizeLedgerError(error);
+  } finally {
+    await closeLedgerTransport(transport);
+  }
+}
+
+export async function requestLedgerAccounts(input: {
+  rpcEndpoint: string;
+  startIndex?: number;
+  count?: number;
+}): Promise<LedgerDiscoveredAccount[]> {
+  const startIndex = input.startIndex ?? 0;
+  const count = input.count ?? LEDGER_ACCOUNT_SCAN_BATCH_SIZE;
+  const TransportWebHID = await loadLedgerTransport();
+  const Solana = await loadLedgerSolana();
+  const transport = await TransportWebHID.request();
+
+  try {
+    const solana = new Solana(transport);
+    const derivations = Array.from({ length: count }, (_value, offset) => {
+      const index = startIndex + offset;
+      return {
+        index,
+        derivationPath: toLedgerDerivationPath(index)
+      };
+    });
+
+    const discovered = [];
+    for (const derivation of derivations) {
+      const result = await solana.getAddress(derivation.derivationPath, false);
+      discovered.push({
+        index: derivation.index,
+        derivationPath: derivation.derivationPath,
+        publicKey: normalizeLedgerAddress(result.address)
+      });
+    }
+
+    const connection = new Connection(input.rpcEndpoint, 'confirmed');
+    const lamports = await connection.getMultipleAccountsInfo(
+      discovered.map((entry) => new PublicKey(entry.publicKey)),
+      'confirmed'
+    );
+
+    return discovered
+      .map((entry, idx) => ({
+        ...entry,
+        lamports: lamports[idx]?.lamports ?? 0
+      }))
+      .sort((left, right) => right.lamports - left.lamports || left.index - right.index);
   } catch (error) {
     throw normalizeLedgerError(error);
   } finally {
@@ -106,6 +165,10 @@ function normalizeLedgerAddress(input: string | Buffer): string {
   return new PublicKey(input).toBase58();
 }
 
+function toLedgerDerivationPath(index: number): string {
+  return `44'/501'/${index}'/0'`;
+}
+
 async function signLedgerTransactionBytes(messageBytes: Uint8Array, derivationPath: string): Promise<Uint8Array> {
   const TransportWebHID = await loadLedgerTransport();
   const Solana = await loadLedgerSolana();
@@ -138,8 +201,16 @@ async function loadLedgerSolana() {
 }
 
 function ensureLedgerRuntimeGlobals() {
+  if (typeof globalThis.Buffer === 'undefined') {
+    (globalThis as typeof globalThis & { Buffer?: typeof Buffer }).Buffer = Buffer;
+  }
+
   if (typeof globalThis.window === 'undefined') {
     (globalThis as typeof globalThis & { window?: Window & typeof globalThis }).window = globalThis as Window & typeof globalThis;
+  }
+
+  if (typeof window !== 'undefined' && typeof (window as Window & { Buffer?: typeof Buffer }).Buffer === 'undefined') {
+    (window as Window & { Buffer?: typeof Buffer }).Buffer = Buffer;
   }
 }
 

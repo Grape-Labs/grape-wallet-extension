@@ -1,5 +1,5 @@
 import { providerResponseSchema } from '@grape/core';
-import { createWalletStandardWallet, GrapeInpageProvider, registerWalletStandard, SOLANA_CHAIN_IDS } from '@grape/solana';
+import { GrapeInpageProvider, initializeWalletStandard, SOLANA_CHAIN_IDS } from '@grape/solana';
 
 const FROM_INPAGE = 'grape:inpage';
 const FROM_CONTENT = 'grape:content';
@@ -59,10 +59,4 @@ window.addEventListener('message', (event) => {
   }
 });
 
-window.grape = provider;
-window.grapeSolana = provider;
-if (!window.solana) {
-  window.solana = provider;
-}
-
-registerWalletStandard(createWalletStandardWallet(provider, Object.values(SOLANA_CHAIN_IDS)));
+initializeWalletStandard(provider, Object.values(SOLANA_CHAIN_IDS));
