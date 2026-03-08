@@ -20,6 +20,7 @@ export default defineConfig({
     outDir: 'dist',
     emptyOutDir: true,
     target: 'es2022',
+    modulePreload: false,
     rollupOptions: {
       input: {
         popup: resolve(extensionRoot, 'popup.html'),
@@ -42,4 +43,3 @@ export default defineConfig({
     }
   }
 });
-

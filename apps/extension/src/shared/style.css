@@ -188,9 +188,14 @@ select {
   display: flex;
   justify-content: space-between;
   gap: 16px;
-  align-items: center;
+  align-items: flex-start;
   padding: 10px 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.key-value-row > :last-child {
+  max-width: 62%;
+  text-align: right;
 }
 
 .mnemonic-grid {
@@ -225,6 +230,30 @@ select {
 
 .wrap-actions > * {
   flex: 1 1 160px;
+}
+
+.step-indicator {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.choice-card {
+  width: 100%;
+  display: grid;
+  gap: 6px;
+  text-align: left;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: #fff;
+  padding: 14px 16px;
+  cursor: pointer;
+}
+
+.choice-card.active {
+  border-color: rgba(244, 211, 94, 0.55);
+  background: rgba(244, 211, 94, 0.08);
 }
 
 .button-block {
@@ -277,13 +306,45 @@ select {
   font-size: 0.92rem;
 }
 
-@media (max-width: 640px) {
-  body {
-    min-width: 100%;
-  }
+.account-address {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 
-  body[data-page='popup'] {
-    width: 100%;
+.mini-button {
+  padding: 6px 10px;
+  font-size: 0.78rem;
+}
+
+.token-list {
+  display: grid;
+  gap: 10px;
+}
+
+.token-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.token-amount {
+  font-weight: 700;
+  text-align: right;
+}
+
+.token-mint {
+  word-break: break-all;
+}
+
+@media (max-width: 640px) {
+  body:not([data-page='popup']) {
     min-width: 100%;
   }
 
@@ -299,7 +360,21 @@ select {
     font-size: 1.2rem;
   }
 
+  .key-value-row {
+    flex-direction: column;
+  }
+
+  .key-value-row > :last-child {
+    max-width: 100%;
+    text-align: left;
+  }
+
   .mnemonic-grid {
     grid-template-columns: 1fr;
+  }
+
+  .token-item {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }

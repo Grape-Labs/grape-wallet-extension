@@ -103,6 +103,9 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     type: z.literal('wallet_get_balance')
   }),
   z.object({
+    type: z.literal('wallet_get_assets')
+  }),
+  z.object({
     type: z.literal('wallet_list_permissions')
   }),
   z.object({
@@ -125,4 +128,3 @@ export type PageOrigin = z.infer<typeof pageOriginSchema>;
 export type ProviderRequest = z.infer<typeof providerRequestSchema>;
 export type ProviderResponse = z.infer<typeof providerResponseSchema>;
 export type RuntimeMessage = z.infer<typeof runtimeMessageSchema>;
-

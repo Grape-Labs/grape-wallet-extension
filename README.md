@@ -17,6 +17,7 @@ Implementation was aligned against official sources before coding:
 apps/extension      MV3 extension app, React pages, background worker, content/inpage bridge
 packages/core       Vault crypto, storage models, permissions, approval state, typed messages
 packages/solana     Mnemonic/account derivation, signing, transaction summaries, provider adapters
+packages/wallet-adapter Dedicated Solana wallet-adapter package for dApps
 packages/ui         Shared React UI primitives
 ```
 
@@ -28,6 +29,7 @@ packages/ui         Shared React UI primitives
 - `@solana/web3.js`: Solana RPC, keypair, transaction serialization, and submission.
 - `tweetnacl`: detached message signatures for `signMessage`.
 - `zod`: typed runtime validation for background/provider messaging.
+- `@solana/wallet-adapter-base`: dedicated wallet-adapter integration surface for dApps that want an explicit Grape adapter.
 - Web Crypto API: PBKDF2 key derivation and AES-GCM vault encryption.
 
 ## MVP features
@@ -40,6 +42,7 @@ packages/ui         Shared React UI primitives
 - Per-origin connection approvals and site revocation.
 - `connect`, `disconnect`, `signMessage`, `signTransaction`, `signAllTransactions`, `signAndSendTransaction`.
 - Wallet Standard registration plus a thin legacy injected provider layer with `isGrape`.
+- Dedicated `@grape/wallet-adapter` package for explicit wallet-adapter integration.
 - Network switch between `devnet` and `mainnet-beta`.
 - Balance fetch for the active account.
 - Idle auto-lock and explicit lock action.
@@ -68,7 +71,26 @@ pnpm build
 - Background worker: `apps/extension/src/background/index.ts`
 - Content script: `apps/extension/src/content-script/index.ts`
 - Injected provider: `apps/extension/src/inpage/index.ts`
+- Wallet-adapter package: `packages/wallet-adapter`
 - Build output: `apps/extension/dist`
+
+## Using `@grape/wallet-adapter`
+
+For dApps that already use `@solana/wallet-adapter-react`, import the dedicated adapter:
+
+```ts
+import { GrapeWalletAdapter } from '@grape/wallet-adapter';
+
+const wallets = [new GrapeWalletAdapter()];
+```
+
+The adapter detects the injected `window.grape` provider, presents itself as `Grape Wallet`, and supports:
+
+- `connect`
+- `disconnect`
+- `signMessage`
+- `signTransaction`
+- `signAllTransactions`
 
 ## Security notes
 

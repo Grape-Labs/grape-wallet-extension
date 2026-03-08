@@ -18,6 +18,8 @@
       "@grape/core/*": ["packages/core/src/*"],
       "@grape/solana": ["packages/solana/src/index.ts"],
       "@grape/solana/*": ["packages/solana/src/*"],
+      "@grape/wallet-adapter": ["packages/wallet-adapter/src/index.ts"],
+      "@grape/wallet-adapter/*": ["packages/wallet-adapter/src/*"],
       "@grape/ui": ["packages/ui/src/index.ts"],
       "@grape/ui/*": ["packages/ui/src/*"]
     }

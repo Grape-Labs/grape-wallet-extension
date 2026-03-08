@@ -1,33 +1,26 @@
-export const SOLANA_DERIVATION_PATH = `m/44'/501'/0'/0'`;
-
-export const SOLANA_CHAIN_IDS = {
-  'mainnet-beta': 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
-  devnet: 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1'
-} as const;
-
-export const GRAPE_WALLET_ICON =
+export const GRAPE_WALLET_ADAPTER_ICON =
   'data:image/svg+xml,' +
   encodeURIComponent(`
   <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" fill="none">
     <defs>
-      <linearGradient id="stem" x1="24" y1="18" x2="96" y2="40" gradientUnits="userSpaceOnUse">
-        <stop stop-color="#0EE3FF"/>
-        <stop offset="1" stop-color="#0B64FF"/>
+      <linearGradient id="stem" x1="33" y1="19" x2="96" y2="34" gradientUnits="userSpaceOnUse">
+        <stop stop-color="#11E2FF"/>
+        <stop offset="1" stop-color="#0C67FF"/>
       </linearGradient>
-      <radialGradient id="berryBlue" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(42 45) rotate(51.52) scale(34.9484)">
-        <stop stop-color="#70E8FF"/>
-        <stop offset="0.58" stop-color="#16B8FF"/>
-        <stop offset="1" stop-color="#004FFF"/>
+      <radialGradient id="berryBlue" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(44 44) rotate(55) scale(28)">
+        <stop stop-color="#7EEBFF"/>
+        <stop offset="0.58" stop-color="#1BBEFF"/>
+        <stop offset="1" stop-color="#005BFF"/>
       </radialGradient>
-      <radialGradient id="berryPurple" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(52 55) rotate(53.115) scale(37.7558)">
-        <stop stop-color="#C27BFF"/>
-        <stop offset="0.62" stop-color="#9C3CFF"/>
-        <stop offset="1" stop-color="#5D12FF"/>
+      <radialGradient id="berryViolet" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(55 52) rotate(55) scale(28)">
+        <stop stop-color="#D09BFF"/>
+        <stop offset="0.6" stop-color="#8F48FF"/>
+        <stop offset="1" stop-color="#4E16FF"/>
       </radialGradient>
-      <radialGradient id="berryPink" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(56 76) rotate(54.462) scale(43.9016)">
-        <stop stop-color="#FF9BF1"/>
-        <stop offset="0.56" stop-color="#EE2DFF"/>
-        <stop offset="1" stop-color="#FF008A"/>
+      <radialGradient id="berryPink" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(58 78) rotate(55) scale(32)">
+        <stop stop-color="#FFB4F6"/>
+        <stop offset="0.55" stop-color="#E62CFF"/>
+        <stop offset="1" stop-color="#FF007F"/>
       </radialGradient>
     </defs>
     <path d="M31 35C42 23 55 18 68 19C78 20 88 25 96 23C100 22 104 21 106 23C108 25 108 28 107 31C105 38 99 44 92 47C84 51 74 52 65 50" stroke="#000" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
@@ -38,8 +31,8 @@ export const GRAPE_WALLET_ICON =
     <path d="M63 28C68 34 72 43 75 53" stroke="url(#stem)" stroke-width="4" stroke-linecap="round"/>
     <g stroke="#000" stroke-width="8">
       <circle cx="38" cy="51" r="16" fill="url(#berryBlue)"/>
-      <circle cx="57" cy="51" r="16" fill="url(#berryPurple)"/>
-      <circle cx="76" cy="51" r="16" fill="url(#berryPurple)"/>
+      <circle cx="57" cy="51" r="16" fill="url(#berryViolet)"/>
+      <circle cx="76" cy="51" r="16" fill="url(#berryViolet)"/>
       <circle cx="95" cy="51" r="16" fill="url(#berryBlue)"/>
       <circle cx="48" cy="71" r="16" fill="url(#berryPink)"/>
       <circle cx="67" cy="71" r="16" fill="url(#berryPink)"/>
@@ -62,3 +55,4 @@ export const GRAPE_WALLET_ICON =
     </g>
   </svg>
 `);
+

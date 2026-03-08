@@ -1,0 +1,26 @@
+{
+  "name": "@grape/wallet-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@grape/core": "workspace:*",
+    "@solana/web3.js": "^1.98.0"
+  },
+  "peerDependencies": {
+    "@solana/wallet-adapter-base": "*"
+  }
+}
+

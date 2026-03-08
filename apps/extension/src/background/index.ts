@@ -1,4 +1,5 @@
 import {
+  createVaultRecord,
   createPendingApproval,
   grantPermissions,
   hasPermission,
@@ -10,16 +11,22 @@ import {
   providerRequestSchema,
   RpcError,
   STORAGE_KEYS,
-  type RuntimeMessage
+  type RuntimeMessage,
+  unlockVaultRecord,
+  verifyVaultPassword
 } from '@grape/core';
 import { deriveSolanaAccount0, signAndSendSerializedTransaction, signMessageBytes, signSerializedTransaction, signSerializedTransactions, summarizeTransaction, SOLANA_RPC_ENDPOINTS } from '@grape/solana';
 import { Connection, PublicKey } from '@solana/web3.js';
 
-import type { ApprovalRecord } from '../shared/models';
+import type { ApprovalRecord, TokenHolding } from '../shared/models';
 
 import { ChromeStorageArea, permissionsStorage, sessionStorage, walletStateStorage } from '../shared/chrome';
 
 const approvalsStorage = new ChromeStorageArea<Record<string, ApprovalRecord>>(chrome.storage.local, STORAGE_KEYS.approvals, {});
+const TOKEN_PROGRAM_IDS = [
+  'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+  'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb'
+] as const;
 
 type PendingResolver = {
   resolve: (value: unknown) => void;
@@ -64,7 +71,6 @@ class WalletController {
   }
 
   async createWallet(mnemonic: string, password: string, publicKey: string) {
-    const { createVaultRecord } = await import('@grape/core');
     const account = {
       id: 'account-0',
       index: 0,
@@ -86,7 +92,6 @@ class WalletController {
 
   async unlockWallet(password: string) {
     const wallet = await this.ensureReadyWallet();
-    const { verifyVaultPassword } = await import('@grape/core');
     const valid = await verifyVaultPassword(wallet.vault!, password);
     if (!valid) {
       throw new RpcError('INVALID_PASSWORD', 'Password is incorrect.');
@@ -147,6 +152,52 @@ class WalletController {
     }
     const connection = new Connection(SOLANA_RPC_ENDPOINTS[wallet.selectedNetwork], 'confirmed');
     return connection.getBalance(new PublicKey(activeAccount.publicKey));
+  }
+
+  async getAssets() {
+    const wallet = await this.ensureReadyWallet();
+    const activeAccount = wallet.accounts.find((account) => account.id === wallet.selectedAccountId);
+    if (!activeAccount) {
+      return {
+        lamports: null,
+        tokens: []
+      };
+    }
+
+    const owner = new PublicKey(activeAccount.publicKey);
+    const connection = new Connection(SOLANA_RPC_ENDPOINTS[wallet.selectedNetwork], 'confirmed');
+    const [lamports, ...tokenResponses] = await Promise.all([
+      connection.getBalance(owner),
+      ...TOKEN_PROGRAM_IDS.map((programId) =>
+        connection.getParsedTokenAccountsByOwner(owner, {
+          programId: new PublicKey(programId)
+        })
+      )
+    ]);
+
+    const tokens = tokenResponses
+      .flatMap((response) => response.value)
+      .map((accountInfo) => {
+        const parsed = accountInfo.account.data.parsed.info;
+        const tokenAmount = parsed.tokenAmount as {
+          uiAmountString?: string;
+          amount: string;
+          decimals: number;
+        };
+
+        return {
+          mint: parsed.mint as string,
+          amount: tokenAmount.uiAmountString ?? tokenAmount.amount,
+          decimals: tokenAmount.decimals
+        } satisfies TokenHolding;
+      })
+      .filter((token) => Number(token.amount) > 0)
+      .sort((left, right) => Number(right.amount) - Number(left.amount));
+
+    return {
+      lamports,
+      tokens
+    };
   }
 
   async revokePermission(origin: string) {
@@ -268,7 +319,6 @@ class WalletController {
     }
 
     const wallet = await this.ensureReadyWallet();
-    const { unlockVaultRecord } = await import('@grape/core');
     const secret = await unlockVaultRecord(wallet.vault!, password);
     const account = deriveSolanaAccount0(secret.mnemonic);
 
@@ -439,6 +489,9 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
           break;
         case 'wallet_get_balance':
           sendResponse({ lamports: await controller.getBalanceLamports() });
+          break;
+        case 'wallet_get_assets':
+          sendResponse(await controller.getAssets());
           break;
         case 'wallet_list_permissions':
           sendResponse((await controller.getStateResponse()).permissions);

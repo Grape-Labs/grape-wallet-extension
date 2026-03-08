@@ -22,3 +22,14 @@ export type WalletStateResponse = {
   activeAccount?: { publicKey: string };
 };
 
+export type TokenHolding = {
+  mint: string;
+  amount: string;
+  decimals: number;
+  symbol?: string;
+};
+
+export type WalletAssetsResponse = {
+  lamports: number | null;
+  tokens: TokenHolding[];
+};
