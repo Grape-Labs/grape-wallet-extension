@@ -34,36 +34,38 @@ export const GRAPE_WALLET_ICON =
         <stop offset="1" stop-color="#FF008A"/>
       </radialGradient>
     </defs>
-    <rect x="8" y="8" width="112" height="112" rx="28" fill="url(#bg)"/>
-    <path d="M31 36C42 24 55 18 69 20C79 21 89 26 97 24C101 23 105 22 107 24C109 26 109 29 108 32C106 39 100 45 93 48C84 52 74 54 65 51" stroke="#000" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M31 36C42 24 55 18 69 20C79 21 89 26 97 24C101 23 105 22 107 24C109 26 109 29 108 32C106 39 100 45 93 48C84 52 74 54 65 51" stroke="#fff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M31 36C42 24 55 18 69 20C79 21 89 26 97 24C101 23 105 22 107 24C109 26 109 29 108 32C106 39 100 45 93 48C84 52 74 54 65 51" stroke="url(#stem)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M63 28C68 34 72 42 75 53" stroke="#000" stroke-width="10" stroke-linecap="round"/>
-    <path d="M63 28C68 34 72 42 75 53" stroke="#fff" stroke-width="6" stroke-linecap="round"/>
-    <path d="M63 28C68 34 72 42 75 53" stroke="url(#stem)" stroke-width="4" stroke-linecap="round"/>
-    <g stroke="#000" stroke-width="8">
-      <circle cx="39" cy="48" r="16.5" fill="url(#berryBlue)"/>
-      <circle cx="58" cy="48" r="16.5" fill="url(#berryPurple)"/>
-      <circle cx="77" cy="48" r="16.5" fill="url(#berryPurple)"/>
-      <circle cx="96" cy="48" r="16.5" fill="url(#berryBlue)"/>
-      <circle cx="49" cy="69" r="16.5" fill="url(#berryPink)"/>
-      <circle cx="68" cy="69" r="16.5" fill="url(#berryPink)"/>
-      <circle cx="87" cy="69" r="16.5" fill="url(#berryPink)"/>
-      <circle cx="58" cy="90" r="16.5" fill="url(#berryPink)"/>
-      <circle cx="77" cy="90" r="16.5" fill="url(#berryPink)"/>
-      <circle cx="67.5" cy="109" r="16.5" fill="url(#berryPink)"/>
-    </g>
-    <g stroke="#fff" stroke-width="4">
-      <circle cx="39" cy="48" r="16.5"/>
-      <circle cx="58" cy="48" r="16.5"/>
-      <circle cx="77" cy="48" r="16.5"/>
-      <circle cx="96" cy="48" r="16.5"/>
-      <circle cx="49" cy="69" r="16.5"/>
-      <circle cx="68" cy="69" r="16.5"/>
-      <circle cx="87" cy="69" r="16.5"/>
-      <circle cx="58" cy="90" r="16.5"/>
-      <circle cx="77" cy="90" r="16.5"/>
-      <circle cx="67.5" cy="109" r="16.5"/>
+    <rect x="2" y="2" width="124" height="124" rx="31" fill="url(#bg)"/>
+    <g transform="translate(-6 -8) scale(1.12)">
+      <path d="M31 36C42 24 55 18 69 20C79 21 89 26 97 24C101 23 105 22 107 24C109 26 109 29 108 32C106 39 100 45 93 48C84 52 74 54 65 51" stroke="#000" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M31 36C42 24 55 18 69 20C79 21 89 26 97 24C101 23 105 22 107 24C109 26 109 29 108 32C106 39 100 45 93 48C84 52 74 54 65 51" stroke="#fff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M31 36C42 24 55 18 69 20C79 21 89 26 97 24C101 23 105 22 107 24C109 26 109 29 108 32C106 39 100 45 93 48C84 52 74 54 65 51" stroke="url(#stem)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M63 28C68 34 72 42 75 53" stroke="#000" stroke-width="10" stroke-linecap="round"/>
+      <path d="M63 28C68 34 72 42 75 53" stroke="#fff" stroke-width="6" stroke-linecap="round"/>
+      <path d="M63 28C68 34 72 42 75 53" stroke="url(#stem)" stroke-width="4" stroke-linecap="round"/>
+      <g stroke="#000" stroke-width="8">
+        <circle cx="39" cy="48" r="16.5" fill="url(#berryBlue)"/>
+        <circle cx="58" cy="48" r="16.5" fill="url(#berryPurple)"/>
+        <circle cx="77" cy="48" r="16.5" fill="url(#berryPurple)"/>
+        <circle cx="96" cy="48" r="16.5" fill="url(#berryBlue)"/>
+        <circle cx="49" cy="69" r="16.5" fill="url(#berryPink)"/>
+        <circle cx="68" cy="69" r="16.5" fill="url(#berryPink)"/>
+        <circle cx="87" cy="69" r="16.5" fill="url(#berryPink)"/>
+        <circle cx="58" cy="90" r="16.5" fill="url(#berryPink)"/>
+        <circle cx="77" cy="90" r="16.5" fill="url(#berryPink)"/>
+        <circle cx="67.5" cy="109" r="16.5" fill="url(#berryPink)"/>
+      </g>
+      <g stroke="#fff" stroke-width="4">
+        <circle cx="39" cy="48" r="16.5"/>
+        <circle cx="58" cy="48" r="16.5"/>
+        <circle cx="77" cy="48" r="16.5"/>
+        <circle cx="96" cy="48" r="16.5"/>
+        <circle cx="49" cy="69" r="16.5"/>
+        <circle cx="68" cy="69" r="16.5"/>
+        <circle cx="87" cy="69" r="16.5"/>
+        <circle cx="58" cy="90" r="16.5"/>
+        <circle cx="77" cy="90" r="16.5"/>
+        <circle cx="67.5" cy="109" r="16.5"/>
+      </g>
     </g>
   </svg>
 `);

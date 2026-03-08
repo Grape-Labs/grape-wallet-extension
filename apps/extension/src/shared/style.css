@@ -18,6 +18,11 @@ body {
   min-height: 600px;
 }
 
+body[data-page='popup'] {
+  width: 430px;
+  min-width: 430px;
+}
+
 a {
   color: inherit;
 }
@@ -38,6 +43,10 @@ select {
   padding: 24px;
 }
 
+body[data-page='popup'] .page-shell {
+  padding: 18px;
+}
+
 .page-header {
   display: flex;
   justify-content: space-between;
@@ -55,6 +64,14 @@ select {
 .page-header h1 {
   line-height: 1.04;
   text-wrap: balance;
+}
+
+body[data-page='popup'] .page-header h1 {
+  font-size: 1.55rem;
+}
+
+body[data-page='popup'] .card h2 {
+  font-size: 1.15rem;
 }
 
 .page-content {
@@ -262,6 +279,11 @@ select {
 
 @media (max-width: 640px) {
   body {
+    min-width: 100%;
+  }
+
+  body[data-page='popup'] {
+    width: 100%;
     min-width: 100%;
   }
 
