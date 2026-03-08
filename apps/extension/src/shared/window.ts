@@ -1,6 +1,6 @@
 export function openExtensionPage(path: string): void {
   const url = chrome.runtime.getURL(path);
-  window.open(url, '_blank', 'noopener,noreferrer');
+  void chrome.tabs.create({ url });
 }
 
 export function closeCurrentWindow(): void {

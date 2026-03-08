@@ -14,7 +14,7 @@
 
 body {
   margin: 0;
-  min-width: 380px;
+  min-width: 360px;
   min-height: 600px;
 }
 
@@ -50,6 +50,11 @@ select {
 .card h2 {
   margin: 0;
   font-size: 1.8rem;
+}
+
+.page-header h1 {
+  line-height: 1.04;
+  text-wrap: balance;
 }
 
 .page-content {
@@ -90,6 +95,9 @@ select {
 }
 
 .button {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
   border: 0;
   border-radius: 999px;
   padding: 11px 16px;
@@ -198,6 +206,22 @@ select {
   flex-wrap: wrap;
 }
 
+.wrap-actions > * {
+  flex: 1 1 160px;
+}
+
+.button-block {
+  width: 100%;
+}
+
+.checkbox-row {
+  align-items: flex-start;
+}
+
+.checkbox-row input {
+  margin-top: 3px;
+}
+
 .space-between {
   display: flex;
   justify-content: space-between;
@@ -245,8 +269,15 @@ select {
     padding: 18px;
   }
 
+  .page-header h1 {
+    font-size: 1.35rem;
+  }
+
+  .card h2 {
+    font-size: 1.2rem;
+  }
+
   .mnemonic-grid {
     grid-template-columns: 1fr;
   }
 }
-

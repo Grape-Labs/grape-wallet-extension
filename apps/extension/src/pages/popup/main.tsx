@@ -7,6 +7,7 @@ import type { WalletStateResponse } from '../../shared/models';
 import { sendRuntimeMessage } from '../../shared/chrome';
 import { openExtensionPage } from '../../shared/window';
 import { mountPage } from '../lib';
+import { OnboardingView } from '../onboarding/OnboardingView';
 
 function formatLamports(lamports: number | null): string {
   if (lamports === null) {
@@ -38,11 +39,16 @@ function PopupPage() {
 
   if (state.wallet.setup !== 'ready') {
     return (
-      <PageShell title="Start your wallet" subtitle="Create a 12-word Solana wallet or import an existing mnemonic.">
-        <Card title="No wallet yet">
-          <p className="muted">Grape is ready for a minimal Solana setup flow.</p>
-          <Button onClick={() => openExtensionPage('onboarding.html')}>Open onboarding</Button>
+      <PageShell title="Set up wallet" subtitle="Create or import your Solana wallet directly in the popup.">
+        <Card title="First run">
+          <p className="muted">
+            The setup flow is available here now. If you want more room, open the full-page version.
+          </p>
+          <Button tone="secondary" className="button-block" onClick={() => openExtensionPage('onboarding.html')}>
+            Open full-page setup
+          </Button>
         </Card>
+        <OnboardingView compact onComplete={refresh} />
       </PageShell>
     );
   }
@@ -107,4 +113,3 @@ function PopupPage() {
 }
 
 mountPage(<PopupPage />);
-
