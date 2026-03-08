@@ -9,6 +9,7 @@ function makeToken(overrides: Partial<TokenHolding> = {}): TokenHolding {
     amount: '1',
     decimals: 6,
     programId: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+    accountAddress: 'account-a',
     ...overrides
   };
 }

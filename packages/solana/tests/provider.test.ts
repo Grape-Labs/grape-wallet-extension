@@ -214,4 +214,35 @@ describe('provider', () => {
     expect(capturedSerialized.length).toBeGreaterThan(0);
     expect(signed).toBeInstanceOf(Transaction);
   });
+
+  it('supports legacy sendTransaction by routing to signAndSendTransaction', async () => {
+    const transaction = new Transaction({
+      feePayer: Keypair.generate().publicKey,
+      recentBlockhash: '11111111111111111111111111111111'
+    }).add(
+      SystemProgram.transfer({
+        fromPubkey: Keypair.generate().publicKey,
+        toPubkey: Keypair.generate().publicKey,
+        lamports: 1
+      })
+    );
+    const transport = {
+      request: vi.fn().mockResolvedValue({ signature: 'tx-signature' })
+    };
+
+    const provider = new GrapeInpageProvider(transport, {
+      origin: 'https://example.com',
+      href: 'https://example.com',
+      title: 'Example'
+    });
+
+    const response = await provider.sendTransaction(transaction);
+
+    expect(response).toEqual({ signature: 'tx-signature' });
+    expect(transport.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: 'signAndSendTransaction'
+      })
+    );
+  });
 });

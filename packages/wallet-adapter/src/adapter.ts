@@ -7,13 +7,15 @@ import {
   WalletNotReadyError,
   WalletPublicKeyError,
   WalletReadyState,
+  WalletSendTransactionError,
   WalletSignMessageError,
   WalletSignTransactionError,
+  type SendTransactionOptions,
   type WalletName,
   scopePollingDetectionStrategy
 } from '@solana/wallet-adapter-base';
 import type { SupportedTransactionVersions } from '@solana/wallet-adapter-base';
-import { PublicKey, type TransactionVersion, type Transaction, type VersionedTransaction } from '@solana/web3.js';
+import { PublicKey, VersionedTransaction, type Connection, type TransactionVersion, type Transaction } from '@solana/web3.js';
 
 import { GRAPE_WALLET_ADAPTER_ICON } from './icon';
 
@@ -39,6 +41,7 @@ type GrapeInjectedProvider = {
   signMessage(message: Uint8Array): Promise<GrapeProviderMessageResult>;
   signTransaction<T extends Transaction | VersionedTransaction>(transaction: T): Promise<T>;
   signAllTransactions?<T extends Transaction | VersionedTransaction>(transactions: T[]): Promise<T[]>;
+  signAndSendTransaction?<T extends Transaction | VersionedTransaction>(transaction: T): Promise<{ signature: string }>;
   on?(event: 'connect' | 'disconnect' | 'accountChanged', listener: (...args: unknown[]) => void): void;
   off?(event: 'connect' | 'disconnect' | 'accountChanged', listener: (...args: unknown[]) => void): void;
 };
@@ -202,6 +205,31 @@ export class GrapeWalletAdapter extends BaseMessageSignerWalletAdapter<GrapeWall
       return result.signature;
     } catch (error) {
       const wrapped = new WalletSignMessageError(toErrorMessage(error, 'Failed to sign message.'), error);
+      this.emit('error', wrapped);
+      throw wrapped;
+    }
+  }
+
+  async sendTransaction(
+    transaction: Transaction | VersionedTransaction,
+    connection: Connection,
+    options: SendTransactionOptions = {}
+  ): Promise<string> {
+    const provider = this.requireProvider();
+
+    try {
+      if (transaction instanceof VersionedTransaction) {
+        const signedTransaction = await provider.signTransaction(transaction);
+        return await connection.sendRawTransaction(signedTransaction.serialize(), options);
+      }
+
+      const { signers, ...sendOptions } = options;
+      const preparedTransaction = await this.prepareTransaction(transaction, connection, sendOptions);
+      signers?.length && preparedTransaction.partialSign(...signers);
+      const signedTransaction = await provider.signTransaction(preparedTransaction);
+      return await connection.sendRawTransaction(signedTransaction.serialize(), sendOptions);
+    } catch (error) {
+      const wrapped = new WalletSendTransactionError(toErrorMessage(error, 'Failed to send transaction.'), error);
       this.emit('error', wrapped);
       throw wrapped;
     }

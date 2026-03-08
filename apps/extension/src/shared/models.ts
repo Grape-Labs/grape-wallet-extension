@@ -42,12 +42,16 @@ export type TokenHolding = {
   amount: string;
   decimals: number;
   programId: string;
+  accountAddress: string;
   name?: string;
   symbol?: string;
   logoUri?: string;
   priceUsd?: number | null;
   valueUsd?: number | null;
   priceChange24h?: number | null;
+  delegate?: string | null;
+  delegatedAmount?: string | null;
+  closeAuthority?: string | null;
 };
 
 export type CollectibleItem = {
@@ -83,6 +87,15 @@ export type SendTransferResponse = {
   network: WalletState['selectedNetwork'];
 };
 
+export type TokenActionResponse = {
+  signature: string;
+  mint: string;
+  accountAddress: string;
+  action: 'burn' | 'close';
+  amount?: string;
+  network: WalletState['selectedNetwork'];
+};
+
 export type WalletExportResponse = {
   walletId: string;
   walletName: string;
@@ -110,4 +123,53 @@ export type WalletSwapExecuteResponse = {
   outputMint: string;
   inputAmountUi: string;
   outputAmountUi: string;
+};
+
+export type DelegatedTokenRisk = {
+  accountAddress: string;
+  mint: string;
+  name?: string;
+  symbol?: string;
+  delegate: string;
+  delegatedAmount?: string | null;
+  closeAuthority?: string | null;
+};
+
+export type CloseAuthorityRisk = {
+  accountAddress: string;
+  mint: string;
+  name?: string;
+  symbol?: string;
+  closeAuthority: string;
+};
+
+export type ControlledMintAuthority = {
+  mint: string;
+  name?: string;
+  symbol?: string;
+  mintAuthority: string | null;
+  freezeAuthority: string | null;
+  controlsMintAuthority: boolean;
+  controlsFreezeAuthority: boolean;
+};
+
+export type WalletSecurityReportResponse = {
+  delegatedTokenAccounts: DelegatedTokenRisk[];
+  externalCloseAuthorities: CloseAuthorityRisk[];
+  controlledMints: ControlledMintAuthority[];
+  warnings: string[];
+  scannedAt: number;
+};
+
+export type IncidentResponseActionResult = {
+  kind: 'revoke-delegates' | 'sweep-spl' | 'sweep-sol' | 'rotate-close-authorities' | 'rotate-mint-authorities';
+  signatures: string[];
+  itemCount: number;
+};
+
+export type IncidentResponseResponse = {
+  safeWallet: string;
+  reserveSol: string;
+  actions: IncidentResponseActionResult[];
+  warnings: string[];
 };

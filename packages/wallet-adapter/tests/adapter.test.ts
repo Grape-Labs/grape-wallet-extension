@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PublicKey, Transaction } from '@solana/web3.js';
+import { Connection, PublicKey, Transaction } from '@solana/web3.js';
 import { WalletReadyState } from '@solana/wallet-adapter-base';
 
 import { GrapeWalletAdapter, getInjectedGrapeProvider } from '../src/adapter';
@@ -14,6 +14,7 @@ type MockProvider = {
   signMessage: ReturnType<typeof vi.fn>;
   signTransaction: ReturnType<typeof vi.fn>;
   signAllTransactions: ReturnType<typeof vi.fn>;
+  signAndSendTransaction: ReturnType<typeof vi.fn>;
   on: ReturnType<typeof vi.fn>;
   off: ReturnType<typeof vi.fn>;
 };
@@ -27,6 +28,7 @@ function createMockProvider(): MockProvider {
     signMessage: vi.fn().mockResolvedValue({ publicKey: PUBLIC_KEY, signature: new Uint8Array([1, 2, 3]) }),
     signTransaction: vi.fn().mockImplementation(async <T>(transaction: T) => transaction),
     signAllTransactions: vi.fn().mockImplementation(async <T>(transactions: T[]) => transactions),
+    signAndSendTransaction: vi.fn().mockResolvedValue({ signature: 'mock-signature' }),
     on: vi.fn(),
     off: vi.fn()
   };
@@ -104,5 +106,30 @@ describe('@grape/wallet-adapter', () => {
     expect(provider.signMessage).toHaveBeenCalledTimes(1);
     expect(provider.signTransaction).toHaveBeenCalledTimes(1);
     expect(provider.signAllTransactions).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends transactions through the injected provider and the supplied connection', async () => {
+    const provider = createMockProvider();
+    const transaction = new Transaction();
+    provider.signTransaction.mockResolvedValue({
+      ...transaction,
+      serialize: vi.fn().mockReturnValue(new Uint8Array([1, 2, 3]))
+    });
+    (window as unknown as { grape: MockProvider }).grape = provider;
+
+    const adapter = new GrapeWalletAdapter();
+    await adapter.connect();
+
+    const prepareTransactionSpy = vi.spyOn(adapter as never, 'prepareTransaction').mockResolvedValue(transaction);
+    const connection = {
+      sendRawTransaction: vi.fn().mockResolvedValue('tx-signature')
+    } as unknown as Connection;
+
+    const signature = await adapter.sendTransaction(transaction, connection);
+
+    expect(signature).toBe('tx-signature');
+    expect(prepareTransactionSpy).toHaveBeenCalledTimes(1);
+    expect(provider.signTransaction).toHaveBeenCalledWith(transaction);
+    expect(connection.sendRawTransaction).toHaveBeenCalledTimes(1);
   });
 });

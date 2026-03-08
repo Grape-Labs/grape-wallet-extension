@@ -36,13 +36,25 @@ type ShyftCollectionItem = {
   collection_id?: string;
   collectionId?: string;
   collection_address?: string;
+  address?: string;
+  collection_name?: string;
   symbol?: string;
   name?: string;
   image?: string;
   image_uri?: string;
   imageUrl?: string;
+  logoURI?: string;
   nft_count?: number;
   count?: number;
+  collection?: {
+    address?: string;
+    name?: string;
+    symbol?: string;
+    image?: string;
+    image_uri?: string;
+    imageUrl?: string;
+    logoURI?: string;
+  };
   items?: Array<{
     mint?: string;
     nft_address?: string;
@@ -174,11 +186,18 @@ function normalizeCollectibleItem(
 }
 
 function normalizeCollection(entry: ShyftCollectionItem): ShyftCollectionMetadata | null {
+  const nestedCollection = entry.collection ?? {};
   const id =
     normalizeString(entry.collection_id) ??
     normalizeString(entry.collectionId) ??
-    normalizeString(entry.collection_address);
-  const name = normalizeString(entry.name);
+    normalizeString(entry.collection_address) ??
+    normalizeString(entry.address) ??
+    normalizeString(nestedCollection.address);
+  const name =
+    normalizeString(entry.name) ??
+    normalizeString(entry.collection_name) ??
+    normalizeString(nestedCollection.name) ??
+    normalizeString(entry.symbol);
 
   if (!id || !name) {
     return null;
@@ -191,8 +210,8 @@ function normalizeCollection(entry: ShyftCollectionItem): ShyftCollectionMetadat
   return {
     id,
     name,
-    symbol: normalizeString(entry.symbol),
-    imageUri: normalizeImage(entry),
+    symbol: normalizeString(entry.symbol) ?? normalizeString(nestedCollection.symbol),
+    imageUri: normalizeImage(entry) ?? normalizeImage(nestedCollection),
     itemCount:
       typeof entry.nft_count === 'number'
         ? entry.nft_count
@@ -201,6 +220,23 @@ function normalizeCollection(entry: ShyftCollectionItem): ShyftCollectionMetadat
           : items.length,
     items
   };
+}
+
+function extractCollectionEntries(payload: ShyftResponse): ShyftCollectionItem[] {
+  if (Array.isArray(payload.result)) {
+    return payload.result as ShyftCollectionItem[];
+  }
+
+  const result = payload.result as { collections?: unknown; result?: { collections?: unknown } } | undefined;
+  if (Array.isArray(result?.collections)) {
+    return result.collections as ShyftCollectionItem[];
+  }
+
+  if (Array.isArray(result?.result?.collections)) {
+    return result.result.collections as ShyftCollectionItem[];
+  }
+
+  return [];
 }
 
 export async function fetchShyftCollections(
@@ -224,7 +260,7 @@ export async function fetchShyftCollections(
   }
 
   const payload = (await response.json()) as ShyftResponse;
-  const entries = Array.isArray(payload.result) ? payload.result : [];
+  const entries = extractCollectionEntries(payload);
 
   return entries
     .map((entry) => normalizeCollection((entry ?? {}) as ShyftCollectionItem))

@@ -12,7 +12,14 @@ type ProviderEventMap = {
 };
 
 type ProviderRequestArgs = {
-  method: 'connect' | 'disconnect' | 'signMessage' | 'signTransaction' | 'signAllTransactions' | 'signAndSendTransaction';
+  method:
+    | 'connect'
+    | 'disconnect'
+    | 'signMessage'
+    | 'signTransaction'
+    | 'signAllTransactions'
+    | 'signAndSendTransaction'
+    | 'sendTransaction';
   params?: Record<string, unknown>;
 };
 
@@ -178,6 +185,14 @@ export class GrapeInpageProvider {
     });
   }
 
+  async sendTransaction(
+    transaction: Transaction | VersionedTransaction,
+    _connection?: unknown,
+    _options?: unknown
+  ): Promise<{ signature: string }> {
+    return this.signAndSendTransaction(transaction);
+  }
+
   async request<T = unknown>(args: ProviderRequestArgs): Promise<T> {
     if (args.method === 'connect') {
       return this.connect(args.params as { onlyIfTrusted?: boolean }) as Promise<T>;
@@ -215,6 +230,13 @@ export class GrapeInpageProvider {
         throw new Error('signAndSendTransaction requires a Transaction or VersionedTransaction.');
       }
       return this.signAndSendTransaction(transaction) as Promise<T>;
+    }
+    if (args.method === 'sendTransaction') {
+      const transaction = args.params?.transaction;
+      if (!(transaction instanceof Transaction) && !(transaction instanceof VersionedTransaction)) {
+        throw new Error('sendTransaction requires a Transaction or VersionedTransaction.');
+      }
+      return this.sendTransaction(transaction, args.params?.connection, args.params?.options) as Promise<T>;
     }
     throw new Error(`Unsupported provider request method: ${args.method}`);
   }

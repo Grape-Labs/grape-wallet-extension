@@ -8,6 +8,18 @@ import { sendRuntimeMessage } from '../../shared/chrome';
 import { closeCurrentWindow } from '../../shared/window';
 import { mountPage } from '../lib';
 
+function formatAddress(address: string | undefined, start = 6, end = 6): string {
+  if (!address) {
+    return 'Unknown';
+  }
+
+  if (address.length <= start + end + 3) {
+    return address;
+  }
+
+  return `${address.slice(0, start)}...${address.slice(-end)}`;
+}
+
 function summarizeMessage(base64Message: string): string {
   try {
     return new TextDecoder().decode(Uint8Array.from(atob(base64Message), (item) => item.charCodeAt(0)));
@@ -65,7 +77,14 @@ function ApprovalPage() {
 
       <Card title="Request details">
         <KeyValueRow label="Network" value={approval.network} />
-        <KeyValueRow label="Account" value={<span className="mono">{approval.publicKey}</span>} />
+        <KeyValueRow
+          label="Account"
+          value={
+            <span className="mono approval-address" title={approval.publicKey}>
+              {formatAddress(approval.publicKey)}
+            </span>
+          }
+        />
         {approval.requestedPermissions?.length ? (
           <div className="stack">
             <span className="muted">Requested permissions</span>
@@ -84,12 +103,26 @@ function ApprovalPage() {
         ) : null}
         {approval.transactionSummary ? (
           <div className="stack">
-            <KeyValueRow label="Fee payer" value={<span className="mono">{approval.transactionSummary.feePayer ?? 'Unknown'}</span>} />
+            <KeyValueRow
+              label="Fee payer"
+              value={
+                <span className="mono approval-address" title={approval.transactionSummary.feePayer ?? 'Unknown'}>
+                  {formatAddress(approval.transactionSummary.feePayer)}
+                </span>
+              }
+            />
             <KeyValueRow label="Instructions" value={approval.transactionSummary.instructionCount} />
             {approval.transactionSummary.instructions.map((instruction, index) => (
               <div key={`${instruction.programId}-${index}`} className="card">
                 <KeyValueRow label="Program" value={instruction.programName} />
-                <KeyValueRow label="Program ID" value={<span className="mono">{instruction.programId}</span>} />
+                <KeyValueRow
+                  label="Program ID"
+                  value={
+                    <span className="mono approval-address" title={instruction.programId}>
+                      {formatAddress(instruction.programId)}
+                    </span>
+                  }
+                />
                 <KeyValueRow label="Accounts" value={instruction.accountCount} />
                 {instruction.warning ? <p className="warning-box">{instruction.warning}</p> : null}
               </div>

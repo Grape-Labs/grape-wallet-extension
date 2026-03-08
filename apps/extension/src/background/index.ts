@@ -21,12 +21,20 @@ import {
   verifyVaultPassword
 } from '@grape/core';
 import {
+  buildBurnSplTokenTransaction,
+  buildCloseTokenAccountTransaction,
   buildSolTransferTransaction,
   buildSplTokenTransferTransaction,
+  createAssociatedTokenAccountInstruction,
+  createRevokeInstruction,
+  createSetAuthorityInstruction,
+  createTransferCheckedInstruction,
   estimateLegacyTransactionFee,
   exportSolanaSoftwareWalletSecret,
+  getAssociatedTokenAddress,
   resolveSolanaVaultSecret,
   parseDecimalAmount,
+  TOKEN_AUTHORITY_TYPES,
   signAndSendLedgerTransaction,
   signAndSendLedgerSerializedTransaction,
   signAndSendSerializedTransaction,
@@ -38,7 +46,7 @@ import {
   signSerializedTransactions,
   summarizeTransaction
 } from '@grape/solana';
-import { Connection, PublicKey } from '@solana/web3.js';
+import { Connection, PublicKey, Transaction, TransactionInstruction } from '@solana/web3.js';
 
 import type { ApprovalRecord, CollectionHolding, TokenHolding } from '../shared/models';
 
@@ -62,6 +70,22 @@ const TOKEN_PROGRAM_IDS = [
 const KNOWN_TOKEN_SYMBOLS: Record<string, string> = {
   [JUPITER_SOL_MINT]: 'SOL',
   EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v: 'USDC'
+};
+const INCIDENT_BATCH_SIZE = 6;
+
+type ParsedWalletTokenAccount = TokenHolding & {
+  rawAmount: string;
+};
+
+type ControlledMintRecord = {
+  mint: string;
+  programId: string;
+  name?: string;
+  symbol?: string;
+  mintAuthority: string | null;
+  freezeAuthority: string | null;
+  controlsMintAuthority: boolean;
+  controlsFreezeAuthority: boolean;
 };
 
 type PendingResolver = {
@@ -281,6 +305,148 @@ class WalletController {
     return connection.getBalance(new PublicKey(activeAccount.publicKey));
   }
 
+  private async scanWalletTokenAccounts(
+    connection: Connection,
+    owner: PublicKey,
+    shyftMetadata: Record<string, { name?: string; symbol?: string; logoUri?: string }>
+  ): Promise<ParsedWalletTokenAccount[]> {
+    const tokenResponses = await Promise.all(
+      TOKEN_PROGRAM_IDS.map((programId) =>
+        connection.getParsedTokenAccountsByOwner(owner, {
+          programId: new PublicKey(programId)
+        })
+      )
+    );
+
+    return tokenResponses.flatMap((response) =>
+      response.value.map((accountInfo) => {
+        const parsed = accountInfo.account.data.parsed.info;
+        const tokenAmount = parsed.tokenAmount as {
+          uiAmountString?: string;
+          amount: string;
+          decimals: number;
+        };
+        const delegatedAmount = parsed.delegatedAmount as { uiAmountString?: string; amount?: string } | undefined;
+        const mint = parsed.mint as string;
+
+        return {
+          mint,
+          amount: tokenAmount.uiAmountString ?? tokenAmount.amount,
+          rawAmount: tokenAmount.amount,
+          decimals: tokenAmount.decimals,
+          programId: accountInfo.account.owner.toBase58(),
+          accountAddress: accountInfo.pubkey.toBase58(),
+          name: shyftMetadata[mint]?.name,
+          symbol: shyftMetadata[mint]?.symbol ?? KNOWN_TOKEN_SYMBOLS[mint],
+          logoUri: shyftMetadata[mint]?.logoUri,
+          delegate: typeof parsed.delegate === 'string' ? parsed.delegate : null,
+          delegatedAmount:
+            delegatedAmount?.uiAmountString ??
+            (typeof delegatedAmount?.amount === 'string' ? delegatedAmount.amount : null),
+          closeAuthority: typeof parsed.closeAuthority === 'string' ? parsed.closeAuthority : null
+        } satisfies ParsedWalletTokenAccount;
+      })
+    );
+  }
+
+  private async scanControlledMints(
+    connection: Connection,
+    walletPublicKey: string,
+    tokens: ParsedWalletTokenAccount[],
+    collections: CollectionHolding[]
+  ): Promise<ControlledMintRecord[]> {
+    const mintAddresses = Array.from(
+      new Set([
+        ...tokens.map((token) => token.mint),
+        ...collections.flatMap((collection) => collection.items.map((item) => item.mint))
+      ])
+    );
+
+    const mintAccounts = await Promise.all(
+      mintAddresses.map(async (mint) => {
+        const accountInfo = await connection.getParsedAccountInfo(new PublicKey(mint), 'confirmed');
+        const parsedData = accountInfo.value?.data;
+        if (!parsedData || typeof parsedData !== 'object' || !('parsed' in parsedData)) {
+          return null;
+        }
+
+        const parsed = parsedData.parsed;
+        if (!parsed || typeof parsed !== 'object' || !('info' in parsed) || !parsed.info || typeof parsed.info !== 'object') {
+          return null;
+        }
+
+        const info = parsed.info as Record<string, unknown>;
+        const mintAuthority = typeof info.mintAuthority === 'string' ? info.mintAuthority : null;
+        const freezeAuthority = typeof info.freezeAuthority === 'string' ? info.freezeAuthority : null;
+        const token = tokens.find((entry) => entry.mint === mint);
+
+        const entry: ControlledMintRecord = {
+          mint,
+          programId: accountInfo.value?.owner.toBase58() ?? token?.programId ?? TOKEN_PROGRAM_IDS[0],
+          name: token?.name,
+          symbol: token?.symbol,
+          mintAuthority,
+          freezeAuthority,
+          controlsMintAuthority: mintAuthority === walletPublicKey,
+          controlsFreezeAuthority: freezeAuthority === walletPublicKey
+        };
+
+        return entry;
+      })
+    );
+
+    return mintAccounts.filter(
+      (entry): entry is ControlledMintRecord => !!entry && (entry.controlsMintAuthority || entry.controlsFreezeAuthority)
+    );
+  }
+
+  private async submitTransactionForWallet(
+    selectedWallet: NonNullable<ReturnType<typeof getSelectedWallet>>,
+    activePublicKey: string,
+    secret: VaultSecret,
+    connection: Connection,
+    transaction: Transaction
+  ) {
+    try {
+      return selectedWallet.signer.kind === 'ledger'
+        ? await signAndSendLedgerTransaction(transaction, activePublicKey, selectedWallet.signer.derivationPath, connection)
+        : await signAndSendTransaction(transaction, resolveSolanaVaultSecret(secret), connection);
+    } catch (error) {
+      throw normalizeSigningError(error);
+    } finally {
+      await this.setSessionState({ locked: false, lastActivityAt: Date.now() });
+    }
+  }
+
+  private async submitInstructionBatches(
+    selectedWallet: NonNullable<ReturnType<typeof getSelectedWallet>>,
+    activePublicKey: string,
+    secret: VaultSecret,
+    connection: Connection,
+    owner: PublicKey,
+    instructions: TransactionInstruction[],
+    batchSize = INCIDENT_BATCH_SIZE
+  ): Promise<string[]> {
+    const signatures: string[] = [];
+
+    for (let index = 0; index < instructions.length; index += batchSize) {
+      const batch = instructions.slice(index, index + batchSize);
+      if (batch.length === 0) {
+        continue;
+      }
+
+      const { blockhash } = await connection.getLatestBlockhash('confirmed');
+      const transaction = new Transaction({
+        feePayer: owner,
+        recentBlockhash: blockhash
+      });
+      transaction.add(...batch);
+      signatures.push(await this.submitTransactionForWallet(selectedWallet, activePublicKey, secret, connection, transaction));
+    }
+
+    return signatures;
+  }
+
   async getAssets() {
     const { walletState, selectedWallet } = await this.ensureReadyWallet();
     const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
@@ -293,45 +459,19 @@ class WalletController {
 
     const owner = new PublicKey(activeAccount.publicKey);
     const connection = new Connection(getRpcEndpoint(walletState.selectedNetwork), 'confirmed');
-    const [lamports, shyftMetadataResult, shyftCollectionsResult, ...tokenResponses] = await Promise.all([
+    const [lamports, shyftMetadataResult, shyftCollectionsResult] = await Promise.all([
       connection.getBalance(owner),
       hasShyftApiKey()
         ? fetchShyftWalletTokens(walletState.selectedNetwork, activeAccount.publicKey).catch(() => ({}))
         : Promise.resolve({}),
       hasShyftApiKey()
         ? fetchShyftCollections(walletState.selectedNetwork, activeAccount.publicKey).catch(() => [])
-        : Promise.resolve([]),
-      ...TOKEN_PROGRAM_IDS.map((programId) =>
-        connection.getParsedTokenAccountsByOwner(owner, {
-          programId: new PublicKey(programId)
-        })
-      )
+        : Promise.resolve([])
     ]);
 
     const shyftMetadata = shyftMetadataResult as Record<string, { name?: string; symbol?: string; logoUri?: string }>;
     const collections = shyftCollectionsResult as CollectionHolding[];
-
-    const tokens = tokenResponses
-      .flatMap((response) => response.value)
-      .map((accountInfo) => {
-        const parsed = accountInfo.account.data.parsed.info;
-        const tokenAmount = parsed.tokenAmount as {
-          uiAmountString?: string;
-          amount: string;
-          decimals: number;
-        };
-
-        return {
-          mint: parsed.mint as string,
-          amount: tokenAmount.uiAmountString ?? tokenAmount.amount,
-          decimals: tokenAmount.decimals,
-          programId: accountInfo.account.owner.toBase58(),
-          name: shyftMetadata[parsed.mint as string]?.name,
-          symbol: shyftMetadata[parsed.mint as string]?.symbol ?? KNOWN_TOKEN_SYMBOLS[parsed.mint as string],
-          logoUri: shyftMetadata[parsed.mint as string]?.logoUri
-        } satisfies TokenHolding;
-      })
-      .filter((token) => Number(token.amount) > 0);
+    const tokens = (await this.scanWalletTokenAccounts(connection, owner, shyftMetadata)).filter((token) => Number(token.amount) > 0);
 
     const fungibleTokens = filterCollectibleTokens(tokens, collections);
 
@@ -477,6 +617,377 @@ class WalletController {
       amount: input.amount,
       asset: input.asset,
       network: walletState.selectedNetwork
+    };
+  }
+
+  async burnToken(input: {
+    mint: string;
+    accountAddress: string;
+    amount: string;
+    decimals: number;
+    programId: string;
+    password?: string;
+  }) {
+    const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
+    if (!activeAccount) {
+      throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
+    }
+
+    const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
+    const connection = new Connection(getRpcEndpoint(walletState.selectedNetwork), 'confirmed');
+    const owner = new PublicKey(activeAccount.publicKey);
+    const transaction = await buildBurnSplTokenTransaction(connection, owner, input);
+    const signature = await this.submitTransactionForWallet(selectedWallet, activeAccount.publicKey, secret, connection, transaction);
+
+    return {
+      signature,
+      mint: input.mint,
+      accountAddress: input.accountAddress,
+      action: 'burn' as const,
+      amount: input.amount,
+      network: walletState.selectedNetwork
+    };
+  }
+
+  async closeTokenAccount(input: { mint: string; accountAddress: string; programId: string; password?: string }) {
+    const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
+    if (!activeAccount) {
+      throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
+    }
+
+    const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
+    const connection = new Connection(getRpcEndpoint(walletState.selectedNetwork), 'confirmed');
+    const owner = new PublicKey(activeAccount.publicKey);
+    const tokenAccounts = await this.scanWalletTokenAccounts(connection, owner, {});
+    const tokenAccount = tokenAccounts.find(
+      (account) =>
+        account.mint === input.mint &&
+        account.programId === input.programId &&
+        account.accountAddress === input.accountAddress
+    );
+    if (!tokenAccount) {
+      throw new RpcError('TOKEN_ACCOUNT_MISSING', 'The selected token account could not be found.');
+    }
+    if (BigInt(tokenAccount.rawAmount) > 0n) {
+      throw new RpcError('TOKEN_ACCOUNT_NOT_EMPTY', 'Burn or transfer the remaining token balance before closing this account.');
+    }
+    if (tokenAccount.delegate) {
+      throw new RpcError('DELEGATE_PRESENT', 'Revoke the token delegate before closing this account.');
+    }
+
+    const transaction = await buildCloseTokenAccountTransaction(connection, owner, input);
+    const signature = await this.submitTransactionForWallet(selectedWallet, activeAccount.publicKey, secret, connection, transaction);
+
+    return {
+      signature,
+      mint: input.mint,
+      accountAddress: input.accountAddress,
+      action: 'close' as const,
+      network: walletState.selectedNetwork
+    };
+  }
+
+  async getSecurityReport() {
+    const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
+    if (!activeAccount) {
+      throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
+    }
+
+    const connection = new Connection(getRpcEndpoint(walletState.selectedNetwork), 'confirmed');
+    const owner = new PublicKey(activeAccount.publicKey);
+    const [shyftMetadataResult, shyftCollectionsResult] = await Promise.all([
+      hasShyftApiKey()
+        ? fetchShyftWalletTokens(walletState.selectedNetwork, activeAccount.publicKey).catch(() => ({}))
+        : Promise.resolve({}),
+      hasShyftApiKey()
+        ? fetchShyftCollections(walletState.selectedNetwork, activeAccount.publicKey).catch(() => [])
+        : Promise.resolve([])
+    ]);
+    const shyftMetadata = shyftMetadataResult as Record<string, { name?: string; symbol?: string; logoUri?: string }>;
+    const collections = shyftCollectionsResult as CollectionHolding[];
+    const tokens = await this.scanWalletTokenAccounts(connection, owner, shyftMetadata);
+    const controlledMints = await this.scanControlledMints(connection, activeAccount.publicKey, tokens, collections);
+    const delegatedTokenAccounts = tokens
+      .filter((token) => !!token.delegate)
+      .map((token) => ({
+        accountAddress: token.accountAddress,
+        mint: token.mint,
+        name: token.name,
+        symbol: token.symbol,
+        delegate: token.delegate ?? '',
+        delegatedAmount: token.delegatedAmount ?? null,
+        closeAuthority: token.closeAuthority ?? null
+      }));
+    const externalCloseAuthorities = tokens
+      .filter((token) => !!token.closeAuthority && token.closeAuthority !== activeAccount.publicKey)
+      .map((token) => ({
+        accountAddress: token.accountAddress,
+        mint: token.mint,
+        name: token.name,
+        symbol: token.symbol,
+        closeAuthority: token.closeAuthority ?? ''
+      }));
+    const warnings: string[] = [];
+
+    if (delegatedTokenAccounts.length > 0) {
+      warnings.push(`${delegatedTokenAccounts.length} token account${delegatedTokenAccounts.length === 1 ? '' : 's'} have an active delegate.`);
+    }
+    if (externalCloseAuthorities.length > 0) {
+      warnings.push(`${externalCloseAuthorities.length} token account${externalCloseAuthorities.length === 1 ? '' : 's'} have an external close authority.`);
+    }
+    if (controlledMints.length > 0) {
+      warnings.push(`${controlledMints.length} discovered mint${controlledMints.length === 1 ? '' : 's'} still trust this wallet with mint and/or freeze authority.`);
+    }
+
+    return {
+      delegatedTokenAccounts,
+      externalCloseAuthorities,
+      controlledMints,
+      warnings,
+      scannedAt: Date.now()
+    };
+  }
+
+  async runIncidentResponse(input: {
+    safeWallet: string;
+    reserveSol: string;
+    password?: string;
+    revokeDelegates: boolean;
+    sweepSplTokens: boolean;
+    sweepSol: boolean;
+    rotateCloseAuthorities: boolean;
+    rotateMintAuthorities: boolean;
+  }) {
+    const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
+    if (!activeAccount) {
+      throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
+    }
+
+    const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
+    const connection = new Connection(getRpcEndpoint(walletState.selectedNetwork), 'confirmed');
+    const owner = new PublicKey(activeAccount.publicKey);
+    const safeWallet = new PublicKey(input.safeWallet);
+    const [shyftMetadataResult, shyftCollectionsResult] = await Promise.all([
+      hasShyftApiKey()
+        ? fetchShyftWalletTokens(walletState.selectedNetwork, activeAccount.publicKey).catch(() => ({}))
+        : Promise.resolve({}),
+      hasShyftApiKey()
+        ? fetchShyftCollections(walletState.selectedNetwork, activeAccount.publicKey).catch(() => [])
+        : Promise.resolve([])
+    ]);
+    const shyftMetadata = shyftMetadataResult as Record<string, { name?: string; symbol?: string; logoUri?: string }>;
+    const collections = shyftCollectionsResult as CollectionHolding[];
+    const tokenAccounts = await this.scanWalletTokenAccounts(connection, owner, shyftMetadata);
+    const fungibleTokens = (filterCollectibleTokens(tokenAccounts, collections) as ParsedWalletTokenAccount[]).filter(
+      (token) => BigInt(token.rawAmount) > 0n
+    );
+    const controlledMints = await this.scanControlledMints(connection, activeAccount.publicKey, tokenAccounts, collections);
+    const warnings: string[] = [];
+    const actions: Array<{
+      kind: 'revoke-delegates' | 'sweep-spl' | 'sweep-sol' | 'rotate-close-authorities' | 'rotate-mint-authorities';
+      signatures: string[];
+      itemCount: number;
+    }> = [];
+
+    if (input.revokeDelegates) {
+      const revokeInstructions = tokenAccounts
+        .filter((token) => !!token.delegate)
+        .map((token) =>
+          createRevokeInstruction(
+            new PublicKey(token.accountAddress),
+            owner,
+            new PublicKey(token.programId)
+          )
+        );
+      if (revokeInstructions.length > 0) {
+        actions.push({
+          kind: 'revoke-delegates',
+          signatures: await this.submitInstructionBatches(
+            selectedWallet,
+            activeAccount.publicKey,
+            secret,
+            connection,
+            owner,
+            revokeInstructions
+          ),
+          itemCount: revokeInstructions.length
+        });
+      }
+    }
+
+    if (input.sweepSplTokens) {
+      const destinationLookups = await Promise.all(
+        fungibleTokens.map(async (token) => {
+          const mint = new PublicKey(token.mint);
+          const tokenProgramId = new PublicKey(token.programId);
+          const destinationAta = getAssociatedTokenAddress(safeWallet, mint, tokenProgramId);
+          const destinationInfo = await connection.getAccountInfo(destinationAta, 'confirmed');
+          return {
+            token,
+            mint,
+            tokenProgramId,
+            destinationAta,
+            destinationExists: !!destinationInfo
+          };
+        })
+      );
+      const sweepInstructions: TransactionInstruction[] = [];
+      for (const entry of destinationLookups) {
+        if (!entry.destinationExists) {
+          sweepInstructions.push(
+            createAssociatedTokenAccountInstruction(owner, entry.destinationAta, safeWallet, entry.mint, entry.tokenProgramId)
+          );
+        }
+        sweepInstructions.push(
+          createTransferCheckedInstruction(
+            new PublicKey(entry.token.accountAddress),
+            entry.mint,
+            entry.destinationAta,
+            owner,
+            BigInt(entry.token.rawAmount),
+            entry.token.decimals,
+            entry.tokenProgramId
+          )
+        );
+      }
+      if (sweepInstructions.length > 0) {
+        actions.push({
+          kind: 'sweep-spl',
+          signatures: await this.submitInstructionBatches(
+            selectedWallet,
+            activeAccount.publicKey,
+            secret,
+            connection,
+            owner,
+            sweepInstructions
+          ),
+          itemCount: fungibleTokens.length
+        });
+      }
+    }
+
+    if (input.rotateCloseAuthorities) {
+      const closeAuthorityInstructions = tokenAccounts
+        .filter((token) => !token.closeAuthority || token.closeAuthority === activeAccount.publicKey)
+        .map((token) =>
+          createSetAuthorityInstruction(
+            new PublicKey(token.accountAddress),
+            owner,
+            new PublicKey(token.programId),
+            TOKEN_AUTHORITY_TYPES.closeAccount,
+            safeWallet
+          )
+        );
+      if (closeAuthorityInstructions.length > 0) {
+        actions.push({
+          kind: 'rotate-close-authorities',
+          signatures: await this.submitInstructionBatches(
+            selectedWallet,
+            activeAccount.publicKey,
+            secret,
+            connection,
+            owner,
+            closeAuthorityInstructions
+          ),
+          itemCount: closeAuthorityInstructions.length
+        });
+      }
+      const skippedExternalCloseAuthorities = tokenAccounts.filter(
+        (token) => !!token.closeAuthority && token.closeAuthority !== activeAccount.publicKey
+      );
+      if (skippedExternalCloseAuthorities.length > 0) {
+        warnings.push(`Skipped ${skippedExternalCloseAuthorities.length} token account close authorit${skippedExternalCloseAuthorities.length === 1 ? 'y' : 'ies'} because another authority controls them.`);
+      }
+    }
+
+    if (input.rotateMintAuthorities) {
+      const mintAuthorityInstructions = controlledMints.flatMap((mint) => {
+        const instructions: TransactionInstruction[] = [];
+        const tokenProgramId = new PublicKey(mint.programId);
+        const mintAddress = new PublicKey(mint.mint);
+
+        if (mint.controlsMintAuthority) {
+          instructions.push(
+            createSetAuthorityInstruction(mintAddress, owner, tokenProgramId, TOKEN_AUTHORITY_TYPES.mintTokens, safeWallet)
+          );
+        }
+        if (mint.controlsFreezeAuthority) {
+          instructions.push(
+            createSetAuthorityInstruction(mintAddress, owner, tokenProgramId, TOKEN_AUTHORITY_TYPES.freezeAccount, safeWallet)
+          );
+        }
+
+        return instructions;
+      });
+      if (mintAuthorityInstructions.length > 0) {
+        actions.push({
+          kind: 'rotate-mint-authorities',
+          signatures: await this.submitInstructionBatches(
+            selectedWallet,
+            activeAccount.publicKey,
+            secret,
+            connection,
+            owner,
+            mintAuthorityInstructions
+          ),
+          itemCount: controlledMints.length
+        });
+      }
+    }
+
+    if (input.sweepSol) {
+      const reserveLamports = parseDecimalAmount(input.reserveSol, 9);
+      const balanceLamports = await connection.getBalance(owner, 'confirmed');
+      const transferLamports = BigInt(balanceLamports) - reserveLamports;
+      if (transferLamports > 0n) {
+        let transaction = await buildSolTransferTransaction(connection, owner, {
+          recipient: safeWallet.toBase58(),
+          amount: (Number(transferLamports) / 1_000_000_000).toFixed(9).replace(/\.?0+$/, '')
+        });
+        const feeLamports = await estimateLegacyTransactionFee(connection, transaction);
+        const adjustedLamports = BigInt(balanceLamports) - reserveLamports - BigInt(feeLamports);
+        if (adjustedLamports > 0n) {
+          transaction = await buildSolTransferTransaction(connection, owner, {
+            recipient: safeWallet.toBase58(),
+            amount: (Number(adjustedLamports) / 1_000_000_000).toFixed(9).replace(/\.?0+$/, '')
+          });
+          actions.push({
+            kind: 'sweep-sol',
+            signatures: [
+              await this.submitTransactionForWallet(
+                selectedWallet,
+                activeAccount.publicKey,
+                secret,
+                connection,
+                transaction
+              )
+            ],
+            itemCount: 1
+          });
+        } else {
+          warnings.push('Skipped SOL sweep because the requested reserve leaves no balance after fees.');
+        }
+      } else {
+        warnings.push('Skipped SOL sweep because the requested reserve is greater than the current SOL balance.');
+      }
+    }
+
+    await walletStateStorage.set({
+      ...walletState,
+      wallets: walletState.wallets.map((wallet) =>
+        wallet.id === selectedWallet.id ? rememberWalletRecipient(wallet, safeWallet.toBase58()) : wallet
+      )
+    });
+
+    return {
+      safeWallet: safeWallet.toBase58(),
+      reserveSol: input.reserveSol,
+      actions,
+      warnings
     };
   }
 
@@ -775,8 +1286,18 @@ class WalletController {
     const createdWindow = await chrome.windows.create({
       url: chrome.runtime.getURL(`approval.html?approvalId=${approval.id}`),
       type: 'popup',
-      width: 420,
-      height: 760
+      width:
+        request.method === 'signTransaction' ||
+        request.method === 'signAllTransactions' ||
+        request.method === 'signAndSendTransaction'
+          ? 500
+          : 440,
+      height:
+        request.method === 'signTransaction' ||
+        request.method === 'signAllTransactions' ||
+        request.method === 'signAndSendTransaction'
+          ? 820
+          : 760
     });
 
     approval.windowId = createdWindow.id;
@@ -988,6 +1509,28 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
             })
           );
           break;
+        case 'wallet_burn_token':
+          sendResponse(
+            await controller.burnToken({
+              mint: message.mint,
+              accountAddress: message.accountAddress,
+              amount: message.amount,
+              decimals: message.decimals,
+              programId: message.programId,
+              password: message.password
+            })
+          );
+          break;
+        case 'wallet_close_token_account':
+          sendResponse(
+            await controller.closeTokenAccount({
+              mint: message.mint,
+              accountAddress: message.accountAddress,
+              programId: message.programId,
+              password: message.password
+            })
+          );
+          break;
         case 'wallet_get_swap_quote':
           sendResponse(
             await controller.getSwapQuote({
@@ -1003,6 +1546,23 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
             await controller.executeSwap({
               quoteResponse: message.quoteResponse,
               password: message.password
+            })
+          );
+          break;
+        case 'wallet_get_security_report':
+          sendResponse(await controller.getSecurityReport());
+          break;
+        case 'wallet_run_incident_response':
+          sendResponse(
+            await controller.runIncidentResponse({
+              safeWallet: message.safeWallet,
+              reserveSol: message.reserveSol,
+              password: message.password,
+              revokeDelegates: message.revokeDelegates,
+              sweepSplTokens: message.sweepSplTokens,
+              sweepSol: message.sweepSol,
+              rotateCloseAuthorities: message.rotateCloseAuthorities,
+              rotateMintAuthorities: message.rotateMintAuthorities
             })
           );
           break;

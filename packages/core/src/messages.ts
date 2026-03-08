@@ -156,6 +156,22 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     asset: sendAssetSchema
   }),
   z.object({
+    type: z.literal('wallet_burn_token'),
+    mint: z.string().min(32),
+    accountAddress: z.string().min(32),
+    amount: decimalAmountSchema,
+    decimals: z.number().int().min(0).max(255),
+    programId: z.string().min(32),
+    password: z.string().min(1).optional()
+  }),
+  z.object({
+    type: z.literal('wallet_close_token_account'),
+    mint: z.string().min(32),
+    accountAddress: z.string().min(32),
+    programId: z.string().min(32),
+    password: z.string().min(1).optional()
+  }),
+  z.object({
     type: z.literal('wallet_get_swap_quote'),
     amount: decimalAmountSchema,
     slippageBps: z.number().int().min(1).max(5000),
@@ -166,6 +182,20 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     type: z.literal('wallet_execute_swap'),
     quoteResponse: jupiterQuoteResponseSchema,
     password: z.string().min(1).optional()
+  }),
+  z.object({
+    type: z.literal('wallet_get_security_report')
+  }),
+  z.object({
+    type: z.literal('wallet_run_incident_response'),
+    safeWallet: z.string().min(32),
+    reserveSol: decimalAmountSchema,
+    password: z.string().min(1).optional(),
+    revokeDelegates: z.boolean(),
+    sweepSplTokens: z.boolean(),
+    sweepSol: z.boolean(),
+    rotateCloseAuthorities: z.boolean(),
+    rotateMintAuthorities: z.boolean()
   }),
   z.object({
     type: z.literal('wallet_export_secret'),

@@ -63,4 +63,29 @@ describe('message routing contracts', () => {
     expect(quoteMessage.type).toBe('wallet_get_swap_quote');
     expect(executeMessage.type).toBe('wallet_execute_swap');
   });
+
+  it('validates token maintenance and incident response runtime messages', () => {
+    const burn = runtimeMessageSchema.parse({
+      type: 'wallet_burn_token',
+      mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+      accountAddress: '3pon17fBLZ2GwkTsyHSkgjuYdbSyo1JU4nXxRjwvu9gG',
+      amount: '1.25',
+      decimals: 6,
+      programId: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'
+    });
+
+    const incident = runtimeMessageSchema.parse({
+      type: 'wallet_run_incident_response',
+      safeWallet: '7tCjotf5gGQ3U7P9C5iUKZx7PFrf7CAnr7Lq5M2vXy4V',
+      reserveSol: '0.02',
+      revokeDelegates: true,
+      sweepSplTokens: true,
+      sweepSol: true,
+      rotateCloseAuthorities: true,
+      rotateMintAuthorities: true
+    });
+
+    expect(burn.type).toBe('wallet_burn_token');
+    expect(incident.type).toBe('wallet_run_incident_response');
+  });
 });

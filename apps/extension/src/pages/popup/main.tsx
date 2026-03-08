@@ -2,15 +2,35 @@ import { useEffect, useMemo, useState } from 'react';
 
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import * as Tabs from '@radix-ui/react-tabs';
-import { ArrowLeft, ArrowLeftRight, ChevronDown, Copy, Eye, EyeOff, Home, Menu, QrCode, SendHorizontal, Settings } from 'lucide-react';
+import {
+  AlertTriangle,
+  ArrowLeft,
+  ArrowLeftRight,
+  ChevronDown,
+  Copy,
+  Eye,
+  EyeOff,
+  Flame,
+  Home,
+  Menu,
+  QrCode,
+  RefreshCcw,
+  SendHorizontal,
+  Settings,
+  ShieldAlert,
+  Trash2
+} from 'lucide-react';
 import QRCode from 'qrcode';
 
 import { Button, Card, Input, KeyValueRow, PageShell, StatusPill } from '@grape/ui';
 
 import type {
   CollectionHolding,
+  IncidentResponseResponse,
+  TokenActionResponse,
   SendTransferResponse,
   TokenHolding,
+  WalletSecurityReportResponse,
   WalletAssetsResponse,
   WalletStateResponse,
   WalletSwapExecuteResponse,
@@ -24,7 +44,7 @@ import { openExtensionPage, openExtensionSidePanel } from '../../shared/window';
 import { mountPage } from '../lib';
 import { OnboardingView } from '../onboarding/OnboardingView';
 
-type PopupView = 'home' | 'send' | 'receive' | 'swap' | 'settings';
+type PopupView = 'home' | 'send' | 'receive' | 'swap' | 'settings' | 'asset' | 'security';
 type HomeTab = 'tokens' | 'collectibles';
 type AssetOption =
   | { id: 'sol'; label: 'SOL'; balance: string; asset: { kind: 'sol' } }
@@ -48,7 +68,7 @@ const GRAPE_LOGO_URL = chrome.runtime.getURL('icons/grape_logo_white.png');
 
 function parseInitialView(): PopupView {
   const nextView = new URLSearchParams(window.location.search).get('view');
-  if (nextView === 'send' || nextView === 'receive' || nextView === 'settings') {
+  if (nextView === 'send' || nextView === 'receive' || nextView === 'settings' || nextView === 'security') {
     return nextView;
   }
   if (nextView === 'swap') {
@@ -97,7 +117,7 @@ function formatUsd(value: number | null | undefined): string | null {
   }).format(value);
 }
 
-function formatUsdcUnitPrice(value: number | null | undefined, symbol?: string): string | null {
+function formatUsdcUnitPrice(value: number | null | undefined): string | null {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     return null;
   }
@@ -108,7 +128,7 @@ function formatUsdcUnitPrice(value: number | null | undefined, symbol?: string):
     maximumFractionDigits
   }).format(value);
 
-  return `1 ${symbol ?? 'Token'} ≈ ${formatted} USDC`;
+  return `${formatted} USDC`;
 }
 
 function formatAddress(address: string | undefined): string {
@@ -193,7 +213,7 @@ function TokenRow(props: { token: TokenHolding; onSelect: () => void }) {
   const valueLabel = formatUsd(props.token.valueUsd);
   const quantityLabel = `${formatTokenAmount(props.token)}${props.token.symbol ? ` ${props.token.symbol}` : ''}`;
   const primaryLabel = props.token.name ?? props.token.symbol ?? formatAddress(props.token.mint);
-  const unitPriceLabel = formatUsdcUnitPrice(props.token.priceUsd, props.token.symbol ?? 'Token');
+  const unitPriceLabel = formatUsdcUnitPrice(props.token.priceUsd);
   const secondaryLabel = unitPriceLabel ?? props.token.symbol ?? formatAddress(props.token.mint);
   const addressLabel = formatAddress(props.token.mint);
   const shouldShowAddressFallback = !changeLabel && !unitPriceLabel && secondaryLabel !== addressLabel;
@@ -330,6 +350,27 @@ function PopupPage() {
   const [quotingSwap, setQuotingSwap] = useState(false);
   const [submittingSwap, setSubmittingSwap] = useState(false);
   const [assetsLoading, setAssetsLoading] = useState(false);
+  const [tokenActionError, setTokenActionError] = useState<string | null>(null);
+  const [tokenActionResult, setTokenActionResult] = useState<TokenActionResponse | null>(null);
+  const [burnAmount, setBurnAmount] = useState('');
+  const [burnPassword, setBurnPassword] = useState('');
+  const [tokenActionSubmitting, setTokenActionSubmitting] = useState<'burn' | 'close' | null>(null);
+  const [securityReport, setSecurityReport] = useState<WalletSecurityReportResponse | null>(null);
+  const [securityLoading, setSecurityLoading] = useState(false);
+  const [securityError, setSecurityError] = useState<string | null>(null);
+  const [incidentSafeWallet, setIncidentSafeWallet] = useState('');
+  const [incidentReserveSol, setIncidentReserveSol] = useState('0.02');
+  const [incidentPassword, setIncidentPassword] = useState('');
+  const [incidentSubmitting, setIncidentSubmitting] = useState(false);
+  const [incidentResult, setIncidentResult] = useState<IncidentResponseResponse | null>(null);
+  const [incidentError, setIncidentError] = useState<string | null>(null);
+  const [incidentOptions, setIncidentOptions] = useState({
+    revokeDelegates: true,
+    sweepSplTokens: true,
+    sweepSol: true,
+    rotateCloseAuthorities: true,
+    rotateMintAuthorities: true
+  });
 
   const surface = document.body.dataset.surface ?? 'page';
   const isPopupSurface = surface === 'popup';
@@ -363,6 +404,12 @@ function PopupPage() {
     applyDocumentTheme(state?.wallet.selectedTheme);
   }, [state?.wallet.selectedTheme]);
 
+  useEffect(() => {
+    if (view === 'security' && state?.wallet.setup === 'ready' && !state.session.locked) {
+      void refreshSecurityReport();
+    }
+  }, [view, state?.wallet.setup, state?.session.locked]);
+
   const activePublicKey = state?.activeAccount?.publicKey;
 
   useEffect(() => {
@@ -385,7 +432,7 @@ function PopupPage() {
   const portfolioValue = useMemo(() => formatUsd(assets.totalUsdValue) ?? homeBalance, [assets.totalUsdValue, homeBalance]);
   const solValue = useMemo(() => formatUsd(assets.nativeValueUsd), [assets.nativeValueUsd]);
   const solChange = useMemo(() => formatPercent(assets.nativePriceChange24h), [assets.nativePriceChange24h]);
-  const solUnitPrice = useMemo(() => formatUsdcUnitPrice(assets.nativePriceUsd, 'SOL'), [assets.nativePriceUsd]);
+  const solUnitPrice = useMemo(() => formatUsdcUnitPrice(assets.nativePriceUsd), [assets.nativePriceUsd]);
   const assetOptions = useMemo<AssetOption[]>(() => {
     const tokenOptions = assets.tokens.map((token) => ({
       id: `${token.mint}:${token.programId}`,
@@ -508,11 +555,138 @@ function PopupPage() {
     window.setTimeout(() => setCopiedAddress(false), 1200);
   }
 
+  function openAssetDetails(nextAssetId: string) {
+    setAssetId(nextAssetId);
+    setTokenActionError(null);
+    setTokenActionResult(null);
+    setBurnAmount('');
+    setBurnPassword('');
+    setView('asset');
+  }
+
   function openSend(nextAssetId = 'sol') {
     setAssetId(nextAssetId);
     setSendError(null);
     setSendResult(null);
     setView('send');
+  }
+
+  function openSwapForAsset(nextAssetId: string) {
+    const nextAsset =
+      assetOptions.find((option) => option.id === nextAssetId) ??
+      assetOptions.find((option) => option.id === 'sol') ??
+      assetOptions[0];
+    if (!nextAsset) {
+      return;
+    }
+
+    const inputMint = nextAsset.asset.kind === 'sol' ? JUPITER_SOL_MINT : nextAsset.asset.mint;
+    const defaultOutputMint =
+      inputMint === COMMON_SWAP_TOKENS[1].mint
+        ? JUPITER_SOL_MINT
+        : COMMON_SWAP_TOKENS[1].mint;
+
+    setSwapInputAssetId(nextAsset.id);
+    setSwapOutputMint(defaultOutputMint);
+    setSwapAmount('');
+    setSwapQuote(null);
+    setSwapResult(null);
+    setSwapError(null);
+    setView('swap');
+  }
+
+  async function refreshSecurityReport() {
+    try {
+      setSecurityLoading(true);
+      setSecurityError(null);
+      const nextReport = await sendRuntimeMessage<WalletSecurityReportResponse>({
+        type: 'wallet_get_security_report'
+      });
+      setSecurityReport(nextReport);
+    } catch (error) {
+      setSecurityError(error instanceof Error ? error.message : 'Unable to load the security report.');
+    } finally {
+      setSecurityLoading(false);
+    }
+  }
+
+  async function handleBurnToken() {
+    if (!selectedTokenHolding) {
+      return;
+    }
+
+    try {
+      setTokenActionSubmitting('burn');
+      setTokenActionError(null);
+      const result = await sendRuntimeMessage<TokenActionResponse>({
+        type: 'wallet_burn_token',
+        mint: selectedTokenHolding.mint,
+        accountAddress: selectedTokenHolding.accountAddress,
+        amount: burnAmount,
+        decimals: selectedTokenHolding.decimals,
+        programId: selectedTokenHolding.programId,
+        password: burnPassword || undefined
+      });
+      setTokenActionResult(result);
+      setBurnAmount('');
+      setBurnPassword('');
+      await refresh();
+      if (view === 'security') {
+        await refreshSecurityReport();
+      }
+    } catch (error) {
+      setTokenActionError(error instanceof Error ? error.message : 'Unable to burn the token.');
+    } finally {
+      setTokenActionSubmitting(null);
+    }
+  }
+
+  async function handleCloseTokenAccount() {
+    if (!selectedTokenHolding) {
+      return;
+    }
+
+    try {
+      setTokenActionSubmitting('close');
+      setTokenActionError(null);
+      const result = await sendRuntimeMessage<TokenActionResponse>({
+        type: 'wallet_close_token_account',
+        mint: selectedTokenHolding.mint,
+        accountAddress: selectedTokenHolding.accountAddress,
+        programId: selectedTokenHolding.programId,
+        password: burnPassword || undefined
+      });
+      setTokenActionResult(result);
+      setBurnPassword('');
+      await refresh();
+      setView('home');
+    } catch (error) {
+      setTokenActionError(error instanceof Error ? error.message : 'Unable to close the token account.');
+    } finally {
+      setTokenActionSubmitting(null);
+    }
+  }
+
+  async function handleRunIncidentResponse() {
+    try {
+      setIncidentSubmitting(true);
+      setIncidentError(null);
+      const result = await sendRuntimeMessage<IncidentResponseResponse>({
+        type: 'wallet_run_incident_response',
+        safeWallet: incidentSafeWallet,
+        reserveSol: incidentReserveSol,
+        password: incidentPassword || undefined,
+        ...incidentOptions
+      });
+      setIncidentResult(result);
+      setIncidentPassword('');
+      await refresh();
+      await refreshSecurityReport();
+    } catch (error) {
+      setIncidentError(error instanceof Error ? error.message : 'Unable to run incident response.');
+    } finally {
+      setIncidentSubmitting(false);
+    }
   }
 
   async function handleSend() {
@@ -647,6 +821,14 @@ function PopupPage() {
               }}
             >
               Swap
+            </DropdownMenu.Item>
+            <DropdownMenu.Item
+              className="wallet-menu-action"
+              onSelect={() => {
+                setView('security');
+              }}
+            >
+              Security
             </DropdownMenu.Item>
             <DropdownMenu.Separator className="menu-separator" />
             <DropdownMenu.Item
@@ -844,7 +1026,7 @@ function PopupPage() {
                         <TokenRow
                           key={`${token.mint}:${token.programId}`}
                           token={token}
-                          onSelect={() => openSend(`${token.mint}:${token.programId}`)}
+                          onSelect={() => openAssetDetails(`${token.mint}:${token.programId}`)}
                         />
                       ))}
                     </div>
@@ -1045,6 +1227,136 @@ function PopupPage() {
     );
   }
 
+  function renderAsset() {
+    if (!selectedTokenHolding) {
+      return (
+        <Card title="Token">
+          <p className="muted">Select a token from the Tokens tab to manage it.</p>
+        </Card>
+      );
+    }
+
+    const tokenValue = formatUsd(selectedTokenHolding.valueUsd) ?? `${formatTokenAmount(selectedTokenHolding)} ${selectedTokenHolding.symbol ?? ''}`.trim();
+    const canCloseAccount = Number(selectedTokenHolding.amount) === 0 && !selectedTokenHolding.delegate;
+    const canBurn = Number(selectedTokenHolding.amount) > 0;
+
+    return (
+      <>
+        <Card className="asset-detail-card">
+          <div className="send-flow-header">
+            <button type="button" className="send-back-button" onClick={() => setView('home')} aria-label="Back to wallet">
+              <ArrowLeft size={20} />
+            </button>
+            <h2>{selectedTokenHolding.name ?? selectedTokenHolding.symbol ?? 'Token'}</h2>
+          </div>
+
+          <div className="asset-detail-hero">
+            <TokenAvatar token={selectedTokenHolding} fallbackLabel={selectedTokenHolding.symbol?.slice(0, 1) ?? 'T'} />
+            <div className="asset-detail-copy">
+              <div className="hero-balance asset-detail-balance">{formatTokenAmount(selectedTokenHolding)}</div>
+              <div className="muted">
+                {selectedTokenHolding.symbol ?? formatAddress(selectedTokenHolding.mint)} · {tokenValue}
+              </div>
+            </div>
+          </div>
+
+          <div className="quick-actions compact asset-detail-actions">
+            <button type="button" className="quick-action-card" onClick={() => openSend(assetId)} aria-label="Send token" title="Send">
+              <span className="quick-action-icon"><SendHorizontal size={18} /></span>
+            </button>
+            <button type="button" className="quick-action-card" onClick={() => openSwapForAsset(assetId)} aria-label="Swap token" title="Swap">
+              <span className="quick-action-icon"><ArrowLeftRight size={18} /></span>
+            </button>
+            <button
+              type="button"
+              className="quick-action-card"
+              onClick={() => setBurnAmount(selectedTokenHolding.amount)}
+              aria-label="Burn token"
+              title="Burn"
+              disabled={!canBurn}
+            >
+              <span className="quick-action-icon"><Flame size={18} /></span>
+            </button>
+            <button
+              type="button"
+              className="quick-action-card"
+              onClick={() => void handleCloseTokenAccount()}
+              aria-label="Close token account"
+              title={canCloseAccount ? 'Close account' : 'Close account after burning all tokens'}
+              disabled={!canCloseAccount}
+            >
+              <span className="quick-action-icon"><Trash2 size={18} /></span>
+            </button>
+          </div>
+        </Card>
+
+        <Card title="Burn tokens">
+          <div className="stack">
+            <label className="stack">
+              <span className="muted">Amount</span>
+              <Input value={burnAmount} onChange={(event) => setBurnAmount(event.target.value)} placeholder="0" inputMode="decimal" />
+            </label>
+            {!canUseUnlockedSigner ? (
+              <label className="stack">
+                <span className="muted">Password</span>
+                <Input
+                  type="password"
+                  value={burnPassword}
+                  onChange={(event) => setBurnPassword(event.target.value)}
+                  placeholder="Password required to sign"
+                />
+              </label>
+            ) : (
+              <p className="muted">Wallet is already unlocked. Burn and close actions can sign without re-entering your password.</p>
+            )}
+            <Button
+              className="button-block"
+              disabled={tokenActionSubmitting === 'burn' || !burnAmount.trim() || (!canUseUnlockedSigner && !burnPassword.trim())}
+              onClick={() => void handleBurnToken()}
+            >
+              {tokenActionSubmitting === 'burn' ? 'Burning...' : 'Burn'}
+            </Button>
+          </div>
+        </Card>
+
+        <Card title="Close account">
+          <div className="stack">
+            <p className="muted">
+              Closing reclaims the SOL rent from this token account. The balance must be zero and no delegate can remain.
+            </p>
+            <KeyValueRow label="Delegate" value={<span className="mono">{selectedTokenHolding.delegate ? formatAddress(selectedTokenHolding.delegate) : 'None'}</span>} />
+            <KeyValueRow
+              label="Close authority"
+              value={<span className="mono">{selectedTokenHolding.closeAuthority ? formatAddress(selectedTokenHolding.closeAuthority) : 'Wallet owner'}</span>}
+            />
+            <Button
+              tone="secondary"
+              className="button-block"
+              disabled={tokenActionSubmitting === 'close' || !canCloseAccount || (!canUseUnlockedSigner && !burnPassword.trim())}
+              onClick={() => void handleCloseTokenAccount()}
+            >
+              {tokenActionSubmitting === 'close' ? 'Closing...' : 'Close token account'}
+            </Button>
+            {!canCloseAccount ? (
+              <p className="warning-box">Burn or transfer the full balance and revoke any delegate before closing this account.</p>
+            ) : null}
+          </div>
+        </Card>
+
+        {tokenActionResult ? (
+          <Card title="Completed">
+            <div className="stack">
+              <KeyValueRow label="Action" value={tokenActionResult.action} />
+              <KeyValueRow label="Signature" value={<span className="mono transfer-signature">{tokenActionResult.signature}</span>} />
+            </div>
+          </Card>
+        ) : null}
+
+        {tokenActionError ? <p className="danger-box">{tokenActionError}</p> : null}
+      </>
+    );
+  }
+
   function renderSettings() {
     return (
       <>
@@ -1103,12 +1415,200 @@ function PopupPage() {
                   Lock
                 </Button>
               )}
+              <Button tone="secondary" onClick={() => setView('security')}>
+                Security
+              </Button>
               <Button tone="secondary" onClick={() => openExtensionPage('options.html')}>
                 Full settings
               </Button>
             </div>
           </div>
         </Card>
+      </>
+    );
+  }
+
+  function renderSecurity() {
+    return (
+      <>
+        <Card title="Delegation & authority scan">
+          <div className="stack">
+            <div className="inline security-actions">
+              <Button tone="secondary" onClick={() => void refreshSecurityReport()} disabled={securityLoading}>
+                <span className="button-icon"><RefreshCcw size={14} /></span>&nbsp;
+                {securityLoading ? 'Scanning...' : 'Refresh scan'}
+              </Button>
+            </div>
+
+            {securityReport?.warnings.length ? (
+              <div className="stack">
+                {securityReport.warnings.map((warning) => (
+                  <p key={warning} className="warning-box">{warning}</p>
+                ))}
+              </div>
+            ) : securityReport ? (
+              <p className="success-box">No delegate, close-authority, or mint-authority warnings were found in this scan.</p>
+            ) : (
+              <p className="muted">Run a scan to inspect token delegates, close authorities, and mint/freeze authorities.</p>
+            )}
+
+            {securityReport?.delegatedTokenAccounts.length ? (
+              <div className="stack">
+                <strong>Delegated token accounts</strong>
+                {securityReport.delegatedTokenAccounts.map((item) => (
+                  <div key={item.accountAddress} className="security-list-item">
+                    <div>
+                      <strong>{item.name ?? item.symbol ?? formatAddress(item.mint)}</strong>
+                      <div className="muted mono">{formatAddress(item.delegate)}</div>
+                    </div>
+                    <span className="muted">{item.delegatedAmount ?? 'Delegated'}</span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+
+            {securityReport?.externalCloseAuthorities.length ? (
+              <div className="stack">
+                <strong>External close authorities</strong>
+                {securityReport.externalCloseAuthorities.map((item) => (
+                  <div key={item.accountAddress} className="security-list-item">
+                    <div>
+                      <strong>{item.name ?? item.symbol ?? formatAddress(item.mint)}</strong>
+                      <div className="muted mono">{formatAddress(item.closeAuthority)}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+
+            {securityReport?.controlledMints.length ? (
+              <div className="stack">
+                <strong>Controlled mints</strong>
+                {securityReport.controlledMints.map((mint) => (
+                  <div key={mint.mint} className="security-list-item">
+                    <div>
+                      <strong>{mint.name ?? mint.symbol ?? formatAddress(mint.mint)}</strong>
+                      <div className="muted mono">
+                        {mint.controlsMintAuthority ? 'Mint authority' : ''}
+                        {mint.controlsMintAuthority && mint.controlsFreezeAuthority ? ' · ' : ''}
+                        {mint.controlsFreezeAuthority ? 'Freeze authority' : ''}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </Card>
+
+        <Card title="Incident response">
+          <div className="stack">
+            <p className="muted">
+              One action flow to contain compromise: revoke delegates, sweep assets to a safe wallet, and rotate authorities where this wallet still has control.
+            </p>
+            <label className="stack">
+              <span className="muted">Safe wallet destination</span>
+              <Input
+                value={incidentSafeWallet}
+                onChange={(event) => setIncidentSafeWallet(event.target.value)}
+                placeholder="Safe wallet public key"
+              />
+            </label>
+            {recentRecipients.length > 0 ? (
+              <div className="recipient-list">
+                {recentRecipients.map((entry) => (
+                  <button
+                    key={entry.address}
+                    type="button"
+                    className={`recipient-chip ${incidentSafeWallet === entry.address ? 'active' : ''}`.trim()}
+                    onClick={() => setIncidentSafeWallet(entry.address)}
+                    title={entry.address}
+                  >
+                    <span className="mono">{formatAddress(entry.address)}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            <label className="stack">
+              <span className="muted">Reserve SOL for fees</span>
+              <Input
+                value={incidentReserveSol}
+                onChange={(event) => setIncidentReserveSol(event.target.value)}
+                placeholder="0.02"
+                inputMode="decimal"
+              />
+            </label>
+            <div className="incident-toggle-list">
+              {[
+                ['revokeDelegates', 'Revoke all token delegates'],
+                ['sweepSplTokens', 'Sweep SPL token balances'],
+                ['sweepSol', 'Sweep SOL balance (minus reserve)'],
+                ['rotateCloseAuthorities', 'Rotate token account close authorities'],
+                ['rotateMintAuthorities', 'Rotate mint / freeze authorities on discovered mints']
+              ].map(([key, label]) => (
+                <label key={key} className="incident-toggle">
+                  <input
+                    type="checkbox"
+                    checked={incidentOptions[key as keyof typeof incidentOptions]}
+                    onChange={(event) =>
+                      setIncidentOptions((current) => ({
+                        ...current,
+                        [key]: event.target.checked
+                      }))
+                    }
+                  />
+                  <span>{label}</span>
+                </label>
+              ))}
+            </div>
+            {!canUseUnlockedSigner ? (
+              <label className="stack">
+                <span className="muted">Password</span>
+                <Input
+                  type="password"
+                  value={incidentPassword}
+                  onChange={(event) => setIncidentPassword(event.target.value)}
+                  placeholder="Password required to sign"
+                />
+              </label>
+            ) : null}
+            <Button
+              className="button-block"
+              disabled={incidentSubmitting || !incidentSafeWallet.trim() || (!canUseUnlockedSigner && !incidentPassword.trim())}
+              onClick={() => void handleRunIncidentResponse()}
+            >
+              <span className="button-icon"><ShieldAlert size={16} /></span>
+              {incidentSubmitting ? 'Containing...' : 'Contain compromise'}
+            </Button>
+            {incidentError ? <p className="danger-box">{incidentError}</p> : null}
+            {incidentResult?.warnings.length ? (
+              <div className="stack">
+                {incidentResult.warnings.map((warning) => (
+                  <p key={warning} className="warning-box">{warning}</p>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </Card>
+
+        {incidentResult ? (
+          <Card title="Incident response result">
+            <div className="stack">
+              <KeyValueRow label="Safe wallet" value={<span className="mono">{formatAddress(incidentResult.safeWallet)}</span>} />
+              {incidentResult.actions.map((action) => (
+                <div key={action.kind} className="security-list-item">
+                  <div>
+                    <strong>{action.kind}</strong>
+                    <div className="muted">{action.itemCount} item{action.itemCount === 1 ? '' : 's'}</div>
+                  </div>
+                  <span className="muted">{action.signatures.length} tx</span>
+                </div>
+              ))}
+            </div>
+          </Card>
+        ) : null}
+
+        {securityError ? <p className="danger-box">{securityError}</p> : null}
       </>
     );
   }
@@ -1381,7 +1881,21 @@ function PopupPage() {
   return (
     <PageShell
       eyebrow={view === 'home' ? null : undefined}
-      title={view === 'home' ? '' : view === 'send' ? 'Send' : view === 'receive' ? 'Receive' : view === 'swap' ? 'Swap' : 'Settings'}
+      title={
+        view === 'home'
+          ? ''
+          : view === 'send'
+            ? 'Send'
+            : view === 'receive'
+              ? 'Receive'
+              : view === 'swap'
+                ? 'Swap'
+                : view === 'asset'
+                  ? 'Token'
+                  : view === 'security'
+                    ? 'Security'
+                    : 'Settings'
+      }
       subtitle={
         view === 'home'
           ? undefined
@@ -1391,13 +1905,19 @@ function PopupPage() {
               ? 'Share your wallet address safely.'
               : view === 'swap'
                 ? 'Get a Jupiter quote and swap from your wallet.'
-              : 'Manage your wallet and connections.'
+                : view === 'asset'
+                  ? 'Burn or close token accounts safely.'
+                  : view === 'security'
+                    ? 'Check delegates and run containment actions.'
+                    : 'Manage your wallet and connections.'
       }
       actions={view === 'home' ? undefined : <div className="inline popup-actions">{renderWalletMenu()}</div>}
     >
       {view === 'home' ? renderHome() : null}
       {view === 'send' ? renderSend() : null}
       {view === 'receive' ? renderReceive() : null}
+      {view === 'asset' ? renderAsset() : null}
+      {view === 'security' ? renderSecurity() : null}
       {view === 'swap' ? renderSwap() : null}
       {view === 'settings' ? renderSettings() : null}
       {surfaceError && view !== 'send' ? <p className="danger-box">{surfaceError}</p> : null}
