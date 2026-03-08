@@ -44,8 +44,7 @@ const COMMON_SWAP_TOKENS = [
 ] as const;
 const SOLANA_LOGO_URL =
   'https://media.solana-cdn.com/image/width=100/https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/solana/info/logo.png';
-const GRAPE_LOGO_URL = chrome.runtime.getURL('icons/verification-avatar.png');
-const GRAPE_THEME_LOGO_URL = chrome.runtime.getURL('icons/verification-128.png');
+const GRAPE_LOGO_URL = chrome.runtime.getURL('icons/grape_logo_white.png');
 
 function parseInitialView(): PopupView {
   const nextView = new URLSearchParams(window.location.search).get('view');
@@ -96,6 +95,20 @@ function formatUsd(value: number | null | undefined): string | null {
     minimumFractionDigits: value >= 100 ? 0 : 2,
     maximumFractionDigits: 2
   }).format(value);
+}
+
+function formatUsdcUnitPrice(value: number | null | undefined, symbol?: string): string | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return null;
+  }
+
+  const maximumFractionDigits = value >= 1 ? 2 : value >= 0.01 ? 4 : 8;
+  const formatted = new Intl.NumberFormat(undefined, {
+    minimumFractionDigits: value >= 1 ? 2 : 0,
+    maximumFractionDigits
+  }).format(value);
+
+  return `1 ${symbol ?? 'Token'} ≈ ${formatted} USDC`;
 }
 
 function formatAddress(address: string | undefined): string {
@@ -180,9 +193,10 @@ function TokenRow(props: { token: TokenHolding; onSelect: () => void }) {
   const valueLabel = formatUsd(props.token.valueUsd);
   const quantityLabel = `${formatTokenAmount(props.token)}${props.token.symbol ? ` ${props.token.symbol}` : ''}`;
   const primaryLabel = props.token.name ?? props.token.symbol ?? formatAddress(props.token.mint);
-  const secondaryLabel = props.token.symbol ?? formatAddress(props.token.mint);
+  const unitPriceLabel = formatUsdcUnitPrice(props.token.priceUsd, props.token.symbol ?? 'Token');
+  const secondaryLabel = unitPriceLabel ?? props.token.symbol ?? formatAddress(props.token.mint);
   const addressLabel = formatAddress(props.token.mint);
-  const shouldShowAddressFallback = !changeLabel && secondaryLabel !== addressLabel;
+  const shouldShowAddressFallback = !changeLabel && !unitPriceLabel && secondaryLabel !== addressLabel;
 
   return (
     <button type="button" className="token-row-button" onClick={props.onSelect}>
@@ -194,7 +208,7 @@ function TokenRow(props: { token: TokenHolding; onSelect: () => void }) {
               {primaryLabel}
             </strong>
             <div className="token-subline">
-              <span className="token-subtitle mono">{secondaryLabel}</span>
+              <span className={`token-subtitle ${unitPriceLabel ? '' : 'mono'}`.trim()}>{secondaryLabel}</span>
               {changeLabel ? (
                 <span className={`token-change ${props.token.priceChange24h && props.token.priceChange24h < 0 ? 'negative' : 'positive'}`.trim()}>
                   {changeLabel}
@@ -371,6 +385,7 @@ function PopupPage() {
   const portfolioValue = useMemo(() => formatUsd(assets.totalUsdValue) ?? homeBalance, [assets.totalUsdValue, homeBalance]);
   const solValue = useMemo(() => formatUsd(assets.nativeValueUsd), [assets.nativeValueUsd]);
   const solChange = useMemo(() => formatPercent(assets.nativePriceChange24h), [assets.nativePriceChange24h]);
+  const solUnitPrice = useMemo(() => formatUsdcUnitPrice(assets.nativePriceUsd, 'SOL'), [assets.nativePriceUsd]);
   const assetOptions = useMemo<AssetOption[]>(() => {
     const tokenOptions = assets.tokens.map((token) => ({
       id: `${token.mint}:${token.programId}`,
@@ -724,11 +739,6 @@ function PopupPage() {
     return (
       <>
         <Card className="wallet-home-card">
-          {wallet.selectedTheme === 'grape' ? (
-            <div className="wallet-home-brand-mark" aria-hidden="true">
-              <img src={GRAPE_THEME_LOGO_URL} alt="" />
-            </div>
-          ) : null}
           <div className="wallet-home-topbar">
             <div className="wallet-home-network">
               <StatusPill tone={wallet.selectedNetwork === 'devnet' ? 'warning' : 'success'}>{wallet.selectedNetwork}</StatusPill>
@@ -810,7 +820,7 @@ function PopupPage() {
                         <div className="token-copy">
                           <strong className="token-name">Solana</strong>
                           <div className="token-subline">
-                            <span className="token-subtitle">{homeBalance}</span>
+                            <span className="token-subtitle">{solUnitPrice ?? 'SOL'}</span>
                             {solChange ? (
                               <span className={`token-change ${assets.nativePriceChange24h && assets.nativePriceChange24h < 0 ? 'negative' : 'positive'}`.trim()}>
                                 {solChange}

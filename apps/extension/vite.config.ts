@@ -36,16 +36,16 @@ function createManifestPlugin(mainnetRpcUrl: string): Plugin {
         version: '0.1.0',
         description: 'Chromium-first Solana wallet extension with Wallet Standard and legacy provider support.',
         icons: {
-          '16': 'icons/verification-16.png',
-          '32': 'icons/verification-32.png',
-          '48': 'icons/verification-48.png',
-          '128': 'icons/verification-128.png'
+          '16': 'icons/grape_logo_white-16.png',
+          '32': 'icons/grape_logo_white-32.png',
+          '48': 'icons/grape_logo_white-48.png',
+          '128': 'icons/grape_logo_white-128.png'
         },
         action: {
           default_title: 'Grape',
           default_icon: {
-            '16': 'icons/verification-16.png',
-            '32': 'icons/verification-32.png'
+            '16': 'icons/grape_logo_white-16.png',
+            '32': 'icons/grape_logo_white-32.png'
           },
           default_popup: 'popup.html'
         },
