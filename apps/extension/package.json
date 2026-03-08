@@ -1,0 +1,20 @@
+{
+  "name": "@grape/extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite build --watch",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@grape/core": "workspace:*",
+    "@grape/solana": "workspace:*",
+    "@grape/ui": "workspace:*",
+    "@solana/web3.js": "^1.98.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  }
+}
+

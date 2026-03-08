@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "jsx": "react-jsx",
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      "@grape/core": ["packages/core/src/index.ts"],
+      "@grape/core/*": ["packages/core/src/*"],
+      "@grape/solana": ["packages/solana/src/index.ts"],
+      "@grape/solana/*": ["packages/solana/src/*"],
+      "@grape/ui": ["packages/ui/src/index.ts"],
+      "@grape/ui/*": ["packages/ui/src/*"]
+    }
+  }
+}
+
