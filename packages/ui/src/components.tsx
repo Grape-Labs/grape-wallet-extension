@@ -2,17 +2,27 @@ import type { PropsWithChildren, ButtonHTMLAttributes, InputHTMLAttributes } fro
 
 import React from 'react';
 
-export function PageShell(props: PropsWithChildren<{ title: string; subtitle?: string; actions?: React.ReactNode }>) {
+export function PageShell(
+  props: PropsWithChildren<{ title: string; subtitle?: string; actions?: React.ReactNode; eyebrow?: string | null }>
+) {
+  const eyebrow = props.eyebrow === undefined ? 'Grape Wallet' : props.eyebrow;
+  const hasIntro = Boolean(eyebrow || props.title || props.subtitle);
+  const showHeader = hasIntro || Boolean(props.actions);
+
   return (
     <div className="page-shell">
-      <header className="page-header">
-        <div>
-          <p className="eyebrow">Grape Wallet</p>
-          <h1>{props.title}</h1>
-          {props.subtitle ? <p className="muted">{props.subtitle}</p> : null}
-        </div>
-        {props.actions ? <div className="page-actions">{props.actions}</div> : null}
-      </header>
+      {showHeader ? (
+        <header className={`page-header ${hasIntro ? '' : 'header-only-actions'}`.trim()}>
+          {hasIntro ? (
+            <div>
+              {eyebrow ? <p className="eyebrow">{eyebrow}</p> : null}
+              {props.title ? <h1>{props.title}</h1> : null}
+              {props.subtitle ? <p className="muted">{props.subtitle}</p> : null}
+            </div>
+          ) : null}
+          {props.actions ? <div className="page-actions">{props.actions}</div> : null}
+        </header>
+      ) : null}
       <main className="page-content">{props.children}</main>
     </div>
   );
@@ -70,4 +80,3 @@ export function MnemonicGrid(props: { words: string[] }) {
     </ol>
   );
 }
-

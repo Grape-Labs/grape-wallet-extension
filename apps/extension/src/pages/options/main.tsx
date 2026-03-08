@@ -24,8 +24,8 @@ function OptionsPage() {
   }
 
   return (
-    <PageShell title="Settings" subtitle="Review site connections, session timeout, and network defaults.">
-      <Card title="Session">
+    <PageShell title="Settings" subtitle="Manage security and connected sites.">
+      <Card title="Security">
         <div className="space-between">
           <StatusPill tone={state.session.locked ? 'warning' : 'success'}>
             {state.session.locked ? 'Locked' : 'Unlocked'}
@@ -98,4 +98,3 @@ function OptionsPage() {
 }
 
 mountPage(<OptionsPage />);
-

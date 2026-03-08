@@ -1,4 +1,6 @@
+import { base64ToBytes, type VaultSecret } from '@grape/core';
 import { Keypair } from '@solana/web3.js';
+import bs58 from 'bs58';
 import { HDKey } from 'micro-ed25519-hdkey';
 
 import { SOLANA_DERIVATION_PATH } from './constants';
@@ -7,6 +9,13 @@ import { mnemonicToSeedBytes, normalizeMnemonic, validateWalletMnemonic } from '
 export type DerivedSolanaAccount = {
   mnemonic: string;
   derivationPath: string;
+  keypair: Keypair;
+  publicKey: string;
+};
+
+export type ImportedSolanaPrivateKeyAccount = {
+  secretKey: string;
+  derivationPath: 'imported-private-key';
   keypair: Keypair;
   publicKey: string;
 };
@@ -31,4 +40,74 @@ export function deriveSolanaAccount0(mnemonic: string): DerivedSolanaAccount {
     keypair,
     publicKey: keypair.publicKey.toBase58()
   };
+}
+
+export function validateSolanaPrivateKey(privateKey: string): boolean {
+  try {
+    importSolanaPrivateKey(privateKey);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function importSolanaPrivateKey(privateKey: string): ImportedSolanaPrivateKeyAccount {
+  const normalizedPrivateKey = privateKey.trim();
+  const keyBytes = decodePrivateKey(normalizedPrivateKey);
+  const keypair = toKeypair(keyBytes);
+
+  return {
+    secretKey: normalizedPrivateKey,
+    derivationPath: 'imported-private-key',
+    keypair,
+    publicKey: keypair.publicKey.toBase58()
+  };
+}
+
+export function resolveSolanaVaultSecret(secret: VaultSecret): Keypair {
+  if (secret.kind === 'mnemonic') {
+    return deriveSolanaAccount0(secret.mnemonic).keypair;
+  }
+
+  if (secret.kind === 'auth-token') {
+    throw new Error('Auth tokens cannot be used as software signers.');
+  }
+
+  return importSolanaPrivateKey(secret.secretKey).keypair;
+}
+
+function decodePrivateKey(privateKey: string): Uint8Array {
+  if (!privateKey.trim()) {
+    throw new Error('Private key is required.');
+  }
+
+  if (privateKey.trim().startsWith('[')) {
+    const parsed = JSON.parse(privateKey) as unknown;
+    if (!Array.isArray(parsed) || parsed.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) {
+      throw new Error('Private key array is invalid.');
+    }
+    return Uint8Array.from(parsed);
+  }
+
+  try {
+    return bs58.decode(privateKey.trim());
+  } catch {
+    try {
+      return base64ToBytes(privateKey.trim());
+    } catch {
+      throw new Error('Private key must be a base58 string, base64 string, or JSON byte array.');
+    }
+  }
+}
+
+function toKeypair(bytes: Uint8Array): Keypair {
+  if (bytes.length === 64) {
+    return Keypair.fromSecretKey(bytes);
+  }
+
+  if (bytes.length === 32) {
+    return Keypair.fromSeed(bytes);
+  }
+
+  throw new Error('Private key must decode to 32 or 64 bytes.');
 }

@@ -45,7 +45,7 @@ function ApprovalPage() {
     );
   }
 
-  const requiresPassword = approval.kind !== 'connect';
+  const requiresPassword = approval.kind !== 'connect' && (approval.requiresPassword ?? true);
 
   return (
     <PageShell

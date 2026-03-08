@@ -2,10 +2,6 @@ import { base64ToBytes, bytesToBase64 } from '@grape/core';
 import { Connection, Keypair, Transaction, VersionedTransaction } from '@solana/web3.js';
 import nacl from 'tweetnacl';
 
-import type { GrapeNetwork } from '@grape/core';
-
-import { SOLANA_RPC_ENDPOINTS } from './networks';
-
 export type ParsedSerializableTransaction =
   | { kind: 'legacy'; transaction: Transaction }
   | { kind: 'versioned'; transaction: VersionedTransaction };
@@ -61,10 +57,9 @@ export function signMessageBytes(message: Uint8Array, keypair: Keypair): Uint8Ar
 export async function signAndSendSerializedTransaction(
   serialized: string,
   keypair: Keypair,
-  network: GrapeNetwork
+  rpcEndpoint: string
 ): Promise<string> {
   const signed = signSerializedTransaction(serialized, keypair);
-  const connection = new Connection(SOLANA_RPC_ENDPOINTS[network], 'confirmed');
+  const connection = new Connection(rpcEndpoint, 'confirmed');
   return connection.sendRawTransaction(base64ToBytes(signed));
 }
-

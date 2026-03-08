@@ -24,13 +24,46 @@ export type WalletAccount = {
   derivationPath: string;
 };
 
+export type WalletRecipient = {
+  address: string;
+  lastUsedAt: number;
+};
+
+export type WalletSigner =
+  | {
+      kind: 'software';
+    }
+  | {
+      kind: 'ledger';
+      transport: 'webhid';
+      derivationPath: string;
+    };
+
+export type WalletProfile = {
+  id: string;
+  name: string;
+  vault: VaultRecord;
+  signer: WalletSigner;
+  accounts: WalletAccount[];
+  selectedAccountId: string;
+  recentRecipients: WalletRecipient[];
+};
+
 export type WalletState = {
   setup: WalletSetupState;
-  vault?: VaultRecord;
-  accounts: WalletAccount[];
-  selectedAccountId?: string;
+  wallets: WalletProfile[];
+  selectedWalletId?: string;
   selectedNetwork: GrapeNetwork;
   idleTimeoutMs: number;
+};
+
+export type LegacyWalletState = {
+  setup: WalletSetupState;
+  vault?: VaultRecord;
+  accounts?: WalletAccount[];
+  selectedAccountId?: string;
+  selectedNetwork?: GrapeNetwork;
+  idleTimeoutMs?: number;
 };
 
 export type SessionState = {
@@ -39,11 +72,12 @@ export type SessionState = {
 };
 
 export const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+export const MAX_RECENT_RECIPIENTS = 8;
 
 export function createEmptyWalletState(): WalletState {
   return {
     setup: 'empty',
-    accounts: [],
+    wallets: [],
     selectedNetwork: 'devnet',
     idleTimeoutMs: DEFAULT_IDLE_TIMEOUT_MS
   };
@@ -63,3 +97,85 @@ export function isSessionExpired(session: SessionState, idleTimeoutMs: number, n
   return now - session.lastActivityAt > idleTimeoutMs;
 }
 
+export function getSelectedWallet(state: WalletState): WalletProfile | undefined {
+  return state.wallets.find((wallet) => wallet.id === state.selectedWalletId) ?? state.wallets[0];
+}
+
+export function rememberWalletRecipient(wallet: WalletProfile, address: string, lastUsedAt = Date.now()): WalletProfile {
+  const normalizedAddress = address.trim();
+  const recentRecipients = [
+    { address: normalizedAddress, lastUsedAt },
+    ...wallet.recentRecipients.filter((recipient) => recipient.address !== normalizedAddress)
+  ].slice(0, MAX_RECENT_RECIPIENTS);
+
+  return {
+    ...wallet,
+    recentRecipients
+  };
+}
+
+export function migrateWalletState(input: WalletState | LegacyWalletState | undefined): WalletState {
+  if (!input) {
+    return createEmptyWalletState();
+  }
+
+  if ('wallets' in input && Array.isArray(input.wallets)) {
+    return {
+      setup: input.wallets.length > 0 ? 'ready' : input.setup,
+      wallets: input.wallets.map(normalizeWalletProfile),
+      selectedWalletId: input.selectedWalletId ?? input.wallets[0]?.id,
+      selectedNetwork: input.selectedNetwork ?? 'devnet',
+      idleTimeoutMs: input.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS
+    };
+  }
+
+  if (isLegacyReadyWalletState(input)) {
+    const firstAccount = input.accounts[0];
+    return {
+      setup: 'ready',
+      wallets: [
+        {
+          id: 'wallet-1',
+          name: 'Wallet 1',
+          vault: input.vault,
+          signer: { kind: 'software' },
+          accounts: input.accounts,
+          selectedAccountId: input.selectedAccountId ?? firstAccount.id,
+          recentRecipients: []
+        }
+      ],
+      selectedWalletId: 'wallet-1',
+      selectedNetwork: input.selectedNetwork ?? 'devnet',
+      idleTimeoutMs: input.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS
+    };
+  }
+
+  return {
+    setup: 'empty',
+    wallets: [],
+    selectedNetwork: input.selectedNetwork ?? 'devnet',
+    idleTimeoutMs: input.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS
+  };
+}
+
+function isLegacyReadyWalletState(input: WalletState | LegacyWalletState): input is LegacyWalletState & {
+  setup: 'ready';
+  vault: VaultRecord;
+  accounts: WalletAccount[];
+} {
+  return (
+    !('wallets' in input) &&
+    input.setup === 'ready' &&
+    !!input.vault &&
+    Array.isArray(input.accounts) &&
+    input.accounts.length > 0
+  );
+}
+
+function normalizeWalletProfile(wallet: WalletProfile): WalletProfile {
+  return {
+    ...wallet,
+    signer: wallet.signer ?? { kind: 'software' },
+    recentRecipients: Array.isArray(wallet.recentRecipients) ? wallet.recentRecipients : []
+  };
+}

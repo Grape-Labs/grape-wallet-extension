@@ -57,6 +57,26 @@ pnpm test
 pnpm build
 ```
 
+## Environment
+
+Create a repo-root `.env` file from `.env.example`:
+
+```bash
+cp .env.example .env
+```
+
+Set your custom mainnet RPC endpoint:
+
+```bash
+VITE_GRAPE_MAINNET_RPC_URL=https://your-mainnet-rpc.example.com/?api-key=replace-me
+```
+
+Notes:
+
+- `.env` is ignored by Git.
+- The endpoint is hidden from the repository, but not from end users of the extension. Browser extensions ship client-side code, so a determined user can inspect the built bundle and recover the RPC URL.
+- If you need the RPC fully hidden from end users, you need a backend/proxy rather than a build-time `.env`.
+
 ## Load unpacked in Chrome
 
 1. Run `pnpm build`.

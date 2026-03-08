@@ -13,10 +13,10 @@ function UnlockPage() {
   const [error, setError] = useState<string | null>(null);
 
   return (
-    <PageShell title="Unlock wallet" subtitle="Re-enter your password to unlock Grape.">
-      <Card title="Unlock">
+    <PageShell title="Unlock" subtitle="Enter your password to open your wallet.">
+      <Card title="Wallet locked">
         <div className="stack">
-          <Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
+          <Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Password" />
           {error ? <p className="danger-box">{error}</p> : null}
           <Button
             onClick={async () => {
@@ -41,4 +41,3 @@ function UnlockPage() {
 }
 
 mountPage(<UnlockPage />);
-

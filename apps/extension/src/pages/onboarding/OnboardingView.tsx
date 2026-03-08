@@ -1,7 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 
-import { Button, Card, Input, MnemonicGrid, PageShell, StatusPill, TextArea } from '@grape/ui';
-import { deriveSolanaAccount0, generateWalletMnemonic, normalizeMnemonic, validateWalletMnemonic } from '@grape/solana';
+import { Button, Card, Input, MnemonicGrid, PageShell, TextArea } from '@grape/ui';
+import {
+  deriveSolanaAccount0,
+  generateWalletMnemonic,
+  importSolanaPrivateKey,
+  normalizeMnemonic,
+  requestLedgerAccount,
+  validateSolanaPrivateKey,
+  validateWalletMnemonic
+} from '@grape/solana';
 
 import type { WalletStateResponse } from '../../shared/models';
 
@@ -13,21 +21,20 @@ type OnboardingViewProps = {
 };
 
 type SetupMode = 'create' | 'import';
+type ImportMethod = 'mnemonic' | 'private-key' | 'ledger';
 type SetupStep = 1 | 2 | 3;
 
-const STEP_LABELS: Record<SetupStep, string> = {
-  1: 'Choose',
-  2: 'Recovery',
-  3: 'Password'
-};
-
-const STEP_SEQUENCE: SetupStep[] = [1, 2, 3];
-
 export function OnboardingView(props: OnboardingViewProps) {
+  const searchParams = useMemo(() => new URLSearchParams(window.location.search), []);
+  const isAppendFlow = searchParams.get('append') === '1';
+  const requestedMode = searchParams.get('mode');
   const [mode, setMode] = useState<SetupMode>('create');
   const [step, setStep] = useState<SetupStep>(1);
   const [generatedMnemonic, setGeneratedMnemonic] = useState('');
   const [importMnemonic, setImportMnemonic] = useState('');
+  const [importPrivateKey, setImportPrivateKey] = useState('');
+  const [ledgerAccount, setLedgerAccount] = useState<{ publicKey: string; derivationPath: string } | null>(null);
+  const [importMethod, setImportMethod] = useState<ImportMethod>('mnemonic');
   const [confirmBackup, setConfirmBackup] = useState(false);
   const [password, setPassword] = useState('');
   const [passwordConfirm, setPasswordConfirm] = useState('');
@@ -38,13 +45,25 @@ export function OnboardingView(props: OnboardingViewProps) {
     setGeneratedMnemonic(generateWalletMnemonic());
   }, []);
 
+  useEffect(() => {
+    if (requestedMode === 'create' || requestedMode === 'import') {
+      setMode(requestedMode);
+    }
+  }, [requestedMode]);
+
   const mnemonic = useMemo(
-    () => normalizeMnemonic(mode === 'create' ? generatedMnemonic : importMnemonic),
-    [generatedMnemonic, importMnemonic, mode]
+    () => normalizeMnemonic(mode === 'create' || importMethod === 'mnemonic' ? (mode === 'create' ? generatedMnemonic : importMnemonic) : ''),
+    [generatedMnemonic, importMnemonic, importMethod, mode]
   );
 
   const isRecoveryStepValid =
-    mode === 'create' ? confirmBackup && validateWalletMnemonic(mnemonic) : validateWalletMnemonic(mnemonic);
+    mode === 'create'
+      ? confirmBackup && validateWalletMnemonic(mnemonic)
+      : importMethod === 'mnemonic'
+        ? validateWalletMnemonic(mnemonic)
+        : importMethod === 'private-key'
+          ? validateSolanaPrivateKey(importPrivateKey)
+          : !!ledgerAccount;
 
   const isPasswordStepValid = !submitting && password.length >= 8 && password === passwordConfirm;
 
@@ -53,7 +72,7 @@ export function OnboardingView(props: OnboardingViewProps) {
       setSubmitting(true);
       setError(null);
 
-      if (!validateWalletMnemonic(mnemonic)) {
+      if (mode === 'create' && !validateWalletMnemonic(mnemonic)) {
         throw new Error('Enter a valid 12-word mnemonic.');
       }
 
@@ -69,14 +88,49 @@ export function OnboardingView(props: OnboardingViewProps) {
         throw new Error('Passwords do not match.');
       }
 
-      const account = deriveSolanaAccount0(mnemonic);
-      const type = mode === 'create' ? 'wallet_create' : 'wallet_import';
-      await sendRuntimeMessage<WalletStateResponse>({
-        type,
-        mnemonic,
-        password,
-        publicKey: account.publicKey
-      });
+      if (mode === 'create') {
+        const account = deriveSolanaAccount0(mnemonic);
+        await sendRuntimeMessage<WalletStateResponse>({
+          type: 'wallet_create',
+          mnemonic,
+          password,
+          publicKey: account.publicKey
+        });
+      } else if (importMethod === 'mnemonic') {
+        if (!validateWalletMnemonic(mnemonic)) {
+          throw new Error('Enter a valid 12-word mnemonic.');
+        }
+        const account = deriveSolanaAccount0(mnemonic);
+        await sendRuntimeMessage<WalletStateResponse>({
+          type: 'wallet_import',
+          mnemonic,
+          password,
+          publicKey: account.publicKey
+        });
+      } else {
+        if (importMethod === 'private-key') {
+          if (!validateSolanaPrivateKey(importPrivateKey)) {
+            throw new Error('Enter a valid Solana private key.');
+          }
+          const account = importSolanaPrivateKey(importPrivateKey);
+          await sendRuntimeMessage<WalletStateResponse>({
+            type: 'wallet_import_private_key',
+            privateKey: importPrivateKey.trim(),
+            password,
+            publicKey: account.publicKey
+          });
+        } else {
+          if (!ledgerAccount) {
+            throw new Error('Connect your Ledger and choose an account first.');
+          }
+          await sendRuntimeMessage<WalletStateResponse>({
+            type: 'wallet_import_ledger',
+            derivationPath: ledgerAccount.derivationPath,
+            password,
+            publicKey: ledgerAccount.publicKey
+          });
+        }
+      }
 
       if (props.onComplete) {
         await props.onComplete();
@@ -113,11 +167,12 @@ export function OnboardingView(props: OnboardingViewProps) {
                 className={`choice-card ${mode === 'import' ? 'active' : ''}`.trim()}
                 onClick={() => {
                   setMode('import');
+                  setImportMethod('mnemonic');
                   setError(null);
                 }}
               >
                 <strong>Import existing wallet</strong>
-                <span className="muted">Restore from a 12-word recovery phrase.</span>
+                <span className="muted">Restore from a recovery phrase or a private key.</span>
               </button>
             </div>
           </div>
@@ -127,16 +182,14 @@ export function OnboardingView(props: OnboardingViewProps) {
 
     if (step === 2) {
       return (
-        <Card title={mode === 'create' ? 'Back up recovery phrase' : 'Enter recovery phrase'}>
+        <Card title={mode === 'create' ? 'Back up recovery phrase' : 'Import wallet'}>
           {mode === 'create' ? (
             <div className="stack">
-              <p className="warning-box">
-                This phrase is shown once. Store it offline before you continue.
-              </p>
+              <p className="warning-box">This phrase is shown once. Save it somewhere offline before you continue.</p>
               <MnemonicGrid words={generatedMnemonic.split(' ')} />
               <label className="inline checkbox-row">
                 <input type="checkbox" checked={confirmBackup} onChange={(event) => setConfirmBackup(event.target.checked)} />
-                <span>I wrote down this recovery phrase.</span>
+                <span>I saved this recovery phrase.</span>
               </label>
               <Button
                 tone="secondary"
@@ -149,17 +202,94 @@ export function OnboardingView(props: OnboardingViewProps) {
               </Button>
             </div>
           ) : (
-            <label className="stack">
-              <span className="muted">Recovery phrase</span>
-              <TextArea
-                placeholder="Enter your 12-word mnemonic"
-                value={importMnemonic}
-                onChange={(event) => setImportMnemonic(event.target.value)}
-              />
-              {importMnemonic.trim().length > 0 && !validateWalletMnemonic(mnemonic) ? (
-                <p className="danger-box">That recovery phrase is not valid.</p>
-              ) : null}
-            </label>
+            <div className="stack">
+              <div className="stack">
+                <button
+                  type="button"
+                  className={`choice-card ${importMethod === 'mnemonic' ? 'active' : ''}`.trim()}
+                  onClick={() => {
+                    setImportMethod('mnemonic');
+                    setError(null);
+                  }}
+                >
+                  <strong>Recovery phrase</strong>
+                  <span className="muted">Import from a 12-word mnemonic.</span>
+                </button>
+                <button
+                  type="button"
+                  className={`choice-card ${importMethod === 'private-key' ? 'active' : ''}`.trim()}
+                  onClick={() => {
+                    setImportMethod('private-key');
+                    setLedgerAccount(null);
+                    setError(null);
+                  }}
+                >
+                  <strong>Private key</strong>
+                  <span className="muted">Import from a Solana private key in base58, base64, or JSON array format.</span>
+                </button>
+                <button
+                  type="button"
+                  className={`choice-card ${importMethod === 'ledger' ? 'active' : ''}`.trim()}
+                  onClick={() => {
+                    setImportMethod('ledger');
+                    setError(null);
+                  }}
+                >
+                  <strong>Ledger</strong>
+                  <span className="muted">Connect a Ledger over WebHID and use it as a hardware signer.</span>
+                </button>
+              </div>
+
+              {importMethod === 'mnemonic' ? (
+                <label className="stack">
+                  <span className="muted">Recovery phrase</span>
+                  <TextArea
+                    placeholder="Enter your 12-word mnemonic"
+                    value={importMnemonic}
+                    onChange={(event) => setImportMnemonic(event.target.value)}
+                  />
+                  {importMnemonic.trim().length > 0 && !validateWalletMnemonic(mnemonic) ? (
+                    <p className="danger-box">That recovery phrase is not valid.</p>
+                  ) : null}
+                </label>
+              ) : importMethod === 'private-key' ? (
+                <label className="stack">
+                  <span className="muted">Private key</span>
+                  <TextArea
+                    placeholder="Paste a base58 string, base64 string, or JSON byte array"
+                    value={importPrivateKey}
+                    onChange={(event) => setImportPrivateKey(event.target.value)}
+                  />
+                  {importPrivateKey.trim().length > 0 && !validateSolanaPrivateKey(importPrivateKey) ? (
+                    <p className="danger-box">That private key is not valid.</p>
+                  ) : null}
+                </label>
+              ) : (
+                <div className="stack">
+                  <p className="muted">Connect your Ledger, unlock it, and open the Solana app before continuing.</p>
+                  <Button
+                    tone="secondary"
+                    onClick={async () => {
+                      try {
+                        setError(null);
+                        const account = await requestLedgerAccount();
+                        setLedgerAccount(account);
+                      } catch (nextError) {
+                        setError(nextError instanceof Error ? nextError.message : 'Unable to connect to Ledger.');
+                      }
+                    }}
+                  >
+                    {ledgerAccount ? 'Reconnect Ledger' : 'Connect Ledger'}
+                  </Button>
+                  {ledgerAccount ? (
+                    <div className="stack">
+                      <div className="muted">Ledger account</div>
+                      <div className="mono">{ledgerAccount.publicKey}</div>
+                    </div>
+                  ) : null}
+                </div>
+              )}
+            </div>
           )}
         </Card>
       );
@@ -176,7 +306,11 @@ export function OnboardingView(props: OnboardingViewProps) {
             <span className="muted">Confirm password</span>
             <Input type="password" value={passwordConfirm} onChange={(event) => setPasswordConfirm(event.target.value)} />
           </label>
-          <p className="muted">Use at least 8 characters. You will use this password to unlock and approve signing.</p>
+          <p className="muted">
+            {isAppendFlow
+              ? 'Use your existing wallet password so this wallet can be unlocked alongside the others.'
+              : 'Use at least 8 characters. You will use this password to unlock and approve signing.'}
+          </p>
           {error ? <p className="danger-box">{error}</p> : null}
         </div>
       </Card>
@@ -201,7 +335,15 @@ export function OnboardingView(props: OnboardingViewProps) {
           <Button
             onClick={() => {
               if (!isRecoveryStepValid) {
-                setError(mode === 'create' ? 'Confirm that you backed up the recovery phrase.' : 'Enter a valid mnemonic.');
+                setError(
+                  mode === 'create'
+                    ? 'Confirm that you backed up the recovery phrase.'
+                    : importMethod === 'mnemonic'
+                      ? 'Enter a valid mnemonic.'
+                      : importMethod === 'private-key'
+                        ? 'Enter a valid Solana private key.'
+                        : 'Connect your Ledger and choose an account.'
+                );
                 return;
               }
               setError(null);
@@ -231,14 +373,26 @@ export function OnboardingView(props: OnboardingViewProps) {
 
   const content = (
     <>
-      <div className="step-indicator" aria-label="Onboarding progress">
-        {STEP_SEQUENCE.map((numericStep) => {
-          return (
-            <StatusPill key={numericStep} tone={numericStep === step ? 'success' : 'neutral'}>
-              {numericStep}. {STEP_LABELS[numericStep]}
-            </StatusPill>
-          );
-        })}
+      <div className="setup-progress" aria-label="Onboarding progress">
+        <div className="setup-progress-copy">
+          <span className="section-label">Step {step} of 3</span>
+          <strong>
+            {step === 1
+              ? 'Choose how to start'
+              : step === 2
+                ? mode === 'create'
+                  ? 'Save your recovery phrase'
+                  : importMethod === 'mnemonic'
+                    ? 'Enter your recovery phrase'
+                    : importMethod === 'private-key'
+                      ? 'Enter your private key'
+                      : 'Connect your Ledger'
+                : 'Set your password'}
+          </strong>
+        </div>
+        <div className="progress-track" aria-hidden="true">
+          <div className="progress-fill" style={{ width: `${(step / 3) * 100}%` }} />
+        </div>
       </div>
       {renderStepContent()}
       {step !== 3 && error ? <p className="danger-box">{error}</p> : null}
@@ -252,8 +406,16 @@ export function OnboardingView(props: OnboardingViewProps) {
 
   return (
     <PageShell
-      title="Set up Grape"
-      subtitle={mode === 'create' ? 'Create a new Solana wallet in three steps.' : 'Import your wallet in three steps.'}
+      title={isAppendFlow ? (mode === 'create' ? 'Add wallet' : 'Import wallet') : 'Set up wallet'}
+      subtitle={
+        isAppendFlow
+          ? mode === 'create'
+            ? 'Create another wallet and add it to Grape.'
+            : 'Import another wallet into Grape.'
+          : mode === 'create'
+            ? 'Create a new wallet in a few clear steps.'
+            : 'Import your wallet with a recovery phrase or private key.'
+      }
     >
       {content}
     </PageShell>

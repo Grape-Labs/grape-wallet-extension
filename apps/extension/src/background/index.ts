@@ -1,26 +1,48 @@
 import {
   createVaultRecord,
   createPendingApproval,
+  getSelectedWallet,
   grantPermissions,
   hasPermission,
   isSessionExpired,
   listPermissions,
+  migrateWalletState,
+  rememberWalletRecipient,
   revokeOriginPermissions,
   runtimeMessageSchema,
+  type SendAsset,
   type ProviderRequest,
   providerRequestSchema,
   RpcError,
   STORAGE_KEYS,
   type RuntimeMessage,
+  type VaultSecret,
   unlockVaultRecord,
   verifyVaultPassword
 } from '@grape/core';
-import { deriveSolanaAccount0, signAndSendSerializedTransaction, signMessageBytes, signSerializedTransaction, signSerializedTransactions, summarizeTransaction, SOLANA_RPC_ENDPOINTS } from '@grape/solana';
+import {
+  buildSolTransferTransaction,
+  buildSplTokenTransferTransaction,
+  estimateLegacyTransactionFee,
+  resolveSolanaVaultSecret,
+  parseDecimalAmount,
+  signAndSendLedgerTransaction,
+  signAndSendLedgerSerializedTransaction,
+  signAndSendSerializedTransaction,
+  signLedgerSerializedTransaction,
+  signLedgerSerializedTransactions,
+  signAndSendTransaction,
+  signMessageBytes,
+  signSerializedTransaction,
+  signSerializedTransactions,
+  summarizeTransaction
+} from '@grape/solana';
 import { Connection, PublicKey } from '@solana/web3.js';
 
 import type { ApprovalRecord, TokenHolding } from '../shared/models';
 
 import { ChromeStorageArea, permissionsStorage, sessionStorage, walletStateStorage } from '../shared/chrome';
+import { getRpcEndpoint } from '../shared/rpc';
 
 const approvalsStorage = new ChromeStorageArea<Record<string, ApprovalRecord>>(chrome.storage.local, STORAGE_KEYS.approvals, {});
 const TOKEN_PROGRAM_IDS = [
@@ -33,17 +55,29 @@ type PendingResolver = {
   reject: (reason: Error) => void;
 };
 
+type UnlockedSecretCache = Record<string, {
+  secret: VaultSecret;
+  unlockedAt: number;
+}>;
+
 class WalletController {
   private readonly pendingApprovals = new Map<string, PendingResolver>();
+  private unlockedSecrets: UnlockedSecretCache = {};
 
   async getWalletState() {
-    return walletStateStorage.get();
+    const raw = await walletStateStorage.get();
+    const migrated = migrateWalletState(raw);
+    if (JSON.stringify(raw) !== JSON.stringify(migrated)) {
+      await walletStateStorage.set(migrated);
+    }
+    return migrated;
   }
 
   async getSessionState() {
     const wallet = await this.getWalletState();
     const session = await sessionStorage.get();
     if (isSessionExpired(session, wallet.idleTimeoutMs)) {
+      this.unlockedSecrets = {};
       const locked = {
         ...session,
         locked: true
@@ -64,50 +98,102 @@ class WalletController {
 
   async ensureReadyWallet() {
     const wallet = await this.getWalletState();
-    if (wallet.setup !== 'ready' || !wallet.vault || !wallet.selectedAccountId) {
+    const selectedWallet = getSelectedWallet(wallet);
+    if (wallet.setup !== 'ready' || !selectedWallet || !selectedWallet.selectedAccountId) {
       throw new RpcError('WALLET_NOT_READY', 'Wallet has not been created or imported yet.');
     }
-    return wallet;
+    return {
+      walletState: wallet,
+      selectedWallet
+    };
   }
 
-  async createWallet(mnemonic: string, password: string, publicKey: string) {
+  async createWallet(
+    secret: VaultSecret,
+    password: string,
+    publicKey: string,
+    signer: import('@grape/core').WalletSigner = { kind: 'software' }
+  ) {
     const account = {
       id: 'account-0',
       index: 0,
       publicKey,
-      derivationPath: `m/44'/501'/0'/0'`
+      derivationPath:
+        signer.kind === 'ledger'
+          ? signer.derivationPath
+          : secret.kind === 'mnemonic'
+            ? `m/44'/501'/0'/0'`
+            : 'imported-private-key'
     };
     const current = await this.getWalletState();
+    if (current.setup === 'ready') {
+      const currentSelectedWallet = getSelectedWallet(current);
+      if (!currentSelectedWallet) {
+        throw new RpcError('WALLET_NOT_READY', 'Wallet state is invalid.');
+      }
+      const valid = await verifyVaultPassword(currentSelectedWallet.vault, password);
+      if (!valid) {
+        throw new RpcError('INVALID_PASSWORD', 'Use your existing wallet password to add another wallet.');
+      }
+    }
+
+    const walletId = `wallet-${current.wallets.length + 1}`;
+    const profile = {
+      id: walletId,
+      name: `Wallet ${current.wallets.length + 1}`,
+      vault: await createVaultRecord(secret, password),
+      signer,
+      accounts: [account],
+      selectedAccountId: account.id,
+      recentRecipients: []
+    };
     const nextState = {
       ...current,
       setup: 'ready' as const,
-      vault: await createVaultRecord({ mnemonic }, password),
-      accounts: [account],
-      selectedAccountId: account.id
+      wallets: [...current.wallets, profile],
+      selectedWalletId: walletId
     };
     await walletStateStorage.set(nextState);
+    this.unlockedSecrets[walletId] = {
+      secret,
+      unlockedAt: Date.now()
+    };
     await this.setSessionState({ locked: false, lastActivityAt: Date.now() });
     return nextState;
   }
 
   async unlockWallet(password: string) {
-    const wallet = await this.ensureReadyWallet();
-    const valid = await verifyVaultPassword(wallet.vault!, password);
-    if (!valid) {
+    const { walletState } = await this.ensureReadyWallet();
+    const unlockedEntries = await Promise.all(
+      walletState.wallets.map(async (wallet) => {
+        const secret = await unlockVaultRecord(wallet.vault, password);
+        return [wallet.id, secret] as const;
+      })
+    ).catch(() => null);
+
+    if (!unlockedEntries) {
       throw new RpcError('INVALID_PASSWORD', 'Password is incorrect.');
     }
+    this.unlockedSecrets = Object.fromEntries(
+      unlockedEntries.map(([walletId, secret]) => [walletId, { secret, unlockedAt: Date.now() }])
+    );
     await this.setSessionState({ locked: false, lastActivityAt: Date.now() });
     return true;
   }
 
   async lockWallet() {
+    this.unlockedSecrets = {};
     await this.setSessionState({ locked: true, lastActivityAt: 0 });
     return true;
   }
 
   async getActiveAccount() {
     const wallet = await this.getWalletState();
-    return wallet.accounts.find((account) => account.id === wallet.selectedAccountId);
+    const selectedWallet = getSelectedWallet(wallet);
+    if (!selectedWallet) {
+      return undefined;
+    }
+    return selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
   }
 
   async getStateResponse() {
@@ -117,46 +203,64 @@ class WalletController {
       permissionsStorage.get(),
       this.getActiveAccount()
     ]);
+    const activeWallet = getSelectedWallet(wallet);
 
     return {
       wallet,
       session,
       permissions: listPermissions(permissions),
-      activeAccount: activeAccount ? { publicKey: activeAccount.publicKey } : undefined
+      activeWallet: activeWallet && activeAccount ? { id: activeWallet.id, name: activeWallet.name, publicKey: activeAccount.publicKey } : undefined,
+      activeAccount: activeAccount ? { publicKey: activeAccount.publicKey } : undefined,
+      recentRecipients: activeWallet?.recentRecipients ?? [],
+      canUseUnlockedSigner: !!(activeWallet && this.unlockedSecrets[activeWallet.id]) && !session.locked
     };
   }
 
   async setNetwork(network: 'mainnet-beta' | 'devnet') {
-    const wallet = await this.ensureReadyWallet();
+    const { walletState } = await this.ensureReadyWallet();
     await walletStateStorage.set({
-      ...wallet,
+      ...walletState,
       selectedNetwork: network
     });
     return this.getStateResponse();
   }
 
-  async setIdleTimeout(idleTimeoutMs: number) {
-    const wallet = await this.ensureReadyWallet();
+  async selectWallet(walletId: string) {
+    const walletState = await this.getWalletState();
+    const selectedWallet = walletState.wallets.find((wallet) => wallet.id === walletId);
+    if (!selectedWallet) {
+      throw new RpcError('WALLET_NOT_FOUND', 'Wallet could not be found.');
+    }
+
     await walletStateStorage.set({
-      ...wallet,
+      ...walletState,
+      selectedWalletId: walletId
+    });
+    return this.getStateResponse();
+  }
+
+  async setIdleTimeout(idleTimeoutMs: number) {
+    const { walletState } = await this.ensureReadyWallet();
+    await walletStateStorage.set({
+      ...walletState,
       idleTimeoutMs
     });
     return this.getStateResponse();
   }
 
   async getBalanceLamports() {
-    const wallet = await this.ensureReadyWallet();
-    const activeAccount = wallet.accounts.find((account) => account.id === wallet.selectedAccountId);
+    const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
     if (!activeAccount) {
       return null;
     }
-    const connection = new Connection(SOLANA_RPC_ENDPOINTS[wallet.selectedNetwork], 'confirmed');
+    const connection = new Connection(getRpcEndpoint(walletState.selectedNetwork), 'confirmed');
     return connection.getBalance(new PublicKey(activeAccount.publicKey));
   }
 
   async getAssets() {
-    const wallet = await this.ensureReadyWallet();
-    const activeAccount = wallet.accounts.find((account) => account.id === wallet.selectedAccountId);
+    const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
     if (!activeAccount) {
       return {
         lamports: null,
@@ -165,7 +269,7 @@ class WalletController {
     }
 
     const owner = new PublicKey(activeAccount.publicKey);
-    const connection = new Connection(SOLANA_RPC_ENDPOINTS[wallet.selectedNetwork], 'confirmed');
+    const connection = new Connection(getRpcEndpoint(walletState.selectedNetwork), 'confirmed');
     const [lamports, ...tokenResponses] = await Promise.all([
       connection.getBalance(owner),
       ...TOKEN_PROGRAM_IDS.map((programId) =>
@@ -188,7 +292,8 @@ class WalletController {
         return {
           mint: parsed.mint as string,
           amount: tokenAmount.uiAmountString ?? tokenAmount.amount,
-          decimals: tokenAmount.decimals
+          decimals: tokenAmount.decimals,
+          programId: accountInfo.account.owner.toBase58()
         } satisfies TokenHolding;
       })
       .filter((token) => Number(token.amount) > 0)
@@ -206,9 +311,82 @@ class WalletController {
     return this.getStateResponse();
   }
 
+  async sendTransfer(input: { recipient: string; amount: string; password?: string; asset: SendAsset }) {
+    const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
+    if (!activeAccount) {
+      throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
+    }
+
+    const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
+    const connection = new Connection(getRpcEndpoint(walletState.selectedNetwork), 'confirmed');
+    const owner = new PublicKey(activeAccount.publicKey);
+
+    const transaction =
+      input.asset.kind === 'sol'
+        ? await buildSolTransferTransaction(connection, owner, {
+            recipient: input.recipient,
+            amount: input.amount
+          })
+        : await buildSplTokenTransferTransaction(connection, owner, {
+            recipient: input.recipient,
+            amount: input.amount,
+            mint: input.asset.mint,
+            decimals: input.asset.decimals,
+            programId: input.asset.programId
+          });
+
+    if (input.asset.kind === 'sol') {
+      const [balanceLamports, feeLamports] = await Promise.all([
+        connection.getBalance(owner, 'confirmed'),
+        estimateLegacyTransactionFee(connection, transaction)
+      ]);
+      const transferLamports = parseDecimalAmount(input.amount, 9);
+      const requiredLamports = transferLamports + BigInt(feeLamports);
+      if (BigInt(balanceLamports) < requiredLamports) {
+        throw new RpcError(
+          'INSUFFICIENT_FUNDS',
+          `Not enough SOL. You need ${(Number(requiredLamports) / 1_000_000_000).toFixed(9)} SOL including network fee, but only ${(balanceLamports / 1_000_000_000).toFixed(9)} SOL is available.`
+        );
+      }
+    }
+
+    let signature: string;
+    try {
+      signature =
+        selectedWallet.signer.kind === 'ledger'
+          ? await signAndSendLedgerTransaction(
+              transaction,
+              activeAccount.publicKey,
+              selectedWallet.signer.derivationPath,
+              connection
+            )
+          : await signAndSendTransaction(transaction, resolveSolanaVaultSecret(secret), connection);
+    } catch (error) {
+      throw normalizeSigningError(error);
+    }
+
+    await walletStateStorage.set({
+      ...walletState,
+      wallets: walletState.wallets.map((wallet) =>
+        wallet.id === selectedWallet.id ? rememberWalletRecipient(wallet, input.recipient) : wallet
+      )
+    });
+
+    await this.setSessionState({ locked: false, lastActivityAt: Date.now() });
+
+    return {
+      signature,
+      recipient: input.recipient,
+      amount: input.amount,
+      asset: input.asset,
+      network: walletState.selectedNetwork
+    };
+  }
+
   async handleProviderRequest(request: ProviderRequest): Promise<unknown> {
-    const wallet = await this.ensureReadyWallet();
-    const activeAccount = wallet.accounts.find((account) => account.id === wallet.selectedAccountId);
+    const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
     if (!activeAccount) {
       throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
     }
@@ -231,7 +409,7 @@ class WalletController {
         return { publicKey: activeAccount.publicKey };
       }
 
-      const approval = await this.createApproval(request, wallet.selectedNetwork, activeAccount.publicKey, {
+      const approval = await this.createApproval(request, walletState.selectedNetwork, selectedWallet.id, activeAccount.publicKey, {
         requestedPermissions: ['View your public key', 'Request signatures with approval']
       });
       return this.awaitApproval(approval.id);
@@ -249,7 +427,7 @@ class WalletController {
           ? summarizeTransaction(request.params.transactions[0])
           : undefined;
 
-    const approval = await this.createApproval(request, wallet.selectedNetwork, activeAccount.publicKey, {
+    const approval = await this.createApproval(request, walletState.selectedNetwork, selectedWallet.id, activeAccount.publicKey, {
       transactionSummary
     });
     return this.awaitApproval(approval.id);
@@ -314,43 +492,72 @@ class WalletController {
       return { publicKey: approval.publicKey };
     }
 
-    if (!password) {
-      throw new RpcError('PASSWORD_REQUIRED', 'Password is required to sign.');
-    }
-
-    const wallet = await this.ensureReadyWallet();
-    const secret = await unlockVaultRecord(wallet.vault!, password);
-    const account = deriveSolanaAccount0(secret.mnemonic);
-
+    const { selectedWallet } = await this.ensureReadyWallet();
+    const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, password);
     switch (approval.kind) {
       case 'sign-message': {
+        if (selectedWallet.signer.kind === 'ledger') {
+          throw new RpcError('LEDGER_UNSUPPORTED', 'Ledger message signing is not supported in this MVP.');
+        }
+
+        const signer = resolveSolanaVaultSecret(secret);
         const messageRequest = approval.request as Extract<ProviderRequest, { method: 'signMessage' }>;
         const signature = signMessageBytes(
           atobBytes(messageRequest.params.message),
-          account.keypair
+          signer
         );
         return {
-          publicKey: account.publicKey,
+          publicKey: signer.publicKey.toBase58(),
           signature: arrayBufferToBase64(signature)
         };
       }
       case 'sign-transaction': {
         const transactionRequest = approval.request as Extract<ProviderRequest, { method: 'signTransaction' }>;
         return {
-          transaction: signSerializedTransaction(transactionRequest.params.transaction, account.keypair)
+          transaction:
+            selectedWallet.signer.kind === 'ledger'
+              ? await signLedgerSerializedTransaction(
+                  transactionRequest.params.transaction,
+                  approval.publicKey ?? '',
+                  selectedWallet.signer.derivationPath
+                )
+              : signSerializedTransaction(transactionRequest.params.transaction, resolveSolanaVaultSecret(secret))
         };
       }
       case 'sign-all-transactions': {
         const transactionsRequest = approval.request as Extract<ProviderRequest, { method: 'signAllTransactions' }>;
         return {
-          transactions: signSerializedTransactions(transactionsRequest.params.transactions, account.keypair)
+          transactions:
+            selectedWallet.signer.kind === 'ledger'
+              ? await signLedgerSerializedTransactions(
+                  transactionsRequest.params.transactions,
+                  approval.publicKey ?? '',
+                  selectedWallet.signer.derivationPath
+                )
+              : signSerializedTransactions(transactionsRequest.params.transactions, resolveSolanaVaultSecret(secret))
         };
       }
       case 'sign-and-send-transaction': {
         const transactionRequest = approval.request as Extract<ProviderRequest, { method: 'signAndSendTransaction' }>;
-        return {
-          signature: await signAndSendSerializedTransaction(transactionRequest.params.transaction, account.keypair, approval.network)
-        };
+        try {
+          return {
+            signature:
+              selectedWallet.signer.kind === 'ledger'
+                ? await signAndSendLedgerSerializedTransaction(
+                    transactionRequest.params.transaction,
+                    approval.publicKey ?? '',
+                    selectedWallet.signer.derivationPath,
+                    getRpcEndpoint(approval.network)
+                  )
+                : await signAndSendSerializedTransaction(
+                    transactionRequest.params.transaction,
+                    resolveSolanaVaultSecret(secret),
+                    getRpcEndpoint(approval.network)
+                  )
+          };
+        } catch (error) {
+          throw normalizeSigningError(error);
+        }
       }
       default:
         throw new RpcError('UNKNOWN_APPROVAL', 'Unsupported approval kind.');
@@ -360,6 +567,7 @@ class WalletController {
   private async createApproval(
     request: ProviderRequest,
     network: 'mainnet-beta' | 'devnet',
+    walletId: string,
     publicKey: string,
     extras?: Pick<ApprovalRecord, 'requestedPermissions' | 'transactionSummary'>
   ) {
@@ -375,7 +583,8 @@ class WalletController {
       publicKey,
       network,
       requestedPermissions: extras?.requestedPermissions,
-      transactionSummary: extras?.transactionSummary
+      transactionSummary: extras?.transactionSummary,
+      requiresPassword: !this.unlockedSecrets[walletId]
     };
 
     const approvals = await approvalsStorage.get();
@@ -416,6 +625,24 @@ class WalletController {
       this.pendingApprovals.delete(approvalId);
     }
   }
+
+  private async getUnlockedSecret(walletId: string, vault: NonNullable<ReturnType<typeof getSelectedWallet>>['vault'], password?: string) {
+    const cached = this.unlockedSecrets[walletId];
+    if (cached) {
+      return cached.secret;
+    }
+
+    if (!password) {
+      throw new RpcError('PASSWORD_REQUIRED', 'Password is required to sign.');
+    }
+
+    const secret = await unlockVaultRecord(vault, password);
+    this.unlockedSecrets[walletId] = {
+      secret,
+      unlockedAt: Date.now()
+    };
+    return secret;
+  }
 }
 
 function toApprovalKind(request: ProviderRequest) {
@@ -453,6 +680,26 @@ function normalizeError(error: unknown) {
   return { code: 'INTERNAL_ERROR', message: 'An unknown error occurred.' };
 }
 
+function normalizeSigningError(error: unknown) {
+  if (error instanceof RpcError) {
+    return error;
+  }
+
+  if (typeof error === 'object' && error !== null) {
+    const maybeMessage = 'message' in error && typeof error.message === 'string' ? error.message : 'Transaction failed.';
+    const maybeLogs = 'logs' in error && Array.isArray(error.logs) ? error.logs.filter((log): log is string => typeof log === 'string') : [];
+    const compactLogs = maybeLogs.slice(0, 2).join(' ');
+
+    if (maybeMessage.toLowerCase().includes('insufficient lamports') || compactLogs.toLowerCase().includes('insufficient lamports')) {
+      return new RpcError('INSUFFICIENT_FUNDS', 'Not enough SOL to cover the transfer amount and network fee.');
+    }
+
+    return new RpcError('TRANSACTION_FAILED', compactLogs ? `${maybeMessage} ${compactLogs}` : maybeMessage);
+  }
+
+  return new RpcError('TRANSACTION_FAILED', 'Transaction failed.');
+}
+
 const controller = new WalletController();
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -469,8 +716,28 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
           sendResponse(await controller.getStateResponse());
           break;
         case 'wallet_create':
+          await controller.createWallet({ kind: 'mnemonic', mnemonic: message.mnemonic }, message.password, message.publicKey);
+          sendResponse(await controller.getStateResponse());
+          break;
         case 'wallet_import':
-          await controller.createWallet(message.mnemonic, message.password, message.publicKey);
+          await controller.createWallet({ kind: 'mnemonic', mnemonic: message.mnemonic }, message.password, message.publicKey);
+          sendResponse(await controller.getStateResponse());
+          break;
+        case 'wallet_import_private_key':
+          await controller.createWallet({ kind: 'private-key', secretKey: message.privateKey }, message.password, message.publicKey);
+          sendResponse(await controller.getStateResponse());
+          break;
+        case 'wallet_import_ledger':
+          await controller.createWallet(
+            { kind: 'auth-token', token: crypto.randomUUID() },
+            message.password,
+            message.publicKey,
+            {
+              kind: 'ledger',
+              transport: 'webhid',
+              derivationPath: message.derivationPath
+            }
+          );
           sendResponse(await controller.getStateResponse());
           break;
         case 'wallet_unlock':
@@ -484,6 +751,9 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
         case 'wallet_set_network':
           sendResponse(await controller.setNetwork(message.network));
           break;
+        case 'wallet_select':
+          sendResponse(await controller.selectWallet(message.walletId));
+          break;
         case 'wallet_set_idle_timeout':
           sendResponse(await controller.setIdleTimeout(message.idleTimeoutMs));
           break;
@@ -492,6 +762,16 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
           break;
         case 'wallet_get_assets':
           sendResponse(await controller.getAssets());
+          break;
+        case 'wallet_send_transfer':
+          sendResponse(
+            await controller.sendTransfer({
+              recipient: message.recipient,
+              amount: message.amount,
+              password: message.password,
+              asset: message.asset
+            })
+          );
           break;
         case 'wallet_list_permissions':
           sendResponse((await controller.getStateResponse()).permissions);

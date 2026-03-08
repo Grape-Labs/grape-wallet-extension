@@ -1,10 +1,32 @@
 {
   "name": "@grape/wallet-adapter",
   "version": "0.1.0",
-  "private": true,
+  "description": "Dedicated Solana wallet-adapter package for Grape Wallet.",
+  "keywords": [
+    "solana",
+    "wallet",
+    "wallet-adapter",
+    "browser-extension",
+    "grape-wallet"
+  ],
+  "homepage": "https://github.com/Grape-Labs/grape-wallet-extension#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Grape-Labs/grape-wallet-extension.git",
+    "directory": "packages/wallet-adapter"
+  },
+  "bugs": {
+    "url": "https://github.com/Grape-Labs/grape-wallet-extension/issues"
+  },
+  "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -13,14 +35,14 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "prepublishOnly": "pnpm run build"
   },
   "dependencies": {
-    "@grape/core": "workspace:*",
     "@solana/web3.js": "^1.98.0"
   },
   "peerDependencies": {
-    "@solana/wallet-adapter-base": "*"
+    "@solana/wallet-adapter-base": "^0.9.27"
   }
 }
 
