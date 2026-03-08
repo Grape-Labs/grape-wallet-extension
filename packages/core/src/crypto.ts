@@ -11,7 +11,7 @@ export type EncryptedPayload = {
 
 export type CryptoProvider = {
   subtle: SubtleCrypto;
-  getRandomValues<T extends ArrayBufferView | null>(array: T): T;
+  getRandomValues<T extends ArrayBufferView>(array: T): T;
 };
 
 const DEFAULT_ITERATIONS = 600_000;
@@ -24,6 +24,14 @@ export function getCryptoProvider(): CryptoProvider {
   return current;
 }
 
+function normalizeBytes(value: Uint8Array): Uint8Array {
+  return new Uint8Array(value);
+}
+
+function asBufferSource(value: Uint8Array): BufferSource {
+  return normalizeBytes(value) as unknown as BufferSource;
+}
+
 export async function deriveAesKey(
   password: string,
   salt: Uint8Array,
@@ -32,7 +40,7 @@ export async function deriveAesKey(
 ): Promise<CryptoKey> {
   const passwordKey = await cryptoProvider.subtle.importKey(
     'raw',
-    utf8ToBytes(password),
+    asBufferSource(utf8ToBytes(password)),
     { name: 'PBKDF2' },
     false,
     ['deriveKey']
@@ -42,7 +50,7 @@ export async function deriveAesKey(
     {
       name: 'PBKDF2',
       hash: 'SHA-256',
-      salt,
+      salt: asBufferSource(salt),
       iterations
     },
     passwordKey,
@@ -63,10 +71,10 @@ export async function encryptText(
   const ciphertext = await cryptoProvider.subtle.encrypt(
     {
       name: 'AES-GCM',
-      iv
+      iv: asBufferSource(iv)
     },
     key,
-    utf8ToBytes(plaintext)
+    asBufferSource(utf8ToBytes(plaintext))
   );
 
   return {
@@ -91,10 +99,10 @@ export async function decryptText(
     const plaintext = await cryptoProvider.subtle.decrypt(
       {
         name: 'AES-GCM',
-        iv
+        iv: asBufferSource(iv)
       },
       key,
-      base64ToBytes(payload.ciphertext)
+      asBufferSource(base64ToBytes(payload.ciphertext))
     );
 
     return bytesToUtf8(new Uint8Array(plaintext));
@@ -102,4 +110,3 @@ export async function decryptText(
     throw new Error('Invalid password or corrupt vault.', { cause: error });
   }
 }
-

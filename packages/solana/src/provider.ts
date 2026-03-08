@@ -1,0 +1,176 @@
+import { base64ToBytes, bytesToBase64, type PageOrigin, type ProviderRequest } from '@grape/core';
+import { PublicKey, Transaction, VersionedTransaction } from '@solana/web3.js';
+
+export type ProviderTransport = {
+  request<T>(request: ProviderRequest): Promise<T>;
+};
+
+type ProviderEventMap = {
+  connect: (publicKey: PublicKey) => void;
+  disconnect: () => void;
+  accountChanged: (publicKey: PublicKey | null) => void;
+};
+
+type ProviderRequestArgs = {
+  method: 'connect' | 'disconnect' | 'signMessage' | 'signTransaction' | 'signAllTransactions' | 'signAndSendTransaction';
+  params?: Record<string, unknown>;
+};
+
+function randomId(): string {
+  return crypto.randomUUID();
+}
+
+export class GrapeInpageProvider {
+  readonly isGrape = true;
+  readonly name = 'Grape Wallet';
+  readonly transport: ProviderTransport;
+  readonly origin: PageOrigin;
+
+  publicKey: PublicKey | null = null;
+  isConnected = false;
+
+  private readonly listeners: {
+    [K in keyof ProviderEventMap]: Set<ProviderEventMap[K]>;
+  } = {
+    connect: new Set(),
+    disconnect: new Set(),
+    accountChanged: new Set()
+  };
+
+  constructor(transport: ProviderTransport, origin: PageOrigin) {
+    this.transport = transport;
+    this.origin = origin;
+  }
+
+  on<K extends keyof ProviderEventMap>(event: K, listener: ProviderEventMap[K]): void {
+    this.listeners[event].add(listener);
+  }
+
+  off<K extends keyof ProviderEventMap>(event: K, listener: ProviderEventMap[K]): void {
+    this.listeners[event].delete(listener);
+  }
+
+  once<K extends keyof ProviderEventMap>(event: K, listener: ProviderEventMap[K]): void {
+    const next = ((...args: Parameters<ProviderEventMap[K]>) => {
+      this.off(event, next as ProviderEventMap[K]);
+      (listener as (...listenerArgs: Parameters<ProviderEventMap[K]>) => void)(...args);
+    }) as ProviderEventMap[K];
+    this.on(event, next);
+  }
+
+  async connect(options?: { onlyIfTrusted?: boolean }): Promise<{ publicKey: PublicKey }> {
+    const result = await this.transport.request<{ publicKey: string }>({
+      id: randomId(),
+      method: 'connect',
+      origin: this.origin,
+      params: {
+        silent: options?.onlyIfTrusted
+      }
+    });
+
+    const publicKey = new PublicKey(result.publicKey);
+    this.publicKey = publicKey;
+    this.isConnected = true;
+    this.emit('connect', publicKey);
+    this.emit('accountChanged', publicKey);
+    return { publicKey };
+  }
+
+  async disconnect(): Promise<void> {
+    await this.transport.request({
+      id: randomId(),
+      method: 'disconnect',
+      origin: this.origin,
+      params: {}
+    });
+    this.publicKey = null;
+    this.isConnected = false;
+    this.emit('disconnect');
+    this.emit('accountChanged', null);
+  }
+
+  async signMessage(message: Uint8Array): Promise<{ publicKey: PublicKey; signature: Uint8Array }> {
+    const result = await this.transport.request<{ publicKey: string; signature: string }>({
+      id: randomId(),
+      method: 'signMessage',
+      origin: this.origin,
+      params: {
+        message: bytesToBase64(message)
+      }
+    });
+    return {
+      publicKey: new PublicKey(result.publicKey),
+      signature: base64ToBytes(result.signature)
+    };
+  }
+
+  async signTransaction<T extends Transaction | VersionedTransaction>(transaction: T): Promise<T> {
+    const result = await this.transport.request<{ transaction: string }>({
+      id: randomId(),
+      method: 'signTransaction',
+      origin: this.origin,
+      params: {
+        transaction: bytesToBase64(transaction.serialize())
+      }
+    });
+
+    if (transaction instanceof VersionedTransaction) {
+      return VersionedTransaction.deserialize(base64ToBytes(result.transaction)) as T;
+    }
+    return Transaction.from(base64ToBytes(result.transaction)) as T;
+  }
+
+  async signAllTransactions<T extends Transaction | VersionedTransaction>(transactions: T[]): Promise<T[]> {
+    const serializedTransactions = transactions.map((transaction) => bytesToBase64(transaction.serialize()));
+    const result = await this.transport.request<{ transactions: string[] }>({
+      id: randomId(),
+      method: 'signAllTransactions',
+      origin: this.origin,
+      params: {
+        transactions: serializedTransactions
+      }
+    });
+
+    return result.transactions.map((serialized, index) => {
+      const transaction = transactions[index];
+      if (transaction instanceof VersionedTransaction) {
+        return VersionedTransaction.deserialize(base64ToBytes(serialized)) as T;
+      }
+      return Transaction.from(base64ToBytes(serialized)) as T;
+    });
+  }
+
+  async signAndSendTransaction(transaction: Transaction | VersionedTransaction): Promise<{ signature: string }> {
+    return this.transport.request<{ signature: string }>({
+      id: randomId(),
+      method: 'signAndSendTransaction',
+      origin: this.origin,
+      params: {
+        transaction: bytesToBase64(transaction.serialize())
+      }
+    });
+  }
+
+  async request<T = unknown>(args: ProviderRequestArgs): Promise<T> {
+    if (args.method === 'connect') {
+      return this.connect(args.params as { onlyIfTrusted?: boolean }) as Promise<T>;
+    }
+    if (args.method === 'disconnect') {
+      return this.disconnect() as Promise<T>;
+    }
+    if (args.method === 'signMessage') {
+      const message = args.params?.message;
+      if (!(message instanceof Uint8Array)) {
+        throw new Error('signMessage requires a Uint8Array message.');
+      }
+      return this.signMessage(message) as Promise<T>;
+    }
+    throw new Error(`Unsupported provider request method: ${args.method}`);
+  }
+
+  private emit<K extends keyof ProviderEventMap>(event: K, ...args: Parameters<ProviderEventMap[K]>): void {
+    for (const listener of this.listeners[event]) {
+      (listener as (...listenerArgs: Parameters<ProviderEventMap[K]>) => void)(...args);
+    }
+  }
+}

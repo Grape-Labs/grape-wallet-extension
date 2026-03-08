@@ -1,0 +1,252 @@
+:root {
+  color-scheme: dark;
+  font-family: Georgia, 'Times New Roman', serif;
+  background:
+    radial-gradient(circle at top left, rgba(255, 122, 89, 0.22), transparent 28%),
+    radial-gradient(circle at right center, rgba(119, 209, 165, 0.16), transparent 26%),
+    linear-gradient(180deg, #120d1f 0%, #1b1330 52%, #0d1018 100%);
+  color: #f9f4ee;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 380px;
+  min-height: 600px;
+}
+
+a {
+  color: inherit;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.page-shell {
+  min-height: 100vh;
+  padding: 24px;
+}
+
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 24px;
+}
+
+.page-header h1,
+.card h2 {
+  margin: 0;
+  font-size: 1.8rem;
+}
+
+.page-content {
+  display: grid;
+  gap: 16px;
+}
+
+.eyebrow {
+  margin: 0 0 6px;
+  color: #f4d35e;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-size: 0.75rem;
+}
+
+.muted {
+  color: rgba(249, 244, 238, 0.72);
+}
+
+.card {
+  background: rgba(20, 16, 34, 0.78);
+  border: 1px solid rgba(244, 211, 94, 0.16);
+  border-radius: 20px;
+  padding: 18px;
+  box-shadow: 0 24px 50px rgba(0, 0, 0, 0.28);
+}
+
+.card-body {
+  display: grid;
+  gap: 14px;
+}
+
+.card-footer {
+  margin-top: 14px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.button {
+  border: 0;
+  border-radius: 999px;
+  padding: 11px 16px;
+  cursor: pointer;
+  transition: transform 140ms ease, opacity 140ms ease;
+}
+
+.button:hover {
+  transform: translateY(-1px);
+}
+
+.button.primary {
+  background: linear-gradient(135deg, #ff7a59 0%, #f4d35e 100%);
+  color: #22162b;
+  font-weight: 700;
+}
+
+.button.secondary {
+  background: rgba(255, 255, 255, 0.08);
+  color: #f9f4ee;
+}
+
+.button.danger {
+  background: rgba(255, 95, 95, 0.16);
+  color: #ffd2d2;
+}
+
+.input,
+select {
+  width: 100%;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: #fff;
+  padding: 12px 14px;
+}
+
+.textarea {
+  min-height: 120px;
+  resize: vertical;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 0.82rem;
+}
+
+.status-pill.neutral {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.status-pill.success {
+  background: rgba(119, 209, 165, 0.18);
+  color: #77d1a5;
+}
+
+.status-pill.warning {
+  background: rgba(244, 211, 94, 0.18);
+  color: #f4d35e;
+}
+
+.status-pill.danger {
+  background: rgba(255, 95, 95, 0.18);
+  color: #ff9c9c;
+}
+
+.key-value-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.mnemonic-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.mnemonic-grid li {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  border-radius: 14px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.stack {
+  display: grid;
+  gap: 12px;
+}
+
+.inline {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.space-between {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.warning-box {
+  border-radius: 14px;
+  padding: 12px;
+  background: rgba(244, 211, 94, 0.12);
+  color: #f4d35e;
+}
+
+.danger-box {
+  border-radius: 14px;
+  padding: 12px;
+  background: rgba(255, 95, 95, 0.12);
+  color: #ffb5b5;
+}
+
+.origin-box {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.origin-box img {
+  width: 24px;
+  height: 24px;
+  border-radius: 8px;
+}
+
+.mono {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  font-size: 0.92rem;
+}
+
+@media (max-width: 640px) {
+  body {
+    min-width: 100%;
+  }
+
+  .page-shell {
+    padding: 18px;
+  }
+
+  .mnemonic-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
