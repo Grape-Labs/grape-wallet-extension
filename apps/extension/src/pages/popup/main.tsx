@@ -100,6 +100,7 @@ type SwapOutputOption = {
 const SOLANA_LOGO_URL =
   'https://media.solana-cdn.com/image/width=100/https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/solana/info/logo.png';
 const GRAPE_LOGO_URL = chrome.runtime.getURL('icons/grape_logo_white.png');
+const ASSET_CACHE_STORAGE_KEY = 'grape:asset-cache';
 
 function parseInitialView(): PopupView {
   const nextView = new URLSearchParams(window.location.search).get('view');
@@ -127,6 +128,14 @@ function buildWalletPagePath(view: PopupView, selectedAssetId: string): string {
   }
   const query = params.toString();
   return `wallet.html${query ? `?${query}` : ''}`;
+}
+
+function buildAssetCacheKey(state: WalletStateResponse | null): string | null {
+  if (!state?.activeWallet?.id || !state.activeAccount?.publicKey) {
+    return null;
+  }
+
+  return `${state.activeWallet.id}:${state.wallet.selectedNetwork}:${state.activeAccount.publicKey}`;
 }
 
 function formatLamports(lamports: number | null): string {
@@ -536,7 +545,10 @@ function PopupPage() {
     if (nextState.wallet.setup === 'ready' && !nextState.session.locked) {
       setAssetsLoading(true);
       try {
-        const nextAssets = await sendRuntimeMessage<WalletAssetsResponse>({ type: 'wallet_get_assets' });
+        const nextAssets = await sendRuntimeMessage<WalletAssetsResponse>({
+          type: 'wallet_get_assets',
+          staleWhileRevalidate: true
+        });
         setAssets(nextAssets);
       } finally {
         setAssetsLoading(false);
@@ -585,6 +597,36 @@ function PopupPage() {
       void refreshSecurityReport();
     }
   }, [view, state?.wallet.setup, state?.session.locked]);
+
+  useEffect(() => {
+    const cacheKey = buildAssetCacheKey(state);
+    if (!cacheKey) {
+      return;
+    }
+
+    const handleStorageChange: Parameters<typeof chrome.storage.onChanged.addListener>[0] = (changes, areaName) => {
+      if (areaName !== 'session') {
+        return;
+      }
+
+      const assetCacheChange = changes[ASSET_CACHE_STORAGE_KEY];
+      if (!assetCacheChange?.newValue || typeof assetCacheChange.newValue !== 'object') {
+        return;
+      }
+
+      const nextCache = assetCacheChange.newValue as Record<string, { data?: WalletAssetsResponse }>;
+      const nextEntry = nextCache[cacheKey];
+      if (!nextEntry?.data) {
+        return;
+      }
+
+      setAssets(nextEntry.data);
+      setAssetsLoading(false);
+    };
+
+    chrome.storage.onChanged.addListener(handleStorageChange);
+    return () => chrome.storage.onChanged.removeListener(handleStorageChange);
+  }, [state]);
 
   useEffect(() => {
     if (view === 'asset') {
@@ -1130,6 +1172,37 @@ function PopupPage() {
     await refresh();
   }
 
+  async function handleWalletRemove(walletId: string, walletName: string) {
+    const warning =
+      state.wallet.wallets.length === 1
+        ? `Remove ${walletName}? This will remove your final wallet from Grape and return you to setup. Make sure you have backed up the recovery phrase or private key and moved any assets first.`
+        : `Remove ${walletName}? Make sure you have backed up the recovery phrase or private key and moved any assets first.`;
+
+    const confirmed = window.confirm(warning);
+    if (!confirmed) {
+      return;
+    }
+
+    await sendRuntimeMessage<WalletStateResponse>({
+      type: 'wallet_remove',
+      walletId
+    });
+
+    setUnlockError(null);
+    setReceiveQr('');
+    setAssetDetails(null);
+    setSelectedCollectible(null);
+    setAssetJsonMetadata(null);
+    setAssetActionMode(null);
+    setSendResult(null);
+    setSwapQuote(null);
+    setSwapResult(null);
+    setIncidentResult(null);
+    setView('home');
+    setWalletMenuOpen(false);
+    await refresh();
+  }
+
   async function handleUnlockInline() {
     try {
       setUnlocking(true);
@@ -1348,21 +1421,36 @@ function PopupPage() {
                 const walletPublicKey =
                   walletEntry.accounts.find((account) => account.id === walletEntry.selectedAccountId)?.publicKey ??
                   walletEntry.accounts[0]?.publicKey;
+                const isActiveWallet = wallet.selectedWalletId === walletEntry.id;
 
                 return (
-                  <DropdownMenu.Item
-                    key={walletEntry.id}
-                    className={`wallet-menu-item ${wallet.selectedWalletId === walletEntry.id ? 'active' : ''}`.trim()}
-                    onSelect={() => {
-                      void handleWalletSelect(walletEntry.id);
-                    }}
-                  >
-                    <div>
-                      <strong>{walletEntry.name}</strong>
-                      <div className="muted mono">{formatAddress(walletPublicKey)}</div>
-                    </div>
-                    {wallet.selectedWalletId === walletEntry.id ? <StatusPill tone="success">Active</StatusPill> : null}
-                  </DropdownMenu.Item>
+                  <div key={walletEntry.id} className="wallet-menu-row">
+                    <DropdownMenu.Item
+                      className={`wallet-menu-item ${isActiveWallet ? 'active' : ''}`.trim()}
+                      onSelect={() => {
+                        void handleWalletSelect(walletEntry.id);
+                      }}
+                    >
+                      <div>
+                        <strong>{walletEntry.name}</strong>
+                        <div className="muted mono">{formatAddress(walletPublicKey)}</div>
+                      </div>
+                      {isActiveWallet ? <StatusPill tone="success">Active</StatusPill> : null}
+                    </DropdownMenu.Item>
+                    <button
+                      type="button"
+                      className="wallet-menu-remove-button"
+                      aria-label={`Remove ${walletEntry.name}`}
+                      title={`Remove ${walletEntry.name}`}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        void handleWalletRemove(walletEntry.id, walletEntry.name);
+                      }}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
                 );
               })}
             </div>

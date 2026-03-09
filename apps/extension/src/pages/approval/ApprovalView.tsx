@@ -258,22 +258,25 @@ export function ApprovalView(props: {
                 ) : null}
                 {approval.transactionSummary.simulation.logs.length > 0 ? (
                   <div className="stack">
-                    <div className="inline approval-simulation-actions">
-                      <p className="muted approval-simulation-hint">
-                        {showSimulationLogs ? 'Simulation logs are expanded below.' : 'Logs are available if you want to inspect execution details.'}
-                      </p>
+                    <div className="approval-simulation-actions">
                       <button
                         type="button"
-                        className="button secondary mini-button"
+                        className="button secondary mini-button approval-simulation-toggle"
                         onClick={() => setShowSimulationLogs((current) => !current)}
                       >
                         {showSimulationLogs ? 'Hide logs' : 'Show logs'}
                       </button>
+                      <p className="muted approval-simulation-hint">
+                        {approval.transactionSummary.simulation.logs.length} log
+                        {approval.transactionSummary.simulation.logs.length === 1 ? '' : 's'} available
+                      </p>
                     </div>
                     {showSimulationLogs ? (
                       <div className="approval-log-box">
                         {approval.transactionSummary.simulation.logs.map((line, lineIndex) => (
-                          <div key={`${approval.id}-simulation-log-${lineIndex}`}>{line}</div>
+                          <div key={`${approval.id}-simulation-log-${lineIndex}`} className="approval-log-line">
+                            {line}
+                          </div>
                         ))}
                       </div>
                     ) : null}

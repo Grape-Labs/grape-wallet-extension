@@ -9,6 +9,7 @@ import {
   isSessionExpired,
   listPermissions,
   migrateWalletState,
+  removeWalletProfile,
   rememberWalletRecipient,
   revokeOriginPermissions,
   runtimeMessageSchema,
@@ -146,6 +147,7 @@ type ProviderDebugPayload = {
 class WalletController {
   private readonly pendingApprovals = new Map<string, PendingResolver>();
   private unlockedSecrets: UnlockedSecretCache = {};
+  private readonly assetRefreshes = new Map<string, Promise<WalletAssetsResponse>>();
 
   private getAssetCacheKey(walletId: string, network: 'mainnet-beta' | 'devnet', publicKey: string) {
     return `${walletId}:${network}:${publicKey}`;
@@ -164,6 +166,194 @@ class WalletController {
       }
     }
     await assetCacheStorage.set(cache);
+  }
+
+  private async refreshAssetsCache(
+    walletId: string,
+    network: 'mainnet-beta' | 'devnet',
+    publicKey: string
+  ): Promise<WalletAssetsResponse> {
+    const cacheKey = this.getAssetCacheKey(walletId, network, publicKey);
+    const inFlight = this.assetRefreshes.get(cacheKey);
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const refreshPromise = (async () => {
+      const owner = new PublicKey(publicKey);
+      const connection = new Connection(getRpcEndpoint(network), 'confirmed');
+      const [lamports, shyftMetadataResult, shyftCollectionsResult] = await Promise.all([
+        connection.getBalance(owner),
+        hasShyftApiKey() ? fetchShyftWalletTokens(network, publicKey).catch(() => ({})) : Promise.resolve({}),
+        hasShyftApiKey() ? fetchShyftCollections(network, publicKey).catch(() => []) : Promise.resolve([])
+      ]);
+
+      const shyftMetadata = shyftMetadataResult as Record<string, { name?: string; symbol?: string; logoUri?: string }>;
+      const collections = shyftCollectionsResult as CollectionHolding[];
+      const tokens = (await this.scanWalletTokenAccounts(connection, owner, shyftMetadata)).filter((token) => Number(token.amount) > 0);
+      const zeroDecimalTokens = tokens.filter((token) => token.decimals === 0);
+      const mintSupplyEntries = await Promise.all(
+        zeroDecimalTokens.map(async (token) => {
+          try {
+            const mintAccountInfo = await connection.getParsedAccountInfo(new PublicKey(token.mint), 'confirmed');
+            const mintAccountData = mintAccountInfo.value?.data;
+            if (!mintAccountData || typeof mintAccountData !== 'object' || !('parsed' in mintAccountData)) {
+              return [token.mint, null] as const;
+            }
+
+            const parsedMint = mintAccountData.parsed;
+            if (!parsedMint || typeof parsedMint !== 'object' || !('info' in parsedMint) || !parsedMint.info || typeof parsedMint.info !== 'object') {
+              return [token.mint, null] as const;
+            }
+
+            const mintInfo = parsedMint.info as Record<string, unknown>;
+            return [token.mint, { rawSupply: typeof mintInfo.supply === 'string' ? mintInfo.supply : null }] as const;
+          } catch {
+            return [token.mint, null] as const;
+          }
+        })
+      );
+      const mintSupplyMap = Object.fromEntries(mintSupplyEntries);
+      const metadataExistenceEntries = await Promise.all(
+        zeroDecimalTokens.map(async (token) => {
+          try {
+            const metadataPda = PublicKey.findProgramAddressSync(
+              [new TextEncoder().encode('metadata'), METADATA_PROGRAM_ID.toBytes(), new PublicKey(token.mint).toBytes()],
+              METADATA_PROGRAM_ID
+            )[0];
+            const metadataAccountInfo = await connection.getAccountInfo(metadataPda, 'confirmed');
+            return [token.mint, !!metadataAccountInfo] as const;
+          } catch {
+            return [token.mint, false] as const;
+          }
+        })
+      );
+      const metadataExistenceMap = Object.fromEntries(metadataExistenceEntries);
+      const inferredCollectibleMints = inferCollectibleMints(
+        tokens.map((token) => ({
+          ...token,
+          rawSupply: mintSupplyMap[token.mint]?.rawSupply ?? null,
+          hasMetadata: metadataExistenceMap[token.mint] ?? false
+        }))
+      );
+      const tokenByMint = new Map(tokens.map((token) => [token.mint, token] as const));
+      const mergedCollections = collections.map((collection) => ({
+        ...collection,
+        items: collection.items.map((item) => {
+          const token = tokenByMint.get(item.mint);
+          const metadata = shyftMetadata[item.mint];
+          return {
+            ...item,
+            name: item.name ?? token?.name ?? metadata?.name,
+            symbol: item.symbol ?? token?.symbol ?? metadata?.symbol,
+            imageUri: item.imageUri ?? token?.logoUri ?? metadata?.logoUri,
+            accountAddress: item.accountAddress ?? token?.accountAddress,
+            programId: item.programId ?? token?.programId,
+            collectionId: item.collectionId ?? collection.id,
+            collectionName: item.collectionName ?? collection.name,
+            collectionSymbol: item.collectionSymbol ?? collection.symbol
+          };
+        })
+      }));
+      const detectedCollectibleItems = tokens
+        .filter((token) => inferredCollectibleMints.has(token.mint))
+        .map((token) => ({
+          mint: token.mint,
+          name: token.name ?? token.symbol,
+          symbol: token.symbol,
+          imageUri: token.logoUri,
+          accountAddress: token.accountAddress,
+          programId: token.programId
+        }));
+      const collectibleMetadataHints = await fetchCollectibleMetadataHints(connection, [
+        ...mergedCollections.flatMap((collection) => collection.items),
+        ...detectedCollectibleItems
+      ]);
+      const enrichCollectibleItem = (item: CollectibleItem, collection?: CollectionHolding): CollectibleItem => {
+        const hint = collectibleMetadataHints[item.mint];
+        return {
+          ...item,
+          name: item.name ?? hint?.name,
+          symbol: item.symbol ?? hint?.symbol,
+          imageUri: item.imageUri ?? hint?.imageUri ?? collection?.imageUri
+        };
+      };
+      const enrichedCollections = mergedCollections.map((collection) => {
+        const items = collection.items.map((item) => enrichCollectibleItem(item, collection));
+        return {
+          ...collection,
+          imageUri: collection.imageUri ?? items.find((item) => !!item.imageUri)?.imageUri,
+          items
+        };
+      });
+      const knownCollectionMints = new Set(enrichedCollections.flatMap((collection) => collection.items.map((item) => item.mint)));
+      const fallbackCollectibleItems = detectedCollectibleItems
+        .filter((item) => !knownCollectionMints.has(item.mint))
+        .map((item) => enrichCollectibleItem(item));
+      const finalCollections =
+        fallbackCollectibleItems.length > 0
+          ? [
+              ...enrichedCollections,
+              {
+                id: 'grape-detected-collectibles',
+                name: enrichedCollections.length > 0 ? 'Other Collectibles' : 'Collectibles',
+                itemCount: fallbackCollectibleItems.length,
+                imageUri: fallbackCollectibleItems[0]?.imageUri,
+                items: fallbackCollectibleItems
+              }
+            ]
+          : enrichedCollections;
+
+      const fungibleTokens = filterCollectibleTokens(tokens, finalCollections, inferredCollectibleMints);
+
+      let pricing: Record<string, { usdPrice: number | null; priceChange24h: number | null }> = {};
+      try {
+        pricing = await fetchJupiterPrices([JUPITER_SOL_MINT, ...fungibleTokens.map((token) => token.mint)]);
+      } catch {
+        pricing = {};
+      }
+
+      const nativeUsdPrice = pricing[JUPITER_SOL_MINT]?.usdPrice ?? null;
+      const nativePriceChange24h = pricing[JUPITER_SOL_MINT]?.priceChange24h ?? null;
+      const nativeValueUsd = nativeUsdPrice === null ? null : (lamports / 1_000_000_000) * nativeUsdPrice;
+      const pricedTokens = fungibleTokens.map((token) => {
+        const usdPrice = pricing[token.mint]?.usdPrice ?? null;
+        return {
+          ...token,
+          priceUsd: usdPrice,
+          valueUsd: usdPrice === null ? null : Number(token.amount) * usdPrice,
+          priceChange24h: pricing[token.mint]?.priceChange24h ?? null
+        };
+      });
+      const sortedTokens = sortWalletTokens(pricedTokens);
+      const totalUsdValue = [nativeValueUsd, ...pricedTokens.map((token) => token.valueUsd ?? null)]
+        .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+        .reduce((sum, value) => sum + value, 0);
+
+      const result: WalletAssetsResponse = {
+        lamports,
+        tokens: sortedTokens,
+        collections: finalCollections,
+        totalUsdValue: Number.isFinite(totalUsdValue) ? totalUsdValue : null,
+        nativePriceUsd: nativeUsdPrice,
+        nativeValueUsd,
+        nativePriceChange24h
+      };
+
+      const cache = await assetCacheStorage.get();
+      cache[cacheKey] = {
+        cachedAt: Date.now(),
+        data: result
+      };
+      await assetCacheStorage.set(cache);
+
+      return result;
+    })().finally(() => {
+      this.assetRefreshes.delete(cacheKey);
+    });
+
+    this.assetRefreshes.set(cacheKey, refreshPromise);
+    return refreshPromise;
   }
 
   async getWalletState() {
@@ -304,6 +494,33 @@ class WalletController {
       approvalsStorage.set({}),
       assetCacheStorage.set({})
     ]);
+
+    return this.getStateResponse();
+  }
+
+  async removeWallet(walletId: string) {
+    const walletState = await this.getWalletState();
+    const targetWallet = walletState.wallets.find((wallet) => wallet.id === walletId);
+    if (!targetWallet) {
+      throw new RpcError('WALLET_NOT_FOUND', 'Wallet could not be found.');
+    }
+
+    delete this.unlockedSecrets[walletId];
+
+    for (const [approvalId, pending] of this.pendingApprovals.entries()) {
+      if (pending.state.publicKey && targetWallet.accounts.some((account) => account.publicKey === pending.state.publicKey)) {
+        pending.reject(new RpcError('WALLET_REMOVED', 'Wallet was removed.'));
+        this.pendingApprovals.delete(approvalId);
+      }
+    }
+
+    const nextState = removeWalletProfile(walletState, walletId);
+    await walletStateStorage.set(nextState);
+    await this.invalidateAssetCache();
+
+    if (nextState.wallets.length === 0) {
+      await this.setSessionState({ locked: true, lastActivityAt: 0 });
+    }
 
     return this.getStateResponse();
   }
@@ -554,7 +771,7 @@ class WalletController {
     return signatures;
   }
 
-  async getAssets() {
+  async getAssets(options?: { staleWhileRevalidate?: boolean }) {
     const { walletState, selectedWallet } = await this.ensureReadyWallet();
     const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
     if (!activeAccount) {
@@ -567,187 +784,30 @@ class WalletController {
     const cacheKey = this.getAssetCacheKey(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey);
     const cache = await assetCacheStorage.get();
     const cached = cache[cacheKey];
-    if (cached && Date.now() - cached.cachedAt < ASSET_CACHE_TTL_MS) {
-      return cached.data;
-    }
 
-    const owner = new PublicKey(activeAccount.publicKey);
-    const connection = new Connection(getRpcEndpoint(walletState.selectedNetwork), 'confirmed');
-    const [lamports, shyftMetadataResult, shyftCollectionsResult] = await Promise.all([
-      connection.getBalance(owner),
-      hasShyftApiKey()
-        ? fetchShyftWalletTokens(walletState.selectedNetwork, activeAccount.publicKey).catch(() => ({}))
-        : Promise.resolve({}),
-      hasShyftApiKey()
-        ? fetchShyftCollections(walletState.selectedNetwork, activeAccount.publicKey).catch(() => [])
-        : Promise.resolve([])
-    ]);
-
-    const shyftMetadata = shyftMetadataResult as Record<string, { name?: string; symbol?: string; logoUri?: string }>;
-    const collections = shyftCollectionsResult as CollectionHolding[];
-    const tokens = (await this.scanWalletTokenAccounts(connection, owner, shyftMetadata)).filter((token) => Number(token.amount) > 0);
-    const zeroDecimalTokens = tokens.filter((token) => token.decimals === 0);
-    const mintSupplyEntries = await Promise.all(
-      zeroDecimalTokens
-        .map(async (token) => {
-          try {
-            const mintAccountInfo = await connection.getParsedAccountInfo(new PublicKey(token.mint), 'confirmed');
-            const mintAccountData = mintAccountInfo.value?.data;
-            if (!mintAccountData || typeof mintAccountData !== 'object' || !('parsed' in mintAccountData)) {
-              return [token.mint, null] as const;
-            }
-
-            const parsedMint = mintAccountData.parsed;
-            if (!parsedMint || typeof parsedMint !== 'object' || !('info' in parsedMint) || !parsedMint.info || typeof parsedMint.info !== 'object') {
-              return [token.mint, null] as const;
-            }
-
-            const mintInfo = parsedMint.info as Record<string, unknown>;
-            return [
-              token.mint,
-              {
-                rawSupply: typeof mintInfo.supply === 'string' ? mintInfo.supply : null
-              }
-            ] as const;
-          } catch {
-            return [token.mint, null] as const;
-          }
-        })
-    );
-    const mintSupplyMap = Object.fromEntries(mintSupplyEntries);
-    const metadataExistenceEntries = await Promise.all(
-      zeroDecimalTokens.map(async (token) => {
-        try {
-          const metadataPda = PublicKey.findProgramAddressSync(
-            [new TextEncoder().encode('metadata'), METADATA_PROGRAM_ID.toBytes(), new PublicKey(token.mint).toBytes()],
-            METADATA_PROGRAM_ID
-          )[0];
-          const metadataAccountInfo = await connection.getAccountInfo(metadataPda, 'confirmed');
-          return [token.mint, !!metadataAccountInfo] as const;
-        } catch {
-          return [token.mint, false] as const;
-        }
-      })
-    );
-    const metadataExistenceMap = Object.fromEntries(metadataExistenceEntries);
-    const inferredCollectibleMints = inferCollectibleMints(
-      tokens.map((token) => ({
-        ...token,
-        rawSupply: mintSupplyMap[token.mint]?.rawSupply ?? null,
-        hasMetadata: metadataExistenceMap[token.mint] ?? false
-      }))
-    );
-    const tokenByMint = new Map(tokens.map((token) => [token.mint, token] as const));
-    const mergedCollections = collections.map((collection) => ({
-      ...collection,
-      items: collection.items.map((item) => {
-        const token = tokenByMint.get(item.mint);
-        const metadata = shyftMetadata[item.mint];
+    if (cached) {
+      const stale = Date.now() - cached.cachedAt >= ASSET_CACHE_TTL_MS;
+      if (!stale) {
         return {
-          ...item,
-          name: item.name ?? token?.name ?? metadata?.name,
-          symbol: item.symbol ?? token?.symbol ?? metadata?.symbol,
-          imageUri: item.imageUri ?? token?.logoUri ?? metadata?.logoUri,
-          accountAddress: item.accountAddress ?? token?.accountAddress,
-          programId: item.programId ?? token?.programId,
-          collectionId: item.collectionId ?? collection.id,
-          collectionName: item.collectionName ?? collection.name,
-          collectionSymbol: item.collectionSymbol ?? collection.symbol
+          ...cached.data,
+          cachedAt: cached.cachedAt,
+          fromCache: true,
+          stale: false
         };
-      })
-    }));
-    const detectedCollectibleItems = tokens
-      .filter((token) => inferredCollectibleMints.has(token.mint))
-      .map((token) => ({
-        mint: token.mint,
-        name: token.name ?? token.symbol,
-        symbol: token.symbol,
-        imageUri: token.logoUri,
-        accountAddress: token.accountAddress,
-        programId: token.programId
-      }));
-    const collectibleMetadataHints = await fetchCollectibleMetadataHints(connection, [
-      ...mergedCollections.flatMap((collection) => collection.items),
-      ...detectedCollectibleItems
-    ]);
-    const enrichCollectibleItem = (item: CollectibleItem, collection?: CollectionHolding): CollectibleItem => {
-      const hint = collectibleMetadataHints[item.mint];
-      return {
-        ...item,
-        name: item.name ?? hint?.name,
-        symbol: item.symbol ?? hint?.symbol,
-        imageUri: item.imageUri ?? hint?.imageUri ?? collection?.imageUri
-      };
-    };
-    const enrichedCollections = mergedCollections.map((collection) => {
-      const items = collection.items.map((item) => enrichCollectibleItem(item, collection));
-      return {
-        ...collection,
-        imageUri: collection.imageUri ?? items.find((item) => !!item.imageUri)?.imageUri,
-        items
-      };
-    });
-    const knownCollectionMints = new Set(enrichedCollections.flatMap((collection) => collection.items.map((item) => item.mint)));
-    const fallbackCollectibleItems = detectedCollectibleItems
-      .filter((item) => !knownCollectionMints.has(item.mint))
-      .map((item) => enrichCollectibleItem(item));
-    const finalCollections =
-      fallbackCollectibleItems.length > 0
-        ? [
-            ...enrichedCollections,
-            {
-              id: 'grape-detected-collectibles',
-              name: enrichedCollections.length > 0 ? 'Other Collectibles' : 'Collectibles',
-              itemCount: fallbackCollectibleItems.length,
-              imageUri: fallbackCollectibleItems[0]?.imageUri,
-              items: fallbackCollectibleItems
-            }
-          ]
-        : enrichedCollections;
+      }
 
-    const fungibleTokens = filterCollectibleTokens(tokens, finalCollections, inferredCollectibleMints);
-
-    let pricing: Record<string, { usdPrice: number | null; priceChange24h: number | null }> = {};
-    try {
-      pricing = await fetchJupiterPrices([JUPITER_SOL_MINT, ...fungibleTokens.map((token) => token.mint)]);
-    } catch {
-      pricing = {};
+      if (options?.staleWhileRevalidate) {
+        void this.refreshAssetsCache(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey);
+        return {
+          ...cached.data,
+          cachedAt: cached.cachedAt,
+          fromCache: true,
+          stale: true
+        };
+      }
     }
 
-    const nativeUsdPrice = pricing[JUPITER_SOL_MINT]?.usdPrice ?? null;
-    const nativePriceChange24h = pricing[JUPITER_SOL_MINT]?.priceChange24h ?? null;
-    const nativeValueUsd = nativeUsdPrice === null ? null : (lamports / 1_000_000_000) * nativeUsdPrice;
-    const pricedTokens = fungibleTokens.map((token) => {
-      const usdPrice = pricing[token.mint]?.usdPrice ?? null;
-      return {
-        ...token,
-        priceUsd: usdPrice,
-        valueUsd: usdPrice === null ? null : Number(token.amount) * usdPrice,
-        priceChange24h: pricing[token.mint]?.priceChange24h ?? null
-      };
-    });
-    const sortedTokens = sortWalletTokens(pricedTokens);
-    const totalUsdValue = [nativeValueUsd, ...pricedTokens.map((token) => token.valueUsd ?? null)]
-      .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
-      .reduce((sum, value) => sum + value, 0);
-
-    const result = {
-      lamports,
-      tokens: sortedTokens,
-      collections: finalCollections,
-      totalUsdValue: Number.isFinite(totalUsdValue) ? totalUsdValue : null,
-      nativePriceUsd: nativeUsdPrice,
-      nativeValueUsd,
-      nativePriceChange24h
-    };
-
-    cache[cacheKey] = {
-      cachedAt: Date.now(),
-      data: result
-    };
-    await assetCacheStorage.set(cache);
-
-    return result;
+    return this.refreshAssetsCache(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey);
   }
 
   async getTokenDetails(input: { mint: string; accountAddress: string; programId: string }) {
@@ -2086,6 +2146,9 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
         case 'wallet_select':
           sendResponse(await controller.selectWallet(message.walletId));
           break;
+        case 'wallet_remove':
+          sendResponse(await controller.removeWallet(message.walletId));
+          break;
         case 'wallet_set_idle_timeout':
           sendResponse(await controller.setIdleTimeout(message.idleTimeoutMs));
           break;
@@ -2096,7 +2159,7 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
           sendResponse({ lamports: await controller.getBalanceLamports() });
           break;
         case 'wallet_get_assets':
-          sendResponse(await controller.getAssets());
+          sendResponse(await controller.getAssets({ staleWhileRevalidate: message.staleWhileRevalidate }));
           break;
         case 'wallet_get_token_details':
           sendResponse(

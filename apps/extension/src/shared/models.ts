@@ -84,6 +84,9 @@ export type WalletAssetsResponse = {
   nativePriceUsd?: number | null;
   nativeValueUsd?: number | null;
   nativePriceChange24h?: number | null;
+  cachedAt?: number;
+  fromCache?: boolean;
+  stale?: boolean;
 };
 
 export type TokenDetailsResponse = {

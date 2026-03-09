@@ -1248,6 +1248,13 @@ body[data-surface='popup'] .quick-actions.compact .quick-action-card {
   gap: 10px;
 }
 
+.wallet-menu-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: stretch;
+}
+
 .wallet-menu-item {
   width: 100%;
   display: flex;
@@ -1261,6 +1268,27 @@ body[data-surface='popup'] .quick-actions.compact .quick-action-card {
   color: inherit;
   cursor: pointer;
   text-align: left;
+}
+
+.wallet-menu-remove-button {
+  width: 40px;
+  border: 0;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--theme-danger-bg) 84%, transparent);
+  color: var(--theme-error);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background-color 160ms ease, color 160ms ease, transform 160ms ease;
+}
+
+.wallet-menu-remove-button:hover,
+.wallet-menu-remove-button:focus-visible {
+  background: color-mix(in srgb, var(--theme-error) 16%, transparent);
+  color: color-mix(in srgb, var(--theme-error) 84%, white 16%);
+  outline: none;
+  transform: translateY(-1px);
 }
 
 .wallet-menu-item.active {
@@ -1981,33 +2009,52 @@ body[data-surface='popup'] .collectible-grid {
 }
 
 .approval-simulation-actions {
-  justify-content: space-between;
+  display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .approval-simulation-hint {
   margin: 0;
-  flex: 1;
+  font-size: 0.8rem;
+}
+
+.approval-simulation-toggle {
+  flex: 0 0 auto;
 }
 
 .approval-log-box {
-  max-height: 140px;
+  width: 100%;
+  max-width: 100%;
+  max-height: 132px;
   max-width: 100%;
   overflow-y: auto;
   overflow-x: hidden;
   border-radius: 14px;
-  padding: 12px;
+  padding: 10px 11px;
   background: color-mix(in srgb, var(--theme-card) 76%, black 24%);
   border: 1px solid color-mix(in srgb, var(--theme-border) 72%, transparent);
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
-  font-size: 0.72rem;
-  line-height: 1.45;
+  font-size: 0.67rem;
+  line-height: 1.35;
   color: var(--theme-text-secondary);
-  white-space: pre-wrap;
+  white-space: normal;
   word-break: break-word;
   overflow-wrap: anywhere;
   overscroll-behavior: contain;
+  box-sizing: border-box;
+}
+
+.approval-log-line {
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.approval-log-line + .approval-log-line {
+  margin-top: 4px;
 }
 
 .account-address {

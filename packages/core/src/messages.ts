@@ -150,6 +150,10 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     walletId: z.string().min(1)
   }),
   z.object({
+    type: z.literal('wallet_remove'),
+    walletId: z.string().min(1)
+  }),
+  z.object({
     type: z.literal('wallet_set_idle_timeout'),
     idleTimeoutMs: z.number().int().positive()
   }),
@@ -176,7 +180,8 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     type: z.literal('wallet_get_balance')
   }),
   z.object({
-    type: z.literal('wallet_get_assets')
+    type: z.literal('wallet_get_assets'),
+    staleWhileRevalidate: z.boolean().optional()
   }),
   z.object({
     type: z.literal('wallet_get_token_details'),

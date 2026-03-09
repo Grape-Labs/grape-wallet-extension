@@ -174,6 +174,29 @@ export function rememberWalletRecipient(wallet: WalletProfile, address: string, 
   };
 }
 
+export function removeWalletProfile(state: WalletState, walletId: string): WalletState {
+  const nextWallets = state.wallets.filter((wallet) => wallet.id !== walletId);
+
+  if (nextWallets.length === 0) {
+    return {
+      ...state,
+      setup: 'empty',
+      wallets: [],
+      selectedWalletId: undefined
+    };
+  }
+
+  const nextSelectedWalletId =
+    state.selectedWalletId === walletId ? nextWallets[0]?.id : state.selectedWalletId ?? nextWallets[0]?.id;
+
+  return {
+    ...state,
+    setup: 'ready',
+    wallets: nextWallets,
+    selectedWalletId: nextSelectedWalletId
+  };
+}
+
 export function migrateWalletState(input: WalletState | LegacyWalletState | undefined): WalletState {
   if (!input) {
     return createEmptyWalletState();
