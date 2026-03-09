@@ -229,28 +229,44 @@ export class GrapeWalletAdapter extends BaseMessageSignerWalletAdapter<GrapeWall
         const preparedTransaction = await this.prepareTransaction(transaction, connection, sendOptions);
         signers?.length && preparedTransaction.partialSign(...signers);
 
+        try {
+          if (provider.sendTransaction) {
+            const providerResult = await provider.sendTransaction(preparedTransaction, connection, sendOptions);
+            return typeof providerResult === 'string' ? providerResult : providerResult.signature;
+          }
+
+          if (provider.signAndSendTransaction) {
+            const providerResult = await provider.signAndSendTransaction(preparedTransaction);
+            return providerResult.signature;
+          }
+        } catch {
+          // Fall through to signTransaction so dApps can still complete the flow
+          // when the wallet-managed broadcast path is unavailable.
+        }
+
+        const signedTransaction = await provider.signTransaction(preparedTransaction);
+        return await connection.sendRawTransaction(
+          signedTransaction.serialize({
+            requireAllSignatures: false,
+            verifySignatures: false
+          }),
+          sendOptions
+        );
+      }
+
+      try {
         if (provider.sendTransaction) {
-          const providerResult = await provider.sendTransaction(preparedTransaction, connection, sendOptions);
+          const providerResult = await provider.sendTransaction(transaction, connection, options);
           return typeof providerResult === 'string' ? providerResult : providerResult.signature;
         }
 
         if (provider.signAndSendTransaction) {
-          const providerResult = await provider.signAndSendTransaction(preparedTransaction);
+          const providerResult = await provider.signAndSendTransaction(transaction);
           return providerResult.signature;
         }
-
-        const signedTransaction = await provider.signTransaction(preparedTransaction);
-        return await connection.sendRawTransaction(signedTransaction.serialize(), sendOptions);
-      }
-
-      if (provider.sendTransaction) {
-        const providerResult = await provider.sendTransaction(transaction, connection, options);
-        return typeof providerResult === 'string' ? providerResult : providerResult.signature;
-      }
-
-      if (provider.signAndSendTransaction) {
-        const providerResult = await provider.signAndSendTransaction(transaction);
-        return providerResult.signature;
+      } catch {
+        // Fall through to signTransaction so dApps can still complete the flow
+        // when the wallet-managed broadcast path is unavailable.
       }
 
       const signedTransaction = await provider.signTransaction(transaction);
@@ -303,9 +319,12 @@ export class GrapeWalletAdapter extends BaseMessageSignerWalletAdapter<GrapeWall
 
   private requireProvider(): GrapeInjectedProvider {
     const provider = this._provider ?? getGrapeProvider();
-    if (!provider || !this._publicKey) {
+    const normalizedPublicKey = this._publicKey ?? normalizePublicKey(provider?.publicKey ?? null);
+    if (!provider || !normalizedPublicKey) {
       throw new WalletNotConnectedError();
     }
+    this._provider = provider;
+    this._publicKey = normalizedPublicKey;
     return provider;
   }
 

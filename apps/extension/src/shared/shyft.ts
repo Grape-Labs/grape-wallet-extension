@@ -62,6 +62,7 @@ type ShyftCollectionItem = {
     mint?: string;
     nft_address?: string;
     name?: string;
+    symbol?: string;
     image?: string;
     image_uri?: string;
     imageUrl?: string;
@@ -70,6 +71,7 @@ type ShyftCollectionItem = {
     mint?: string;
     nft_address?: string;
     name?: string;
+    symbol?: string;
     image?: string;
     image_uri?: string;
     imageUrl?: string;
@@ -85,6 +87,7 @@ export type ShyftCollectionMetadata = {
   items: Array<{
     mint: string;
     name?: string;
+    symbol?: string;
     imageUri?: string;
   }>;
 };
@@ -172,11 +175,12 @@ function normalizeCollectibleItem(
     mint?: string;
     nft_address?: string;
     name?: string;
+    symbol?: string;
     image?: string;
     image_uri?: string;
     imageUrl?: string;
   }
-): { mint: string; name?: string; imageUri?: string } | null {
+): { mint: string; name?: string; symbol?: string; imageUri?: string } | null {
   const mint = normalizeString(item.mint) ?? normalizeString(item.nft_address);
   if (!mint) {
     return null;
@@ -185,6 +189,7 @@ function normalizeCollectibleItem(
   return {
     mint,
     name: normalizeString(item.name),
+    symbol: normalizeString(item.symbol),
     imageUri: normalizeImage(item)
   };
 }
@@ -209,7 +214,7 @@ function normalizeCollection(entry: ShyftCollectionItem): ShyftCollectionMetadat
 
   const items = (Array.isArray(entry.items) ? entry.items : Array.isArray(entry.nfts) ? entry.nfts : [])
     .map((item) => normalizeCollectibleItem(item))
-    .filter((item): item is { mint: string; name?: string; imageUri?: string } => !!item);
+    .filter((item): item is { mint: string; name?: string; symbol?: string; imageUri?: string } => !!item);
 
   return {
     id,

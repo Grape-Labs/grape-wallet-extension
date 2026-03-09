@@ -51,6 +51,14 @@ export type WalletRecipient = {
   lastUsedAt: number;
 };
 
+export type BiometricUnlockConfig = {
+  credentialId: string;
+  credentialIdB64Url: string;
+  keySalt: string;
+  wrappedPassword: EncryptedPayload;
+  createdAt: number;
+};
+
 export type WalletSigner =
   | {
       kind: 'software';
@@ -66,6 +74,7 @@ export type WalletProfile = {
   name: string;
   vault: VaultRecord;
   signer: WalletSigner;
+  biometricUnlock?: BiometricUnlockConfig;
   accounts: WalletAccount[];
   selectedAccountId: string;
   recentRecipients: WalletRecipient[];
@@ -230,6 +239,7 @@ function normalizeWalletProfile(wallet: WalletProfile): WalletProfile {
   return {
     ...wallet,
     signer: wallet.signer ?? { kind: 'software' },
+    biometricUnlock: wallet.biometricUnlock,
     recentRecipients: Array.isArray(wallet.recentRecipients) ? wallet.recentRecipients : []
   };
 }

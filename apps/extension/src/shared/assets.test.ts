@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { CollectionHolding, TokenHolding } from './models';
-import { filterCollectibleTokens, getCollectibleMints, sortWalletTokens } from './assets';
+import { filterCollectibleTokens, getCollectibleMints, inferCollectibleMints, sortWalletTokens } from './assets';
 
 function makeToken(overrides: Partial<TokenHolding> = {}): TokenHolding {
   return {
@@ -44,6 +44,27 @@ describe('wallet assets helpers', () => {
     ];
 
     expect(filterCollectibleTokens(tokens, [makeCollection()])).toEqual([tokens[0]]);
+  });
+
+  it('infers NFT-like mints from zero-decimal single-supply tokens', () => {
+    const inferred = inferCollectibleMints([
+      makeToken({ mint: 'nft-mint-1', decimals: 0, amount: '1', rawAmount: '1', rawSupply: '1' } as TokenHolding & {
+        rawAmount: string;
+        rawSupply: string;
+      }),
+      makeToken({ mint: 'fungible-mint', decimals: 0, amount: '2', rawAmount: '2', rawSupply: '1000' } as TokenHolding & {
+        rawAmount: string;
+        rawSupply: string;
+      })
+    ]);
+
+    expect([...inferred]).toEqual(['nft-mint-1']);
+  });
+
+  it('merges inferred collectible mints with collection-derived mints', () => {
+    const mints = getCollectibleMints([makeCollection()], new Set(['nft-mint-2']));
+
+    expect([...mints]).toEqual(['nft-mint-2', 'nft-mint-1']);
   });
 
   it('sorts priced tokens ahead of unpriced tokens by USD value', () => {

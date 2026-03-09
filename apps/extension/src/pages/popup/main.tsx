@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import * as Tabs from '@radix-ui/react-tabs';
@@ -10,6 +10,7 @@ import {
   Copy,
   Eye,
   EyeOff,
+  Fingerprint,
   Flame,
   Home,
   Menu,
@@ -27,9 +28,11 @@ import { STORAGE_KEYS } from '@grape/core';
 
 import type {
   ApprovalRecord,
+  CollectibleItem,
   CollectionHolding,
   IncidentResponseResponse,
   TokenActionResponse,
+  TokenDetailsResponse,
   SendTransferResponse,
   TokenHolding,
   WalletSecurityReportResponse,
@@ -40,6 +43,7 @@ import type {
 } from '../../shared/models';
 
 import { sendRuntimeMessage } from '../../shared/chrome';
+import { createBiometricUnlock, isBiometricUnlockSupported, unlockWithBiometric } from '../../shared/biometric';
 import { JUPITER_SOL_MINT } from '../../shared/jupiter';
 import { applyDocumentTheme, THEMES } from '../../shared/theme';
 import { openExtensionPage, openExtensionSidePanel } from '../../shared/window';
@@ -50,13 +54,33 @@ import { OnboardingView } from '../onboarding/OnboardingView';
 type PopupView = 'home' | 'send' | 'receive' | 'swap' | 'settings' | 'asset' | 'security' | 'approval';
 type HomeTab = 'tokens' | 'collectibles';
 type AssetOption =
-  | { id: 'sol'; label: 'SOL'; balance: string; asset: { kind: 'sol' } }
+  | {
+      id: 'sol';
+      label: 'SOL';
+      name: 'Solana';
+      symbol: 'SOL';
+      balance: string;
+      logoUri?: string;
+      asset: { kind: 'sol' };
+    }
   | {
       id: string;
       label: string;
+      name: string;
+      symbol: string;
       balance: string;
+      logoUri?: string;
       asset: { kind: 'spl-token'; mint: string; decimals: number; programId: string };
     };
+
+type AssetPickerDisplayOption = {
+  id: string;
+  name: string;
+  symbol: string;
+  balance: string;
+  logoUri?: string;
+  sol?: boolean;
+};
 
 const COMMON_SWAP_TOKENS = [
   { mint: JUPITER_SOL_MINT, symbol: 'SOL' },
@@ -65,6 +89,11 @@ const COMMON_SWAP_TOKENS = [
   { mint: 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN', symbol: 'JUP' },
   { mint: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6uA9Rh5o1kxU4hA', symbol: 'BONK' }
 ] as const;
+
+type SwapOutputOption = {
+  mint: string;
+  symbol: string;
+};
 const SOLANA_LOGO_URL =
   'https://media.solana-cdn.com/image/width=100/https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/solana/info/logo.png';
 const GRAPE_LOGO_URL = chrome.runtime.getURL('icons/grape_logo_white.png');
@@ -120,18 +149,18 @@ function formatUsd(value: number | null | undefined): string | null {
   }).format(value);
 }
 
-function formatUsdcUnitPrice(value: number | null | undefined): string | null {
+function formatUnitPrice(value: number | null | undefined): string | null {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     return null;
   }
 
-  const maximumFractionDigits = value >= 1 ? 2 : value >= 0.01 ? 4 : 8;
-  const formatted = new Intl.NumberFormat(undefined, {
+  const maximumFractionDigits = value >= 1 ? 2 : value >= 0.01 ? 4 : 6;
+  return new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency: 'USD',
     minimumFractionDigits: value >= 1 ? 2 : 0,
     maximumFractionDigits
   }).format(value);
-
-  return `${formatted} USDC`;
 }
 
 function formatAddress(address: string | undefined): string {
@@ -141,11 +170,37 @@ function formatAddress(address: string | undefined): string {
   return `${address.slice(0, 4)}...${address.slice(-4)}`;
 }
 
+function buildExplorerUrl(address: string, network: 'mainnet-beta' | 'devnet'): string {
+  const cluster = network === 'devnet' ? '?cluster=devnet' : '';
+  return `https://explorer.solana.com/address/${address}${cluster}`;
+}
+
+function formatBoolean(value: boolean | null | undefined): string {
+  if (value == null) {
+    return 'Unavailable';
+  }
+  return value ? 'Yes' : 'No';
+}
+
 function formatTokenAmount(token: TokenHolding): string {
   const numeric = Number(token.amount);
   if (Number.isFinite(numeric)) {
+    const absolute = Math.abs(numeric);
+    if (absolute >= 1_000_000_000) {
+      return `${(numeric / 1_000_000_000).toLocaleString(undefined, {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 1
+      })}B`;
+    }
+    if (absolute >= 1_000_000) {
+      return `${(numeric / 1_000_000).toLocaleString(undefined, {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 1
+      })}M`;
+    }
     return numeric.toLocaleString(undefined, {
-      maximumFractionDigits: Math.min(Math.max(token.decimals, 0), 6)
+      minimumFractionDigits: 0,
+      maximumFractionDigits: Math.min(Math.max(token.decimals, 0), 2)
     });
   }
   return token.amount;
@@ -166,6 +221,28 @@ function SolanaMark() {
       <span className="solana-mark-bar solana-mark-bar-middle" />
       <span className="solana-mark-bar solana-mark-bar-bottom" />
     </span>
+  );
+}
+
+function XBrandIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="brand-icon">
+      <path
+        fill="currentColor"
+        d="M17.9 3H21l-6.77 7.74L22 21h-6.1l-4.77-6.23L5.67 21H2.56l7.23-8.27L2.37 3h6.25l4.31 5.69zM16.8 19.1h1.72L7.7 4.8H5.86z"
+      />
+    </svg>
+  );
+}
+
+function DiscordBrandIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="brand-icon">
+      <path
+        fill="currentColor"
+        d="M18.6 5.4A14.5 14.5 0 0 0 15 4.3l-.4.8a13 13 0 0 0-5.2 0l-.4-.8A14.5 14.5 0 0 0 5.4 5.4C3.2 8.5 2.6 11.5 2.9 14.5a14.1 14.1 0 0 0 4.4 2.2l1.1-1.4c-.6-.2-1.1-.5-1.6-.8l.4-.3a10.4 10.4 0 0 0 9.6 0l.4.3c-.5.3-1 .6-1.6.8l1.1 1.4a14.1 14.1 0 0 0 4.4-2.2c.4-3.5-.5-6.5-2.5-9.1M9.5 12.9c-.8 0-1.5-.7-1.5-1.6s.7-1.6 1.5-1.6 1.5.7 1.5 1.6-.7 1.6-1.5 1.6m5 0c-.8 0-1.5-.7-1.5-1.6s.7-1.6 1.5-1.6 1.5.7 1.5 1.6-.7 1.6-1.5 1.6"
+      />
+    </svg>
   );
 }
 
@@ -216,7 +293,7 @@ function TokenRow(props: { token: TokenHolding; onSelect: () => void }) {
   const valueLabel = formatUsd(props.token.valueUsd);
   const quantityLabel = `${formatTokenAmount(props.token)}${props.token.symbol ? ` ${props.token.symbol}` : ''}`;
   const primaryLabel = props.token.name ?? props.token.symbol ?? formatAddress(props.token.mint);
-  const unitPriceLabel = formatUsdcUnitPrice(props.token.priceUsd);
+  const unitPriceLabel = formatUnitPrice(props.token.priceUsd);
   const secondaryLabel = unitPriceLabel ?? props.token.symbol ?? formatAddress(props.token.mint);
   const addressLabel = formatAddress(props.token.mint);
   const shouldShowAddressFallback = !changeLabel && !unitPriceLabel && secondaryLabel !== addressLabel;
@@ -269,54 +346,71 @@ function AssetSkeletonRow() {
   );
 }
 
-function CollectibleCard(props: { collection: CollectionHolding }) {
-  const previewItems = props.collection.items.slice(0, 3);
-  const coverImage = props.collection.imageUri ?? previewItems[0]?.imageUri;
+function AssetPickerOptionRow(props: { option: AssetPickerDisplayOption; active?: boolean; onSelect?: () => void }) {
+  const content = (
+    <>
+      <div className="token-leading">
+        <TokenAvatar
+          token={{ symbol: props.option.symbol, logoUri: props.option.logoUri }}
+          fallbackLabel={props.option.symbol.slice(0, 1)}
+          sol={props.option.sol}
+        />
+        <div className="token-copy">
+          <strong className="token-name">{props.option.name}</strong>
+          <div className="token-subline">
+            <span className="token-subtitle">{props.option.symbol}</span>
+          </div>
+        </div>
+      </div>
+      <div className="token-amount-group">
+        <div className="token-amount">{props.option.balance}</div>
+      </div>
+    </>
+  );
+
+  if (!props.onSelect) {
+    return <div className="token-item send-asset-option-summary">{content}</div>;
+  }
 
   return (
-    <div className="collectible-card">
+    <button
+      type="button"
+      className={`send-asset-option-button ${props.active ? 'active' : ''}`.trim()}
+      onClick={props.onSelect}
+    >
+      <div className="token-item send-asset-option-row">{content}</div>
+    </button>
+  );
+}
+
+function CollectibleCard(props: { item: CollectibleItem; onSelect: () => void }) {
+  const title = props.item.name ?? props.item.collectionName ?? 'Collectible';
+
+  return (
+    <button type="button" className="collectible-card collectible-card-button" onClick={props.onSelect}>
       <div className="collectible-cover">
-        {coverImage ? (
+        {props.item.imageUri ? (
           <img
             className="collectible-cover-image"
-            src={coverImage}
-            alt={props.collection.name}
+            src={props.item.imageUri}
+            alt={title}
             loading="lazy"
             referrerPolicy="no-referrer"
           />
         ) : (
-          <div className="collectible-cover-fallback">{props.collection.name.slice(0, 1).toUpperCase()}</div>
+          <div className="collectible-cover-fallback">{title.slice(0, 1).toUpperCase()}</div>
         )}
       </div>
       <div className="collectible-copy">
-        <strong className="collectible-name" title={props.collection.name}>
-          {props.collection.name}
+        <strong className="collectible-name" title={title}>
+          {title}
         </strong>
         <div className="collectible-meta">
-          <span>{props.collection.itemCount} item{props.collection.itemCount === 1 ? '' : 's'}</span>
-          {props.collection.symbol ? <span className="mono">{props.collection.symbol}</span> : null}
+          {props.item.collectionName ? <span>{props.item.collectionName}</span> : null}
+          {props.item.collectionSymbol ?? props.item.symbol ? <span className="mono">{props.item.collectionSymbol ?? props.item.symbol}</span> : null}
         </div>
-        {previewItems.length > 0 ? (
-          <div className="collectible-preview-strip">
-            {previewItems.map((item) => (
-              <div key={item.mint} className="collectible-preview">
-                {item.imageUri ? (
-                  <img
-                    className="collectible-preview-image"
-                    src={item.imageUri}
-                    alt={item.name ?? item.mint}
-                    loading="lazy"
-                    referrerPolicy="no-referrer"
-                  />
-                ) : (
-                  <span className="collectible-preview-fallback">{(item.name ?? item.mint).slice(0, 1).toUpperCase()}</span>
-                )}
-              </div>
-            ))}
-          </div>
-        ) : null}
       </div>
-    </div>
+    </button>
   );
 }
 
@@ -331,6 +425,7 @@ function PopupPage() {
   const [copiedAddress, setCopiedAddress] = useState(false);
   const [receiveQr, setReceiveQr] = useState('');
   const [assetId, setAssetId] = useState(() => parseInitialAssetId());
+  const [sendAssetPickerOpen, setSendAssetPickerOpen] = useState(false);
   const [recipient, setRecipient] = useState('');
   const [amount, setAmount] = useState('');
   const [password, setPassword] = useState('');
@@ -341,9 +436,18 @@ function PopupPage() {
   const [unlockPassword, setUnlockPassword] = useState('');
   const [unlockError, setUnlockError] = useState<string | null>(null);
   const [unlocking, setUnlocking] = useState(false);
+  const [biometricSupported, setBiometricSupported] = useState(false);
+  const [biometricUnlocking, setBiometricUnlocking] = useState(false);
   const [showUnlockPassword, setShowUnlockPassword] = useState(false);
+  const [biometricSettingsPassword, setBiometricSettingsPassword] = useState('');
+  const [biometricSettingsError, setBiometricSettingsError] = useState<string | null>(null);
+  const [biometricSettingsBusy, setBiometricSettingsBusy] = useState(false);
   const [swapInputAssetId, setSwapInputAssetId] = useState('sol');
   const [swapOutputMint, setSwapOutputMint] = useState<string>(COMMON_SWAP_TOKENS[1].mint);
+  const [swapInputPickerOpen, setSwapInputPickerOpen] = useState(false);
+  const [swapOutputPickerOpen, setSwapOutputPickerOpen] = useState(false);
+  const [swapUseCustomOutputMint, setSwapUseCustomOutputMint] = useState(false);
+  const [swapCustomOutputMint, setSwapCustomOutputMint] = useState('');
   const [swapAmount, setSwapAmount] = useState('');
   const [swapSlippageBps, setSwapSlippageBps] = useState('50');
   const [swapPassword, setSwapPassword] = useState('');
@@ -353,6 +457,19 @@ function PopupPage() {
   const [quotingSwap, setQuotingSwap] = useState(false);
   const [submittingSwap, setSubmittingSwap] = useState(false);
   const [assetsLoading, setAssetsLoading] = useState(false);
+  const [assetDetails, setAssetDetails] = useState<TokenDetailsResponse | null>(null);
+  const [selectedCollectible, setSelectedCollectible] = useState<CollectibleItem | null>(null);
+  const [assetDetailsLoading, setAssetDetailsLoading] = useState(false);
+  const [assetDetailsError, setAssetDetailsError] = useState<string | null>(null);
+  const [assetJsonMetadata, setAssetJsonMetadata] = useState<{
+    name?: string;
+    symbol?: string;
+    description?: string;
+    imageUri?: string;
+    externalUrl?: string;
+  } | null>(null);
+  const [assetJsonLoading, setAssetJsonLoading] = useState(false);
+  const [assetActionMode, setAssetActionMode] = useState<'burn' | 'close' | null>(null);
   const [tokenActionError, setTokenActionError] = useState<string | null>(null);
   const [tokenActionResult, setTokenActionResult] = useState<TokenActionResponse | null>(null);
   const [burnAmount, setBurnAmount] = useState('');
@@ -375,6 +492,7 @@ function PopupPage() {
     rotateMintAuthorities: true
   });
   const [activeApproval, setActiveApproval] = useState<ApprovalRecord | null>(null);
+  const assetActionCardRef = useRef<HTMLDivElement | null>(null);
 
   const surface = document.body.dataset.surface ?? 'page';
   const surfaceId = document.body.dataset.surfaceId ?? '';
@@ -422,6 +540,10 @@ function PopupPage() {
   }, []);
 
   useEffect(() => {
+    void isBiometricUnlockSupported().then(setBiometricSupported).catch(() => setBiometricSupported(false));
+  }, []);
+
+  useEffect(() => {
     applyDocumentTheme(state?.wallet.selectedTheme);
   }, [state?.wallet.selectedTheme]);
 
@@ -436,6 +558,73 @@ function PopupPage() {
       window.scrollTo(0, 0);
     }
   }, [view, assetId]);
+
+  useEffect(() => {
+    if (view !== 'asset' || !assetActionMode) {
+      return;
+    }
+
+    window.requestAnimationFrame(() => {
+      assetActionCardRef.current?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start'
+      });
+    });
+  }, [view, assetActionMode]);
+
+  useEffect(() => {
+    if (view !== 'asset' || !assetDetails?.metadataUri) {
+      setAssetJsonMetadata(null);
+      setAssetJsonLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    setAssetJsonLoading(true);
+    setAssetJsonMetadata(null);
+
+    void fetch(assetDetails.metadataUri, {
+      signal: controller.signal,
+      headers: {
+        accept: 'application/json'
+      }
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error('Metadata JSON request failed.');
+        }
+        const payload = (await response.json()) as Record<string, unknown>;
+        setAssetJsonMetadata({
+          name: typeof payload.name === 'string' ? payload.name : undefined,
+          symbol: typeof payload.symbol === 'string' ? payload.symbol : undefined,
+          description: typeof payload.description === 'string' ? payload.description : undefined,
+          externalUrl:
+            typeof payload.external_url === 'string'
+              ? payload.external_url
+              : typeof payload.externalUrl === 'string'
+                ? payload.externalUrl
+                : typeof payload.website === 'string'
+                  ? payload.website
+                  : undefined,
+          imageUri:
+            typeof payload.image === 'string'
+              ? payload.image
+              : typeof payload.image_url === 'string'
+                ? payload.image_url
+                : undefined
+        });
+      })
+      .catch(() => {
+        setAssetJsonMetadata(null);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setAssetJsonLoading(false);
+        }
+      });
+
+    return () => controller.abort();
+  }, [view, assetDetails?.metadataUri]);
 
   useEffect(() => {
     const listener = (
@@ -475,12 +664,15 @@ function PopupPage() {
   const portfolioValue = useMemo(() => formatUsd(assets.totalUsdValue) ?? homeBalance, [assets.totalUsdValue, homeBalance]);
   const solValue = useMemo(() => formatUsd(assets.nativeValueUsd), [assets.nativeValueUsd]);
   const solChange = useMemo(() => formatPercent(assets.nativePriceChange24h), [assets.nativePriceChange24h]);
-  const solUnitPrice = useMemo(() => formatUsdcUnitPrice(assets.nativePriceUsd), [assets.nativePriceUsd]);
+  const solUnitPrice = useMemo(() => formatUnitPrice(assets.nativePriceUsd), [assets.nativePriceUsd]);
   const assetOptions = useMemo<AssetOption[]>(() => {
     const tokenOptions = assets.tokens.map((token) => ({
       id: `${token.mint}:${token.programId}`,
       label: token.symbol ? `${token.symbol} token` : `${formatAddress(token.mint)} token`,
+      name: token.name ?? token.symbol ?? formatAddress(token.mint),
+      symbol: token.symbol ?? formatAddress(token.mint),
       balance: formatTokenAmount(token),
+      logoUri: token.logoUri,
       asset: {
         kind: 'spl-token' as const,
         mint: token.mint,
@@ -493,7 +685,11 @@ function PopupPage() {
       {
         id: 'sol',
         label: 'SOL',
+        name: 'Solana',
+        symbol: 'SOL',
         balance: homeBalance,
+        logoUri: SOLANA_LOGO_URL,
+        sol: true,
         asset: { kind: 'sol' as const }
       },
       ...tokenOptions
@@ -508,8 +704,8 @@ function PopupPage() {
     swapInputAssetId === 'sol'
       ? null
       : assets.tokens.find((token) => `${token.mint}:${token.programId}` === swapInputAssetId) ?? null;
-  const swapOutputOptions = useMemo(() => {
-    const ownedTokens = assets.tokens.map((token) => ({
+  const swapOutputOptions = useMemo<SwapOutputOption[]>(() => {
+    const ownedTokens: SwapOutputOption[] = assets.tokens.map((token) => ({
       mint: token.mint,
       symbol: token.symbol ?? formatAddress(token.mint)
     }));
@@ -518,7 +714,44 @@ function PopupPage() {
     );
   }, [assets.tokens]);
   const selectedSwapOutputToken = assets.tokens.find((token) => token.mint === swapOutputMint) ?? null;
+  const collectibleItems = useMemo(
+    () =>
+      (assets.collections ?? []).flatMap((collection) =>
+        collection.items.map((item) => ({
+          ...item,
+          collectionId: item.collectionId ?? collection.id,
+          collectionName: item.collectionName ?? collection.name,
+          collectionSymbol: item.collectionSymbol ?? collection.symbol,
+          imageUri: item.imageUri ?? collection.imageUri
+        }))
+      ),
+    [assets.collections]
+  );
   const selectedSwapOutputOption = swapOutputOptions.find((option) => option.mint === swapOutputMint) ?? null;
+  const effectiveSwapOutputMint = swapUseCustomOutputMint ? swapCustomOutputMint.trim() : swapOutputMint;
+  const swapOutputPickerOptions = useMemo<AssetPickerDisplayOption[]>(
+    () =>
+      swapOutputOptions.map((option) => {
+        const ownedToken = assets.tokens.find((token) => token.mint === option.mint);
+        return {
+          id: option.mint,
+          name:
+            option.mint === JUPITER_SOL_MINT
+              ? 'Solana'
+              : ownedToken?.name ?? option.symbol ?? formatAddress(option.mint),
+          symbol: option.symbol ?? ownedToken?.symbol ?? formatAddress(option.mint),
+          balance:
+            option.mint === JUPITER_SOL_MINT
+              ? homeBalance
+              : ownedToken
+                ? formatTokenAmount(ownedToken)
+                : 'Not owned yet',
+          logoUri: option.mint === JUPITER_SOL_MINT ? SOLANA_LOGO_URL : ownedToken?.logoUri,
+          sol: option.mint === JUPITER_SOL_MINT
+        };
+      }),
+    [assets.tokens, homeBalance, swapOutputOptions]
+  );
 
   async function handleOpenInTab() {
     openExtensionPage(buildWalletPagePath(view, assetId));
@@ -528,7 +761,7 @@ function PopupPage() {
   }
 
   async function handleGetSwapQuote() {
-    if (!selectedSwapInputAsset) {
+    if (!selectedSwapInputAsset || !effectiveSwapOutputMint) {
       return;
     }
 
@@ -541,7 +774,7 @@ function PopupPage() {
         amount: swapAmount,
         slippageBps: Number(swapSlippageBps),
         inputAsset: selectedSwapInputAsset.asset,
-        outputMint: swapOutputMint
+        outputMint: effectiveSwapOutputMint
       });
       setSwapQuote(quote);
     } catch (error) {
@@ -598,17 +831,69 @@ function PopupPage() {
     window.setTimeout(() => setCopiedAddress(false), 1200);
   }
 
-  function openAssetDetails(nextAssetId: string) {
-    setAssetId(nextAssetId);
+  async function refreshAssetDetails(nextToken: Pick<TokenHolding, 'mint' | 'accountAddress' | 'programId'>) {
+    try {
+      setAssetDetailsLoading(true);
+      setAssetDetailsError(null);
+      const nextDetails = await sendRuntimeMessage<TokenDetailsResponse>({
+        type: 'wallet_get_token_details',
+        mint: nextToken.mint,
+        accountAddress: nextToken.accountAddress,
+        programId: nextToken.programId
+      });
+      setAssetDetails(nextDetails);
+    } catch (error) {
+      setAssetDetailsError(error instanceof Error ? error.message : 'Unable to load token details.');
+      setAssetDetails(null);
+    } finally {
+      setAssetDetailsLoading(false);
+    }
+  }
+
+  function openAssetDetails(nextToken: TokenHolding) {
+    setAssetId(`${nextToken.mint}:${nextToken.programId}`);
+    setSelectedCollectible(null);
+    setAssetDetails(null);
+    setAssetDetailsError(null);
+    setAssetJsonMetadata(null);
+    setAssetActionMode(null);
     setTokenActionError(null);
     setTokenActionResult(null);
     setBurnAmount('');
     setBurnPassword('');
     setView('asset');
+    void refreshAssetDetails(nextToken);
+  }
+
+  function openCollectibleDetails(item: CollectibleItem) {
+    setSelectedCollectible(item);
+    setAssetJsonMetadata(null);
+    setAssetActionMode(null);
+    setTokenActionError(null);
+    setTokenActionResult(null);
+    setBurnAmount('');
+    setBurnPassword('');
+    setView('asset');
+
+    if (!item.accountAddress || !item.programId) {
+      setAssetDetails(null);
+      setAssetDetailsError('This collectible is missing token account metadata, so Grape cannot inspect it yet.');
+      return;
+    }
+
+    setAssetId(`${item.mint}:${item.programId}`);
+    setAssetDetails(null);
+    setAssetDetailsError(null);
+    void refreshAssetDetails({
+      mint: item.mint,
+      accountAddress: item.accountAddress,
+      programId: item.programId
+    });
   }
 
   function openSend(nextAssetId = 'sol') {
     setAssetId(nextAssetId);
+    setSendAssetPickerOpen(false);
     setSendError(null);
     setSendResult(null);
     setView('send');
@@ -631,6 +916,10 @@ function PopupPage() {
 
     setSwapInputAssetId(nextAsset.id);
     setSwapOutputMint(defaultOutputMint);
+    setSwapUseCustomOutputMint(false);
+    setSwapCustomOutputMint('');
+    setSwapInputPickerOpen(false);
+    setSwapOutputPickerOpen(false);
     setSwapAmount('');
     setSwapQuote(null);
     setSwapResult(null);
@@ -654,7 +943,7 @@ function PopupPage() {
   }
 
   async function handleBurnToken() {
-    if (!selectedTokenHolding) {
+    if (!assetDetails) {
       return;
     }
 
@@ -663,17 +952,19 @@ function PopupPage() {
       setTokenActionError(null);
       const result = await sendRuntimeMessage<TokenActionResponse>({
         type: 'wallet_burn_token',
-        mint: selectedTokenHolding.mint,
-        accountAddress: selectedTokenHolding.accountAddress,
+        mint: assetDetails.mint,
+        accountAddress: assetDetails.accountAddress,
         amount: burnAmount,
-        decimals: selectedTokenHolding.decimals,
-        programId: selectedTokenHolding.programId,
+        decimals: assetDetails.decimals,
+        programId: assetDetails.programId,
         password: burnPassword || undefined
       });
       setTokenActionResult(result);
       setBurnAmount('');
       setBurnPassword('');
       await refresh();
+      await refreshAssetDetails(assetDetails);
+      setAssetActionMode(null);
       if (view === 'security') {
         await refreshSecurityReport();
       }
@@ -685,7 +976,7 @@ function PopupPage() {
   }
 
   async function handleCloseTokenAccount() {
-    if (!selectedTokenHolding) {
+    if (!assetDetails) {
       return;
     }
 
@@ -694,14 +985,15 @@ function PopupPage() {
       setTokenActionError(null);
       const result = await sendRuntimeMessage<TokenActionResponse>({
         type: 'wallet_close_token_account',
-        mint: selectedTokenHolding.mint,
-        accountAddress: selectedTokenHolding.accountAddress,
-        programId: selectedTokenHolding.programId,
+        mint: assetDetails.mint,
+        accountAddress: assetDetails.accountAddress,
+        programId: assetDetails.programId,
         password: burnPassword || undefined
       });
       setTokenActionResult(result);
       setBurnPassword('');
       await refresh();
+      setAssetActionMode(null);
       setView('home');
     } catch (error) {
       setTokenActionError(error instanceof Error ? error.message : 'Unable to close the token account.');
@@ -822,6 +1114,183 @@ function PopupPage() {
     }
   }
 
+  async function handleBiometricUnlockInline() {
+    if (!wallet.wallets.length) {
+      return;
+    }
+
+    const selectedWallet = wallet.wallets.find((entry) => entry.id === wallet.selectedWalletId) ?? wallet.wallets[0];
+    if (!selectedWallet?.biometricUnlock) {
+      return;
+    }
+
+    try {
+      setBiometricUnlocking(true);
+      setUnlockError(null);
+      const password = await unlockWithBiometric(selectedWallet.biometricUnlock);
+      await sendRuntimeMessage<WalletStateResponse>({
+        type: 'wallet_unlock',
+        password
+      });
+      setUnlockPassword('');
+      await refresh();
+    } catch (error) {
+      setUnlockError(error instanceof Error ? error.message : 'Unable to unlock with device.');
+    } finally {
+      setBiometricUnlocking(false);
+    }
+  }
+
+  async function handleBiometricUnlockForSigning() {
+    if (!wallet.wallets.length) {
+      return;
+    }
+
+    const selectedWallet = wallet.wallets.find((entry) => entry.id === wallet.selectedWalletId) ?? wallet.wallets[0];
+    if (!selectedWallet?.biometricUnlock) {
+      return;
+    }
+
+    try {
+      setBiometricUnlocking(true);
+      setSendError(null);
+      setSwapError(null);
+      setTokenActionError(null);
+      setIncidentError(null);
+      const password = await unlockWithBiometric(selectedWallet.biometricUnlock);
+      await sendRuntimeMessage<WalletStateResponse>({
+        type: 'wallet_unlock',
+        password
+      });
+      setSwapPassword('');
+      setBurnPassword('');
+      setIncidentPassword('');
+      await refresh();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to unlock with device.';
+      setSendError(message);
+      setSwapError(message);
+      setTokenActionError(message);
+      setIncidentError(message);
+    } finally {
+      setBiometricUnlocking(false);
+    }
+  }
+
+  async function handleEnableBiometricFromSettings() {
+    if (!activeWallet?.id || !biometricSettingsPassword.trim()) {
+      return;
+    }
+
+    try {
+      setBiometricSettingsBusy(true);
+      setBiometricSettingsError(null);
+      const config = await createBiometricUnlock(activeWallet.id, biometricSettingsPassword);
+      await sendRuntimeMessage({
+        type: 'wallet_set_biometric_unlock',
+        config
+      });
+      setBiometricSettingsPassword('');
+      await refresh();
+    } catch (error) {
+      setBiometricSettingsError(error instanceof Error ? error.message : 'Unable to enable biometric unlock.');
+    } finally {
+      setBiometricSettingsBusy(false);
+    }
+  }
+
+  async function handleDisableBiometricFromSettings() {
+    try {
+      setBiometricSettingsBusy(true);
+      setBiometricSettingsError(null);
+      await sendRuntimeMessage({
+        type: 'wallet_set_biometric_unlock',
+        config: null
+      });
+      await refresh();
+    } catch (error) {
+      setBiometricSettingsError(error instanceof Error ? error.message : 'Unable to disable biometric unlock.');
+    } finally {
+      setBiometricSettingsBusy(false);
+    }
+  }
+
+  function openExternal(url: string) {
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }
+
+  async function handleResetWallet() {
+    const confirmed = window.confirm('This will remove all wallets, approvals, and site connections from this browser. Continue?');
+    if (!confirmed) {
+      return;
+    }
+
+    setUnlockError(null);
+    await sendRuntimeMessage<WalletStateResponse>({
+      type: 'wallet_reset'
+    });
+    setUnlockPassword('');
+    setShowUnlockPassword(false);
+    setReceiveQr('');
+    setAssetDetails(null);
+    setSelectedCollectible(null);
+    setAssetJsonMetadata(null);
+    setAssetActionMode(null);
+    setSendResult(null);
+    setSwapQuote(null);
+    setSwapResult(null);
+    setView('home');
+    await refresh();
+  }
+
+  function renderUnlockWelcomeMenu() {
+    return (
+      <DropdownMenu.Root>
+        <DropdownMenu.Trigger asChild>
+          <button type="button" className="menu-button unlock-welcome-menu-button" aria-label="Grape links">
+            <Menu size={18} />
+          </button>
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content sideOffset={8} align="end" className="popup-menu-content">
+            <div className="popup-menu-section">Grape</div>
+            <DropdownMenu.Item
+              className="wallet-menu-action"
+              onSelect={() => {
+                openExternal('https://x.com/grapeprotocol');
+              }}
+            >
+              <span className="wallet-menu-action-copy">
+                <XBrandIcon />
+                <span>@grapeprotocol</span>
+              </span>
+            </DropdownMenu.Item>
+            <DropdownMenu.Item
+              className="wallet-menu-action"
+              onSelect={() => {
+                openExternal('https://discord.gg/tVFUvAQT');
+              }}
+            >
+              <span className="wallet-menu-action-copy">
+                <DiscordBrandIcon />
+                <span>Discord</span>
+              </span>
+            </DropdownMenu.Item>
+            <DropdownMenu.Separator className="menu-separator" />
+            <DropdownMenu.Item
+              className="wallet-menu-action wallet-menu-action-danger"
+              onSelect={() => {
+                void handleResetWallet();
+              }}
+            >
+              Reset wallet
+            </DropdownMenu.Item>
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
+    );
+  }
+
   function renderWalletMenu() {
     return (
       <DropdownMenu.Root>
@@ -917,9 +1386,10 @@ function PopupPage() {
     return (
       <div className="unlock-welcome-shell">
         <Card className="unlock-welcome-card">
+          {renderUnlockWelcomeMenu()}
           <div className="unlock-welcome-brand">
             <img className="unlock-welcome-logo" src={GRAPE_LOGO_URL} alt="Grape" />
-            <h2>Grape</h2>
+            <h2 className="unlock-welcome-title">Grape Wallet</h2>
           </div>
 
           <div className="unlock-welcome-form">
@@ -939,6 +1409,18 @@ function PopupPage() {
               >
                 {showUnlockPassword ? <EyeOff size={20} /> : <Eye size={20} />}
               </button>
+              {biometricSupported && activeWallet?.biometricEnabled ? (
+                <button
+                  type="button"
+                  className="biometric-inline-button"
+                  aria-label="Unlock with device"
+                  title="Unlock with device"
+                  onClick={() => void handleBiometricUnlockInline()}
+                  disabled={biometricUnlocking}
+                >
+                  <Fingerprint size={16} />
+                </button>
+              ) : null}
             </div>
 
             {unlockError ? <p className="danger-box">{unlockError}</p> : null}
@@ -1069,7 +1551,7 @@ function PopupPage() {
                         <TokenRow
                           key={`${token.mint}:${token.programId}`}
                           token={token}
-                          onSelect={() => openAssetDetails(`${token.mint}:${token.programId}`)}
+                          onSelect={() => openAssetDetails(token)}
                         />
                       ))}
                     </div>
@@ -1081,10 +1563,14 @@ function PopupPage() {
 
           <Tabs.Content value="collectibles">
             <Card className="asset-panel-card">
-              {assets.collections && assets.collections.length > 0 ? (
+              {collectibleItems.length > 0 ? (
                 <div className="collectible-grid">
-                  {assets.collections.map((collection) => (
-                    <CollectibleCard key={collection.id} collection={collection} />
+                  {collectibleItems.map((item) => (
+                    <CollectibleCard
+                      key={`${item.collectionId ?? 'collectible'}:${item.mint}`}
+                      item={item}
+                      onSelect={() => openCollectibleDetails(item)}
+                    />
                   ))}
                 </div>
               ) : (
@@ -1155,31 +1641,35 @@ function PopupPage() {
           <div className="send-field-stack">
             <div className="send-field-group">
               <label className="send-field-label">Token</label>
-              <div className="send-select-shell">
-                <div className="send-select-leading">
-                  <TokenAvatar
-                    token={assetId === 'sol' ? { symbol: 'SOL' } : selectedTokenHolding ?? { symbol: selectedAssetSymbol }}
-                    fallbackLabel={selectedAssetSymbol.slice(0, 1)}
-                    sol={assetId === 'sol'}
-                  />
-                  <div className="send-select-copy">
-                    <strong>{selectedAssetName}</strong>
-                    <span className="muted">{availableBalanceLabel}</span>
-                  </div>
-                </div>
-                <select
-                  className="send-select-input"
-                  value={assetId}
-                  onChange={(event) => setAssetId(event.target.value)}
+              <div className="send-asset-picker">
+                <button
+                  type="button"
+                  className={`send-select-shell send-select-button ${sendAssetPickerOpen ? 'open' : ''}`.trim()}
                   aria-label="Select token"
+                  aria-expanded={sendAssetPickerOpen}
+                  onClick={() => setSendAssetPickerOpen((value) => !value)}
                 >
-                  {assetOptions.map((option) => (
-                    <option key={option.id} value={option.id}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown className="send-select-chevron" size={18} />
+                  <AssetPickerOptionRow option={selectedAsset} />
+                  <ChevronDown className="send-select-chevron" size={18} />
+                </button>
+                {sendAssetPickerOpen ? (
+                  <div className="send-asset-menu">
+                    <div className="popup-menu-section">Assets</div>
+                    <div className="send-asset-menu-list">
+                      {assetOptions.map((option) => (
+                        <AssetPickerOptionRow
+                          key={option.id}
+                          option={option}
+                          active={option.id === assetId}
+                          onSelect={() => {
+                            setAssetId(option.id);
+                            setSendAssetPickerOpen(false);
+                          }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
               </div>
             </div>
 
@@ -1217,7 +1707,7 @@ function PopupPage() {
             {!canUseUnlockedSigner ? (
               <div className="send-field-group">
                 <label className="send-field-label">Password</label>
-                <div className="send-input-shell">
+                <div className="send-input-shell send-input-shell-sign">
                   <Input
                     type="password"
                     value={password}
@@ -1225,6 +1715,18 @@ function PopupPage() {
                     placeholder="Password required to sign"
                     className="send-recipient-input"
                   />
+                  {biometricSupported && activeWallet?.biometricEnabled ? (
+                    <button
+                      type="button"
+                      className="biometric-inline-button"
+                      onClick={() => void handleBiometricUnlockForSigning()}
+                      aria-label="Unlock with device"
+                      title="Unlock with device"
+                      disabled={biometricUnlocking}
+                    >
+                      <Fingerprint size={16} />
+                    </button>
+                  ) : null}
                 </div>
               </div>
             ) : (
@@ -1271,20 +1773,43 @@ function PopupPage() {
   }
 
   function renderAsset() {
-    if (!selectedTokenHolding) {
+    const isCollectibleView = !!selectedCollectible;
+    const showMetadataCards = isCollectibleView || !assetActionMode;
+
+    if (assetDetailsLoading) {
       return (
-        <Card title="Token">
-          <p className="muted">Select a token from the Tokens tab to manage it.</p>
+        <Card title={isCollectibleView ? 'NFT Details' : 'Token'}>
+          <p className="muted">Loading {isCollectibleView ? 'NFT' : 'token'} details...</p>
         </Card>
       );
     }
 
-    const tokenValue = formatUsd(selectedTokenHolding.valueUsd) ?? `${formatTokenAmount(selectedTokenHolding)} ${selectedTokenHolding.symbol ?? ''}`.trim();
-    const canCloseAccount = Number(selectedTokenHolding.amount) === 0 && !selectedTokenHolding.delegate;
-    const canBurn = Number(selectedTokenHolding.amount) > 0;
-    const detailActionLabel = canBurn ? 'Burn' : 'Close';
+    if (assetDetailsError) {
+      return (
+        <Card title={isCollectibleView ? 'NFT Details' : 'Token'}>
+          <p className="danger-box">{assetDetailsError}</p>
+        </Card>
+      );
+    }
+
+    if (!assetDetails) {
+      return (
+        <Card title={isCollectibleView ? 'NFT Details' : 'Token'}>
+          <p className="muted">{isCollectibleView ? 'Select an NFT from Collectibles to inspect it.' : 'Select a token from the Tokens tab to manage it.'}</p>
+        </Card>
+      );
+    }
+
+    const tokenValue =
+      selectedTokenHolding && typeof selectedTokenHolding.valueUsd === 'number'
+        ? formatUsd(selectedTokenHolding.valueUsd)
+        : null;
+    const canCloseAccount = Number(assetDetails.amount) === 0 && !assetDetails.delegate;
+    const canBurn = Number(assetDetails.amount) > 0;
     const detailActionTitle = canBurn ? 'Burn token' : canCloseAccount ? 'Close account' : 'Close account after burning all tokens';
     const detailActionIcon = canBurn ? <Flame size={18} /> : <Trash2 size={18} />;
+    const explorerNetwork = wallet.selectedNetwork;
+    const tokenImage = assetJsonMetadata?.imageUri ?? selectedCollectible?.imageUri ?? assetDetails.logoUri;
 
     return (
       <>
@@ -1293,40 +1818,149 @@ function PopupPage() {
             <button type="button" className="send-back-button" onClick={() => setView('home')} aria-label="Back to wallet">
               <ArrowLeft size={20} />
             </button>
-            <h2>{selectedTokenHolding.name ?? selectedTokenHolding.symbol ?? 'Token'}</h2>
+            <h2>{isCollectibleView ? 'NFT Details' : assetDetails.name ?? assetDetails.symbol ?? 'Token'}</h2>
           </div>
 
           <div className="asset-detail-hero">
-            <TokenAvatar token={selectedTokenHolding} fallbackLabel={selectedTokenHolding.symbol?.slice(0, 1) ?? 'T'} />
+            <TokenAvatar
+              token={{ symbol: assetDetails.symbol, logoUri: tokenImage }}
+              fallbackLabel={assetDetails.symbol?.slice(0, 1) ?? 'T'}
+            />
             <div className="asset-detail-copy">
-              <div className="hero-balance asset-detail-balance">{formatTokenAmount(selectedTokenHolding)}</div>
+              <div className="hero-balance asset-detail-balance">
+                {isCollectibleView ? assetDetails.name ?? selectedCollectible?.name ?? 'NFT' : assetDetails.amount}
+              </div>
               <div className="muted">
-                {selectedTokenHolding.symbol ?? formatAddress(selectedTokenHolding.mint)} · {tokenValue}
+                {isCollectibleView
+                  ? selectedCollectible?.collectionSymbol ?? assetDetails.symbol ?? formatAddress(assetDetails.mint)
+                  : `${assetDetails.symbol ?? formatAddress(assetDetails.mint)}${tokenValue ? ` · ${tokenValue}` : ''}`}
               </div>
             </div>
           </div>
 
-          <div className="quick-actions compact asset-detail-actions">
-            <button type="button" className="quick-action-card" onClick={() => openSend(assetId)} aria-label="Send token" title="Send">
-              <span className="quick-action-icon"><SendHorizontal size={18} /></span>
-            </button>
-            <button type="button" className="quick-action-card" onClick={() => openSwapForAsset(assetId)} aria-label="Swap token" title="Swap">
-              <span className="quick-action-icon"><ArrowLeftRight size={18} /></span>
-            </button>
-            <button
-              type="button"
-              className="quick-action-card"
-              onClick={canBurn ? () => setBurnAmount(selectedTokenHolding.amount) : () => void handleCloseTokenAccount()}
-              aria-label={detailActionTitle}
-              title={detailActionTitle}
-              disabled={canBurn ? !canBurn : !canCloseAccount}
-            >
-              <span className="quick-action-icon">{detailActionIcon}</span>
-            </button>
+          {!isCollectibleView ? (
+            <div className="quick-actions compact asset-detail-actions">
+              <button type="button" className="quick-action-card" onClick={() => openSend(assetId)} aria-label="Send token" title="Send">
+                <span className="quick-action-icon"><SendHorizontal size={18} /></span>
+              </button>
+              <button type="button" className="quick-action-card" onClick={() => openSwapForAsset(assetId)} aria-label="Swap token" title="Swap">
+                <span className="quick-action-icon"><ArrowLeftRight size={18} /></span>
+              </button>
+              <button
+                type="button"
+                className="quick-action-card"
+                onClick={() => {
+                  setTokenActionError(null);
+                  setTokenActionResult(null);
+                  setAssetActionMode(canBurn ? 'burn' : 'close');
+                  if (canBurn) {
+                    setBurnAmount(assetDetails.amount);
+                  }
+                }}
+                aria-label={detailActionTitle}
+                title={detailActionTitle}
+                disabled={canBurn ? !canBurn : !canCloseAccount}
+              >
+                <span className="quick-action-icon">{detailActionIcon}</span>
+              </button>
+            </div>
+          ) : null}
+        </Card>
+
+        <Card title={isCollectibleView ? 'NFT Details' : 'Token details'}>
+          <div className="stack asset-detail-info">
+            {isCollectibleView && selectedCollectible?.collectionId ? (
+              <KeyValueRow
+                label="Verified Collection Address"
+                value={<span className="mono asset-detail-mono">{selectedCollectible.collectionId}</span>}
+              />
+            ) : null}
+            <KeyValueRow label="Mint" value={<span className="mono asset-detail-mono">{assetDetails.mint}</span>} />
+            <KeyValueRow label="Token account" value={<span className="mono asset-detail-mono">{assetDetails.accountAddress}</span>} />
+            <div className="inline wrap-actions asset-detail-links">
+              <Button tone="secondary" onClick={() => window.open(buildExplorerUrl(assetDetails.mint, explorerNetwork), '_blank', 'noopener,noreferrer')}>
+                Mint on Explorer
+              </Button>
+              <Button tone="secondary" onClick={() => window.open(buildExplorerUrl(assetDetails.accountAddress, explorerNetwork), '_blank', 'noopener,noreferrer')}>
+                Token Account on Explorer
+              </Button>
+            </div>
+            <KeyValueRow
+              label="Balance"
+              value={
+                <span>
+                  {assetDetails.amount} <span className="muted">({assetDetails.rawAmount} raw)</span>
+                </span>
+              }
+            />
+            <KeyValueRow
+              label="Decimals / Supply"
+              value={
+                <span>
+                  {assetDetails.decimals} / {assetDetails.supply ?? 'Unavailable'}
+                </span>
+              }
+            />
+            <KeyValueRow label="Mint initialized" value={formatBoolean(assetDetails.mintInitialized)} />
+            <KeyValueRow label="Mint authority" value={<span className="mono asset-detail-mono">{assetDetails.mintAuthority ?? 'None'}</span>} />
+            <KeyValueRow label="Freeze authority" value={<span className="mono asset-detail-mono">{assetDetails.freezeAuthority ?? 'None'}</span>} />
+            {!isCollectibleView ? (
+              <>
+                <KeyValueRow label="Delegate" value={<span className="mono asset-detail-mono">{assetDetails.delegate ?? 'None'}</span>} />
+                <KeyValueRow label="Close authority" value={<span className="mono asset-detail-mono">{assetDetails.closeAuthority ?? 'None'}</span>} />
+                <KeyValueRow label="Account state" value={assetDetails.accountState ?? 'Unavailable'} />
+              </>
+            ) : null}
           </div>
         </Card>
 
-        {canBurn ? (
+        {showMetadataCards ? (
+          <>
+            <Card title="On-chain Metaplex metadata">
+              <div className="stack asset-detail-info">
+                <KeyValueRow label="Metadata PDA" value={<span className="mono asset-detail-mono">{assetDetails.metadataPda}</span>} />
+                <div className="inline wrap-actions asset-detail-links">
+                  <Button tone="secondary" onClick={() => window.open(buildExplorerUrl(assetDetails.metadataPda, explorerNetwork), '_blank', 'noopener,noreferrer')}>
+                    Metadata Account on Explorer
+                  </Button>
+                </div>
+                <KeyValueRow
+                  label="On-chain Name / Symbol"
+                  value={`${assetDetails.metadataName ?? assetDetails.name ?? 'Unavailable'} / ${assetDetails.metadataSymbol ?? assetDetails.symbol ?? 'Unavailable'}`}
+                />
+                <KeyValueRow label="Royalty" value={assetDetails.sellerFeeBasisPoints == null ? 'Unavailable' : `${assetDetails.sellerFeeBasisPoints} bps`} />
+                <KeyValueRow label="Update authority" value={<span className="mono asset-detail-mono">{assetDetails.updateAuthority ?? 'Unavailable'}</span>} />
+                <KeyValueRow label="Metadata URI" value={<span className="mono asset-detail-mono">{assetDetails.metadataUri ?? 'Unavailable'}</span>} />
+              </div>
+            </Card>
+
+            {assetDetails.metadataUri || tokenImage || assetJsonMetadata?.description ? (
+              <Card title="Off-chain metadata">
+                <div className="stack asset-detail-info">
+                  {tokenImage ? <img className="asset-detail-preview" src={tokenImage} alt={assetDetails.name ?? assetDetails.symbol ?? 'Token'} /> : null}
+                  {assetJsonLoading ? <p className="muted">Loading metadata JSON...</p> : null}
+                  {!assetJsonLoading && assetJsonMetadata ? (
+                    <>
+                      <KeyValueRow
+                        label="JSON Name / Symbol"
+                        value={`${assetJsonMetadata.name ?? assetDetails.name ?? 'Unavailable'} / ${assetJsonMetadata.symbol ?? assetDetails.symbol ?? 'Unavailable'}`}
+                      />
+                      {assetJsonMetadata.description ? <p className="muted">{assetJsonMetadata.description}</p> : null}
+                      {assetJsonMetadata.externalUrl ? (
+                        <Button tone="secondary" onClick={() => window.open(assetJsonMetadata.externalUrl, '_blank', 'noopener,noreferrer')}>
+                          Visit website
+                        </Button>
+                      ) : null}
+                    </>
+                  ) : null}
+                </div>
+              </Card>
+            ) : null}
+          </>
+        ) : null}
+
+        {!isCollectibleView && assetActionMode === 'burn' ? (
+          <div ref={assetActionCardRef}>
           <Card title="Burn tokens">
             <div className="stack">
               <label className="stack">
@@ -1336,12 +1970,26 @@ function PopupPage() {
               {!canUseUnlockedSigner ? (
                 <label className="stack">
                   <span className="muted">Password</span>
-                  <Input
-                    type="password"
-                    value={burnPassword}
-                    onChange={(event) => setBurnPassword(event.target.value)}
-                    placeholder="Password required to sign"
-                  />
+                  <div className="send-input-shell send-input-shell-sign">
+                    <Input
+                      type="password"
+                      value={burnPassword}
+                      onChange={(event) => setBurnPassword(event.target.value)}
+                      placeholder="Password required to sign"
+                    />
+                    {biometricSupported && activeWallet?.biometricEnabled ? (
+                      <button
+                        type="button"
+                        className="biometric-inline-button"
+                        onClick={() => void handleBiometricUnlockForSigning()}
+                        aria-label="Unlock with device"
+                        title="Unlock with device"
+                        disabled={biometricUnlocking}
+                      >
+                        <Fingerprint size={16} />
+                      </button>
+                    ) : null}
+                  </div>
                 </label>
               ) : (
                 <p className="muted">Wallet is already unlocked. Burn and close actions can sign without re-entering your password.</p>
@@ -1355,16 +2003,20 @@ function PopupPage() {
               </Button>
             </div>
           </Card>
-        ) : (
+          </div>
+        ) : null}
+
+        {!isCollectibleView && assetActionMode === 'close' ? (
+          <div ref={assetActionCardRef}>
           <Card title="Close account">
             <div className="stack">
               <p className="muted">
                 Closing reclaims the SOL rent from this token account. The balance must be zero and no delegate can remain.
               </p>
-              <KeyValueRow label="Delegate" value={<span className="mono">{selectedTokenHolding.delegate ? formatAddress(selectedTokenHolding.delegate) : 'None'}</span>} />
+              <KeyValueRow label="Delegate" value={<span className="mono">{assetDetails.delegate ? formatAddress(assetDetails.delegate) : 'None'}</span>} />
               <KeyValueRow
                 label="Close authority"
-                value={<span className="mono">{selectedTokenHolding.closeAuthority ? formatAddress(selectedTokenHolding.closeAuthority) : 'Wallet owner'}</span>}
+                value={<span className="mono">{assetDetails.closeAuthority ? formatAddress(assetDetails.closeAuthority) : 'None'}</span>}
               />
               <Button
                 tone="secondary"
@@ -1379,7 +2031,8 @@ function PopupPage() {
               ) : null}
             </div>
           </Card>
-        )}
+          </div>
+        ) : null}
 
         {tokenActionResult ? (
           <Card title="Completed">
@@ -1439,6 +2092,40 @@ function PopupPage() {
                 ))}
               </select>
             </label>
+            <div className="stack">
+              <div className="settings-row">
+                <span className="muted">Biometric unlock</span>
+                <strong>
+                  {biometricSupported
+                    ? activeWallet?.biometricEnabled
+                      ? 'On'
+                      : 'Off'
+                    : 'Unavailable'}
+                </strong>
+              </div>
+              {biometricSupported ? (
+                activeWallet?.biometricEnabled ? (
+                  <Button tone="secondary" onClick={() => void handleDisableBiometricFromSettings()} disabled={biometricSettingsBusy}>
+                    {biometricSettingsBusy ? 'Updating...' : 'Disable biometric unlock'}
+                  </Button>
+                ) : (
+                  <>
+                    <Input
+                      type="password"
+                      value={biometricSettingsPassword}
+                      onChange={(event) => setBiometricSettingsPassword(event.target.value)}
+                      placeholder="Confirm password to enable"
+                    />
+                    <Button onClick={() => void handleEnableBiometricFromSettings()} disabled={biometricSettingsBusy || !biometricSettingsPassword.trim()}>
+                      {biometricSettingsBusy ? 'Enabling...' : 'Enable biometric unlock'}
+                    </Button>
+                  </>
+                )
+              ) : (
+                <p className="muted">Platform authenticator unavailable on this device.</p>
+              )}
+              {biometricSettingsError ? <p className="danger-box">{biometricSettingsError}</p> : null}
+            </div>
             <div className="inline">
               {session.locked ? (
                 <Button onClick={() => openExtensionPage('unlock.html?redirect=wallet.html')}>Unlock</Button>
@@ -1625,12 +2312,26 @@ function PopupPage() {
             {!canUseUnlockedSigner ? (
               <label className="stack">
                 <span className="muted">Password</span>
-                <Input
-                  type="password"
-                  value={incidentPassword}
-                  onChange={(event) => setIncidentPassword(event.target.value)}
-                  placeholder="Password required to sign"
-                />
+                <div className="send-input-shell send-input-shell-sign">
+                  <Input
+                    type="password"
+                    value={incidentPassword}
+                    onChange={(event) => setIncidentPassword(event.target.value)}
+                    placeholder="Password required to sign"
+                  />
+                  {biometricSupported && activeWallet?.biometricEnabled ? (
+                    <button
+                      type="button"
+                      className="biometric-inline-button"
+                      onClick={() => void handleBiometricUnlockForSigning()}
+                      aria-label="Unlock with device"
+                      title="Unlock with device"
+                      disabled={biometricUnlocking}
+                    >
+                      <Fingerprint size={16} />
+                    </button>
+                  ) : null}
+                </div>
               </label>
             ) : null}
             <Button
@@ -1680,9 +2381,21 @@ function PopupPage() {
         ? 'SOL'
         : selectedSwapInputHolding?.symbol ?? selectedSwapInputAsset?.label.replace(/ token$/i, '') ?? 'Token';
     const inputAssetBalance = selectedSwapInputAsset?.balance ?? '0';
-    const outputAssetSymbol = selectedSwapOutputToken?.symbol ?? selectedSwapOutputOption?.symbol ?? formatAddress(swapOutputMint);
+    const outputAssetSymbol = swapUseCustomOutputMint
+      ? effectiveSwapOutputMint
+        ? formatAddress(effectiveSwapOutputMint)
+        : 'Custom mint'
+      : selectedSwapOutputToken?.symbol ?? selectedSwapOutputOption?.symbol ?? formatAddress(swapOutputMint);
     const outputAssetBalance =
-      selectedSwapOutputToken ? formatTokenAmount(selectedSwapOutputToken) : selectedSwapOutputOption?.symbol ? 'Not owned yet' : 'Unknown';
+      swapUseCustomOutputMint
+        ? assets.tokens.find((token) => token.mint === effectiveSwapOutputMint)
+          ? formatTokenAmount(assets.tokens.find((token) => token.mint === effectiveSwapOutputMint)!)
+          : 'Not owned yet'
+        : selectedSwapOutputToken
+          ? formatTokenAmount(selectedSwapOutputToken)
+          : selectedSwapOutputOption?.symbol
+            ? 'Not owned yet'
+            : 'Unknown';
     const quoteOutputValue = swapQuote ? `${swapQuote.outputAmountUi} ${outputAssetSymbol}` : '0';
 
     function setSwapAmountByRatio(ratio: number) {
@@ -1715,6 +2428,8 @@ function PopupPage() {
 
       setSwapInputAssetId(nextInputId);
       setSwapOutputMint(currentInputMint);
+      setSwapUseCustomOutputMint(false);
+      setSwapCustomOutputMint('');
       setSwapQuote(null);
       setSwapResult(null);
     }
@@ -1748,35 +2463,37 @@ function PopupPage() {
               </div>
 
               <div className="swap-leg-main">
-                <div className="send-select-shell swap-select-shell">
-                  <div className="send-select-leading">
-                    <TokenAvatar
-                      token={swapInputAssetId === 'sol' ? { symbol: 'SOL' } : selectedSwapInputHolding ?? { symbol: inputAssetSymbol }}
-                      fallbackLabel={inputAssetSymbol.slice(0, 1)}
-                      sol={swapInputAssetId === 'sol'}
-                    />
-                    <div className="send-select-copy">
-                      <strong>{inputAssetSymbol}</strong>
-                      <span className="muted">Balance: {inputAssetBalance}</span>
-                    </div>
-                  </div>
-                  <select
-                    className="send-select-input"
-                    value={swapInputAssetId}
-                    onChange={(event) => {
-                      setSwapInputAssetId(event.target.value);
-                      setSwapQuote(null);
-                      setSwapResult(null);
-                    }}
+                <div className="send-asset-picker">
+                  <button
+                    type="button"
+                    className={`send-select-shell send-select-button swap-select-shell ${swapInputPickerOpen ? 'open' : ''}`.trim()}
                     aria-label="Select input asset"
+                    aria-expanded={swapInputPickerOpen}
+                    onClick={() => setSwapInputPickerOpen((value) => !value)}
                   >
-                    {assetOptions.map((option) => (
-                      <option key={option.id} value={option.id}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown className="send-select-chevron" size={18} />
+                    <AssetPickerOptionRow option={selectedSwapInputAsset} />
+                    <ChevronDown className="send-select-chevron" size={18} />
+                  </button>
+                  {swapInputPickerOpen ? (
+                    <div className="send-asset-menu">
+                      <div className="popup-menu-section">Sell asset</div>
+                      <div className="send-asset-menu-list">
+                        {assetOptions.map((option) => (
+                          <AssetPickerOptionRow
+                            key={option.id}
+                            option={option}
+                            active={option.id === swapInputAssetId}
+                            onSelect={() => {
+                              setSwapInputAssetId(option.id);
+                              setSwapInputPickerOpen(false);
+                              setSwapQuote(null);
+                              setSwapResult(null);
+                            }}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className="swap-leg-value-row">
@@ -1806,39 +2523,83 @@ function PopupPage() {
               </div>
 
               <div className="swap-leg-main">
-                <div className="send-select-shell swap-select-shell">
-                  <div className="send-select-leading">
-                    <TokenAvatar
-                      token={
-                        swapOutputMint === JUPITER_SOL_MINT
-                          ? { symbol: 'SOL' }
-                          : selectedSwapOutputToken ?? { symbol: outputAssetSymbol }
-                      }
-                      fallbackLabel={outputAssetSymbol.slice(0, 1)}
-                      sol={swapOutputMint === JUPITER_SOL_MINT}
-                    />
-                    <div className="send-select-copy">
-                      <strong>{outputAssetSymbol}</strong>
-                      <span className="muted">Balance: {outputAssetBalance}</span>
-                    </div>
-                  </div>
-                  <select
-                    className="send-select-input"
-                    value={swapOutputMint}
-                    onChange={(event) => {
-                      setSwapOutputMint(event.target.value);
-                      setSwapQuote(null);
-                      setSwapResult(null);
-                    }}
+                <div className="send-asset-picker">
+                  <button
+                    type="button"
+                    className={`send-select-shell send-select-button swap-select-shell ${swapOutputPickerOpen ? 'open' : ''}`.trim()}
                     aria-label="Select output asset"
+                    aria-expanded={swapOutputPickerOpen}
+                    onClick={() => setSwapOutputPickerOpen((value) => !value)}
                   >
-                    {swapOutputOptions.map((option) => (
-                      <option key={option.mint} value={option.mint}>
-                        {option.symbol}
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown className="send-select-chevron" size={18} />
+                    <AssetPickerOptionRow
+                      option={{
+                        id: swapUseCustomOutputMint ? `custom:${effectiveSwapOutputMint}` : effectiveSwapOutputMint,
+                        name: swapUseCustomOutputMint ? 'Custom mint' : selectedSwapOutputToken?.name ?? selectedSwapOutputOption?.symbol ?? outputAssetSymbol,
+                        symbol: outputAssetSymbol,
+                        balance: outputAssetBalance,
+                        logoUri:
+                          swapUseCustomOutputMint
+                            ? assets.tokens.find((token) => token.mint === effectiveSwapOutputMint)?.logoUri
+                            : swapOutputMint === JUPITER_SOL_MINT
+                              ? SOLANA_LOGO_URL
+                              : selectedSwapOutputToken?.logoUri,
+                        sol: !swapUseCustomOutputMint && swapOutputMint === JUPITER_SOL_MINT
+                      }}
+                    />
+                    <ChevronDown className="send-select-chevron" size={18} />
+                  </button>
+                  {swapOutputPickerOpen ? (
+                    <div className="send-asset-menu">
+                      <div className="popup-menu-section">Buy asset</div>
+                      <div className="send-asset-menu-list">
+                        {swapOutputPickerOptions.map((option) => (
+                          <AssetPickerOptionRow
+                            key={option.id}
+                            option={option}
+                            active={!swapUseCustomOutputMint && option.id === swapOutputMint}
+                            onSelect={() => {
+                              setSwapUseCustomOutputMint(false);
+                              setSwapOutputMint(option.id);
+                              setSwapOutputPickerOpen(false);
+                              setSwapQuote(null);
+                              setSwapResult(null);
+                            }}
+                          />
+                        ))}
+                        <button
+                          type="button"
+                          className={`send-asset-option-button ${swapUseCustomOutputMint ? 'active' : ''}`.trim()}
+                          onClick={() => setSwapUseCustomOutputMint(true)}
+                        >
+                          <div className="token-item send-asset-option-row">
+                            <div className="token-leading">
+                              <div className="token-avatar">+</div>
+                              <div className="token-copy">
+                                <strong className="token-name">Custom mint</strong>
+                                <div className="token-subline">
+                                  <span className="token-subtitle">Paste any SPL mint address</span>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </button>
+                      </div>
+                      {swapUseCustomOutputMint ? (
+                        <div className="swap-custom-mint-shell">
+                          <Input
+                            value={swapCustomOutputMint}
+                            onChange={(event) => {
+                              setSwapCustomOutputMint(event.target.value);
+                              setSwapQuote(null);
+                              setSwapResult(null);
+                            }}
+                            placeholder="Paste custom mint address"
+                            className="swap-custom-mint-input"
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className="swap-leg-value-row">
@@ -1879,12 +2640,26 @@ function PopupPage() {
               {!canUseUnlockedSigner ? (
                 <label className="stack">
                   <span className="muted">Password</span>
-                  <Input
-                    type="password"
-                    value={swapPassword}
-                    onChange={(event) => setSwapPassword(event.target.value)}
-                    placeholder="Password required to sign"
-                  />
+                  <div className="send-input-shell send-input-shell-sign">
+                    <Input
+                      type="password"
+                      value={swapPassword}
+                      onChange={(event) => setSwapPassword(event.target.value)}
+                      placeholder="Password required to sign"
+                    />
+                    {biometricSupported && activeWallet?.biometricEnabled ? (
+                      <button
+                        type="button"
+                        className="biometric-inline-button"
+                        onClick={() => void handleBiometricUnlockForSigning()}
+                        aria-label="Unlock with device"
+                        title="Unlock with device"
+                        disabled={biometricUnlocking}
+                      >
+                        <Fingerprint size={16} />
+                      </button>
+                    ) : null}
+                  </div>
                 </label>
               ) : (
                 <p className="muted">Wallet is already unlocked. You can sign the swap without re-entering your password.</p>
@@ -1926,7 +2701,8 @@ function PopupPage() {
                 wallet.selectedNetwork !== 'mainnet-beta' ||
                 !selectedSwapInputAsset ||
                 !swapAmount.trim() ||
-                !swapOutputMint ||
+                !effectiveSwapOutputMint ||
+                effectiveSwapOutputMint.length < 32 ||
                 !Number.isFinite(Number(swapSlippageBps))
               }
               onClick={() => void handleGetSwapQuote()}

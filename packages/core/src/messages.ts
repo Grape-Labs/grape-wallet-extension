@@ -135,6 +135,9 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     type: z.literal('wallet_lock')
   }),
   z.object({
+    type: z.literal('wallet_reset')
+  }),
+  z.object({
     type: z.literal('wallet_set_network'),
     network: z.enum(['mainnet-beta', 'devnet'])
   }),
@@ -151,10 +154,35 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     idleTimeoutMs: z.number().int().positive()
   }),
   z.object({
+    type: z.literal('wallet_set_biometric_unlock'),
+    config: z
+      .object({
+        credentialId: z.string().min(1),
+        credentialIdB64Url: z.string().min(1),
+        keySalt: z.string().min(1),
+        wrappedPassword: z.object({
+          algorithm: z.literal('AES-GCM'),
+          kdf: z.literal('PBKDF2'),
+          iterations: z.number().int().positive(),
+          salt: z.string().min(1),
+          iv: z.string().min(1),
+          ciphertext: z.string().min(1)
+        }),
+        createdAt: z.number().int().positive()
+      })
+      .nullable()
+  }),
+  z.object({
     type: z.literal('wallet_get_balance')
   }),
   z.object({
     type: z.literal('wallet_get_assets')
+  }),
+  z.object({
+    type: z.literal('wallet_get_token_details'),
+    mint: z.string().min(32),
+    accountAddress: z.string().min(32),
+    programId: z.string().min(32)
   }),
   z.object({
     type: z.literal('wallet_send_transfer'),

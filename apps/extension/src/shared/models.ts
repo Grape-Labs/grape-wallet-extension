@@ -32,7 +32,7 @@ export type WalletStateResponse = {
   wallet: WalletState;
   session: SessionState;
   permissions: OriginPermission[];
-  activeWallet?: { id: string; name: string; publicKey: string };
+  activeWallet?: { id: string; name: string; publicKey: string; biometricEnabled?: boolean };
   activeAccount?: { publicKey: string };
   recentRecipients: WalletRecipient[];
   canUseUnlockedSigner: boolean;
@@ -58,7 +58,13 @@ export type TokenHolding = {
 export type CollectibleItem = {
   mint: string;
   name?: string;
+  symbol?: string;
   imageUri?: string;
+  accountAddress?: string;
+  programId?: string;
+  collectionId?: string;
+  collectionName?: string;
+  collectionSymbol?: string;
 };
 
 export type CollectionHolding = {
@@ -78,6 +84,33 @@ export type WalletAssetsResponse = {
   nativePriceUsd?: number | null;
   nativeValueUsd?: number | null;
   nativePriceChange24h?: number | null;
+};
+
+export type TokenDetailsResponse = {
+  mint: string;
+  programId: string;
+  accountAddress: string;
+  name?: string;
+  symbol?: string;
+  logoUri?: string;
+  amount: string;
+  rawAmount: string;
+  decimals: number;
+  supply: string | null;
+  rawSupply: string | null;
+  mintInitialized: boolean | null;
+  mintAuthority: string | null;
+  freezeAuthority: string | null;
+  delegate: string | null;
+  delegatedAmount: string | null;
+  closeAuthority: string | null;
+  accountState: string | null;
+  metadataPda: string;
+  metadataName: string | null;
+  metadataSymbol: string | null;
+  metadataUri: string | null;
+  sellerFeeBasisPoints: number | null;
+  updateAuthority: string | null;
 };
 
 export type SendTransferResponse = {

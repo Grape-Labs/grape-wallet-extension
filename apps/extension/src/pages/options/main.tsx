@@ -4,6 +4,7 @@ import { Button, Card, Input, KeyValueRow, PageShell, StatusPill, TextArea } fro
 
 import type { WalletExportResponse, WalletStateResponse } from '../../shared/models';
 
+import { createBiometricUnlock, isBiometricUnlockSupported } from '../../shared/biometric';
 import { sendRuntimeMessage } from '../../shared/chrome';
 import { applyDocumentTheme, THEMES } from '../../shared/theme';
 import { mountPage } from '../lib';
@@ -17,6 +18,10 @@ function OptionsPage() {
   const [exportError, setExportError] = useState<string | null>(null);
   const [copiedField, setCopiedField] = useState<'mnemonic' | 'private-key' | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [biometricSupported, setBiometricSupported] = useState(false);
+  const [biometricLoading, setBiometricLoading] = useState(false);
+  const [biometricPassword, setBiometricPassword] = useState('');
+  const [biometricError, setBiometricError] = useState<string | null>(null);
   const [revealedFields, setRevealedFields] = useState<{ mnemonic: boolean; privateKey: boolean }>({
     mnemonic: false,
     privateKey: false
@@ -37,6 +42,10 @@ function OptionsPage() {
 
   useEffect(() => {
     void refresh();
+  }, []);
+
+  useEffect(() => {
+    void isBiometricUnlockSupported().then(setBiometricSupported).catch(() => setBiometricSupported(false));
   }, []);
 
   useEffect(() => {
@@ -153,6 +162,44 @@ function OptionsPage() {
     URL.revokeObjectURL(url);
   }
 
+  async function handleEnableBiometric() {
+    if (!selectedWallet || !biometricPassword.trim()) {
+      return;
+    }
+
+    try {
+      setBiometricLoading(true);
+      setBiometricError(null);
+      const config = await createBiometricUnlock(selectedWallet.id, biometricPassword);
+      await sendRuntimeMessage({
+        type: 'wallet_set_biometric_unlock',
+        config
+      });
+      setBiometricPassword('');
+      await refresh();
+    } catch (error) {
+      setBiometricError(error instanceof Error ? error.message : 'Unable to enable biometric unlock.');
+    } finally {
+      setBiometricLoading(false);
+    }
+  }
+
+  async function handleDisableBiometric() {
+    try {
+      setBiometricLoading(true);
+      setBiometricError(null);
+      await sendRuntimeMessage({
+        type: 'wallet_set_biometric_unlock',
+        config: null
+      });
+      await refresh();
+    } catch (error) {
+      setBiometricError(error instanceof Error ? error.message : 'Unable to disable biometric unlock.');
+    } finally {
+      setBiometricLoading(false);
+    }
+  }
+
   return (
     <PageShell title="Settings" subtitle="Manage security and connected sites.">
       <Card title="Security">
@@ -208,6 +255,44 @@ function OptionsPage() {
             ))}
           </select>
         </label>
+        <div className="stack">
+          <KeyValueRow
+            label="Biometric unlock"
+            value={
+              biometricSupported
+                ? state.activeWallet?.biometricEnabled
+                  ? 'Enabled'
+                  : 'Disabled'
+                : 'Unavailable'
+            }
+          />
+          {biometricSupported ? (
+            state.activeWallet?.biometricEnabled ? (
+              <div className="stack">
+                <p className="muted">Use Touch ID, Face ID, Windows Hello, or the platform authenticator when available.</p>
+                <Button tone="secondary" onClick={() => void handleDisableBiometric()} disabled={biometricLoading}>
+                  {biometricLoading ? 'Updating...' : 'Disable biometric unlock'}
+                </Button>
+              </div>
+            ) : (
+              <div className="stack">
+                <p className="muted">Enable fast unlock with the device authenticator. Your password remains the fallback.</p>
+                <Input
+                  type="password"
+                  value={biometricPassword}
+                  onChange={(event) => setBiometricPassword(event.target.value)}
+                  placeholder="Confirm password to enable"
+                />
+                <Button onClick={() => void handleEnableBiometric()} disabled={biometricLoading || !biometricPassword.trim()}>
+                  {biometricLoading ? 'Enabling...' : 'Enable biometric unlock'}
+                </Button>
+              </div>
+            )
+          ) : (
+            <p className="muted">This device or browser profile does not expose a supported platform authenticator.</p>
+          )}
+          {biometricError ? <p className="danger-box">{biometricError}</p> : null}
+        </div>
       </Card>
 
       <Card title="Backup & export">

@@ -130,4 +130,51 @@ describe('@grape/wallet-adapter', () => {
     expect(provider.sendTransaction).toHaveBeenCalledWith(transaction, connection, {});
     expect(connection.sendRawTransaction).not.toHaveBeenCalled();
   });
+
+  it('recovers connected state from the injected provider publicKey', async () => {
+    const provider = createMockProvider();
+    (window as unknown as { grape: MockProvider }).grape = provider;
+
+    const adapter = new GrapeWalletAdapter();
+    await adapter.connect();
+
+    (adapter as unknown as { _publicKey: PublicKey | null })._publicKey = null;
+
+    const transaction = new Transaction();
+    const prepareTransactionSpy = vi.spyOn(adapter as never, 'prepareTransaction').mockResolvedValue(transaction);
+    const connection = {
+      sendRawTransaction: vi.fn().mockResolvedValue('tx-signature')
+    } as unknown as Connection;
+
+    const signature = await adapter.sendTransaction(transaction, connection);
+
+    expect(signature).toBe('provider-send-signature');
+    expect(prepareTransactionSpy).toHaveBeenCalledTimes(1);
+    expect(adapter.publicKey?.toBase58()).toBe(PUBLIC_KEY.toBase58());
+  });
+
+  it('falls back to signTransaction when wallet-managed sendTransaction fails', async () => {
+    const provider = createMockProvider();
+    provider.sendTransaction.mockRejectedValueOnce(new Error('wallet-managed send failed'));
+    (window as unknown as { grape: MockProvider }).grape = provider;
+
+    const adapter = new GrapeWalletAdapter();
+    await adapter.connect();
+
+    const transaction = new Transaction({
+      recentBlockhash: PUBLIC_KEY.toBase58(),
+      feePayer: PUBLIC_KEY
+    });
+    vi.spyOn(adapter as never, 'prepareTransaction').mockResolvedValue(transaction);
+    const connection = {
+      sendRawTransaction: vi.fn().mockResolvedValue('tx-signature')
+    } as unknown as Connection;
+
+    const signature = await adapter.sendTransaction(transaction, connection);
+
+    expect(signature).toBe('tx-signature');
+    expect(provider.sendTransaction).toHaveBeenCalledTimes(1);
+    expect(provider.signTransaction).toHaveBeenCalledWith(transaction);
+    expect(connection.sendRawTransaction).toHaveBeenCalledTimes(1);
+  });
 });

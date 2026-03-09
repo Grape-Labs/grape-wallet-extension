@@ -5,6 +5,12 @@ function tokenNumericAmount(token: TokenHolding): number {
   return Number.isFinite(amount) ? amount : 0;
 }
 
+type CollectibleCandidate = Pick<TokenHolding, 'mint' | 'amount' | 'decimals'> & {
+  rawAmount?: string;
+  rawSupply?: string | null;
+  hasMetadata?: boolean;
+};
+
 function tokenUsdValue(token: TokenHolding): number | null {
   return typeof token.valueUsd === 'number' && Number.isFinite(token.valueUsd) ? token.valueUsd : null;
 }
@@ -13,17 +19,50 @@ function tokenHasPrice(token: TokenHolding): boolean {
   return typeof token.priceUsd === 'number' && Number.isFinite(token.priceUsd);
 }
 
-export function getCollectibleMints(collections?: CollectionHolding[]): Set<string> {
+export function inferCollectibleMints(tokens: CollectibleCandidate[]): Set<string> {
   return new Set(
-    (collections ?? [])
-      .flatMap((collection) => collection.items)
-      .map((item) => item.mint)
+    tokens
+      .filter((token) => {
+        if (token.decimals !== 0) {
+          return false;
+        }
+
+        if (typeof token.rawAmount === 'string') {
+          try {
+            const rawAmount = BigInt(token.rawAmount);
+            if (rawAmount !== 1n) {
+              return token.rawSupply === '1';
+            }
+            return token.rawSupply === '1' || token.hasMetadata === true;
+          } catch {
+            return false;
+          }
+        }
+
+        const amount = Number(token.amount);
+        return Number.isFinite(amount) && amount === 1 && (token.rawSupply === '1' || token.hasMetadata === true);
+      })
+      .map((token) => token.mint)
       .filter(Boolean)
   );
 }
 
-export function filterCollectibleTokens(tokens: TokenHolding[], collections?: CollectionHolding[]): TokenHolding[] {
-  const collectibleMints = getCollectibleMints(collections);
+export function getCollectibleMints(collections?: CollectionHolding[], inferredMints?: Set<string>): Set<string> {
+  return new Set([
+    ...(inferredMints ? [...inferredMints] : []),
+    ...(collections ?? [])
+      .flatMap((collection) => collection.items)
+      .map((item) => item.mint)
+      .filter(Boolean)
+  ]);
+}
+
+export function filterCollectibleTokens(
+  tokens: TokenHolding[],
+  collections?: CollectionHolding[],
+  inferredMints?: Set<string>
+): TokenHolding[] {
+  const collectibleMints = getCollectibleMints(collections, inferredMints);
   if (collectibleMints.size === 0) {
     return tokens;
   }
