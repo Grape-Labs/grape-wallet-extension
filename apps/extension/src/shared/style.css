@@ -38,6 +38,11 @@
     radial-gradient(circle at 88% 12%, rgba(31, 216, 255, 0.16), transparent 24%),
     linear-gradient(145deg, rgba(31, 21, 49, 0.98) 0%, rgba(18, 16, 35, 0.96) 55%, rgba(11, 13, 21, 0.98) 100%);
   --theme-home-card-glow: radial-gradient(circle, rgba(199, 95, 255, 0.12) 0%, rgba(199, 95, 255, 0) 72%);
+  --theme-ambient-primary: radial-gradient(circle at 22% 18%, rgba(255, 122, 89, 0.14) 0%, transparent 34%);
+  --theme-ambient-secondary: radial-gradient(circle at 76% 20%, rgba(119, 209, 165, 0.12) 0%, transparent 30%);
+  --theme-ambient-opacity: 0;
+  --theme-ambient-blend: screen;
+  --theme-ambient-filter: blur(26px) saturate(120%);
   --theme-backdrop-blur: blur(0px);
   --theme-backdrop-saturate: saturate(100%);
   background: var(--theme-background);
@@ -64,9 +69,9 @@ body[data-theme='comic'] {
 
 body[data-theme='grape'] {
   --theme-background:
-    radial-gradient(circle at 16% 18%, rgba(252, 111, 255, 0.18) 0%, transparent 28%),
-    radial-gradient(circle at 82% 12%, rgba(108, 92, 231, 0.2) 0%, transparent 34%),
-    linear-gradient(180deg, #12051c 0%, #190923 36%, #100417 100%);
+    radial-gradient(circle at 18% 18%, rgba(255, 104, 239, 0.18) 0%, transparent 26%),
+    radial-gradient(circle at 84% 10%, rgba(115, 95, 255, 0.18) 0%, transparent 28%),
+    linear-gradient(180deg, #0f0418 0%, #14061f 34%, #0b0311 100%);
   --theme-text: #fbf5ff;
   --theme-muted: rgba(251, 245, 255, 0.74);
   --theme-subtle: rgba(251, 245, 255, 0.48);
@@ -98,6 +103,14 @@ body[data-theme='grape'] {
   --theme-home-card-bg:
     linear-gradient(145deg, rgba(40, 12, 54, 0.96) 0%, rgba(31, 10, 46, 0.98) 44%, rgba(18, 7, 30, 0.98) 100%);
   --theme-home-card-glow: radial-gradient(circle, rgba(255, 115, 233, 0.18) 0%, rgba(255, 115, 233, 0) 72%);
+  --theme-ambient-primary:
+    radial-gradient(circle at 22% 22%, rgba(255, 66, 213, 0.34) 0%, rgba(255, 66, 213, 0.18) 18%, transparent 46%),
+    radial-gradient(circle at 36% 62%, rgba(103, 238, 255, 0.18) 0%, transparent 34%);
+  --theme-ambient-secondary:
+    radial-gradient(circle at 78% 18%, rgba(112, 112, 255, 0.32) 0%, rgba(112, 112, 255, 0.16) 20%, transparent 44%),
+    radial-gradient(circle at 74% 72%, rgba(255, 119, 194, 0.18) 0%, transparent 36%);
+  --theme-ambient-opacity: 0.92;
+  --theme-ambient-filter: blur(34px) saturate(138%);
   --theme-backdrop-blur: blur(8px);
   --theme-backdrop-saturate: saturate(120%);
 }
@@ -267,6 +280,14 @@ body[data-theme='apple'] {
     radial-gradient(circle at 88% 12%, rgba(255, 255, 255, 0.52), transparent 18%),
     linear-gradient(145deg, rgba(255, 255, 255, 0.44) 0%, rgba(247, 250, 255, 0.32) 55%, rgba(235, 243, 255, 0.28) 100%);
   --theme-home-card-glow: radial-gradient(circle, rgba(90, 200, 250, 0.16) 0%, rgba(90, 200, 250, 0) 72%);
+  --theme-ambient-primary:
+    radial-gradient(circle at 20% 20%, rgba(105, 208, 255, 0.38) 0%, rgba(105, 208, 255, 0.16) 16%, transparent 40%),
+    radial-gradient(circle at 44% 66%, rgba(255, 255, 255, 0.26) 0%, transparent 28%);
+  --theme-ambient-secondary:
+    radial-gradient(circle at 82% 16%, rgba(184, 223, 255, 0.44) 0%, rgba(184, 223, 255, 0.18) 18%, transparent 42%),
+    radial-gradient(circle at 78% 72%, rgba(164, 192, 255, 0.24) 0%, transparent 30%);
+  --theme-ambient-opacity: 0.84;
+  --theme-ambient-filter: blur(38px) saturate(150%);
   --theme-backdrop-blur: blur(22px);
   --theme-backdrop-saturate: saturate(170%);
 }
@@ -312,6 +333,11 @@ body[data-theme='aurora'] {
     radial-gradient(circle at 90% 8%, rgba(139, 125, 255, 0.22), transparent 22%),
     linear-gradient(145deg, rgba(9, 20, 36, 0.98) 0%, rgba(6, 14, 28, 0.96) 56%, rgba(2, 7, 15, 0.98) 100%);
   --theme-home-card-glow: radial-gradient(circle, rgba(123, 246, 229, 0.14) 0%, rgba(123, 246, 229, 0) 72%);
+  --theme-ambient-primary:
+    radial-gradient(circle at 18% 16%, rgba(92, 244, 214, 0.3) 0%, rgba(92, 244, 214, 0.14) 18%, transparent 40%);
+  --theme-ambient-secondary:
+    radial-gradient(circle at 78% 14%, rgba(133, 126, 255, 0.28) 0%, rgba(133, 126, 255, 0.14) 18%, transparent 42%);
+  --theme-ambient-opacity: 0.8;
   --theme-backdrop-blur: blur(8px);
   --theme-backdrop-saturate: saturate(120%);
 }
@@ -400,6 +426,12 @@ body[data-theme='liquid-chrome'] {
     radial-gradient(circle at 86% 10%, rgba(140, 184, 255, 0.18), transparent 20%),
     linear-gradient(145deg, rgba(227, 236, 248, 0.14) 0%, rgba(196, 208, 224, 0.08) 55%, rgba(87, 100, 120, 0.14) 100%);
   --theme-home-card-glow: radial-gradient(circle, rgba(255, 255, 255, 0.12) 0%, rgba(255, 255, 255, 0) 72%);
+  --theme-ambient-primary:
+    radial-gradient(circle at 18% 18%, rgba(255, 255, 255, 0.26) 0%, rgba(255, 255, 255, 0.1) 18%, transparent 40%);
+  --theme-ambient-secondary:
+    radial-gradient(circle at 80% 16%, rgba(143, 186, 255, 0.24) 0%, rgba(143, 186, 255, 0.1) 18%, transparent 40%);
+  --theme-ambient-opacity: 0.76;
+  --theme-ambient-filter: blur(30px) saturate(145%);
   --theme-backdrop-blur: blur(16px);
   --theme-backdrop-saturate: saturate(150%);
 }
@@ -458,6 +490,31 @@ body {
   min-height: 600px;
   background: var(--theme-background);
   color: var(--theme-text);
+  position: relative;
+  overflow-x: hidden;
+}
+
+body::before,
+body::after {
+  content: '';
+  position: fixed;
+  inset: -18%;
+  pointer-events: none;
+  z-index: 0;
+  opacity: var(--theme-ambient-opacity);
+  mix-blend-mode: var(--theme-ambient-blend);
+  filter: var(--theme-ambient-filter);
+  transform: translate3d(0, 0, 0);
+}
+
+body::before {
+  background: var(--theme-ambient-primary);
+  animation: theme-ambient-drift-a 22s ease-in-out infinite alternate;
+}
+
+body::after {
+  background: var(--theme-ambient-secondary);
+  animation: theme-ambient-drift-b 28s ease-in-out infinite alternate;
 }
 
 body[data-surface='popup'] {
@@ -479,6 +536,32 @@ select {
 
 #root {
   min-height: 100vh;
+  position: relative;
+  z-index: 1;
+}
+
+@keyframes theme-ambient-drift-a {
+  0% {
+    transform: translate3d(-2%, -1%, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(3%, 2%, 0) scale(1.08);
+  }
+  100% {
+    transform: translate3d(-1%, 4%, 0) scale(1.03);
+  }
+}
+
+@keyframes theme-ambient-drift-b {
+  0% {
+    transform: translate3d(2%, -2%, 0) scale(1.02);
+  }
+  50% {
+    transform: translate3d(-3%, 2%, 0) scale(1.09);
+  }
+  100% {
+    transform: translate3d(1%, -1%, 0) scale(1.04);
+  }
 }
 
 .page-shell {
@@ -930,7 +1013,7 @@ body[data-theme='grape'] .wallet-home-card::before {
 
 .wallet-home-header {
   display: flex;
-  justify-content: space-between;
+  justify-content: center;
   gap: 12px;
   align-items: center;
 }
@@ -946,7 +1029,39 @@ body[data-theme='grape'] .wallet-home-card::before {
 
 .wallet-address-row {
   min-width: 0;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
+}
+
+.wallet-address-inline {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+}
+
+.wallet-address-copy-trigger {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  cursor: pointer;
+  text-align: center;
+  justify-content: center;
+}
+
+.wallet-address-copy-trigger:hover .account-primary,
+.wallet-address-copy-trigger:focus-visible .account-primary {
+  color: var(--theme-text);
+}
+
+.wallet-address-copy-trigger:focus-visible {
+  outline: none;
 }
 
 .wallet-name {
@@ -968,16 +1083,39 @@ body[data-theme='grape'] .wallet-home-card::before {
   text-transform: uppercase;
 }
 
-.portfolio-address-block {
-  display: grid;
-  gap: 4px;
+.mini-icon-button {
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  border: 1px solid var(--theme-divider);
+  background: color-mix(in srgb, var(--theme-button-secondary-bg) 90%, transparent);
+  color: var(--theme-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  cursor: pointer;
+  transition: border-color 160ms ease, color 160ms ease, background-color 160ms ease;
 }
 
-.portfolio-address-label {
+.mini-icon-button.subtle {
+  border-color: color-mix(in srgb, var(--theme-divider) 72%, transparent);
+  background: color-mix(in srgb, var(--theme-surface-soft) 72%, transparent);
   color: var(--theme-subtle);
-  font-size: 0.72rem;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+}
+
+.mini-icon-button:hover,
+.mini-icon-button:focus-visible {
+  color: var(--theme-text);
+  border-color: color-mix(in srgb, var(--theme-accent) 28%, transparent);
+  background: var(--theme-surface-soft-hover);
+  outline: none;
+}
+
+.mini-icon-button.copied {
+  color: var(--theme-success);
+  border-color: color-mix(in srgb, var(--theme-success) 34%, transparent);
+  background: color-mix(in srgb, var(--theme-success) 12%, transparent);
 }
 
 .hero-top {
@@ -2846,4 +2984,13 @@ body[data-surface='panel'] .bottom-nav {
     bottom: 12px;
   }
 
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body::before,
+  body::after {
+    animation: none;
+    transform: none;
+    opacity: calc(var(--theme-ambient-opacity) * 0.58);
+  }
 }

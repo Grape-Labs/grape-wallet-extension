@@ -7,6 +7,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   ArrowLeftRight,
+  Check,
   ChevronDown,
   Copy,
   Eye,
@@ -1493,16 +1494,28 @@ function PopupPage() {
           </div>
 
           <div className="wallet-home-header compact wallet-home-header-compact">
-            <div className="wallet-address-row portfolio-address-block">
-              <div className="portfolio-address-label">Wallet address</div>
-              <div className="mono account-primary" title={activePublicKey ?? 'Unknown'}>
-                {formatAddress(activePublicKey)}
-              </div>
+            <div className="wallet-address-inline">
+              <button
+                type="button"
+                className="wallet-address-row wallet-address-copy-trigger"
+                onClick={handleCopyAddress}
+                title={activePublicKey ?? 'Unknown'}
+                aria-label="Copy wallet address"
+              >
+                <div className="mono account-primary" title={activePublicKey ?? 'Unknown'}>
+                  {formatAddress(activePublicKey)}
+                </div>
+              </button>
+              <button
+                type="button"
+                className={`mini-icon-button subtle ${copiedAddress ? 'copied' : ''}`.trim()}
+                onClick={handleCopyAddress}
+                aria-label={copiedAddress ? 'Address copied' : 'Copy wallet address'}
+                title={copiedAddress ? 'Copied' : 'Copy address'}
+              >
+                {copiedAddress ? <Check size={13} /> : <Copy size={13} />}
+              </button>
             </div>
-            <Button tone="secondary" className="mini-button" onClick={handleCopyAddress}>
-              <span className="button-icon"><Copy size={14} /></span>&nbsp;
-              {copiedAddress ? 'Copied' : 'Copy'}
-            </Button>
           </div>
 
           <div className="quick-actions compact">
