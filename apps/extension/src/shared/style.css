@@ -1967,6 +1967,35 @@ body[data-surface='popup'] .collectible-grid {
   white-space: nowrap;
 }
 
+.approval-simulation-card {
+  gap: 12px;
+}
+
+.approval-simulation-header {
+  justify-content: space-between;
+  align-items: center;
+}
+
+.approval-simulation-copy {
+  margin: 0;
+}
+
+.approval-log-box {
+  max-height: 180px;
+  max-width: 100%;
+  overflow: auto;
+  border-radius: 14px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--theme-card) 76%, black 24%);
+  border: 1px solid color-mix(in srgb, var(--theme-border) 72%, transparent);
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--theme-text-secondary);
+  white-space: nowrap;
+  overscroll-behavior: contain;
+}
+
 .account-address {
   display: inline-flex;
   align-items: center;

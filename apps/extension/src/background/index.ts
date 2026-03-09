@@ -44,13 +44,13 @@ import {
   signLedgerSerializedTransactions,
   signAndSendTransaction,
   signMessageBytes,
+  inspectTransaction,
   signSerializedTransaction,
-  signSerializedTransactions,
-  summarizeTransaction
+  signSerializedTransactions
 } from '@grape/solana';
 import { Connection, PublicKey, Transaction, TransactionInstruction } from '@solana/web3.js';
 
-import type { ApprovalRecord, CollectionHolding, CollectibleItem, TokenHolding } from '../shared/models';
+import type { ApprovalRecord, CollectionHolding, CollectibleItem, TokenHolding, WalletAssetsResponse } from '../shared/models';
 
 import { filterCollectibleTokens, inferCollectibleMints, sortWalletTokens } from '../shared/assets';
 import { ChromeStorageArea, permissionsStorage, sessionStorage, walletStateStorage } from '../shared/chrome';
@@ -65,6 +65,11 @@ import { getRpcEndpoint } from '../shared/rpc';
 import { fetchShyftCollections, fetchShyftWalletTokens, hasShyftApiKey } from '../shared/shyft';
 
 const approvalsStorage = new ChromeStorageArea<Record<string, ApprovalRecord>>(chrome.storage.local, STORAGE_KEYS.approvals, {});
+const assetCacheStorage = new ChromeStorageArea<Record<string, { cachedAt: number; data: WalletAssetsResponse }>>(
+  chrome.storage.session,
+  'grape:asset-cache',
+  {}
+);
 type ActiveWalletSurface = {
   port: chrome.runtime.Port;
   surfaceId: string;
@@ -82,6 +87,7 @@ const KNOWN_TOKEN_SYMBOLS: Record<string, string> = {
   EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v: 'USDC'
 };
 const INCIDENT_BATCH_SIZE = 6;
+const ASSET_CACHE_TTL_MS = 45_000;
 
 type ParsedWalletTokenAccount = TokenHolding & {
   rawAmount: string;
@@ -140,6 +146,25 @@ type ProviderDebugPayload = {
 class WalletController {
   private readonly pendingApprovals = new Map<string, PendingResolver>();
   private unlockedSecrets: UnlockedSecretCache = {};
+
+  private getAssetCacheKey(walletId: string, network: 'mainnet-beta' | 'devnet', publicKey: string) {
+    return `${walletId}:${network}:${publicKey}`;
+  }
+
+  private async invalidateAssetCache(cacheKey?: string) {
+    const cache = await assetCacheStorage.get();
+    if (cacheKey) {
+      if (!(cacheKey in cache)) {
+        return;
+      }
+      delete cache[cacheKey];
+    } else {
+      for (const key of Object.keys(cache)) {
+        delete cache[key];
+      }
+    }
+    await assetCacheStorage.set(cache);
+  }
 
   async getWalletState() {
     const raw = await walletStateStorage.get();
@@ -276,7 +301,8 @@ class WalletController {
       walletStateStorage.set(createEmptyWalletState()),
       permissionsStorage.set({ origins: {} }),
       sessionStorage.set(createInitialSessionState()),
-      approvalsStorage.set({})
+      approvalsStorage.set({}),
+      assetCacheStorage.set({})
     ]);
 
     return this.getStateResponse();
@@ -538,6 +564,13 @@ class WalletController {
       };
     }
 
+    const cacheKey = this.getAssetCacheKey(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey);
+    const cache = await assetCacheStorage.get();
+    const cached = cache[cacheKey];
+    if (cached && Date.now() - cached.cachedAt < ASSET_CACHE_TTL_MS) {
+      return cached.data;
+    }
+
     const owner = new PublicKey(activeAccount.publicKey);
     const connection = new Connection(getRpcEndpoint(walletState.selectedNetwork), 'confirmed');
     const [lamports, shyftMetadataResult, shyftCollectionsResult] = await Promise.all([
@@ -698,7 +731,7 @@ class WalletController {
       .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
       .reduce((sum, value) => sum + value, 0);
 
-    return {
+    const result = {
       lamports,
       tokens: sortedTokens,
       collections: finalCollections,
@@ -707,6 +740,14 @@ class WalletController {
       nativeValueUsd,
       nativePriceChange24h
     };
+
+    cache[cacheKey] = {
+      cachedAt: Date.now(),
+      data: result
+    };
+    await assetCacheStorage.set(cache);
+
+    return result;
   }
 
   async getTokenDetails(input: { mint: string; accountAddress: string; programId: string }) {
@@ -897,6 +938,7 @@ class WalletController {
         wallet.id === selectedWallet.id ? rememberWalletRecipient(wallet, input.recipient) : wallet
       )
     });
+    await this.invalidateAssetCache(this.getAssetCacheKey(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey));
 
     await this.setSessionState({ locked: false, lastActivityAt: Date.now() });
 
@@ -928,6 +970,7 @@ class WalletController {
     const owner = new PublicKey(activeAccount.publicKey);
     const transaction = await buildBurnSplTokenTransaction(connection, owner, input);
     const signature = await this.submitTransactionForWallet(selectedWallet, activeAccount.publicKey, secret, connection, transaction);
+    await this.invalidateAssetCache(this.getAssetCacheKey(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey));
 
     return {
       signature,
@@ -968,6 +1011,7 @@ class WalletController {
 
     const transaction = await buildCloseTokenAccountTransaction(connection, owner, input);
     const signature = await this.submitTransactionForWallet(selectedWallet, activeAccount.publicKey, secret, connection, transaction);
+    await this.invalidateAssetCache(this.getAssetCacheKey(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey));
 
     return {
       signature,
@@ -1271,6 +1315,7 @@ class WalletController {
         wallet.id === selectedWallet.id ? rememberWalletRecipient(wallet, safeWallet.toBase58()) : wallet
       )
     });
+    await this.invalidateAssetCache(this.getAssetCacheKey(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey));
 
     return {
       safeWallet: safeWallet.toBase58(),
@@ -1355,8 +1400,9 @@ class WalletController {
     }
 
     await this.setSessionState({ locked: false, lastActivityAt: Date.now() });
+    await this.invalidateAssetCache(this.getAssetCacheKey(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey));
 
-      return {
+    return {
       signature,
       inputMint: input.quoteResponse.inputMint,
       outputMint: input.quoteResponse.outputMint,
@@ -1432,9 +1478,15 @@ class WalletController {
 
     const transactionSummary =
       request.method === 'signTransaction' || request.method === 'signAndSendTransaction' || request.method === 'sendTransaction'
-        ? summarizeTransaction(request.params.transaction)
+        ? await inspectTransaction(request.params.transaction, new Connection(getRpcEndpoint(walletState.selectedNetwork), 'confirmed'))
         : request.method === 'signAllTransactions'
-          ? summarizeTransaction(request.params.transactions[0])
+          ? {
+              ...(await inspectTransaction(
+                request.params.transactions[0],
+                new Connection(getRpcEndpoint(walletState.selectedNetwork), 'confirmed')
+              )),
+              warnings: ['Only the first transaction in this batch was decoded and simulated.']
+            }
           : undefined;
 
     const approval = await this.createApproval(request, walletState.selectedNetwork, selectedWallet.id, activeAccount.publicKey, {
@@ -1656,12 +1708,11 @@ class WalletController {
       const createdWindow = await chrome.windows.create({
         url: chrome.runtime.getURL(`approval.html?approvalId=${state.id}`),
         type: 'popup',
-        width: 500,
-        height: 820
+        focused: true,
+        width: 420,
+        height: 760
       });
-      if (createdWindow.id !== undefined) {
-        approval.windowId = createdWindow.id;
-      }
+      approval.windowId = createdWindow.id;
     }
 
     approvals[state.id] = approval;

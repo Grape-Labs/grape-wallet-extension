@@ -30,6 +30,18 @@ function summarizeMessage(base64Message: string): string {
   }
 }
 
+function renderInstructionValue(value: string, isAddress?: boolean) {
+  if (!isAddress) {
+    return value;
+  }
+
+  return (
+    <span className="mono approval-address" title={value}>
+      {formatAddress(value)}
+    </span>
+  );
+}
+
 export function ApprovalView(props: {
   approvalId: string;
   approval: ApprovalRecord;
@@ -209,6 +221,7 @@ export function ApprovalView(props: {
             {approval.transactionSummary.instructions.map((instruction, index) => (
               <div key={`${instruction.programId}-${index}`} className="card">
                 <KeyValueRow label="Program" value={instruction.programName} />
+                {instruction.title ? <KeyValueRow label="Action" value={instruction.title} /> : null}
                 <KeyValueRow
                   label="Program ID"
                   value={
@@ -218,9 +231,39 @@ export function ApprovalView(props: {
                   }
                 />
                 <KeyValueRow label="Accounts" value={instruction.accountCount} />
+                {instruction.details?.map((detail) => (
+                  <KeyValueRow key={`${instruction.programId}-${index}-${detail.label}`} label={detail.label} value={renderInstructionValue(detail.value, detail.address)} />
+                ))}
                 {instruction.warning ? <p className="warning-box">{instruction.warning}</p> : null}
               </div>
             ))}
+            {approval.transactionSummary.simulation ? (
+              <div className="card approval-simulation-card">
+                <div className="inline approval-simulation-header">
+                  <span>Simulation</span>
+                  <StatusPill tone={approval.transactionSummary.simulation.ok ? 'success' : 'danger'}>
+                    {approval.transactionSummary.simulation.ok ? 'Passed' : 'Failed'}
+                  </StatusPill>
+                </div>
+                {approval.transactionSummary.simulation.error ? (
+                  <p className="warning-box">{approval.transactionSummary.simulation.error}</p>
+                ) : (
+                  <p className="muted approval-simulation-copy">
+                    Grape simulated this transaction on the selected RPC before approval.
+                  </p>
+                )}
+                {approval.transactionSummary.simulation.unitsConsumed != null ? (
+                  <KeyValueRow label="Compute units" value={approval.transactionSummary.simulation.unitsConsumed.toLocaleString()} />
+                ) : null}
+                {approval.transactionSummary.simulation.logs.length > 0 ? (
+                  <div className="approval-log-box">
+                    {approval.transactionSummary.simulation.logs.map((line, lineIndex) => (
+                      <div key={`${approval.id}-simulation-log-${lineIndex}`}>{line}</div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
             {approval.transactionSummary.warnings.map((warning) => (
               <p key={warning} className="warning-box">
                 {warning}

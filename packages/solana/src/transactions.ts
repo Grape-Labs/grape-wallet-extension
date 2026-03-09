@@ -1,16 +1,22 @@
-import { base64ToBytes } from '@grape/core';
+import { Buffer } from 'buffer';
+
 import {
   AddressLookupTableProgram,
   ComputeBudgetProgram,
+  Connection,
   PublicKey,
   StakeProgram,
+  SystemInstruction,
   SystemProgram,
-  Transaction,
-  VersionedTransaction
+  TransactionInstruction
 } from '@solana/web3.js';
 
+import { parseSerializedTransaction } from './signing';
+
 const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+const TOKEN_2022_PROGRAM_ID = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
+const MEMO_PROGRAM_ID = new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr');
 
 const PROGRAM_NAMES: Record<string, string> = {
   [SystemProgram.programId.toBase58()]: 'System Program',
@@ -18,7 +24,15 @@ const PROGRAM_NAMES: Record<string, string> = {
   [StakeProgram.programId.toBase58()]: 'Stake Program',
   [AddressLookupTableProgram.programId.toBase58()]: 'Address Lookup Table Program',
   [TOKEN_PROGRAM_ID.toBase58()]: 'SPL Token Program',
+  [TOKEN_2022_PROGRAM_ID.toBase58()]: 'Token-2022 Program',
+  [MEMO_PROGRAM_ID.toBase58()]: 'Memo Program',
   [ASSOCIATED_TOKEN_PROGRAM_ID.toBase58()]: 'Associated Token Program'
+};
+
+export type TransactionInstructionDetail = {
+  label: string;
+  value: string;
+  address?: boolean;
 };
 
 export type TransactionInstructionSummary = {
@@ -26,7 +40,17 @@ export type TransactionInstructionSummary = {
   programName: string;
   accountCount: number;
   dataLength: number;
+  title?: string;
+  details?: TransactionInstructionDetail[];
   warning?: string;
+};
+
+export type TransactionSimulationSummary = {
+  attempted: boolean;
+  ok: boolean;
+  error?: string;
+  unitsConsumed?: number | null;
+  logs: string[];
 };
 
 export type TransactionSummary = {
@@ -35,7 +59,52 @@ export type TransactionSummary = {
   instructionCount: number;
   instructions: TransactionInstructionSummary[];
   warnings: string[];
+  simulation?: TransactionSimulationSummary;
 };
+
+type ResolvedInstruction = {
+  programId: PublicKey;
+  keys: Array<PublicKey | null>;
+  data: Uint8Array;
+};
+
+function formatUiAmount(rawAmount: bigint, decimals = 0): string {
+  if (decimals <= 0) {
+    return rawAmount.toString();
+  }
+
+  const divisor = 10n ** BigInt(decimals);
+  const whole = rawAmount / divisor;
+  const fraction = rawAmount % divisor;
+  if (fraction === 0n) {
+    return whole.toString();
+  }
+
+  const fractionText = fraction.toString().padStart(decimals, '0').replace(/0+$/, '');
+  return `${whole.toString()}.${fractionText}`;
+}
+
+function readU32Le(bytes: Uint8Array, offset: number): number {
+  if (offset + 4 > bytes.length) {
+    return 0;
+  }
+
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return view.getUint32(offset, true);
+}
+
+function readU64Le(bytes: Uint8Array, offset: number): bigint {
+  if (offset + 8 > bytes.length) {
+    return 0n;
+  }
+
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return view.getBigUint64(offset, true);
+}
+
+function accountLabel(account: PublicKey | null | undefined): string {
+  return account?.toBase58() ?? 'Lookup table account';
+}
 
 function summarizeProgram(programId: PublicKey, accountCount: number, dataLength: number): TransactionInstructionSummary {
   const base58 = programId.toBase58();
@@ -50,45 +119,362 @@ function summarizeProgram(programId: PublicKey, accountCount: number, dataLength
   };
 }
 
-export function summarizeTransaction(serialized: string): TransactionSummary {
-  const raw = base64ToBytes(serialized);
+function buildResolvedInstructions(serialized: string): {
+  feePayer?: string;
+  recentBlockhash: string;
+  instructions: ResolvedInstruction[];
+  warnings: string[];
+} {
+  const parsed = parseSerializedTransaction(serialized);
 
-  try {
-    const transaction = VersionedTransaction.deserialize(raw);
-    const staticKeys = transaction.message.staticAccountKeys;
-    const instructions = transaction.message.compiledInstructions.map((instruction) =>
-      summarizeProgram(
-        staticKeys[instruction.programIdIndex],
-        instruction.accountKeyIndexes.length,
-        instruction.data.length
-      )
-    );
-
-    const warnings = instructions.flatMap((instruction) => (instruction.warning ? [instruction.warning] : []));
-    if (transaction.message.addressTableLookups.length > 0) {
-      warnings.push('Address lookup tables are present. Instruction parsing may be incomplete.');
-    }
-
+  if (parsed.kind === 'legacy') {
     return {
-      feePayer: staticKeys[0]?.toBase58(),
-      recentBlockhash: transaction.message.recentBlockhash,
-      instructionCount: instructions.length,
-      instructions,
-      warnings
+      feePayer: parsed.transaction.feePayer?.toBase58(),
+      recentBlockhash: parsed.transaction.recentBlockhash ?? 'unknown',
+      instructions: parsed.transaction.instructions.map((instruction) => ({
+        programId: instruction.programId,
+        keys: instruction.keys.map((key) => key.pubkey),
+        data: instruction.data
+      })),
+      warnings: []
+    };
+  }
+
+  const staticKeys = parsed.transaction.message.staticAccountKeys;
+  const warnings =
+    parsed.transaction.message.addressTableLookups.length > 0
+      ? ['Address lookup tables are present. Some account decoding may be incomplete.']
+      : [];
+
+  return {
+    feePayer: staticKeys[0]?.toBase58(),
+    recentBlockhash: parsed.transaction.message.recentBlockhash,
+    instructions: parsed.transaction.message.compiledInstructions.map((instruction) => ({
+      programId: staticKeys[instruction.programIdIndex] ?? SystemProgram.programId,
+      keys: instruction.accountKeyIndexes.map((index) => staticKeys[index] ?? null),
+      data: instruction.data
+    })),
+    warnings
+  };
+}
+
+function summarizeSystemInstruction(instruction: TransactionInstruction): Pick<TransactionInstructionSummary, 'title' | 'details'> {
+  try {
+    const type = SystemInstruction.decodeInstructionType(instruction);
+
+    switch (type) {
+      case 'Transfer': {
+        const decoded = SystemInstruction.decodeTransfer(instruction);
+        return {
+          title: 'Transfer SOL',
+          details: [
+            { label: 'From', value: decoded.fromPubkey.toBase58(), address: true },
+            { label: 'To', value: decoded.toPubkey.toBase58(), address: true },
+            { label: 'Amount', value: `${formatUiAmount(BigInt(decoded.lamports), 9)} SOL` }
+          ]
+        };
+      }
+      case 'Create': {
+        const decoded = SystemInstruction.decodeCreateAccount(instruction);
+        return {
+          title: 'Create account',
+          details: [
+            { label: 'Payer', value: decoded.fromPubkey.toBase58(), address: true },
+            { label: 'New account', value: decoded.newAccountPubkey.toBase58(), address: true },
+            { label: 'Lamports', value: formatUiAmount(BigInt(decoded.lamports), 9) },
+            { label: 'Space', value: decoded.space.toString() },
+            { label: 'Owner', value: decoded.programId.toBase58(), address: true }
+          ]
+        };
+      }
+      case 'Assign': {
+        const decoded = SystemInstruction.decodeAssign(instruction);
+        return {
+          title: 'Assign account owner',
+          details: [
+            { label: 'Account', value: decoded.accountPubkey.toBase58(), address: true },
+            { label: 'Program', value: decoded.programId.toBase58(), address: true }
+          ]
+        };
+      }
+      default:
+        return {
+          title: type.replace(/([A-Z])/g, ' $1').trim()
+        };
+    }
+  } catch {
+    return {};
+  }
+}
+
+function summarizeTokenInstruction(instruction: ResolvedInstruction): Pick<TransactionInstructionSummary, 'title' | 'details' | 'warning'> {
+  const tag = instruction.data[0];
+
+  switch (tag) {
+    case 3:
+      return {
+        title: 'Transfer token',
+        details: [
+          { label: 'Source', value: accountLabel(instruction.keys[0]), address: true },
+          { label: 'Destination', value: accountLabel(instruction.keys[1]), address: true },
+          { label: 'Authority', value: accountLabel(instruction.keys[2]), address: true },
+          { label: 'Amount', value: readU64Le(instruction.data, 1).toString() }
+        ]
+      };
+    case 12:
+      return {
+        title: 'Transfer token (checked)',
+        details: [
+          { label: 'Source', value: accountLabel(instruction.keys[0]), address: true },
+          { label: 'Mint', value: accountLabel(instruction.keys[1]), address: true },
+          { label: 'Destination', value: accountLabel(instruction.keys[2]), address: true },
+          { label: 'Authority', value: accountLabel(instruction.keys[3]), address: true },
+          { label: 'Amount', value: formatUiAmount(readU64Le(instruction.data, 1), instruction.data[9] ?? 0) }
+        ]
+      };
+    case 4:
+    case 13:
+      return {
+        title: 'Approve delegate',
+        details: [
+          { label: 'Source', value: accountLabel(instruction.keys[0]), address: true },
+          { label: 'Delegate', value: accountLabel(instruction.keys[1]), address: true },
+          { label: 'Authority', value: accountLabel(instruction.keys[tag === 13 ? 3 : 2]), address: true }
+        ]
+      };
+    case 5:
+      return {
+        title: 'Revoke delegate',
+        details: [
+          { label: 'Source', value: accountLabel(instruction.keys[0]), address: true },
+          { label: 'Authority', value: accountLabel(instruction.keys[1]), address: true }
+        ]
+      };
+    case 6: {
+      const authorityType = instruction.data[1];
+      return {
+        title: 'Set authority',
+        details: [
+          { label: 'Target', value: accountLabel(instruction.keys[0]), address: true },
+          { label: 'Authority type', value: ['Mint tokens', 'Freeze account', 'Account owner', 'Close account'][authorityType] ?? 'Unknown' },
+          { label: 'Current authority', value: accountLabel(instruction.keys[1]), address: true }
+        ]
+      };
+    }
+    case 7:
+    case 14:
+      return {
+        title: 'Mint token',
+        details: [
+          { label: 'Mint', value: accountLabel(instruction.keys[0]), address: true },
+          { label: 'Destination', value: accountLabel(instruction.keys[1]), address: true },
+          { label: 'Authority', value: accountLabel(instruction.keys[2]), address: true },
+          {
+            label: 'Amount',
+            value:
+              tag === 14
+                ? formatUiAmount(readU64Le(instruction.data, 1), instruction.data[9] ?? 0)
+                : readU64Le(instruction.data, 1).toString()
+          }
+        ]
+      };
+    case 8:
+    case 15:
+      return {
+        title: 'Burn token',
+        details: [
+          { label: 'Account', value: accountLabel(instruction.keys[0]), address: true },
+          { label: 'Mint', value: accountLabel(instruction.keys[1]), address: true },
+          { label: 'Authority', value: accountLabel(instruction.keys[2]), address: true },
+          {
+            label: 'Amount',
+            value:
+              tag === 15
+                ? formatUiAmount(readU64Le(instruction.data, 1), instruction.data[9] ?? 0)
+                : readU64Le(instruction.data, 1).toString()
+          }
+        ]
+      };
+    case 9:
+      return {
+        title: 'Close token account',
+        details: [
+          { label: 'Account', value: accountLabel(instruction.keys[0]), address: true },
+          { label: 'Destination', value: accountLabel(instruction.keys[1]), address: true },
+          { label: 'Authority', value: accountLabel(instruction.keys[2]), address: true }
+        ]
+      };
+    case 17:
+      return {
+        title: 'Sync wrapped SOL',
+        details: [{ label: 'Account', value: accountLabel(instruction.keys[0]), address: true }]
+      };
+    default:
+      return {
+        title: 'Token instruction',
+        warning: 'Instruction could not be decoded fully. Review the program ID and accounts carefully.'
+      };
+  }
+}
+
+function summarizeAssociatedTokenInstruction(instruction: ResolvedInstruction): Pick<TransactionInstructionSummary, 'title' | 'details'> {
+  const opcode = instruction.data[0] ?? 0;
+  return {
+    title: opcode === 1 ? 'Create associated token account (idempotent)' : 'Create associated token account',
+    details: [
+      { label: 'Payer', value: accountLabel(instruction.keys[0]), address: true },
+      { label: 'Account', value: accountLabel(instruction.keys[1]), address: true },
+      { label: 'Owner', value: accountLabel(instruction.keys[2]), address: true },
+      { label: 'Mint', value: accountLabel(instruction.keys[3]), address: true }
+    ]
+  };
+}
+
+function summarizeComputeBudgetInstruction(instruction: ResolvedInstruction): Pick<TransactionInstructionSummary, 'title' | 'details'> {
+  switch (instruction.data[0]) {
+    case 1:
+      return {
+        title: 'Request heap frame',
+        details: [{ label: 'Bytes', value: readU32Le(instruction.data, 1).toString() }]
+      };
+    case 2:
+      return {
+        title: 'Set compute unit limit',
+        details: [{ label: 'Units', value: readU32Le(instruction.data, 1).toString() }]
+      };
+    case 3:
+      return {
+        title: 'Set compute unit price',
+        details: [{ label: 'Micro-lamports', value: readU64Le(instruction.data, 1).toString() }]
+      };
+    default:
+      return {
+        title: 'Compute budget instruction'
+      };
+  }
+}
+
+function summarizeMemoInstruction(instruction: ResolvedInstruction): Pick<TransactionInstructionSummary, 'title' | 'details'> {
+  try {
+    return {
+      title: 'Memo',
+      details: [{ label: 'Message', value: new TextDecoder().decode(instruction.data) }]
     };
   } catch {
-    const transaction = Transaction.from(raw);
-    const instructions = transaction.instructions.map((instruction) =>
-      summarizeProgram(instruction.programId, instruction.keys.length, instruction.data.length)
-    );
-
     return {
-      feePayer: transaction.feePayer?.toBase58(),
-      recentBlockhash: transaction.recentBlockhash ?? 'unknown',
-      instructionCount: instructions.length,
-      instructions,
-      warnings: instructions.flatMap((instruction) => (instruction.warning ? [instruction.warning] : []))
+      title: 'Memo',
+      details: [{ label: 'Message', value: 'Binary memo' }]
     };
   }
 }
 
+function summarizeInstruction(instruction: ResolvedInstruction): TransactionInstructionSummary {
+  const base = summarizeProgram(instruction.programId, instruction.keys.length, instruction.data.length);
+  const programId = instruction.programId.toBase58();
+  let decoded: Pick<TransactionInstructionSummary, 'title' | 'details' | 'warning'> = {};
+
+  if (programId === SystemProgram.programId.toBase58()) {
+    decoded = summarizeSystemInstruction(
+      new TransactionInstruction({
+        programId: instruction.programId,
+        keys: instruction.keys.map((pubkey) => ({
+          pubkey: pubkey ?? SystemProgram.programId,
+          isSigner: false,
+          isWritable: false
+        })),
+        data: Buffer.from(instruction.data)
+      })
+    );
+  } else if (programId === TOKEN_PROGRAM_ID.toBase58() || programId === TOKEN_2022_PROGRAM_ID.toBase58()) {
+    decoded = summarizeTokenInstruction(instruction);
+  } else if (programId === ASSOCIATED_TOKEN_PROGRAM_ID.toBase58()) {
+    decoded = summarizeAssociatedTokenInstruction(instruction);
+  } else if (programId === ComputeBudgetProgram.programId.toBase58()) {
+    decoded = summarizeComputeBudgetInstruction(instruction);
+  } else if (programId === MEMO_PROGRAM_ID.toBase58()) {
+    decoded = summarizeMemoInstruction(instruction);
+  }
+
+  return {
+    ...base,
+    ...decoded,
+    warning: decoded.warning ?? base.warning
+  };
+}
+
+function formatSimulationError(error: unknown): string {
+  if (typeof error === 'string') {
+    return error;
+  }
+  if (error && typeof error === 'object') {
+    return JSON.stringify(error);
+  }
+  return 'Simulation failed.';
+}
+
+export function summarizeTransaction(serialized: string): TransactionSummary {
+  const resolved = buildResolvedInstructions(serialized);
+  const instructions = resolved.instructions.map((instruction) => summarizeInstruction(instruction));
+
+  return {
+    feePayer: resolved.feePayer,
+    recentBlockhash: resolved.recentBlockhash,
+    instructionCount: instructions.length,
+    instructions,
+    warnings: [...resolved.warnings, ...instructions.flatMap((instruction) => (instruction.warning ? [instruction.warning] : []))]
+  };
+}
+
+export async function inspectTransaction(serialized: string, connection: Connection): Promise<TransactionSummary> {
+  const summary = summarizeTransaction(serialized);
+  const parsed = parseSerializedTransaction(serialized);
+
+  try {
+    const response =
+      parsed.kind === 'versioned'
+        ? await connection.simulateTransaction(parsed.transaction, {
+            commitment: 'processed',
+            replaceRecentBlockhash: true,
+            sigVerify: false
+          })
+        : await (
+            connection as Connection & {
+              simulateTransaction: (
+                transaction: typeof parsed.transaction,
+                config: {
+                  commitment: 'processed';
+                  replaceRecentBlockhash: true;
+                  sigVerify: false;
+                }
+              ) => Promise<{
+                value: {
+                  err: unknown;
+                  logs?: string[];
+                  unitsConsumed?: number;
+                };
+              }>;
+            }
+          ).simulateTransaction(parsed.transaction, {
+            commitment: 'processed',
+            replaceRecentBlockhash: true,
+            sigVerify: false
+          });
+    summary.simulation = {
+      attempted: true,
+      ok: !response.value.err,
+      error: response.value.err ? formatSimulationError(response.value.err) : undefined,
+      unitsConsumed: response.value.unitsConsumed ?? null,
+      logs: response.value.logs?.slice(0, 12) ?? []
+    };
+  } catch (error) {
+    summary.simulation = {
+      attempted: true,
+      ok: false,
+      error: error instanceof Error ? error.message : 'Simulation could not be completed.',
+      logs: []
+    };
+    summary.warnings.push('Simulation could not be completed on the selected RPC.');
+  }
+
+  return summary;
+}
