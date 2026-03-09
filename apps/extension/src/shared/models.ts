@@ -169,6 +169,32 @@ export type WalletSwapExecuteResponse = {
   outputAmountUi: string;
 };
 
+export type StakeAccountRow = {
+  address: string;
+  lamports: number;
+  state: string;
+  delegatedLamports: number;
+  voter: string | null;
+  staker: string | null;
+  withdrawer: string | null;
+};
+
+export type WalletStakeAccountsResponse = {
+  accounts: StakeAccountRow[];
+  source: 'shyft' | 'rpc' | 'none';
+  network: WalletState['selectedNetwork'];
+  refreshedAt: number;
+};
+
+export type WalletStakeActionResponse = {
+  signature: string;
+  action: 'stake' | 'deactivate' | 'withdraw';
+  stakeAccount: string;
+  amountSol?: string;
+  voteAccount?: string;
+  network: WalletState['selectedNetwork'];
+};
+
 export type DelegatedTokenRisk = {
   accountAddress: string;
   mint: string;

@@ -15,6 +15,7 @@ import {
   Fingerprint,
   Flame,
   Home,
+  Landmark,
   Menu,
   QrCode,
   RefreshCcw,
@@ -34,12 +35,15 @@ import type {
   CollectibleItem,
   CollectionHolding,
   IncidentResponseResponse,
+  StakeAccountRow,
   TokenActionResponse,
   TokenDetailsResponse,
   SendTransferResponse,
   TokenHolding,
   WalletSecurityReportResponse,
   WalletAssetsResponse,
+  WalletStakeAccountsResponse,
+  WalletStakeActionResponse,
   WalletStateResponse,
   WalletSwapExecuteResponse,
   WalletSwapQuoteResponse
@@ -55,7 +59,7 @@ import { mountPage } from '../lib';
 import { OnboardingView } from '../onboarding/OnboardingView';
 
 type PopupView = 'home' | 'send' | 'receive' | 'swap' | 'settings' | 'asset' | 'security' | 'approval';
-type HomeTab = 'tokens' | 'collectibles';
+type HomeTab = 'tokens' | 'collectibles' | 'staking';
 type AssetOption =
   | {
       id: 'sol';
@@ -280,6 +284,13 @@ function formatPercent(value: number | null | undefined): string | null {
   }
 
   return `${value > 0 ? '+' : ''}${value.toFixed(2)}%`;
+}
+
+function formatSolAmountFromLamports(lamports: number): string {
+  return (lamports / 1_000_000_000).toLocaleString(undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 6
+  });
 }
 
 function SolanaMark() {
@@ -552,6 +563,18 @@ function PopupPage() {
   const [quotingSwap, setQuotingSwap] = useState(false);
   const [submittingSwap, setSubmittingSwap] = useState(false);
   const [assetsLoading, setAssetsLoading] = useState(false);
+  const [stakeAccounts, setStakeAccounts] = useState<StakeAccountRow[]>([]);
+  const [stakeSource, setStakeSource] = useState<'shyft' | 'rpc' | 'none'>('none');
+  const [stakeLoading, setStakeLoading] = useState(false);
+  const [stakeAmount, setStakeAmount] = useState('');
+  const [stakeVoteAccount, setStakeVoteAccount] = useState('');
+  const [stakeDeactivateAccount, setStakeDeactivateAccount] = useState('');
+  const [stakeWithdrawAccount, setStakeWithdrawAccount] = useState('');
+  const [stakeWithdrawAmount, setStakeWithdrawAmount] = useState('');
+  const [stakePassword, setStakePassword] = useState('');
+  const [stakeSubmitting, setStakeSubmitting] = useState<'stake' | 'deactivate' | 'withdraw' | null>(null);
+  const [stakeError, setStakeError] = useState<string | null>(null);
+  const [stakeResult, setStakeResult] = useState<WalletStakeActionResponse | null>(null);
   const [assetDetails, setAssetDetails] = useState<TokenDetailsResponse | null>(null);
   const [selectedCollectible, setSelectedCollectible] = useState<CollectibleItem | null>(null);
   const [assetDetailsLoading, setAssetDetailsLoading] = useState(false);
@@ -619,6 +642,28 @@ function PopupPage() {
     }
   };
 
+  const refreshStakeAccounts = async () => {
+    if (!state || state.wallet.setup !== 'ready') {
+      setStakeAccounts([]);
+      setStakeSource('none');
+      return;
+    }
+
+    setStakeLoading(true);
+    try {
+      const nextStakeState = await sendRuntimeMessage<WalletStakeAccountsResponse>({ type: 'wallet_get_stake_accounts' });
+      setStakeAccounts(nextStakeState.accounts);
+      setStakeSource(nextStakeState.source);
+      setStakeError(null);
+    } catch (error) {
+      setStakeError(error instanceof Error ? error.message : 'Unable to load stake accounts.');
+      setStakeAccounts([]);
+      setStakeSource('none');
+    } finally {
+      setStakeLoading(false);
+    }
+  };
+
   const refreshActiveApproval = async () => {
     const stored = await chrome.storage.local.get(STORAGE_KEYS.approvals);
     const approvals = (stored[STORAGE_KEYS.approvals] as Record<string, ApprovalRecord> | undefined) ?? {};
@@ -653,6 +698,18 @@ function PopupPage() {
       void refreshSecurityReport();
     }
   }, [view, state?.wallet.setup, state?.session.locked]);
+
+  useEffect(() => {
+    if (homeTab !== 'staking' || state?.wallet.setup !== 'ready' || view !== 'home') {
+      return;
+    }
+
+    if (state.session.locked && state.activeWallet?.signerKind !== 'watch-only') {
+      return;
+    }
+
+    void refreshStakeAccounts();
+  }, [homeTab, view, state?.wallet.setup, state?.session.locked, state?.activeWallet?.signerKind, state?.wallet.selectedWalletId]);
 
   useEffect(() => {
     const cacheKey = buildAssetCacheKey(state);
@@ -938,6 +995,70 @@ function PopupPage() {
       setSwapError(error instanceof Error ? error.message : 'Unable to execute swap.');
     } finally {
       setSubmittingSwap(false);
+    }
+  }
+
+  async function handleCreateStake() {
+    try {
+      setStakeSubmitting('stake');
+      setStakeError(null);
+      const result = await sendRuntimeMessage<WalletStakeActionResponse>({
+        type: 'wallet_stake_create',
+        amount: stakeAmount,
+        voteAccount: stakeVoteAccount,
+        password: stakePassword || undefined
+      });
+      setStakeResult(result);
+      setStakeAmount('');
+      setStakeVoteAccount('');
+      setStakePassword('');
+      await refreshStakeAccounts();
+      void refresh().catch(() => undefined);
+    } catch (error) {
+      setStakeError(error instanceof Error ? error.message : 'Unable to create stake account.');
+    } finally {
+      setStakeSubmitting(null);
+    }
+  }
+
+  async function handleDeactivateStake() {
+    try {
+      setStakeSubmitting('deactivate');
+      setStakeError(null);
+      const result = await sendRuntimeMessage<WalletStakeActionResponse>({
+        type: 'wallet_stake_deactivate',
+        stakeAccount: stakeDeactivateAccount,
+        password: stakePassword || undefined
+      });
+      setStakeResult(result);
+      setStakePassword('');
+      await refreshStakeAccounts();
+    } catch (error) {
+      setStakeError(error instanceof Error ? error.message : 'Unable to deactivate stake account.');
+    } finally {
+      setStakeSubmitting(null);
+    }
+  }
+
+  async function handleWithdrawStake() {
+    try {
+      setStakeSubmitting('withdraw');
+      setStakeError(null);
+      const result = await sendRuntimeMessage<WalletStakeActionResponse>({
+        type: 'wallet_stake_withdraw',
+        stakeAccount: stakeWithdrawAccount,
+        amount: stakeWithdrawAmount,
+        password: stakePassword || undefined
+      });
+      setStakeResult(result);
+      setStakeWithdrawAmount('');
+      setStakePassword('');
+      await refreshStakeAccounts();
+      void refresh().catch(() => undefined);
+    } catch (error) {
+      setStakeError(error instanceof Error ? error.message : 'Unable to withdraw stake.');
+    } finally {
+      setStakeSubmitting(null);
     }
   }
 
@@ -1719,11 +1840,17 @@ function PopupPage() {
         <Tabs.Root value={homeTab} onValueChange={(value) => setHomeTab(value as HomeTab)}>
           <Tabs.List className="content-tabs" aria-label="Wallet content">
             <Tabs.Trigger className="content-tab" value="tokens">
-              Tokens
+              <span className="content-tab-copy">Tokens</span>
             </Tabs.Trigger>
             <Tabs.Trigger className="content-tab" value="collectibles">
-              Collectibles
+              <span className="content-tab-copy">Collectibles</span>
             </Tabs.Trigger>
+            {/*
+            <Tabs.Trigger className="content-tab" value="staking">
+              <Landmark size={14} />
+              <span className="content-tab-copy">Staking</span>
+            </Tabs.Trigger>
+            */}
           </Tabs.List>
 
           <Tabs.Content value="tokens">
@@ -1792,6 +1919,145 @@ function PopupPage() {
               ) : (
                 <p className="muted">No NFT collections found for this wallet on {wallet.selectedNetwork}.</p>
               )}
+            </Card>
+          </Tabs.Content>
+
+          <Tabs.Content value="staking">
+            <Card className="asset-panel-card staking-panel-card">
+              {isWatchOnlyWallet ? (
+                <p className="warning-box">Watch-only wallets can view stake accounts but cannot submit stake, harvest, or withdraw transactions.</p>
+              ) : null}
+
+              <div className="staking-header">
+                <div>
+                  <strong>Native staking</strong>
+                  <p className="muted">Stake SOL, harvest by deactivating, and withdraw directly in Grape.</p>
+                </div>
+                <div className="staking-header-actions">
+                  <span className="staking-source-chip">Source: {stakeSource === 'none' ? '--' : stakeSource.toUpperCase()}</span>
+                  <button type="button" className="mini-icon-button subtle" onClick={() => void refreshStakeAccounts()} aria-label="Refresh staking" title="Refresh staking" disabled={stakeLoading}>
+                    <RefreshCcw size={13} />
+                  </button>
+                </div>
+              </div>
+
+              {stakeError ? <p className="danger-box">{stakeError}</p> : null}
+              {stakeResult ? (
+                <div className="success-box staking-status-box">
+                  <strong>{stakeResult.action === 'stake' ? 'Stake submitted' : stakeResult.action === 'deactivate' ? 'Harvest started' : 'Withdraw submitted'}</strong>
+                  <span className="mono">{formatAddress(stakeResult.stakeAccount)}</span>
+                </div>
+              ) : null}
+
+              <div className="staking-summary-grid">
+                <div className="staking-summary-card">
+                  <span className="muted">Stake accounts</span>
+                  <strong>{stakeLoading ? '...' : stakeAccounts.length}</strong>
+                </div>
+                <div className="staking-summary-card">
+                  <span className="muted">Delegated</span>
+                  <strong>
+                    {stakeLoading
+                      ? '...'
+                      : `${formatSolAmountFromLamports(
+                          stakeAccounts.reduce((sum, account) => sum + account.delegatedLamports, 0)
+                        )} SOL`}
+                  </strong>
+                </div>
+              </div>
+
+              {stakeAccounts.length > 0 ? (
+                <div className="staking-list">
+                  {stakeAccounts.map((account) => (
+                    <div key={account.address} className="staking-row">
+                      <div className="staking-row-copy">
+                        <strong>{formatAddress(account.address)}</strong>
+                        <span className="muted">
+                          {formatSolAmountFromLamports(account.lamports)} SOL
+                          {account.delegatedLamports > 0 ? ` • ${formatSolAmountFromLamports(account.delegatedLamports)} delegated` : ''}
+                        </span>
+                        {account.voter ? <span className="staking-voter mono">{formatAddress(account.voter)}</span> : null}
+                      </div>
+                      <span className="staking-state-chip">{account.state}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="muted">{stakeLoading ? 'Loading stake accounts...' : 'No native stake accounts found yet.'}</p>
+              )}
+
+              <div className="staking-form-grid">
+                <div className="staking-form-card">
+                  <h3>Stake</h3>
+                  <Input value={stakeAmount} onChange={(event) => setStakeAmount(event.target.value)} placeholder="Amount (SOL)" />
+                  <Input value={stakeVoteAccount} onChange={(event) => setStakeVoteAccount(event.target.value)} placeholder="Validator vote account" />
+                  <Button className="button-block" onClick={handleCreateStake} disabled={isWatchOnlyWallet || stakeSubmitting !== null || !stakeAmount.trim() || !stakeVoteAccount.trim()}>
+                    {stakeSubmitting === 'stake' ? 'Submitting...' : 'Stake SOL'}
+                  </Button>
+                </div>
+
+                <div className="staking-form-card">
+                  <h3>Harvest</h3>
+                  <select className="staking-select" value={stakeDeactivateAccount} onChange={(event) => setStakeDeactivateAccount(event.target.value)}>
+                    <option value="">Select stake account</option>
+                    {stakeAccounts.map((account) => (
+                      <option key={account.address} value={account.address}>
+                        {formatAddress(account.address)} ({account.state})
+                      </option>
+                    ))}
+                  </select>
+                  <Button className="button-block" tone="secondary" onClick={handleDeactivateStake} disabled={isWatchOnlyWallet || stakeSubmitting !== null || !stakeDeactivateAccount}>
+                    {stakeSubmitting === 'deactivate' ? 'Submitting...' : 'Harvest'}
+                  </Button>
+                </div>
+
+                <div className="staking-form-card">
+                  <h3>Withdraw</h3>
+                  <select className="staking-select" value={stakeWithdrawAccount} onChange={(event) => setStakeWithdrawAccount(event.target.value)}>
+                    <option value="">Select stake account</option>
+                    {stakeAccounts.map((account) => (
+                      <option key={account.address} value={account.address}>
+                        {formatAddress(account.address)} ({account.state})
+                      </option>
+                    ))}
+                  </select>
+                  <Input value={stakeWithdrawAmount} onChange={(event) => setStakeWithdrawAmount(event.target.value)} placeholder="Amount (SOL)" />
+                  <Button className="button-block" tone="secondary" onClick={handleWithdrawStake} disabled={isWatchOnlyWallet || stakeSubmitting !== null || !stakeWithdrawAccount || !stakeWithdrawAmount.trim()}>
+                    {stakeSubmitting === 'withdraw' ? 'Submitting...' : 'Withdraw'}
+                  </Button>
+                </div>
+              </div>
+
+              {!isWatchOnlyWallet && !state?.canUseUnlockedSigner ? (
+                <div className="staking-password-shell">
+                  <Input
+                    type={showUnlockPassword ? 'text' : 'password'}
+                    value={stakePassword}
+                    onChange={(event) => setStakePassword(event.target.value)}
+                    placeholder="Password to sign"
+                  />
+                  <button
+                    type="button"
+                    className="unlock-password-toggle"
+                    aria-label={showUnlockPassword ? 'Hide password' : 'Show password'}
+                    onClick={() => setShowUnlockPassword((value) => !value)}
+                  >
+                    {showUnlockPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                  </button>
+                  {biometricSupported && activeWallet?.biometricEnabled ? (
+                    <button
+                      type="button"
+                      className="biometric-inline-button"
+                      aria-label="Unlock with device"
+                      title="Unlock with device"
+                      onClick={() => void handleBiometricUnlockInline()}
+                      disabled={biometricUnlocking}
+                    >
+                      <Fingerprint size={16} />
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
             </Card>
           </Tabs.Content>
         </Tabs.Root>

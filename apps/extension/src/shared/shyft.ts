@@ -92,6 +92,16 @@ export type ShyftCollectionMetadata = {
   }>;
 };
 
+export type ShyftStakeAccount = {
+  address: string;
+  lamports: number;
+  delegatedLamports: number;
+  state: string;
+  voter: string | null;
+  staker: string | null;
+  withdrawer: string | null;
+};
+
 function getShyftHeaders(): Record<string, string> | undefined {
   const apiKey = getShyftApiKey();
   return apiKey ? { 'x-api-key': apiKey } : undefined;
@@ -231,6 +241,70 @@ function normalizeCollection(entry: ShyftCollectionItem): ShyftCollectionMetadat
   };
 }
 
+function parseNumberish(value: unknown) {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : 0;
+  }
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+}
+
+function normalizeStakeAccount(account: Record<string, unknown>): ShyftStakeAccount | null {
+  const address =
+    normalizeString(account.stakeAccountAddress) ??
+    normalizeString(account.stake_account_address) ??
+    normalizeString(account.stake_account) ??
+    normalizeString(account.address) ??
+    normalizeString(account.account) ??
+    normalizeString(account.stake_pubkey);
+
+  if (!address) {
+    return null;
+  }
+
+  const rawBalance = account.lamports ?? account.balance ?? account.total_amount ?? 0;
+  const rawDelegated =
+    account.delegated_lamports ??
+    account.delegated_stake ??
+    account.delegated_amount ??
+    account.active_amount ??
+    0;
+  const authorized =
+    typeof account.authorized === 'object' && account.authorized
+      ? (account.authorized as { staker?: unknown; withdrawer?: unknown })
+      : undefined;
+  const toLamports = (value: number) => (Number.isInteger(value) ? value : Math.round(value * 1_000_000_000));
+
+  return {
+    address,
+    lamports: toLamports(parseNumberish(rawBalance)),
+    delegatedLamports: toLamports(parseNumberish(rawDelegated)),
+    state: normalizeString(account.state) ?? normalizeString(account.status) ?? 'unknown',
+    voter:
+      normalizeString(account.voter) ??
+      normalizeString(account.voter_address) ??
+      normalizeString(account.vote_account) ??
+      normalizeString(account.voteAccountAddress) ??
+      normalizeString(account.vote_account_address) ??
+      null,
+    staker:
+      normalizeString(account.staker) ??
+      normalizeString(authorized?.staker) ??
+      normalizeString(account.stakeAuthorityAddress) ??
+      normalizeString(account.stake_authority_address) ??
+      null,
+    withdrawer:
+      normalizeString(account.withdrawer) ??
+      normalizeString(authorized?.withdrawer) ??
+      normalizeString(account.withdrawAuthorityAddress) ??
+      normalizeString(account.withdraw_authority_address) ??
+      null
+  };
+}
+
 function extractCollectionEntries(payload: ShyftResponse): ShyftCollectionItem[] {
   if (Array.isArray(payload.result)) {
     return payload.result as ShyftCollectionItem[];
@@ -275,4 +349,57 @@ export async function fetchShyftCollections(
     .map((entry) => normalizeCollection((entry ?? {}) as ShyftCollectionItem))
     .filter((entry): entry is ShyftCollectionMetadata => !!entry)
     .sort((left, right) => right.itemCount - left.itemCount);
+}
+
+export async function fetchShyftStakeAccounts(
+  network: 'mainnet-beta' | 'devnet',
+  walletAddress: string
+): Promise<ShyftStakeAccount[]> {
+  if (!getShyftApiKey()) {
+    return [];
+  }
+
+  const pageSize = 10;
+  const maxPages = 20;
+  const rows: ShyftStakeAccount[] = [];
+
+  for (let page = 1; page <= maxPages; page += 1) {
+    const url = new URL(`${SHYFT_BASE_URL}/wallet/stake_accounts`);
+    url.searchParams.set('network', network);
+    url.searchParams.set('wallet_address', walletAddress);
+    url.searchParams.set('page', String(page));
+    url.searchParams.set('size', String(pageSize));
+
+    const response = await fetch(url, {
+      headers: getShyftHeaders()
+    });
+
+    if (!response.ok) {
+      throw new Error(`Shyft stake account request failed with ${response.status}.`);
+    }
+
+    const payload = (await response.json()) as ShyftResponse;
+    const pageItems = Array.isArray(payload.result)
+      ? payload.result
+      : Array.isArray((payload.result as { stake_accounts?: unknown } | undefined)?.stake_accounts)
+        ? ((payload.result as { stake_accounts?: unknown }).stake_accounts as unknown[])
+        : [];
+
+    rows.push(
+      ...pageItems
+        .map((account) => normalizeStakeAccount((account ?? {}) as Record<string, unknown>))
+        .filter((account): account is ShyftStakeAccount => !!account)
+    );
+
+    if (pageItems.length < pageSize) {
+      break;
+    }
+  }
+
+  const deduped = new Map<string, ShyftStakeAccount>();
+  rows.forEach((row) => {
+    deduped.set(row.address, row);
+  });
+
+  return Array.from(deduped.values()).sort((left, right) => right.lamports - left.lamports);
 }

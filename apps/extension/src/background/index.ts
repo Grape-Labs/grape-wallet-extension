@@ -49,9 +49,27 @@ import {
   signSerializedTransaction,
   signSerializedTransactions
 } from '@grape/solana';
-import { Connection, PublicKey, Transaction, TransactionInstruction } from '@solana/web3.js';
+import {
+  Authorized,
+  Connection,
+  Keypair,
+  LAMPORTS_PER_SOL,
+  Lockup,
+  ParsedAccountData,
+  PublicKey,
+  StakeProgram,
+  Transaction,
+  TransactionInstruction
+} from '@solana/web3.js';
 
-import type { ApprovalRecord, CollectionHolding, CollectibleItem, TokenHolding, WalletAssetsResponse } from '../shared/models';
+import type {
+  ApprovalRecord,
+  CollectionHolding,
+  CollectibleItem,
+  StakeAccountRow,
+  TokenHolding,
+  WalletAssetsResponse
+} from '../shared/models';
 
 import { filterCollectibleTokens, inferCollectibleMints, sortWalletTokens } from '../shared/assets';
 import { ChromeStorageArea, permissionsStorage, sessionStorage, walletStateStorage } from '../shared/chrome';
@@ -63,7 +81,7 @@ import {
   type JupiterQuoteResponse
 } from '../shared/jupiter';
 import { getRpcEndpoint } from '../shared/rpc';
-import { fetchShyftCollections, fetchShyftWalletTokens, hasShyftApiKey } from '../shared/shyft';
+import { fetchShyftCollections, fetchShyftStakeAccounts, fetchShyftWalletTokens, hasShyftApiKey } from '../shared/shyft';
 
 const approvalsStorage = new ChromeStorageArea<Record<string, ApprovalRecord>>(chrome.storage.local, STORAGE_KEYS.approvals, {});
 const assetCacheStorage = new ChromeStorageArea<Record<string, { cachedAt: number; data: WalletAssetsResponse }>>(
@@ -868,6 +886,124 @@ class WalletController {
     return this.refreshAssetsCache(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey);
   }
 
+  async getStakeAccounts() {
+    const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
+    if (!activeAccount) {
+      return {
+        accounts: [],
+        source: 'none' as const,
+        network: walletState.selectedNetwork,
+        refreshedAt: Date.now()
+      };
+    }
+
+    if (hasShyftApiKey()) {
+      try {
+        const shyftAccounts = await fetchShyftStakeAccounts(walletState.selectedNetwork, activeAccount.publicKey);
+        if (shyftAccounts.length > 0) {
+          return {
+            accounts: shyftAccounts,
+            source: 'shyft' as const,
+            network: walletState.selectedNetwork,
+            refreshedAt: Date.now()
+          };
+        }
+      } catch {
+        // Fall through to RPC discovery.
+      }
+    }
+
+    const connection = new Connection(getRpcEndpoint(walletState.selectedNetwork), 'confirmed');
+    const authority = new PublicKey(activeAccount.publicKey);
+    const getProgramAccountsByAuthority = async (offset: number) =>
+      connection.getProgramAccounts(StakeProgram.programId, {
+        commitment: 'confirmed',
+        encoding: 'base64',
+        dataSlice: {
+          offset: 0,
+          length: 0
+        },
+        filters: [
+          { dataSize: StakeProgram.space },
+          { memcmp: { offset, bytes: authority.toBase58() } }
+        ]
+      });
+
+    const [asStaker, asWithdrawer] = await Promise.all([
+      getProgramAccountsByAuthority(12),
+      getProgramAccountsByAuthority(44)
+    ]);
+
+    const rowsByAddress = new Map<string, StakeAccountRow>();
+    [...asStaker, ...asWithdrawer].forEach((entry) => {
+      const address = entry.pubkey.toBase58();
+      const current = rowsByAddress.get(address);
+      rowsByAddress.set(address, {
+        address,
+        lamports: Math.max(current?.lamports ?? 0, entry.account.lamports),
+        state: 'unknown',
+        delegatedLamports: 0,
+        voter: null,
+        staker: null,
+        withdrawer: null
+      });
+    });
+
+    const baseRows = Array.from(rowsByAddress.values());
+    const enrichedRows = [...baseRows];
+    const chunkSize = 8;
+
+    for (let startIndex = 0; startIndex < enrichedRows.length; startIndex += chunkSize) {
+      const chunkRows = enrichedRows.slice(startIndex, startIndex + chunkSize);
+      const chunkResponses = await Promise.allSettled(
+        chunkRows.map(async (row) => {
+          const accountInfo = await connection.getParsedAccountInfo(new PublicKey(row.address), 'confirmed');
+          if (!accountInfo.value) {
+            return null;
+          }
+          const parsedData = accountInfo.value.data as ParsedAccountData;
+          const parsedInfo = parsedData.parsed.info as {
+            meta?: { authorized?: { staker?: string; withdrawer?: string } };
+            stake?: { delegation?: { stake?: string; voter?: string } };
+          };
+
+          return {
+            address: row.address,
+            state: parsedData.parsed.type ?? row.state,
+            delegatedLamports: Number(parsedInfo.stake?.delegation?.stake ?? '0'),
+            voter: parsedInfo.stake?.delegation?.voter ?? null,
+            staker: parsedInfo.meta?.authorized?.staker ?? null,
+            withdrawer: parsedInfo.meta?.authorized?.withdrawer ?? null
+          };
+        })
+      );
+
+      chunkResponses.forEach((response, index) => {
+        if (response.status !== 'fulfilled' || !response.value) {
+          return;
+        }
+        const target = enrichedRows.find((candidate) => candidate.address === chunkRows[index]?.address);
+        if (!target) {
+          return;
+        }
+        target.state = response.value.state;
+        target.delegatedLamports = response.value.delegatedLamports;
+        target.voter = response.value.voter;
+        target.staker = response.value.staker;
+        target.withdrawer = response.value.withdrawer;
+      });
+    }
+
+    enrichedRows.sort((left, right) => right.lamports - left.lamports);
+    return {
+      accounts: enrichedRows,
+      source: enrichedRows.length > 0 ? ('rpc' as const) : ('none' as const),
+      network: walletState.selectedNetwork,
+      refreshedAt: Date.now()
+    };
+  }
+
   async getTokenDetails(input: { mint: string; accountAddress: string; programId: string }) {
     const { walletState, selectedWallet } = await this.ensureReadyWallet();
     const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
@@ -995,6 +1131,141 @@ class WalletController {
       kind: exported.kind,
       privateKeyBase58: exported.privateKeyBase58,
       mnemonic: exported.mnemonic
+    };
+  }
+
+  async stakeCreate(input: { amount: string; voteAccount: string; password?: string }) {
+    const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    this.assertInteractiveWallet(selectedWallet);
+    const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
+    if (!activeAccount) {
+      throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
+    }
+
+    const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
+    const connection = new Connection(getRpcEndpoint(walletState.selectedNetwork), 'confirmed');
+    const owner = new PublicKey(activeAccount.publicKey);
+    const votePubkey = new PublicKey(input.voteAccount.trim());
+    const stakeLamportsBigint = parseDecimalAmount(input.amount, 9);
+    const rentExempt = await connection.getMinimumBalanceForRentExemption(StakeProgram.space);
+    const totalLamportsBigint = stakeLamportsBigint + BigInt(rentExempt);
+    if (totalLamportsBigint > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new RpcError('INVALID_AMOUNT', 'Stake amount is too large.');
+    }
+
+    const totalLamports = Number(totalLamportsBigint);
+    const stakeKeypair = Keypair.generate();
+    const transaction = StakeProgram.createAccount({
+      fromPubkey: owner,
+      stakePubkey: stakeKeypair.publicKey,
+      authorized: new Authorized(owner, owner),
+      lockup: Lockup.default,
+      lamports: totalLamports
+    });
+    transaction.add(
+      ...StakeProgram.delegate({
+        stakePubkey: stakeKeypair.publicKey,
+        authorizedPubkey: owner,
+        votePubkey
+      }).instructions
+    );
+    const { blockhash } = await connection.getLatestBlockhash('confirmed');
+    transaction.recentBlockhash = blockhash;
+    transaction.feePayer = owner;
+    transaction.partialSign(stakeKeypair);
+
+    let signature: string;
+    try {
+      if (selectedWallet.signer.kind === 'ledger') {
+        signature = await signAndSendLedgerTransaction(transaction, activeAccount.publicKey, selectedWallet.signer.derivationPath, connection);
+      } else {
+        transaction.partialSign(resolveSolanaVaultSecret(secret));
+        signature = await connection.sendRawTransaction(transaction.serialize());
+      }
+    } catch (error) {
+      throw normalizeSigningError(error);
+    }
+
+    await this.setSessionState({ locked: false, lastActivityAt: Date.now() });
+    return {
+      signature,
+      action: 'stake' as const,
+      stakeAccount: stakeKeypair.publicKey.toBase58(),
+      amountSol: input.amount,
+      voteAccount: votePubkey.toBase58(),
+      network: walletState.selectedNetwork
+    };
+  }
+
+  async stakeDeactivate(input: { stakeAccount: string; password?: string }) {
+    const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    this.assertInteractiveWallet(selectedWallet);
+    const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
+    if (!activeAccount) {
+      throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
+    }
+
+    const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
+    const connection = new Connection(getRpcEndpoint(walletState.selectedNetwork), 'confirmed');
+    const owner = new PublicKey(activeAccount.publicKey);
+    const signature = await this.submitInstructionBatches(
+      selectedWallet,
+      activeAccount.publicKey,
+      secret,
+      connection,
+      owner,
+      StakeProgram.deactivate({
+        stakePubkey: new PublicKey(input.stakeAccount),
+        authorizedPubkey: owner
+      }).instructions,
+      1
+    );
+
+    return {
+      signature: signature[0],
+      action: 'deactivate' as const,
+      stakeAccount: input.stakeAccount,
+      network: walletState.selectedNetwork
+    };
+  }
+
+  async stakeWithdraw(input: { stakeAccount: string; amount: string; password?: string }) {
+    const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    this.assertInteractiveWallet(selectedWallet);
+    const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
+    if (!activeAccount) {
+      throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
+    }
+
+    const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
+    const connection = new Connection(getRpcEndpoint(walletState.selectedNetwork), 'confirmed');
+    const owner = new PublicKey(activeAccount.publicKey);
+    const lamportsBigint = parseDecimalAmount(input.amount, 9);
+    if (lamportsBigint > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new RpcError('INVALID_AMOUNT', 'Withdraw amount is too large.');
+    }
+
+    const signature = await this.submitInstructionBatches(
+      selectedWallet,
+      activeAccount.publicKey,
+      secret,
+      connection,
+      owner,
+      StakeProgram.withdraw({
+        stakePubkey: new PublicKey(input.stakeAccount),
+        authorizedPubkey: owner,
+        toPubkey: owner,
+        lamports: Number(lamportsBigint)
+      }).instructions,
+      1
+    );
+
+    return {
+      signature: signature[0],
+      action: 'withdraw' as const,
+      stakeAccount: input.stakeAccount,
+      amountSol: input.amount,
+      network: walletState.selectedNetwork
     };
   }
 
@@ -2282,12 +2553,41 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
         case 'wallet_get_assets':
           sendResponse(await controller.getAssets({ staleWhileRevalidate: message.staleWhileRevalidate }));
           break;
+        case 'wallet_get_stake_accounts':
+          sendResponse(await controller.getStakeAccounts());
+          break;
         case 'wallet_get_token_details':
           sendResponse(
             await controller.getTokenDetails({
               mint: message.mint,
               accountAddress: message.accountAddress,
               programId: message.programId
+            })
+          );
+          break;
+        case 'wallet_stake_create':
+          sendResponse(
+            await controller.stakeCreate({
+              amount: message.amount,
+              voteAccount: message.voteAccount,
+              password: message.password
+            })
+          );
+          break;
+        case 'wallet_stake_deactivate':
+          sendResponse(
+            await controller.stakeDeactivate({
+              stakeAccount: message.stakeAccount,
+              password: message.password
+            })
+          );
+          break;
+        case 'wallet_stake_withdraw':
+          sendResponse(
+            await controller.stakeWithdraw({
+              stakeAccount: message.stakeAccount,
+              amount: message.amount,
+              password: message.password
             })
           );
           break;

@@ -200,10 +200,30 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     staleWhileRevalidate: z.boolean().optional()
   }),
   z.object({
+    type: z.literal('wallet_get_stake_accounts')
+  }),
+  z.object({
     type: z.literal('wallet_get_token_details'),
     mint: z.string().min(32),
     accountAddress: z.string().min(32),
     programId: z.string().min(32)
+  }),
+  z.object({
+    type: z.literal('wallet_stake_create'),
+    amount: decimalAmountSchema,
+    voteAccount: z.string().min(32),
+    password: z.string().min(1).optional()
+  }),
+  z.object({
+    type: z.literal('wallet_stake_deactivate'),
+    stakeAccount: z.string().min(32),
+    password: z.string().min(1).optional()
+  }),
+  z.object({
+    type: z.literal('wallet_stake_withdraw'),
+    stakeAccount: z.string().min(32),
+    amount: decimalAmountSchema,
+    password: z.string().min(1).optional()
   }),
   z.object({
     type: z.literal('wallet_send_transfer'),
