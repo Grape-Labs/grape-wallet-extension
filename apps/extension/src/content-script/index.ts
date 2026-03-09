@@ -7,11 +7,16 @@ function injectInpageScript() {
     return;
   }
 
+  const target = document.head || document.documentElement;
+  if (!target) {
+    return;
+  }
+
   const script = document.createElement('script');
   script.id = INJECTED_SCRIPT_ID;
   script.src = chrome.runtime.getURL('assets/inpage.js');
   script.type = 'module';
-  (document.head || document.documentElement).appendChild(script);
+  target.appendChild(script);
 }
 
 function getFaviconUrl(): string | undefined {

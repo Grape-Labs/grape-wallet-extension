@@ -432,6 +432,12 @@ function PopupPage() {
   }, [view, state?.wallet.setup, state?.session.locked]);
 
   useEffect(() => {
+    if (view === 'asset') {
+      window.scrollTo(0, 0);
+    }
+  }, [view, assetId]);
+
+  useEffect(() => {
     const listener = (
       changes: Record<string, chrome.storage.StorageChange>,
       areaName: string
@@ -1276,6 +1282,9 @@ function PopupPage() {
     const tokenValue = formatUsd(selectedTokenHolding.valueUsd) ?? `${formatTokenAmount(selectedTokenHolding)} ${selectedTokenHolding.symbol ?? ''}`.trim();
     const canCloseAccount = Number(selectedTokenHolding.amount) === 0 && !selectedTokenHolding.delegate;
     const canBurn = Number(selectedTokenHolding.amount) > 0;
+    const detailActionLabel = canBurn ? 'Burn' : 'Close';
+    const detailActionTitle = canBurn ? 'Burn token' : canCloseAccount ? 'Close account' : 'Close account after burning all tokens';
+    const detailActionIcon = canBurn ? <Flame size={18} /> : <Trash2 size={18} />;
 
     return (
       <>
@@ -1307,78 +1316,70 @@ function PopupPage() {
             <button
               type="button"
               className="quick-action-card"
-              onClick={() => setBurnAmount(selectedTokenHolding.amount)}
-              aria-label="Burn token"
-              title="Burn"
-              disabled={!canBurn}
+              onClick={canBurn ? () => setBurnAmount(selectedTokenHolding.amount) : () => void handleCloseTokenAccount()}
+              aria-label={detailActionTitle}
+              title={detailActionTitle}
+              disabled={canBurn ? !canBurn : !canCloseAccount}
             >
-              <span className="quick-action-icon"><Flame size={18} /></span>
-            </button>
-            <button
-              type="button"
-              className="quick-action-card"
-              onClick={() => void handleCloseTokenAccount()}
-              aria-label="Close token account"
-              title={canCloseAccount ? 'Close account' : 'Close account after burning all tokens'}
-              disabled={!canCloseAccount}
-            >
-              <span className="quick-action-icon"><Trash2 size={18} /></span>
+              <span className="quick-action-icon">{detailActionIcon}</span>
             </button>
           </div>
         </Card>
 
-        <Card title="Burn tokens">
-          <div className="stack">
-            <label className="stack">
-              <span className="muted">Amount</span>
-              <Input value={burnAmount} onChange={(event) => setBurnAmount(event.target.value)} placeholder="0" inputMode="decimal" />
-            </label>
-            {!canUseUnlockedSigner ? (
+        {canBurn ? (
+          <Card title="Burn tokens">
+            <div className="stack">
               <label className="stack">
-                <span className="muted">Password</span>
-                <Input
-                  type="password"
-                  value={burnPassword}
-                  onChange={(event) => setBurnPassword(event.target.value)}
-                  placeholder="Password required to sign"
-                />
+                <span className="muted">Amount</span>
+                <Input value={burnAmount} onChange={(event) => setBurnAmount(event.target.value)} placeholder="0" inputMode="decimal" />
               </label>
-            ) : (
-              <p className="muted">Wallet is already unlocked. Burn and close actions can sign without re-entering your password.</p>
-            )}
-            <Button
-              className="button-block"
-              disabled={tokenActionSubmitting === 'burn' || !burnAmount.trim() || (!canUseUnlockedSigner && !burnPassword.trim())}
-              onClick={() => void handleBurnToken()}
-            >
-              {tokenActionSubmitting === 'burn' ? 'Burning...' : 'Burn'}
-            </Button>
-          </div>
-        </Card>
-
-        <Card title="Close account">
-          <div className="stack">
-            <p className="muted">
-              Closing reclaims the SOL rent from this token account. The balance must be zero and no delegate can remain.
-            </p>
-            <KeyValueRow label="Delegate" value={<span className="mono">{selectedTokenHolding.delegate ? formatAddress(selectedTokenHolding.delegate) : 'None'}</span>} />
-            <KeyValueRow
-              label="Close authority"
-              value={<span className="mono">{selectedTokenHolding.closeAuthority ? formatAddress(selectedTokenHolding.closeAuthority) : 'Wallet owner'}</span>}
-            />
-            <Button
-              tone="secondary"
-              className="button-block"
-              disabled={tokenActionSubmitting === 'close' || !canCloseAccount || (!canUseUnlockedSigner && !burnPassword.trim())}
-              onClick={() => void handleCloseTokenAccount()}
-            >
-              {tokenActionSubmitting === 'close' ? 'Closing...' : 'Close token account'}
-            </Button>
-            {!canCloseAccount ? (
-              <p className="warning-box">Burn or transfer the full balance and revoke any delegate before closing this account.</p>
-            ) : null}
-          </div>
-        </Card>
+              {!canUseUnlockedSigner ? (
+                <label className="stack">
+                  <span className="muted">Password</span>
+                  <Input
+                    type="password"
+                    value={burnPassword}
+                    onChange={(event) => setBurnPassword(event.target.value)}
+                    placeholder="Password required to sign"
+                  />
+                </label>
+              ) : (
+                <p className="muted">Wallet is already unlocked. Burn and close actions can sign without re-entering your password.</p>
+              )}
+              <Button
+                className="button-block"
+                disabled={tokenActionSubmitting === 'burn' || !burnAmount.trim() || (!canUseUnlockedSigner && !burnPassword.trim())}
+                onClick={() => void handleBurnToken()}
+              >
+                {tokenActionSubmitting === 'burn' ? 'Burning...' : 'Burn'}
+              </Button>
+            </div>
+          </Card>
+        ) : (
+          <Card title="Close account">
+            <div className="stack">
+              <p className="muted">
+                Closing reclaims the SOL rent from this token account. The balance must be zero and no delegate can remain.
+              </p>
+              <KeyValueRow label="Delegate" value={<span className="mono">{selectedTokenHolding.delegate ? formatAddress(selectedTokenHolding.delegate) : 'None'}</span>} />
+              <KeyValueRow
+                label="Close authority"
+                value={<span className="mono">{selectedTokenHolding.closeAuthority ? formatAddress(selectedTokenHolding.closeAuthority) : 'Wallet owner'}</span>}
+              />
+              <Button
+                tone="secondary"
+                className="button-block"
+                disabled={tokenActionSubmitting === 'close' || !canCloseAccount || (!canUseUnlockedSigner && !burnPassword.trim())}
+                onClick={() => void handleCloseTokenAccount()}
+              >
+                {tokenActionSubmitting === 'close' ? 'Closing...' : 'Close token account'}
+              </Button>
+              {!canCloseAccount ? (
+                <p className="warning-box">Revoke any delegate before closing this account.</p>
+              ) : null}
+            </div>
+          </Card>
+        )}
 
         {tokenActionResult ? (
           <Card title="Completed">

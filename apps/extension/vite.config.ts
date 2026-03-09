@@ -69,7 +69,7 @@ function createManifestPlugin(mainnetRpcUrl: string): Plugin {
           {
             matches: ['<all_urls>'],
             js: ['assets/content-script.js'],
-            run_at: 'document_start'
+            run_at: 'document_end'
           }
         ],
         web_accessible_resources: [

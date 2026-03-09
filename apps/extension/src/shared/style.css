@@ -2377,6 +2377,19 @@ body[data-surface='panel'] .bottom-nav {
 
 .asset-detail-actions {
   margin-top: 4px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.asset-detail-actions .quick-action-card {
+  padding: 10px 12px;
+  border-radius: 16px;
+}
+
+.asset-detail-actions .quick-action-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
 }
 
 .security-actions {
