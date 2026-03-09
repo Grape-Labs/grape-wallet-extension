@@ -1,6 +1,7 @@
 const INJECTED_SCRIPT_ID = 'grape-wallet-inpage';
 const FROM_INPAGE = 'grape:inpage';
 const FROM_CONTENT = 'grape:content';
+const FROM_CONTENT_DEBUG = 'grape:content:debug';
 
 function injectInpageScript() {
   if (document.getElementById(INJECTED_SCRIPT_ID)) {
@@ -48,6 +49,17 @@ window.addEventListener('message', (event) => {
 });
 
 port.onMessage.addListener((message) => {
+  if (message?.__grapeDebug === true) {
+    window.postMessage(
+      {
+        source: FROM_CONTENT_DEBUG,
+        payload: message.payload
+      },
+      '*'
+    );
+    return;
+  }
+
   window.postMessage(
     {
       source: FROM_CONTENT,

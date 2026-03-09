@@ -23,8 +23,45 @@ type ProviderRequestArgs = {
   params?: Record<string, unknown>;
 };
 
+type ProviderDebugEvent = {
+  timestamp: number;
+  source: 'provider';
+  phase: string;
+  method?: ProviderRequestArgs['method'];
+  transactionKind?: 'legacy' | 'versioned';
+  origin?: string;
+  message?: string;
+};
+
+type GrapeDebugGlobal = typeof globalThis & {
+  __grapeDebugEvents?: ProviderDebugEvent[];
+  __grapeLastProviderDebug?: ProviderDebugEvent;
+};
+
+type SendRawTransactionConnection = {
+  sendRawTransaction(rawTransaction: Uint8Array, options?: unknown): Promise<string>;
+};
+
 function randomId(): string {
   return crypto.randomUUID();
+}
+
+function emitProviderDebug(event: Omit<ProviderDebugEvent, 'timestamp' | 'source'>): void {
+  const nextEvent: ProviderDebugEvent = {
+    timestamp: Date.now(),
+    source: 'provider',
+    ...event
+  };
+
+  const debugGlobal = globalThis as GrapeDebugGlobal;
+  const currentEvents = Array.isArray(debugGlobal.__grapeDebugEvents) ? debugGlobal.__grapeDebugEvents : [];
+  debugGlobal.__grapeDebugEvents = [...currentEvents, nextEvent].slice(-100);
+  debugGlobal.__grapeLastProviderDebug = nextEvent;
+  console.debug('[Grape][provider]', nextEvent);
+}
+
+function hasSendRawTransaction(value: unknown): value is SendRawTransactionConnection {
+  return typeof value === 'object' && value !== null && typeof (value as SendRawTransactionConnection).sendRawTransaction === 'function';
 }
 
 function serializeForTransport(transaction: Transaction | VersionedTransaction): string {
@@ -93,6 +130,7 @@ export class GrapeInpageProvider {
   }
 
   async connect(options?: { onlyIfTrusted?: boolean }): Promise<{ publicKey: PublicKey }> {
+    emitProviderDebug({ phase: 'provider_method_called', method: 'connect', origin: this.origin.origin });
     const result = await this.transport.request<{ publicKey: string }>({
       id: randomId(),
       method: 'connect',
@@ -111,6 +149,7 @@ export class GrapeInpageProvider {
   }
 
   async disconnect(): Promise<void> {
+    emitProviderDebug({ phase: 'provider_method_called', method: 'disconnect', origin: this.origin.origin });
     await this.transport.request({
       id: randomId(),
       method: 'disconnect',
@@ -124,6 +163,7 @@ export class GrapeInpageProvider {
   }
 
   async signMessage(message: Uint8Array): Promise<{ publicKey: PublicKey; signature: Uint8Array }> {
+    emitProviderDebug({ phase: 'provider_method_called', method: 'signMessage', origin: this.origin.origin });
     const result = await this.transport.request<{ publicKey: string; signature: string }>({
       id: randomId(),
       method: 'signMessage',
@@ -139,6 +179,12 @@ export class GrapeInpageProvider {
   }
 
   async signTransaction<T extends Transaction | VersionedTransaction>(transaction: T): Promise<T> {
+    emitProviderDebug({
+      phase: 'provider_method_called',
+      method: 'signTransaction',
+      transactionKind: transaction instanceof VersionedTransaction ? 'versioned' : 'legacy',
+      origin: this.origin.origin
+    });
     const result = await this.transport.request<{ transaction: string }>({
       id: randomId(),
       method: 'signTransaction',
@@ -155,6 +201,12 @@ export class GrapeInpageProvider {
   }
 
   async signAllTransactions<T extends Transaction | VersionedTransaction>(transactions: T[]): Promise<T[]> {
+    emitProviderDebug({
+      phase: 'provider_method_called',
+      method: 'signAllTransactions',
+      transactionKind: transactions[0] instanceof VersionedTransaction ? 'versioned' : 'legacy',
+      origin: this.origin.origin
+    });
     const serializedTransactions = transactions.map((transaction) => serializeForTransport(transaction));
     const result = await this.transport.request<{ transactions: string[] }>({
       id: randomId(),
@@ -175,6 +227,12 @@ export class GrapeInpageProvider {
   }
 
   async signAndSendTransaction(transaction: Transaction | VersionedTransaction): Promise<{ signature: string }> {
+    emitProviderDebug({
+      phase: 'provider_method_called',
+      method: 'signAndSendTransaction',
+      transactionKind: transaction instanceof VersionedTransaction ? 'versioned' : 'legacy',
+      origin: this.origin.origin
+    });
     return this.transport.request<{ signature: string }>({
       id: randomId(),
       method: 'signAndSendTransaction',
@@ -187,10 +245,34 @@ export class GrapeInpageProvider {
 
   async sendTransaction(
     transaction: Transaction | VersionedTransaction,
-    _connection?: unknown,
-    _options?: unknown
+    connection?: unknown,
+    options?: unknown
   ): Promise<{ signature: string }> {
-    return this.signAndSendTransaction(transaction);
+    emitProviderDebug({
+      phase: 'provider_method_called',
+      method: 'sendTransaction',
+      transactionKind: transaction instanceof VersionedTransaction ? 'versioned' : 'legacy',
+      origin: this.origin.origin,
+      message: 'Legacy sendTransaction routed through signTransaction and the supplied connection.'
+    });
+
+    if (!hasSendRawTransaction(connection)) {
+      throw new Error('sendTransaction requires a connection with sendRawTransaction.');
+    }
+
+    const signedTransaction = await this.signTransaction(transaction);
+    const signature =
+      signedTransaction instanceof VersionedTransaction
+        ? await connection.sendRawTransaction(signedTransaction.serialize(), options)
+        : await connection.sendRawTransaction(
+            signedTransaction.serialize({
+              requireAllSignatures: false,
+              verifySignatures: false
+            }),
+            options
+          );
+
+    return { signature };
   }
 
   async request<T = unknown>(args: ProviderRequestArgs): Promise<T> {

@@ -116,12 +116,26 @@ type CollectibleMetadataHint = {
 type PendingResolver = {
   resolve: (value: unknown) => void;
   reject: (reason: Error) => void;
+  debug?: (payload: ProviderDebugPayload) => void;
 };
 
 type UnlockedSecretCache = Record<string, {
   secret: VaultSecret;
   unlockedAt: number;
 }>;
+
+type ProviderDebugPayload = {
+  phase: string;
+  requestId?: string;
+  method?: ProviderRequest['method'];
+  approvalId?: string;
+  kind?: ApprovalRecord['kind'];
+  origin?: string;
+  network?: 'mainnet-beta' | 'devnet';
+  success?: boolean;
+  code?: string;
+  message?: string;
+};
 
 class WalletController {
   private readonly pendingApprovals = new Map<string, PendingResolver>();
@@ -1351,7 +1365,13 @@ class WalletController {
     };
   }
 
-  async handleProviderRequest(request: ProviderRequest): Promise<unknown> {
+  async handleProviderRequest(request: ProviderRequest, debug?: (payload: ProviderDebugPayload) => void): Promise<unknown> {
+    debug?.({
+      phase: 'handle_provider_request_start',
+      requestId: request.id,
+      method: request.method,
+      origin: request.origin.origin
+    });
     const { walletState, selectedWallet } = await this.ensureReadyWallet();
     const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
     if (!activeAccount) {
@@ -1369,17 +1389,40 @@ class WalletController {
         if (!isTrusted) {
           throw new RpcError('NOT_CONNECTED', 'This site has not been approved yet.');
         }
+        debug?.({
+          phase: 'connect_silent_trusted',
+          requestId: request.id,
+          method: request.method,
+          origin: request.origin.origin,
+          success: true
+        });
         return { publicKey: activeAccount.publicKey };
       }
 
       if (isTrusted) {
+        debug?.({
+          phase: 'connect_already_trusted',
+          requestId: request.id,
+          method: request.method,
+          origin: request.origin.origin,
+          success: true
+        });
         return { publicKey: activeAccount.publicKey };
       }
 
       const approval = await this.createApproval(request, walletState.selectedNetwork, selectedWallet.id, activeAccount.publicKey, {
         requestedPermissions: ['View your public key', 'Request signatures with approval']
       });
-      return this.awaitApproval(approval.id);
+      debug?.({
+        phase: 'approval_created',
+        requestId: request.id,
+        method: request.method,
+        approvalId: approval.id,
+        kind: approval.kind,
+        origin: request.origin.origin,
+        network: walletState.selectedNetwork
+      });
+      return this.awaitApproval(approval.id, debug);
     }
 
     const permissions = await permissionsStorage.get();
@@ -1397,7 +1440,16 @@ class WalletController {
     const approval = await this.createApproval(request, walletState.selectedNetwork, selectedWallet.id, activeAccount.publicKey, {
       transactionSummary
     });
-    return this.awaitApproval(approval.id);
+    debug?.({
+      phase: 'approval_created',
+      requestId: request.id,
+      method: request.method,
+      approvalId: approval.id,
+      kind: approval.kind,
+      origin: request.origin.origin,
+      network: walletState.selectedNetwork
+    });
+    return this.awaitApproval(approval.id, debug);
   }
 
   async getApproval(approvalId: string) {
@@ -1414,13 +1466,58 @@ class WalletController {
 
     try {
       if (!approved) {
+        this.emitPendingApprovalDebug(approvalId, {
+          phase: 'approval_rejected',
+          requestId: approval.request.id,
+          method: approval.request.method,
+          approvalId,
+          kind: approval.kind,
+          origin: approval.origin.origin,
+          success: false,
+          code: 'USER_REJECTED',
+          message: 'User rejected the request.'
+        });
         this.rejectPendingApproval(approvalId, new RpcError('USER_REJECTED', 'User rejected the request.'));
         return { approved: false };
       }
 
+      this.emitPendingApprovalDebug(approvalId, {
+        phase: 'approval_execute_start',
+        requestId: approval.request.id,
+        method: approval.request.method,
+        approvalId,
+        kind: approval.kind,
+        origin: approval.origin.origin,
+        network: approval.network
+      });
       const result = await this.executeApproval(approval, password);
+      this.emitPendingApprovalDebug(approvalId, {
+        phase: 'approval_execute_success',
+        requestId: approval.request.id,
+        method: approval.request.method,
+        approvalId,
+        kind: approval.kind,
+        origin: approval.origin.origin,
+        network: approval.network,
+        success: true
+      });
       this.resolvePendingApproval(approvalId, result);
       return { approved: true };
+    } catch (error) {
+      const normalized = normalizeError(error);
+      this.emitPendingApprovalDebug(approvalId, {
+        phase: 'approval_execute_error',
+        requestId: approval.request.id,
+        method: approval.request.method,
+        approvalId,
+        kind: approval.kind,
+        origin: approval.origin.origin,
+        network: approval.network,
+        success: false,
+        code: normalized.code,
+        message: normalized.message
+      });
+      throw error;
     } finally {
       const nextApprovals = { ...approvals };
       delete nextApprovals[approvalId];
@@ -1572,9 +1669,9 @@ class WalletController {
     return approval;
   }
 
-  private awaitApproval(approvalId: string): Promise<unknown> {
+  private awaitApproval(approvalId: string, debug?: (payload: ProviderDebugPayload) => void): Promise<unknown> {
     return new Promise((resolve, reject) => {
-      this.pendingApprovals.set(approvalId, { resolve, reject });
+      this.pendingApprovals.set(approvalId, { resolve, reject, debug });
     });
   }
 
@@ -1592,6 +1689,10 @@ class WalletController {
       pending.reject(error);
       this.pendingApprovals.delete(approvalId);
     }
+  }
+
+  private emitPendingApprovalDebug(approvalId: string, payload: ProviderDebugPayload) {
+    this.pendingApprovals.get(approvalId)?.debug?.(payload);
   }
 
   private async getUnlockedSecret(walletId: string, vault: NonNullable<ReturnType<typeof getSelectedWallet>>['vault'], password?: string) {
@@ -1721,6 +1822,18 @@ function normalizeSigningError(error: unknown) {
   }
 
   return new RpcError('TRANSACTION_FAILED', 'Transaction failed.');
+}
+
+function emitProviderDebug(port: chrome.runtime.Port, payload: ProviderDebugPayload) {
+  console.debug('[Grape][background]', payload);
+  try {
+    port.postMessage({
+      __grapeDebug: true,
+      payload
+    });
+  } catch {
+    // Ignore debug transport failures.
+  }
 }
 
 function readBorshString(bytes: Uint8Array, offset: number) {
@@ -2071,8 +2184,29 @@ chrome.runtime.onConnect.addListener((port) => {
   port.onMessage.addListener((rawMessage) => {
     void (async () => {
       try {
+        const requestId = typeof rawMessage?.id === 'string' ? rawMessage.id : undefined;
+        const requestMethod = typeof rawMessage?.method === 'string' ? rawMessage.method : undefined;
+        emitProviderDebug(port, {
+          phase: 'port_message_received',
+          requestId,
+          method: requestMethod as ProviderRequest['method'] | undefined,
+          origin: typeof rawMessage?.origin?.origin === 'string' ? rawMessage.origin.origin : undefined
+        });
         const request = providerRequestSchema.parse(rawMessage);
-        const result = await controller.handleProviderRequest(request);
+        emitProviderDebug(port, {
+          phase: 'provider_request_parsed',
+          requestId: request.id,
+          method: request.method,
+          origin: request.origin.origin
+        });
+        const result = await controller.handleProviderRequest(request, (payload) => emitProviderDebug(port, payload));
+        emitProviderDebug(port, {
+          phase: 'provider_request_resolved',
+          requestId: request.id,
+          method: request.method,
+          origin: request.origin.origin,
+          success: true
+        });
         port.postMessage({
           id: request.id,
           success: true,
@@ -2080,10 +2214,20 @@ chrome.runtime.onConnect.addListener((port) => {
         });
       } catch (error) {
         const requestId = typeof rawMessage?.id === 'string' ? rawMessage.id : crypto.randomUUID();
+        const normalized = normalizeError(error);
+        emitProviderDebug(port, {
+          phase: 'provider_request_error',
+          requestId,
+          method: typeof rawMessage?.method === 'string' ? (rawMessage.method as ProviderRequest['method']) : undefined,
+          origin: typeof rawMessage?.origin?.origin === 'string' ? rawMessage.origin.origin : undefined,
+          success: false,
+          code: normalized.code,
+          message: normalized.message
+        });
         port.postMessage({
           id: requestId,
           success: false,
-          error: normalizeError(error)
+          error: normalized
         });
       }
     })();

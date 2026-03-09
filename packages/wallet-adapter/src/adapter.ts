@@ -1,7 +1,6 @@
 import {
   BaseMessageSignerWalletAdapter,
   WalletConnectionError,
-  WalletDisconnectedError,
   WalletDisconnectionError,
   WalletNotConnectedError,
   WalletNotReadyError,
@@ -15,7 +14,14 @@ import {
   scopePollingDetectionStrategy
 } from '@solana/wallet-adapter-base';
 import type { SupportedTransactionVersions } from '@solana/wallet-adapter-base';
-import { PublicKey, VersionedTransaction, type Connection, type TransactionVersion, type Transaction } from '@solana/web3.js';
+import {
+  PublicKey,
+  VersionedTransaction,
+  type Connection,
+  type TransactionVersion,
+  type Transaction,
+  type Signer
+} from '@solana/web3.js';
 
 import { GRAPE_WALLET_ADAPTER_ICON } from './icon';
 
@@ -51,11 +57,23 @@ type GrapeInjectedProvider = {
   off?(event: 'connect' | 'disconnect' | 'accountChanged', listener: (...args: unknown[]) => void): void;
 };
 
+type GrapeSendTransactionDiagnostic = {
+  stage: 'prepare' | 'sign' | 'broadcast';
+  transactionKind: 'legacy' | 'versioned';
+  strategy?: 'provider.signAndSendTransaction' | 'provider.sendTransaction' | 'provider.signTransaction+connection.sendRawTransaction';
+  connectionRpcEndpoint?: string;
+  options: SendTransactionOptions;
+  publicKey?: string | null;
+  message: string;
+  error?: unknown;
+};
+
 declare global {
   interface Window {
     grape?: GrapeInjectedProvider;
     grapeSolana?: GrapeInjectedProvider;
     solana?: GrapeInjectedProvider;
+    __grapeLastSendTransactionDiagnostic?: GrapeSendTransactionDiagnostic;
   }
 }
 
@@ -97,6 +115,35 @@ function normalizePublicKey(input: PublicKey | { toBase58(): string } | string |
 
 function toErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
+}
+
+function captureSendTransactionDiagnostic(diagnostic: GrapeSendTransactionDiagnostic) {
+  if (typeof window !== 'undefined') {
+    window.__grapeLastSendTransactionDiagnostic = diagnostic;
+  }
+
+  console.error('[Grape] sendTransaction failed', diagnostic);
+}
+
+function normalizeProviderSignature(result: { signature: string } | string): string {
+  return typeof result === 'string' ? result : result.signature;
+}
+
+function applyAdditionalSigners(
+  transaction: Transaction | VersionedTransaction,
+  signers: Signer[] | undefined
+): Transaction | VersionedTransaction {
+  if (!signers?.length) {
+    return transaction;
+  }
+
+  if (transaction instanceof VersionedTransaction) {
+    transaction.sign(signers);
+    return transaction;
+  }
+
+  transaction.partialSign(...signers);
+  return transaction;
 }
 
 export class GrapeWalletAdapter extends BaseMessageSignerWalletAdapter<GrapeWalletAdapterName> {
@@ -220,31 +267,96 @@ export class GrapeWalletAdapter extends BaseMessageSignerWalletAdapter<GrapeWall
     connection: Connection,
     options: SendTransactionOptions = {}
   ): Promise<string> {
+    console.log('🔥 GRAPE ADAPTER SEND TRANSACTION');
     const provider = this.requireProvider();
+    const transactionKind = transaction instanceof VersionedTransaction ? 'versioned' : 'legacy';
+    const connectionRpcEndpoint = (connection as Connection & { rpcEndpoint?: string }).rpcEndpoint;
 
     try {
       const { signers, ...sendOptions } = options;
 
-      if (!(transaction instanceof VersionedTransaction)) {
-        const preparedTransaction = await this.prepareTransaction(transaction, connection, sendOptions);
-        signers?.length && preparedTransaction.partialSign(...signers);
+      let preparedTransaction: Transaction | VersionedTransaction = transaction;
 
+      if (transaction instanceof VersionedTransaction) {
+        preparedTransaction = applyAdditionalSigners(transaction, signers);
+      } else {
         try {
-          if (provider.sendTransaction) {
-            const providerResult = await provider.sendTransaction(preparedTransaction, connection, sendOptions);
-            return typeof providerResult === 'string' ? providerResult : providerResult.signature;
-          }
-
-          if (provider.signAndSendTransaction) {
-            const providerResult = await provider.signAndSendTransaction(preparedTransaction);
-            return providerResult.signature;
-          }
-        } catch {
-          // Fall through to signTransaction so dApps can still complete the flow
-          // when the wallet-managed broadcast path is unavailable.
+          preparedTransaction = await this.prepareTransaction(transaction, connection, sendOptions);
+        } catch (error) {
+          captureSendTransactionDiagnostic({
+            stage: 'prepare',
+            transactionKind,
+            strategy: 'provider.signTransaction+connection.sendRawTransaction',
+            connectionRpcEndpoint,
+            options,
+            publicKey: this._publicKey?.toBase58() ?? null,
+            message: toErrorMessage(error, 'Failed to prepare transaction.'),
+            error
+          });
+          throw error;
         }
 
-        const signedTransaction = await provider.signTransaction(preparedTransaction);
+        applyAdditionalSigners(preparedTransaction, signers);
+      }
+
+      if (provider.signAndSendTransaction) {
+        try {
+          const result = await provider.signAndSendTransaction(preparedTransaction);
+          return normalizeProviderSignature(result);
+        } catch (error) {
+          captureSendTransactionDiagnostic({
+            stage: 'sign',
+            transactionKind,
+            strategy: 'provider.signAndSendTransaction',
+            connectionRpcEndpoint,
+            options,
+            publicKey: this._publicKey?.toBase58() ?? null,
+            message: toErrorMessage(error, 'Provider signAndSendTransaction failed.'),
+            error
+          });
+        }
+      }
+
+      if (provider.sendTransaction) {
+        try {
+          const result = await provider.sendTransaction(preparedTransaction, connection, sendOptions);
+          return normalizeProviderSignature(result);
+        } catch (error) {
+          captureSendTransactionDiagnostic({
+            stage: 'sign',
+            transactionKind,
+            strategy: 'provider.sendTransaction',
+            connectionRpcEndpoint,
+            options,
+            publicKey: this._publicKey?.toBase58() ?? null,
+            message: toErrorMessage(error, 'Provider sendTransaction failed.'),
+            error
+          });
+        }
+      }
+
+      let signedTransaction: Transaction | VersionedTransaction;
+      try {
+        signedTransaction = await provider.signTransaction(preparedTransaction);
+      } catch (error) {
+        captureSendTransactionDiagnostic({
+          stage: 'sign',
+          transactionKind,
+          strategy: 'provider.signTransaction+connection.sendRawTransaction',
+          connectionRpcEndpoint,
+          options,
+          publicKey: this._publicKey?.toBase58() ?? null,
+          message: toErrorMessage(error, 'Failed to sign transaction.'),
+          error
+        });
+        throw error;
+      }
+
+      try {
+        if (signedTransaction instanceof VersionedTransaction) {
+          return await connection.sendRawTransaction(signedTransaction.serialize(), sendOptions);
+        }
+
         return await connection.sendRawTransaction(
           signedTransaction.serialize({
             requireAllSignatures: false,
@@ -252,25 +364,19 @@ export class GrapeWalletAdapter extends BaseMessageSignerWalletAdapter<GrapeWall
           }),
           sendOptions
         );
+      } catch (error) {
+        captureSendTransactionDiagnostic({
+          stage: 'broadcast',
+          transactionKind,
+          strategy: 'provider.signTransaction+connection.sendRawTransaction',
+          connectionRpcEndpoint,
+          options,
+          publicKey: this._publicKey?.toBase58() ?? null,
+          message: toErrorMessage(error, 'Failed to broadcast transaction.'),
+          error
+        });
+        throw error;
       }
-
-      try {
-        if (provider.sendTransaction) {
-          const providerResult = await provider.sendTransaction(transaction, connection, options);
-          return typeof providerResult === 'string' ? providerResult : providerResult.signature;
-        }
-
-        if (provider.signAndSendTransaction) {
-          const providerResult = await provider.signAndSendTransaction(transaction);
-          return providerResult.signature;
-        }
-      } catch {
-        // Fall through to signTransaction so dApps can still complete the flow
-        // when the wallet-managed broadcast path is unavailable.
-      }
-
-      const signedTransaction = await provider.signTransaction(transaction);
-      return await connection.sendRawTransaction(signedTransaction.serialize(), options);
     } catch (error) {
       const wrapped = new WalletSendTransactionError(toErrorMessage(error, 'Failed to send transaction.'), error);
       this.emit('error', wrapped);

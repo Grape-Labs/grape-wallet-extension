@@ -1,8 +1,10 @@
+import { SOLANA_DEVNET_CHAIN, SOLANA_MAINNET_CHAIN } from '@solana/wallet-standard-chains';
+
 export const SOLANA_DERIVATION_PATH = `m/44'/501'/0'/0'`;
 
 export const SOLANA_CHAIN_IDS = {
-  'mainnet-beta': 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
-  devnet: 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1'
+  'mainnet-beta': SOLANA_MAINNET_CHAIN,
+  devnet: SOLANA_DEVNET_CHAIN
 } as const;
 
 export const GRAPE_WALLET_ICON =

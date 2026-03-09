@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Connection, PublicKey, Transaction } from '@solana/web3.js';
+import { Connection, PublicKey, Transaction, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 import { WalletReadyState } from '@solana/wallet-adapter-base';
 
 import { GrapeWalletAdapter, getInjectedGrapeProvider } from '../src/adapter';
@@ -110,14 +110,17 @@ describe('@grape/wallet-adapter', () => {
     expect(provider.signAllTransactions).toHaveBeenCalledTimes(1);
   });
 
-  it('sends transactions through the injected provider and the supplied connection', async () => {
+  it('sends transactions through the supplied connection after wallet signing', async () => {
     const provider = createMockProvider();
     (window as unknown as { grape: MockProvider }).grape = provider;
 
     const adapter = new GrapeWalletAdapter();
     await adapter.connect();
 
-    const transaction = new Transaction();
+    const transaction = new Transaction({
+      recentBlockhash: PUBLIC_KEY.toBase58(),
+      feePayer: PUBLIC_KEY
+    });
     const prepareTransactionSpy = vi.spyOn(adapter as never, 'prepareTransaction').mockResolvedValue(transaction);
     const connection = {
       sendRawTransaction: vi.fn().mockResolvedValue('tx-signature')
@@ -125,10 +128,11 @@ describe('@grape/wallet-adapter', () => {
 
     const signature = await adapter.sendTransaction(transaction, connection);
 
-    expect(signature).toBe('provider-send-signature');
+    expect(signature).toBe('tx-signature');
     expect(prepareTransactionSpy).toHaveBeenCalledTimes(1);
-    expect(provider.sendTransaction).toHaveBeenCalledWith(transaction, connection, {});
-    expect(connection.sendRawTransaction).not.toHaveBeenCalled();
+    expect(provider.signTransaction).toHaveBeenCalledWith(transaction);
+    expect(provider.sendTransaction).not.toHaveBeenCalled();
+    expect(connection.sendRawTransaction).toHaveBeenCalledTimes(1);
   });
 
   it('recovers connected state from the injected provider publicKey', async () => {
@@ -140,7 +144,10 @@ describe('@grape/wallet-adapter', () => {
 
     (adapter as unknown as { _publicKey: PublicKey | null })._publicKey = null;
 
-    const transaction = new Transaction();
+    const transaction = new Transaction({
+      recentBlockhash: PUBLIC_KEY.toBase58(),
+      feePayer: PUBLIC_KEY
+    });
     const prepareTransactionSpy = vi.spyOn(adapter as never, 'prepareTransaction').mockResolvedValue(transaction);
     const connection = {
       sendRawTransaction: vi.fn().mockResolvedValue('tx-signature')
@@ -148,24 +155,27 @@ describe('@grape/wallet-adapter', () => {
 
     const signature = await adapter.sendTransaction(transaction, connection);
 
-    expect(signature).toBe('provider-send-signature');
+    expect(signature).toBe('tx-signature');
     expect(prepareTransactionSpy).toHaveBeenCalledTimes(1);
     expect(adapter.publicKey?.toBase58()).toBe(PUBLIC_KEY.toBase58());
+    expect(provider.signTransaction).toHaveBeenCalledWith(transaction);
+    expect(connection.sendRawTransaction).toHaveBeenCalledTimes(1);
   });
 
-  it('falls back to signTransaction when wallet-managed sendTransaction fails', async () => {
+  it('sends versioned transactions through the supplied connection after wallet signing', async () => {
     const provider = createMockProvider();
-    provider.sendTransaction.mockRejectedValueOnce(new Error('wallet-managed send failed'));
     (window as unknown as { grape: MockProvider }).grape = provider;
 
     const adapter = new GrapeWalletAdapter();
     await adapter.connect();
 
-    const transaction = new Transaction({
-      recentBlockhash: PUBLIC_KEY.toBase58(),
-      feePayer: PUBLIC_KEY
-    });
-    vi.spyOn(adapter as never, 'prepareTransaction').mockResolvedValue(transaction);
+    const transaction = new VersionedTransaction(
+      new TransactionMessage({
+        payerKey: PUBLIC_KEY,
+        recentBlockhash: PUBLIC_KEY.toBase58(),
+        instructions: []
+      }).compileToV0Message([])
+    );
     const connection = {
       sendRawTransaction: vi.fn().mockResolvedValue('tx-signature')
     } as unknown as Connection;
@@ -173,7 +183,6 @@ describe('@grape/wallet-adapter', () => {
     const signature = await adapter.sendTransaction(transaction, connection);
 
     expect(signature).toBe('tx-signature');
-    expect(provider.sendTransaction).toHaveBeenCalledTimes(1);
     expect(provider.signTransaction).toHaveBeenCalledWith(transaction);
     expect(connection.sendRawTransaction).toHaveBeenCalledTimes(1);
   });

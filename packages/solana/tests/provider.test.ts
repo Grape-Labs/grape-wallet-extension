@@ -215,7 +215,7 @@ describe('provider', () => {
     expect(signed).toBeInstanceOf(Transaction);
   });
 
-  it('supports legacy sendTransaction by routing to signAndSendTransaction', async () => {
+  it('supports legacy sendTransaction through signTransaction and the supplied connection', async () => {
     const transaction = new Transaction({
       feePayer: Keypair.generate().publicKey,
       recentBlockhash: '11111111111111111111111111111111'
@@ -227,7 +227,16 @@ describe('provider', () => {
       })
     );
     const transport = {
-      request: vi.fn().mockResolvedValue({ signature: 'tx-signature' })
+      request: vi.fn().mockImplementation(async (request) => {
+        if (request.method !== 'signTransaction') {
+          throw new Error(`Unexpected request method: ${request.method}`);
+        }
+
+        return { transaction: request.params.transaction };
+      })
+    };
+    const connection = {
+      sendRawTransaction: vi.fn().mockResolvedValue('tx-signature')
     };
 
     const provider = new GrapeInpageProvider(transport, {
@@ -236,13 +245,10 @@ describe('provider', () => {
       title: 'Example'
     });
 
-    const response = await provider.sendTransaction(transaction);
+    const response = await provider.sendTransaction(transaction, connection);
 
     expect(response).toEqual({ signature: 'tx-signature' });
-    expect(transport.request).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: 'signAndSendTransaction'
-      })
-    );
+    expect(transport.request).toHaveBeenCalledWith(expect.objectContaining({ method: 'signTransaction' }));
+    expect(connection.sendRawTransaction).toHaveBeenCalledTimes(1);
   });
 });

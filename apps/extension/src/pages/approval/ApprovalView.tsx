@@ -1,10 +1,13 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+
+import { Fingerprint } from 'lucide-react';
 
 import { Button, Card, Input, KeyValueRow, StatusPill } from '@grape/ui';
 
-import type { ApprovalRecord } from '../../shared/models';
+import type { ApprovalRecord, WalletStateResponse } from '../../shared/models';
 
 import { sendRuntimeMessage } from '../../shared/chrome';
+import { isBiometricUnlockSupported, unlockWithBiometric } from '../../shared/biometric';
 import { closeCurrentWindow } from '../../shared/window';
 
 function formatAddress(address: string | undefined, start = 6, end = 6): string {
@@ -38,7 +41,13 @@ export function ApprovalView(props: {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [approved, setApproved] = useState(false);
+  const [walletState, setWalletState] = useState<WalletStateResponse | null>(null);
+  const [biometricSupported, setBiometricSupported] = useState(false);
+  const [biometricUnlocking, setBiometricUnlocking] = useState(false);
   const requiresPassword = approval.kind !== 'connect' && (approval.requiresPassword ?? true);
+  const selectedWallet =
+    walletState?.wallet.wallets.find((entry) => entry.id === walletState.wallet.selectedWalletId) ?? walletState?.wallet.wallets[0];
+  const biometricEnabled = biometricSupported && !!selectedWallet?.biometricUnlock && !!walletState?.activeWallet?.biometricEnabled;
   const successCopy = useMemo(() => {
     switch (approval.kind) {
       case 'connect':
@@ -76,6 +85,35 @@ export function ApprovalView(props: {
       return;
     }
     closeCurrentWindow();
+  }
+
+  useEffect(() => {
+    void isBiometricUnlockSupported().then(setBiometricSupported).catch(() => setBiometricSupported(false));
+    void sendRuntimeMessage<WalletStateResponse>({ type: 'wallet_get_state' })
+      .then(setWalletState)
+      .catch(() => setWalletState(null));
+  }, []);
+
+  async function handleBiometricUnlock() {
+    if (!selectedWallet?.biometricUnlock) {
+      return;
+    }
+
+    try {
+      setBiometricUnlocking(true);
+      setError(null);
+      const nextPassword = await unlockWithBiometric(selectedWallet.biometricUnlock);
+      const nextState = await sendRuntimeMessage<WalletStateResponse>({
+        type: 'wallet_unlock',
+        password: nextPassword
+      });
+      setPassword('');
+      setWalletState(nextState);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : 'Unable to unlock with device.');
+    } finally {
+      setBiometricUnlocking(false);
+    }
   }
 
   if (submitting) {
@@ -198,12 +236,26 @@ export function ApprovalView(props: {
       {requiresPassword ? (
         <Card title="Confirm password">
           <div className="stack">
-            <Input
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              placeholder="Enter password to sign"
-            />
+            <div className="send-input-shell send-input-shell-sign">
+              <Input
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                placeholder="Enter password to sign"
+              />
+              {biometricEnabled ? (
+                <button
+                  type="button"
+                  className="biometric-inline-button"
+                  onClick={() => void handleBiometricUnlock()}
+                  aria-label="Unlock with device"
+                  title="Unlock with device"
+                  disabled={biometricUnlocking}
+                >
+                  <Fingerprint size={16} />
+                </button>
+              ) : null}
+            </div>
             <p className="muted">Grape never auto-approves signing requests.</p>
           </div>
         </Card>
