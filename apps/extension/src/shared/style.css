@@ -1994,6 +1994,12 @@ body[data-surface='popup'] .collectible-grid {
   color: var(--theme-text-secondary);
   white-space: nowrap;
   overscroll-behavior: contain;
+  scrollbar-gutter: stable both-edges;
+}
+
+.approval-log-box > div {
+  display: block;
+  min-width: max-content;
 }
 
 .account-address {

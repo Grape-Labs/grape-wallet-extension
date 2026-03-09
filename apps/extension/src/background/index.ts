@@ -1709,8 +1709,8 @@ class WalletController {
         url: chrome.runtime.getURL(`approval.html?approvalId=${state.id}`),
         type: 'popup',
         focused: true,
-        width: 420,
-        height: 760
+        width: 520,
+        height: 820
       });
       approval.windowId = createdWindow.id;
     }
