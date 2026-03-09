@@ -1235,6 +1235,7 @@ body[data-surface='popup'] .quick-actions.compact .quick-action-card {
 
 .popup-menu-content {
   width: min(320px, calc(100vw - 36px));
+  max-height: min(560px, calc(100vh - 32px));
   border-radius: 20px;
   border: 1px solid var(--theme-card-border);
   background: color-mix(in srgb, var(--theme-card-bg) 92%, black 8%);
@@ -1242,6 +1243,8 @@ body[data-surface='popup'] .quick-actions.compact .quick-action-card {
   -webkit-backdrop-filter: var(--theme-backdrop-blur) var(--theme-backdrop-saturate);
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
   padding: 12px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   z-index: 30;
 }
 
