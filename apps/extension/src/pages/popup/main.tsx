@@ -23,8 +23,10 @@ import {
 import QRCode from 'qrcode';
 
 import { Button, Card, Input, KeyValueRow, PageShell, StatusPill } from '@grape/ui';
+import { STORAGE_KEYS } from '@grape/core';
 
 import type {
+  ApprovalRecord,
   CollectionHolding,
   IncidentResponseResponse,
   TokenActionResponse,
@@ -41,10 +43,11 @@ import { sendRuntimeMessage } from '../../shared/chrome';
 import { JUPITER_SOL_MINT } from '../../shared/jupiter';
 import { applyDocumentTheme, THEMES } from '../../shared/theme';
 import { openExtensionPage, openExtensionSidePanel } from '../../shared/window';
+import { ApprovalView } from '../approval/ApprovalView';
 import { mountPage } from '../lib';
 import { OnboardingView } from '../onboarding/OnboardingView';
 
-type PopupView = 'home' | 'send' | 'receive' | 'swap' | 'settings' | 'asset' | 'security';
+type PopupView = 'home' | 'send' | 'receive' | 'swap' | 'settings' | 'asset' | 'security' | 'approval';
 type HomeTab = 'tokens' | 'collectibles';
 type AssetOption =
   | { id: 'sol'; label: 'SOL'; balance: string; asset: { kind: 'sol' } }
@@ -371,8 +374,10 @@ function PopupPage() {
     rotateCloseAuthorities: true,
     rotateMintAuthorities: true
   });
+  const [activeApproval, setActiveApproval] = useState<ApprovalRecord | null>(null);
 
   const surface = document.body.dataset.surface ?? 'page';
+  const surfaceId = document.body.dataset.surfaceId ?? '';
   const isPopupSurface = surface === 'popup';
 
   const refresh = async () => {
@@ -396,8 +401,24 @@ function PopupPage() {
     }
   };
 
+  const refreshActiveApproval = async () => {
+    const stored = await chrome.storage.local.get(STORAGE_KEYS.approvals);
+    const approvals = (stored[STORAGE_KEYS.approvals] as Record<string, ApprovalRecord> | undefined) ?? {};
+    const latestApproval =
+      Object.values(approvals)
+        .filter((approval) => approval.hostSurfaceId === surfaceId)
+        .sort((left, right) => right.createdAt - left.createdAt)[0] ?? null;
+    setActiveApproval(latestApproval);
+    if (latestApproval) {
+      setView('approval');
+    } else {
+      setView((current) => (current === 'approval' ? 'home' : current));
+    }
+  };
+
   useEffect(() => {
     void refresh();
+    void refreshActiveApproval();
   }, []);
 
   useEffect(() => {
@@ -409,6 +430,22 @@ function PopupPage() {
       void refreshSecurityReport();
     }
   }, [view, state?.wallet.setup, state?.session.locked]);
+
+  useEffect(() => {
+    const listener = (
+      changes: Record<string, chrome.storage.StorageChange>,
+      areaName: string
+    ) => {
+      if (areaName === 'local' && changes[STORAGE_KEYS.approvals]) {
+        void refreshActiveApproval();
+      }
+    };
+
+    chrome.storage.onChanged.addListener(listener);
+    return () => {
+      chrome.storage.onChanged.removeListener(listener);
+    };
+  }, []);
 
   const activePublicKey = state?.activeAccount?.publicKey;
 
@@ -946,7 +983,7 @@ function PopupPage() {
               </div>
             </div>
             <Button tone="secondary" className="mini-button" onClick={handleCopyAddress}>
-              <span className="button-icon"><Copy size={14} /></span>
+              <span className="button-icon"><Copy size={14} /></span>&nbsp;
               {copiedAddress ? 'Copied' : 'Copy'}
             </Button>
           </div>
@@ -1217,7 +1254,7 @@ function PopupPage() {
             {receiveQr ? <img className="receive-qr" src={receiveQr} alt="Wallet address QR code" /> : null}
             <div className="receive-address">
               <div className="mono receive-address-value">{activePublicKey}</div>
-              <Button tone="secondary" className="button-block" onClick={handleCopyAddress}>
+              <Button tone="secondary" className="button-block" onClick={handleCopyAddress}>&nbsp;
                 {copiedAddress ? 'Copied address' : 'Copy address'}
               </Button>
             </div>
@@ -1425,6 +1462,29 @@ function PopupPage() {
           </div>
         </Card>
       </>
+    );
+  }
+
+  function renderApproval() {
+    if (!activeApproval) {
+      return (
+        <Card title="Waiting for request">
+          <p className="muted">No pending approval is available right now.</p>
+        </Card>
+      );
+    }
+
+    return (
+      <ApprovalView
+        approvalId={activeApproval.id}
+        approval={activeApproval}
+        inline
+        onResolved={() => {
+          setActiveApproval(null);
+          setView('home');
+          void refresh();
+        }}
+      />
     );
   }
 
@@ -1892,6 +1952,8 @@ function PopupPage() {
                 ? 'Swap'
                 : view === 'asset'
                   ? 'Token'
+                  : view === 'approval'
+                    ? 'Review request'
                   : view === 'security'
                     ? 'Security'
                     : 'Settings'
@@ -1907,6 +1969,8 @@ function PopupPage() {
                 ? 'Get a Jupiter quote and swap from your wallet.'
                 : view === 'asset'
                   ? 'Burn or close token accounts safely.'
+                  : view === 'approval'
+                    ? 'Approve or reject this request from the currently open wallet surface.'
                   : view === 'security'
                     ? 'Check delegates and run containment actions.'
                     : 'Manage your wallet and connections.'
@@ -1917,6 +1981,7 @@ function PopupPage() {
       {view === 'send' ? renderSend() : null}
       {view === 'receive' ? renderReceive() : null}
       {view === 'asset' ? renderAsset() : null}
+      {view === 'approval' ? renderApproval() : null}
       {view === 'security' ? renderSecurity() : null}
       {view === 'swap' ? renderSwap() : null}
       {view === 'settings' ? renderSettings() : null}

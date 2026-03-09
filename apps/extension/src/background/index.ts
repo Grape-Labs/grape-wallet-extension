@@ -63,6 +63,13 @@ import { getRpcEndpoint } from '../shared/rpc';
 import { fetchShyftCollections, fetchShyftWalletTokens, hasShyftApiKey } from '../shared/shyft';
 
 const approvalsStorage = new ChromeStorageArea<Record<string, ApprovalRecord>>(chrome.storage.local, STORAGE_KEYS.approvals, {});
+type ActiveWalletSurface = {
+  port: chrome.runtime.Port;
+  surfaceId: string;
+  page: string;
+};
+
+const activeWalletSurfacePorts = new Map<chrome.runtime.Port, ActiveWalletSurface>();
 const TOKEN_PROGRAM_IDS = [
   'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
   'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb'
@@ -1113,7 +1120,7 @@ class WalletController {
     }
 
     const transactionSummary =
-      request.method === 'signTransaction' || request.method === 'signAndSendTransaction'
+      request.method === 'signTransaction' || request.method === 'signAndSendTransaction' || request.method === 'sendTransaction'
         ? summarizeTransaction(request.params.transaction)
         : request.method === 'signAllTransactions'
           ? summarizeTransaction(request.params.transactions[0])
@@ -1230,7 +1237,10 @@ class WalletController {
         };
       }
       case 'sign-and-send-transaction': {
-        const transactionRequest = approval.request as Extract<ProviderRequest, { method: 'signAndSendTransaction' }>;
+        const transactionRequest = approval.request as Extract<
+          ProviderRequest,
+          { method: 'signAndSendTransaction' | 'sendTransaction' }
+        >;
         try {
           return {
             signature:
@@ -1276,31 +1286,23 @@ class WalletController {
       network,
       requestedPermissions: extras?.requestedPermissions,
       transactionSummary: extras?.transactionSummary,
-      requiresPassword: !this.unlockedSecrets[walletId]
+      requiresPassword: !this.unlockedSecrets[walletId],
+      hostSurfaceId: getPreferredApprovalSurface()?.surfaceId
     };
 
     const approvals = await approvalsStorage.get();
     approvals[state.id] = approval;
     await approvalsStorage.set(approvals);
 
-    const createdWindow = await chrome.windows.create({
-      url: chrome.runtime.getURL(`approval.html?approvalId=${approval.id}`),
-      type: 'popup',
-      width:
-        request.method === 'signTransaction' ||
-        request.method === 'signAllTransactions' ||
-        request.method === 'signAndSendTransaction'
-          ? 500
-          : 440,
-      height:
-        request.method === 'signTransaction' ||
-        request.method === 'signAllTransactions' ||
-        request.method === 'signAndSendTransaction'
-          ? 820
-          : 760
-    });
+    if (!approval.hostSurfaceId) {
+      await chrome.windows.create({
+        url: chrome.runtime.getURL(`wallet.html?view=approval`),
+        type: 'popup',
+        width: 500,
+        height: 820
+      });
+    }
 
-    approval.windowId = createdWindow.id;
     approvals[state.id] = approval;
     await approvalsStorage.set(approvals);
     return approval;
@@ -1347,6 +1349,60 @@ class WalletController {
   }
 }
 
+function getSurfacePriority(page: string): number {
+  switch (page) {
+    case 'sidepanel':
+      return 3;
+    case 'popup':
+      return 2;
+    case 'wallet':
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+function getPreferredApprovalSurface(): ActiveWalletSurface | undefined {
+  return [...activeWalletSurfacePorts.values()].sort((left, right) => getSurfacePriority(right.page) - getSurfacePriority(left.page))[0];
+}
+
+async function assignPendingApprovalsToPreferredSurface() {
+  const preferred = getPreferredApprovalSurface();
+  if (!preferred) {
+    return;
+  }
+
+  const approvals = await approvalsStorage.get();
+  let changed = false;
+  for (const approval of Object.values(approvals)) {
+    if (!approval.hostSurfaceId) {
+      approval.hostSurfaceId = preferred.surfaceId;
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    await approvalsStorage.set(approvals);
+  }
+}
+
+async function reassignApprovalsFromSurface(surfaceId: string) {
+  const approvals = await approvalsStorage.get();
+  const preferred = getPreferredApprovalSurface();
+  let changed = false;
+
+  for (const approval of Object.values(approvals)) {
+    if (approval.hostSurfaceId === surfaceId) {
+      approval.hostSurfaceId = preferred?.surfaceId;
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    await approvalsStorage.set(approvals);
+  }
+}
+
 function toApprovalKind(request: ProviderRequest) {
   switch (request.method) {
     case 'connect':
@@ -1358,6 +1414,7 @@ function toApprovalKind(request: ProviderRequest) {
     case 'signAllTransactions':
       return 'sign-all-transactions';
     case 'signAndSendTransaction':
+    case 'sendTransaction':
       return 'sign-and-send-transaction';
     default:
       throw new RpcError('UNKNOWN_REQUEST', 'Unsupported request type.');
@@ -1593,6 +1650,33 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
 });
 
 chrome.runtime.onConnect.addListener((port) => {
+  if (port.name === 'grape-surface') {
+    port.onMessage.addListener((message) => {
+      if (
+        message &&
+        typeof message === 'object' &&
+        message.type === 'register-surface' &&
+        typeof message.surfaceId === 'string' &&
+        typeof message.page === 'string'
+      ) {
+        activeWalletSurfacePorts.set(port, {
+          port,
+          surfaceId: message.surfaceId,
+          page: message.page
+        });
+        void assignPendingApprovalsToPreferredSurface();
+      }
+    });
+    port.onDisconnect.addListener(() => {
+      const surface = activeWalletSurfacePorts.get(port);
+      activeWalletSurfacePorts.delete(port);
+      if (surface) {
+        void reassignApprovalsFromSurface(surface.surfaceId);
+      }
+    });
+    return;
+  }
+
   if (port.name !== 'grape-provider') {
     return;
   }

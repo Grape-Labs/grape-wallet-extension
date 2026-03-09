@@ -25,6 +25,7 @@ export type ApprovalRecord = {
   publicKey?: string;
   transactionSummary?: TransactionSummary;
   requiresPassword?: boolean;
+  hostSurfaceId?: string;
 };
 
 export type WalletStateResponse = {

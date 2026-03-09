@@ -78,6 +78,14 @@ export const providerRequestSchema = z.discriminatedUnion('method', [
     params: z.object({
       transaction: bytesSchema
     })
+  }),
+  z.object({
+    id: z.string(),
+    method: z.literal('sendTransaction'),
+    origin: pageOriginSchema,
+    params: z.object({
+      transaction: bytesSchema
+    })
   })
 ]);
 

@@ -29,6 +29,23 @@ describe('message routing contracts', () => {
     expect(response.success).toBe(true);
   });
 
+  it('validates legacy sendTransaction provider requests', () => {
+    const request = providerRequestSchema.parse({
+      id: 'request-legacy-send-1',
+      method: 'sendTransaction',
+      origin: {
+        origin: 'https://example.com',
+        href: 'https://example.com/app',
+        title: 'Example App'
+      },
+      params: {
+        transaction: 'AQID'
+      }
+    });
+
+    expect(request.method).toBe('sendTransaction');
+  });
+
   it('validates runtime messages used by extension pages', () => {
     const message = runtimeMessageSchema.parse({
       type: 'approval_respond',

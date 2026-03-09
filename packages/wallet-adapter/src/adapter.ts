@@ -42,6 +42,11 @@ type GrapeInjectedProvider = {
   signTransaction<T extends Transaction | VersionedTransaction>(transaction: T): Promise<T>;
   signAllTransactions?<T extends Transaction | VersionedTransaction>(transactions: T[]): Promise<T[]>;
   signAndSendTransaction?<T extends Transaction | VersionedTransaction>(transaction: T): Promise<{ signature: string }>;
+  sendTransaction?(
+    transaction: Transaction | VersionedTransaction,
+    connection?: Connection,
+    options?: SendTransactionOptions
+  ): Promise<{ signature: string } | string>;
   on?(event: 'connect' | 'disconnect' | 'accountChanged', listener: (...args: unknown[]) => void): void;
   off?(event: 'connect' | 'disconnect' | 'accountChanged', listener: (...args: unknown[]) => void): void;
 };
@@ -218,16 +223,38 @@ export class GrapeWalletAdapter extends BaseMessageSignerWalletAdapter<GrapeWall
     const provider = this.requireProvider();
 
     try {
-      if (transaction instanceof VersionedTransaction) {
-        const signedTransaction = await provider.signTransaction(transaction);
-        return await connection.sendRawTransaction(signedTransaction.serialize(), options);
+      const { signers, ...sendOptions } = options;
+
+      if (!(transaction instanceof VersionedTransaction)) {
+        const preparedTransaction = await this.prepareTransaction(transaction, connection, sendOptions);
+        signers?.length && preparedTransaction.partialSign(...signers);
+
+        if (provider.sendTransaction) {
+          const providerResult = await provider.sendTransaction(preparedTransaction, connection, sendOptions);
+          return typeof providerResult === 'string' ? providerResult : providerResult.signature;
+        }
+
+        if (provider.signAndSendTransaction) {
+          const providerResult = await provider.signAndSendTransaction(preparedTransaction);
+          return providerResult.signature;
+        }
+
+        const signedTransaction = await provider.signTransaction(preparedTransaction);
+        return await connection.sendRawTransaction(signedTransaction.serialize(), sendOptions);
       }
 
-      const { signers, ...sendOptions } = options;
-      const preparedTransaction = await this.prepareTransaction(transaction, connection, sendOptions);
-      signers?.length && preparedTransaction.partialSign(...signers);
-      const signedTransaction = await provider.signTransaction(preparedTransaction);
-      return await connection.sendRawTransaction(signedTransaction.serialize(), sendOptions);
+      if (provider.sendTransaction) {
+        const providerResult = await provider.sendTransaction(transaction, connection, options);
+        return typeof providerResult === 'string' ? providerResult : providerResult.signature;
+      }
+
+      if (provider.signAndSendTransaction) {
+        const providerResult = await provider.signAndSendTransaction(transaction);
+        return providerResult.signature;
+      }
+
+      const signedTransaction = await provider.signTransaction(transaction);
+      return await connection.sendRawTransaction(signedTransaction.serialize(), options);
     } catch (error) {
       const wrapped = new WalletSendTransactionError(toErrorMessage(error, 'Failed to send transaction.'), error);
       this.emit('error', wrapped);

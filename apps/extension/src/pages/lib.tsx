@@ -25,6 +25,9 @@ function resolveSurface() {
   }
 }
 
+let surfacePort: chrome.runtime.Port | null = null;
+let surfaceId: string | null = null;
+
 export function mountPage(element: React.ReactNode) {
   const container = document.getElementById('root');
   if (!container) {
@@ -32,6 +35,25 @@ export function mountPage(element: React.ReactNode) {
   }
 
   document.body.dataset.surface = resolveSurface();
+  surfaceId ??= crypto.randomUUID();
+  document.body.dataset.surfaceId = surfaceId;
+  const page = document.body.dataset.page;
+  if ((page === 'popup' || page === 'wallet' || page === 'sidepanel') && !surfacePort) {
+    try {
+      surfacePort = chrome.runtime.connect({ name: 'grape-surface' });
+      surfacePort.postMessage({
+        type: 'register-surface',
+        surfaceId,
+        page
+      });
+      window.addEventListener('beforeunload', () => {
+        surfacePort?.disconnect();
+        surfacePort = null;
+      }, { once: true });
+    } catch {
+      surfacePort = null;
+    }
+  }
   void loadPersistedTheme().then((theme) => {
     applyDocumentTheme(theme);
   });

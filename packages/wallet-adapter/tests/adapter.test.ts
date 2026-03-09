@@ -15,6 +15,7 @@ type MockProvider = {
   signTransaction: ReturnType<typeof vi.fn>;
   signAllTransactions: ReturnType<typeof vi.fn>;
   signAndSendTransaction: ReturnType<typeof vi.fn>;
+  sendTransaction: ReturnType<typeof vi.fn>;
   on: ReturnType<typeof vi.fn>;
   off: ReturnType<typeof vi.fn>;
 };
@@ -29,6 +30,7 @@ function createMockProvider(): MockProvider {
     signTransaction: vi.fn().mockImplementation(async <T>(transaction: T) => transaction),
     signAllTransactions: vi.fn().mockImplementation(async <T>(transactions: T[]) => transactions),
     signAndSendTransaction: vi.fn().mockResolvedValue({ signature: 'mock-signature' }),
+    sendTransaction: vi.fn().mockResolvedValue({ signature: 'provider-send-signature' }),
     on: vi.fn(),
     off: vi.fn()
   };
@@ -110,16 +112,12 @@ describe('@grape/wallet-adapter', () => {
 
   it('sends transactions through the injected provider and the supplied connection', async () => {
     const provider = createMockProvider();
-    const transaction = new Transaction();
-    provider.signTransaction.mockResolvedValue({
-      ...transaction,
-      serialize: vi.fn().mockReturnValue(new Uint8Array([1, 2, 3]))
-    });
     (window as unknown as { grape: MockProvider }).grape = provider;
 
     const adapter = new GrapeWalletAdapter();
     await adapter.connect();
 
+    const transaction = new Transaction();
     const prepareTransactionSpy = vi.spyOn(adapter as never, 'prepareTransaction').mockResolvedValue(transaction);
     const connection = {
       sendRawTransaction: vi.fn().mockResolvedValue('tx-signature')
@@ -127,9 +125,9 @@ describe('@grape/wallet-adapter', () => {
 
     const signature = await adapter.sendTransaction(transaction, connection);
 
-    expect(signature).toBe('tx-signature');
+    expect(signature).toBe('provider-send-signature');
     expect(prepareTransactionSpy).toHaveBeenCalledTimes(1);
-    expect(provider.signTransaction).toHaveBeenCalledWith(transaction);
-    expect(connection.sendRawTransaction).toHaveBeenCalledTimes(1);
+    expect(provider.sendTransaction).toHaveBeenCalledWith(transaction, connection, {});
+    expect(connection.sendRawTransaction).not.toHaveBeenCalled();
   });
 });
