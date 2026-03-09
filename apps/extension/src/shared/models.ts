@@ -32,7 +32,14 @@ export type WalletStateResponse = {
   wallet: WalletState;
   session: SessionState;
   permissions: OriginPermission[];
-  activeWallet?: { id: string; name: string; publicKey: string; biometricEnabled?: boolean };
+  activeWallet?: {
+    id: string;
+    name: string;
+    publicKey: string;
+    biometricEnabled?: boolean;
+    source?: 'created' | 'imported-mnemonic' | 'imported-private-key' | 'watch-only' | 'ledger';
+    signerKind?: 'software' | 'watch-only' | 'ledger';
+  };
   activeAccount?: { publicKey: string };
   recentRecipients: WalletRecipient[];
   canUseUnlockedSigner: boolean;

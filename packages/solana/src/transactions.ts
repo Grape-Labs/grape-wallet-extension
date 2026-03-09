@@ -40,6 +40,7 @@ export type TransactionInstructionSummary = {
   programName: string;
   accountCount: number;
   dataLength: number;
+  accounts?: string[];
   title?: string;
   details?: TransactionInstructionDetail[];
   warning?: string;
@@ -397,6 +398,7 @@ function summarizeInstruction(instruction: ResolvedInstruction): TransactionInst
 
   return {
     ...base,
+    accounts: instruction.keys.map((key) => accountLabel(key)),
     ...decoded,
     warning: decoded.warning ?? base.warning
   };

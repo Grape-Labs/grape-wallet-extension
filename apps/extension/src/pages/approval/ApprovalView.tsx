@@ -57,6 +57,7 @@ export function ApprovalView(props: {
   const [biometricSupported, setBiometricSupported] = useState(false);
   const [biometricUnlocking, setBiometricUnlocking] = useState(false);
   const [showSimulationLogs, setShowSimulationLogs] = useState(false);
+  const [expandedInstructionAccounts, setExpandedInstructionAccounts] = useState<Record<string, boolean>>({});
   const requiresPassword = approval.kind !== 'connect' && (approval.requiresPassword ?? true);
   const selectedWallet =
     walletState?.wallet.wallets.find((entry) => entry.id === walletState.wallet.selectedWalletId) ?? walletState?.wallet.wallets[0];
@@ -232,6 +233,37 @@ export function ApprovalView(props: {
                   }
                 />
                 <KeyValueRow label="Accounts" value={instruction.accountCount} />
+                {instruction.accounts?.length ? (
+                  <div className="approval-instruction-accounts">
+                    <div className="approval-instruction-accounts-header">
+                      <span className="muted">Instruction accounts</span>
+                      <button
+                        type="button"
+                        className="button secondary mini-button"
+                        onClick={() =>
+                          setExpandedInstructionAccounts((current) => ({
+                            ...current,
+                            [`${instruction.programId}-${index}`]: !current[`${instruction.programId}-${index}`]
+                          }))
+                        }
+                      >
+                        {expandedInstructionAccounts[`${instruction.programId}-${index}`] ? 'Hide accounts' : 'Show accounts'}
+                      </button>
+                    </div>
+                    {expandedInstructionAccounts[`${instruction.programId}-${index}`] ? (
+                      <div className="approval-instruction-account-list">
+                        {instruction.accounts.map((account, accountIndex) => (
+                          <div key={`${instruction.programId}-${index}-account-${accountIndex}`} className="approval-instruction-account-row">
+                            <span className="muted">#{accountIndex + 1}</span>
+                            <span className="mono approval-address" title={account}>
+                              {formatAddress(account)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
                 {instruction.details?.map((detail) => (
                   <KeyValueRow key={`${instruction.programId}-${index}-${detail.label}`} label={detail.label} value={renderInstructionValue(detail.value, detail.address)} />
                 ))}

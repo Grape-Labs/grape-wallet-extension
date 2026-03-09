@@ -128,6 +128,10 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     publicKey: z.string()
   }),
   z.object({
+    type: z.literal('wallet_import_watch_only'),
+    publicKey: z.string().min(32)
+  }),
+  z.object({
     type: z.literal('wallet_unlock'),
     password: z.string()
   }),

@@ -182,6 +182,28 @@ function formatAddress(address: string | undefined): string {
   return `${address.slice(0, 4)}...${address.slice(-4)}`;
 }
 
+function formatWalletSourceLabel(
+  source: WalletStateResponse['activeWallet'] extends { source?: infer T } ? T : string,
+  signerKind?: 'software' | 'watch-only' | 'ledger'
+): string {
+  if (signerKind === 'watch-only' || source === 'watch-only') {
+    return 'Watch-only wallet';
+  }
+  if (signerKind === 'ledger' || source === 'ledger') {
+    return 'Ledger hardware wallet';
+  }
+
+  switch (source) {
+    case 'imported-mnemonic':
+      return 'Imported recovery phrase';
+    case 'imported-private-key':
+      return 'Imported private key';
+    case 'created':
+    default:
+      return 'Created in Grape';
+  }
+}
+
 function buildExplorerUrl(address: string, network: 'mainnet-beta' | 'devnet'): string {
   const cluster = network === 'devnet' ? '?cluster=devnet' : '';
   return `https://explorer.solana.com/address/${address}${cluster}`;
@@ -1153,9 +1175,10 @@ function PopupPage() {
   const permissions = state.permissions;
   const canUseUnlockedSigner = state.canUseUnlockedSigner;
   const activeWallet = state.activeWallet;
+  const isWatchOnlyWallet = activeWallet?.signerKind === 'watch-only';
   const recentRecipients = state.recentRecipients;
 
-  if (session.locked) {
+  if (session.locked && !isWatchOnlyWallet) {
     return (
       <PageShell eyebrow={null} title="" subtitle="">
         {renderLockedWelcome()}
@@ -1174,7 +1197,7 @@ function PopupPage() {
 
   async function handleWalletRemove(walletId: string, walletName: string) {
     const warning =
-      state.wallet.wallets.length === 1
+      wallet.wallets.length === 1
         ? `Remove ${walletName}? This will remove your final wallet from Grape and return you to setup. Make sure you have backed up the recovery phrase or private key and moved any assets first.`
         : `Remove ${walletName}? Make sure you have backed up the recovery phrase or private key and moved any assets first.`;
 
@@ -1433,6 +1456,7 @@ function PopupPage() {
                     >
                       <div>
                         <strong>{walletEntry.name}</strong>
+                        <div className="muted wallet-menu-meta">{formatWalletSourceLabel(walletEntry.source, walletEntry.signer.kind)}</div>
                         <div className="muted mono">{formatAddress(walletPublicKey)}</div>
                       </div>
                       {isActiveWallet ? <StatusPill tone="success">Active</StatusPill> : null}
@@ -1458,8 +1482,11 @@ function PopupPage() {
             <DropdownMenu.Item
               className="wallet-menu-action"
               onSelect={() => {
-                setView('swap');
+                if (!isWatchOnlyWallet) {
+                  setView('swap');
+                }
               }}
+              disabled={isWatchOnlyWallet}
             >
               Swap
             </DropdownMenu.Item>
@@ -1581,7 +1608,7 @@ function PopupPage() {
             </div>
             <div className="wallet-home-controls">
               <span className={`wallet-session-state ${session.locked ? 'locked' : 'ready'}`.trim()}>
-                {session.locked ? 'Locked' : 'Ready'}
+                {isWatchOnlyWallet ? 'Watch-only' : session.locked ? 'Locked' : 'Ready'}
               </span>
               {renderWalletMenu()}
             </div>
@@ -1618,7 +1645,7 @@ function PopupPage() {
           </div>
 
           <div className="quick-actions compact">
-            <button type="button" className="quick-action-card" onClick={() => openSend('sol')} aria-label="Send" title="Send">
+            <button type="button" className="quick-action-card" onClick={() => openSend('sol')} aria-label="Send" title="Send" disabled={isWatchOnlyWallet}>
               <span className="quick-action-icon"><SendHorizontal size={18} /></span>
             </button>
             <button
@@ -1632,6 +1659,7 @@ function PopupPage() {
               }}
               aria-label="Swap"
               title="Swap"
+              disabled={isWatchOnlyWallet}
             >
               <span className="quick-action-icon"><ArrowLeftRight size={18} /></span>
             </button>
@@ -1640,6 +1668,10 @@ function PopupPage() {
             </button>
           </div>
         </Card>
+
+        {isWatchOnlyWallet ? (
+          <p className="warning-box">This is a watch-only wallet. You can view assets, receive funds, and connect to dApps, but signing is disabled.</p>
+        ) : null}
 
         <Tabs.Root value={homeTab} onValueChange={(value) => setHomeTab(value as HomeTab)}>
           <Tabs.List className="content-tabs" aria-label="Wallet content">
@@ -1725,6 +1757,17 @@ function PopupPage() {
   }
 
   function renderSend() {
+    if (isWatchOnlyWallet) {
+      return (
+        <Card title="Watch-only wallet">
+          <p className="warning-box">This wallet can track assets and connect to dApps, but it cannot send or sign transactions.</p>
+          <Button tone="secondary" onClick={() => setView('home')}>
+            Back to wallet
+          </Button>
+        </Card>
+      );
+    }
+
     const selectedAssetName =
       assetId === 'sol' ? 'Solana' : selectedTokenHolding?.name ?? selectedTokenHolding?.symbol ?? selectedAsset?.label ?? 'Token';
     const selectedAssetSymbol =
@@ -1974,8 +2017,8 @@ function PopupPage() {
       selectedTokenHolding && typeof selectedTokenHolding.valueUsd === 'number'
         ? formatUsd(selectedTokenHolding.valueUsd)
         : null;
-    const canCloseAccount = Number(assetDetails.amount) === 0 && !assetDetails.delegate;
-    const canBurn = Number(assetDetails.amount) > 0;
+    const canCloseAccount = !isWatchOnlyWallet && Number(assetDetails.amount) === 0 && !assetDetails.delegate;
+    const canBurn = !isWatchOnlyWallet && Number(assetDetails.amount) > 0;
     const detailActionTitle = canBurn ? 'Burn token' : canCloseAccount ? 'Close account' : 'Close account after burning all tokens';
     const detailActionIcon = canBurn ? <Flame size={18} /> : <Trash2 size={18} />;
     const explorerNetwork = wallet.selectedNetwork;
@@ -2010,10 +2053,10 @@ function PopupPage() {
 
           {!isCollectibleView ? (
             <div className="quick-actions compact asset-detail-actions">
-              <button type="button" className="quick-action-card" onClick={() => openSend(assetId)} aria-label="Send token" title="Send">
+              <button type="button" className="quick-action-card" onClick={() => openSend(assetId)} aria-label="Send token" title="Send" disabled={isWatchOnlyWallet}>
                 <span className="quick-action-icon"><SendHorizontal size={18} /></span>
               </button>
-              <button type="button" className="quick-action-card" onClick={() => openSwapForAsset(assetId)} aria-label="Swap token" title="Swap">
+              <button type="button" className="quick-action-card" onClick={() => openSwapForAsset(assetId)} aria-label="Swap token" title="Swap" disabled={isWatchOnlyWallet}>
                 <span className="quick-action-icon"><ArrowLeftRight size={18} /></span>
               </button>
               <button
@@ -2029,7 +2072,7 @@ function PopupPage() {
                 }}
                 aria-label={detailActionTitle}
                 title={detailActionTitle}
-                disabled={canBurn ? !canBurn : !canCloseAccount}
+                disabled={isWatchOnlyWallet || (canBurn ? !canBurn : !canCloseAccount)}
               >
                 <span className="quick-action-icon">{detailActionIcon}</span>
               </button>
@@ -2506,12 +2549,13 @@ function PopupPage() {
             ) : null}
             <Button
               className="button-block"
-              disabled={incidentSubmitting || !incidentSafeWallet.trim() || (!canUseUnlockedSigner && !incidentPassword.trim())}
+              disabled={isWatchOnlyWallet || incidentSubmitting || !incidentSafeWallet.trim() || (!canUseUnlockedSigner && !incidentPassword.trim())}
               onClick={() => void handleRunIncidentResponse()}
             >
               <span className="button-icon"><ShieldAlert size={16} /></span>
               {incidentSubmitting ? 'Containing...' : 'Contain compromise'}
             </Button>
+            {isWatchOnlyWallet ? <p className="warning-box">Incident response actions require a signing wallet. Watch-only wallets cannot execute them.</p> : null}
             {incidentError ? <p className="danger-box">{incidentError}</p> : null}
             {incidentResult?.warnings.length ? (
               <div className="stack">
@@ -2546,6 +2590,17 @@ function PopupPage() {
   }
 
   function renderSwap() {
+    if (isWatchOnlyWallet) {
+      return (
+        <Card title="Watch-only wallet">
+          <p className="warning-box">This wallet can view assets and connect to dApps, but it cannot swap or sign transactions.</p>
+          <Button tone="secondary" onClick={() => setView('home')}>
+            Back to wallet
+          </Button>
+        </Card>
+      );
+    }
+
     const inputAssetSymbol =
       swapInputAssetId === 'sol'
         ? 'SOL'

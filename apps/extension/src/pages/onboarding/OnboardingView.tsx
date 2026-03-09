@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { PublicKey } from '@solana/web3.js';
 
 import { Button, Card, Input, MnemonicGrid, PageShell, TextArea } from '@grape/ui';
 import {
@@ -23,7 +24,7 @@ type OnboardingViewProps = {
 };
 
 type SetupMode = 'create' | 'import';
-type ImportMethod = 'mnemonic' | 'private-key' | 'ledger';
+type ImportMethod = 'mnemonic' | 'private-key' | 'watch-only' | 'ledger';
 type SetupStep = 1 | 2 | 3;
 type LedgerCandidate = {
   index: number;
@@ -43,6 +44,15 @@ function formatAddress(address: string) {
   return `${address.slice(0, 4)}...${address.slice(-4)}`;
 }
 
+function validatePublicKey(value: string) {
+  try {
+    new PublicKey(value.trim());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function OnboardingView(props: OnboardingViewProps) {
   const searchParams = useMemo(() => new URLSearchParams(window.location.search), []);
   const isAppendFlow = searchParams.get('append') === '1';
@@ -52,6 +62,7 @@ export function OnboardingView(props: OnboardingViewProps) {
   const [generatedMnemonic, setGeneratedMnemonic] = useState('');
   const [importMnemonic, setImportMnemonic] = useState('');
   const [importPrivateKey, setImportPrivateKey] = useState('');
+  const [watchOnlyPublicKey, setWatchOnlyPublicKey] = useState('');
   const [ledgerAccount, setLedgerAccount] = useState<{ publicKey: string; derivationPath: string } | null>(null);
   const [ledgerAccounts, setLedgerAccounts] = useState<LedgerCandidate[]>([]);
   const [ledgerScanCount, setLedgerScanCount] = useState(LEDGER_ACCOUNT_SCAN_BATCH_SIZE);
@@ -97,9 +108,12 @@ export function OnboardingView(props: OnboardingViewProps) {
         ? validateWalletMnemonic(mnemonic)
         : importMethod === 'private-key'
           ? validateSolanaPrivateKey(importPrivateKey)
+          : importMethod === 'watch-only'
+            ? validatePublicKey(watchOnlyPublicKey)
           : !!ledgerAccount;
 
-  const isPasswordStepValid = !submitting && password.length >= 8 && password === passwordConfirm;
+  const requiresPassword = mode === 'create' || importMethod === 'mnemonic' || importMethod === 'private-key' || importMethod === 'ledger';
+  const isPasswordStepValid = !requiresPassword || (!submitting && password.length >= 8 && password === passwordConfirm);
 
   async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
     try {
@@ -136,11 +150,11 @@ export function OnboardingView(props: OnboardingViewProps) {
         throw new Error('Confirm that you backed up the recovery phrase.');
       }
 
-      if (password.length < 8) {
+      if (requiresPassword && password.length < 8) {
         throw new Error('Password must be at least 8 characters.');
       }
 
-      if (password !== passwordConfirm) {
+      if (requiresPassword && password !== passwordConfirm) {
         throw new Error('Passwords do not match.');
       }
 
@@ -174,6 +188,14 @@ export function OnboardingView(props: OnboardingViewProps) {
             privateKey: importPrivateKey.trim(),
             password,
             publicKey: account.publicKey
+          });
+        } else if (importMethod === 'watch-only') {
+          if (!validatePublicKey(watchOnlyPublicKey)) {
+            throw new Error('Enter a valid Solana wallet address.');
+          }
+          await sendRuntimeMessage<WalletStateResponse>({
+            type: 'wallet_import_watch_only',
+            publicKey: watchOnlyPublicKey.trim()
           });
         } else {
           if (!ledgerAccount) {
@@ -285,6 +307,18 @@ export function OnboardingView(props: OnboardingViewProps) {
                 </button>
                 <button
                   type="button"
+                  className={`choice-card ${importMethod === 'watch-only' ? 'active' : ''}`.trim()}
+                  onClick={() => {
+                    setImportMethod('watch-only');
+                    setLedgerAccount(null);
+                    setError(null);
+                  }}
+                >
+                  <strong>Watch-only wallet</strong>
+                  <span className="muted">Track any public address and connect to dApps without signing.</span>
+                </button>
+                <button
+                  type="button"
                   className={`choice-card ${importMethod === 'ledger' ? 'active' : ''}`.trim()}
                   onClick={() => {
                     setImportMethod('ledger');
@@ -318,6 +352,19 @@ export function OnboardingView(props: OnboardingViewProps) {
                   />
                   {importPrivateKey.trim().length > 0 && !validateSolanaPrivateKey(importPrivateKey) ? (
                     <p className="danger-box">That private key is not valid.</p>
+                  ) : null}
+                </label>
+              ) : importMethod === 'watch-only' ? (
+                <label className="stack">
+                  <span className="muted">Public wallet address</span>
+                  <TextArea
+                    placeholder="Paste a Solana public key"
+                    value={watchOnlyPublicKey}
+                    onChange={(event) => setWatchOnlyPublicKey(event.target.value)}
+                  />
+                  <p className="warning-box">Watch-only wallets can view balances and connect to dApps, but they cannot sign messages or transactions.</p>
+                  {watchOnlyPublicKey.trim().length > 0 && !validatePublicKey(watchOnlyPublicKey) ? (
+                    <p className="danger-box">That wallet address is not valid.</p>
                   ) : null}
                 </label>
               ) : (
@@ -380,21 +427,29 @@ export function OnboardingView(props: OnboardingViewProps) {
     }
 
     return (
-      <Card title="Set password">
+      <Card title={requiresPassword ? 'Set password' : 'Watch-only ready'}>
         <div className="stack">
-          <label className="stack">
-            <span className="muted">Password</span>
-            <Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
-          </label>
-          <label className="stack">
-            <span className="muted">Confirm password</span>
-            <Input type="password" value={passwordConfirm} onChange={(event) => setPasswordConfirm(event.target.value)} />
-          </label>
-          <p className="muted">
-            {isAppendFlow
-              ? 'Use your existing wallet password so this wallet can be unlocked alongside the others.'
-              : 'Use at least 8 characters. You will use this password to unlock and approve signing.'}
-          </p>
+          {requiresPassword ? (
+            <>
+              <label className="stack">
+                <span className="muted">Password</span>
+                <Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
+              </label>
+              <label className="stack">
+                <span className="muted">Confirm password</span>
+                <Input type="password" value={passwordConfirm} onChange={(event) => setPasswordConfirm(event.target.value)} />
+              </label>
+              <p className="muted">
+                {isAppendFlow
+                  ? 'Use your existing wallet password so this wallet can be unlocked alongside the others.'
+                  : 'Use at least 8 characters. You will use this password to unlock and approve signing.'}
+              </p>
+            </>
+          ) : (
+            <p className="muted">
+              Watch-only wallets do not store secrets locally, so no password is needed. You can view assets and connect to dApps, but signing stays disabled.
+            </p>
+          )}
           {error ? <p className="danger-box">{error}</p> : null}
         </div>
       </Card>
@@ -426,6 +481,8 @@ export function OnboardingView(props: OnboardingViewProps) {
                       ? 'Enter a valid mnemonic.'
                       : importMethod === 'private-key'
                         ? 'Enter a valid Solana private key.'
+                        : importMethod === 'watch-only'
+                          ? 'Enter a valid Solana wallet address.'
                         : 'Connect your Ledger and choose an account.'
                 );
                 return;
@@ -470,8 +527,12 @@ export function OnboardingView(props: OnboardingViewProps) {
                     ? 'Enter your recovery phrase'
                     : importMethod === 'private-key'
                       ? 'Enter your private key'
-                      : 'Connect your Ledger'
-                : 'Set your password'}
+                      : importMethod === 'watch-only'
+                        ? 'Add a public wallet'
+                        : 'Connect your Ledger'
+                : requiresPassword
+                  ? 'Set your password'
+                  : 'Review watch-only wallet'}
           </strong>
         </div>
         <div className="progress-track" aria-hidden="true">

@@ -51,6 +51,7 @@ describe('wallet state', () => {
       name: 'Wallet 1',
       vault: vaultRecord,
       signer: { kind: 'software' },
+      source: 'created',
       accounts: [
         {
           id: 'account-0',
@@ -87,6 +88,7 @@ describe('wallet state', () => {
             name: 'Wallet 1',
             vault: vaultRecord,
             signer: { kind: 'software' },
+            source: 'created',
             accounts: [
               {
                 id: 'account-0',
@@ -103,6 +105,7 @@ describe('wallet state', () => {
             name: 'Wallet 2',
             vault: vaultRecord,
             signer: { kind: 'software' },
+            source: 'imported-private-key',
             accounts: [
               {
                 id: 'account-0',
@@ -138,6 +141,7 @@ describe('wallet state', () => {
             name: 'Wallet 1',
             vault: vaultRecord,
             signer: { kind: 'software' },
+            source: 'created',
             accounts: [
               {
                 id: 'account-0',

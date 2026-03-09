@@ -368,6 +368,22 @@ class WalletController {
   async getSessionState() {
     const wallet = await this.getWalletState();
     const session = await sessionStorage.get();
+    const selectedWallet = getSelectedWallet(wallet);
+    if (
+      wallet.wallets.length > 0 &&
+      (wallet.wallets.every((entry) => entry.signer.kind === 'watch-only') || selectedWallet?.signer.kind === 'watch-only')
+    ) {
+      if (session.locked) {
+        const unlocked = {
+          ...session,
+          locked: false,
+          lastActivityAt: Date.now()
+        };
+        await sessionStorage.set(unlocked);
+        return unlocked;
+      }
+      return session;
+    }
     if (isSessionExpired(session, wallet.idleTimeoutMs)) {
       this.unlockedSecrets = {};
       const locked = {
@@ -402,9 +418,16 @@ class WalletController {
 
   async createWallet(
     secret: VaultSecret,
-    password: string,
+    password: string | undefined,
     publicKey: string,
-    signer: import('@grape/core').WalletSigner = { kind: 'software' }
+    signer: import('@grape/core').WalletSigner = { kind: 'software' },
+    source: import('@grape/core').WalletProfile['source'] = signer.kind === 'ledger'
+      ? 'ledger'
+      : signer.kind === 'watch-only'
+        ? 'watch-only'
+      : secret.kind === 'private-key'
+        ? 'imported-private-key'
+        : 'created'
   ) {
     const account = {
       id: 'account-0',
@@ -413,19 +436,23 @@ class WalletController {
       derivationPath:
         signer.kind === 'ledger'
           ? signer.derivationPath
+          : signer.kind === 'watch-only'
+            ? 'watch-only'
           : secret.kind === 'mnemonic'
             ? `m/44'/501'/0'/0'`
             : 'imported-private-key'
     };
     const current = await this.getWalletState();
-    if (current.setup === 'ready') {
-      const currentSelectedWallet = getSelectedWallet(current);
-      if (!currentSelectedWallet) {
-        throw new RpcError('WALLET_NOT_READY', 'Wallet state is invalid.');
-      }
-      const valid = await verifyVaultPassword(currentSelectedWallet.vault, password);
-      if (!valid) {
-        throw new RpcError('INVALID_PASSWORD', 'Use your existing wallet password to add another wallet.');
+    if (current.setup === 'ready' && signer.kind !== 'watch-only') {
+      const passwordProtectedWallet = current.wallets.find((wallet) => !!wallet.vault);
+      if (passwordProtectedWallet) {
+        if (!password) {
+          throw new RpcError('INVALID_PASSWORD', 'Use your existing wallet password to add another wallet.');
+        }
+        const valid = await verifyVaultPassword(passwordProtectedWallet.vault!, password);
+        if (!valid) {
+          throw new RpcError('INVALID_PASSWORD', 'Use your existing wallet password to add another wallet.');
+        }
       }
     }
 
@@ -433,8 +460,9 @@ class WalletController {
     const profile = {
       id: walletId,
       name: `Wallet ${current.wallets.length + 1}`,
-      vault: await createVaultRecord(secret, password),
+      vault: signer.kind === 'watch-only' ? undefined : await createVaultRecord(secret, password ?? ''),
       signer,
+      source,
       accounts: [account],
       selectedAccountId: account.id,
       recentRecipients: []
@@ -446,19 +474,26 @@ class WalletController {
       selectedWalletId: walletId
     };
     await walletStateStorage.set(nextState);
-    this.unlockedSecrets[walletId] = {
-      secret,
-      unlockedAt: Date.now()
-    };
+    if (signer.kind !== 'watch-only') {
+      this.unlockedSecrets[walletId] = {
+        secret,
+        unlockedAt: Date.now()
+      };
+    }
     await this.setSessionState({ locked: false, lastActivityAt: Date.now() });
     return nextState;
   }
 
   async unlockWallet(password: string) {
     const { walletState } = await this.ensureReadyWallet();
+    const vaultWallets = walletState.wallets.filter((wallet) => !!wallet.vault);
+    if (vaultWallets.length === 0) {
+      await this.setSessionState({ locked: false, lastActivityAt: Date.now() });
+      return true;
+    }
     const unlockedEntries = await Promise.all(
-      walletState.wallets.map(async (wallet) => {
-        const secret = await unlockVaultRecord(wallet.vault, password);
+      vaultWallets.map(async (wallet) => {
+        const secret = await unlockVaultRecord(wallet.vault!, password);
         return [wallet.id, secret] as const;
       })
     ).catch(() => null);
@@ -475,6 +510,11 @@ class WalletController {
 
   async lockWallet() {
     this.unlockedSecrets = {};
+    const walletState = await this.getWalletState();
+    if (walletState.wallets.length > 0 && walletState.wallets.every((entry) => entry.signer.kind === 'watch-only')) {
+      await this.setSessionState({ locked: false, lastActivityAt: Date.now() });
+      return true;
+    }
     await this.setSessionState({ locked: true, lastActivityAt: 0 });
     return true;
   }
@@ -500,6 +540,7 @@ class WalletController {
 
   async removeWallet(walletId: string) {
     const walletState = await this.getWalletState();
+    const approvals = await approvalsStorage.get();
     const targetWallet = walletState.wallets.find((wallet) => wallet.id === walletId);
     if (!targetWallet) {
       throw new RpcError('WALLET_NOT_FOUND', 'Wallet could not be found.');
@@ -508,7 +549,8 @@ class WalletController {
     delete this.unlockedSecrets[walletId];
 
     for (const [approvalId, pending] of this.pendingApprovals.entries()) {
-      if (pending.state.publicKey && targetWallet.accounts.some((account) => account.publicKey === pending.state.publicKey)) {
+      const approval = approvals[approvalId];
+      if (approval?.publicKey && targetWallet.accounts.some((account) => account.publicKey === approval.publicKey)) {
         pending.reject(new RpcError('WALLET_REMOVED', 'Wallet was removed.'));
         this.pendingApprovals.delete(approvalId);
       }
@@ -553,12 +595,14 @@ class WalletController {
               id: activeWallet.id,
               name: activeWallet.name,
               publicKey: activeAccount.publicKey,
-              biometricEnabled: !!activeWallet.biometricUnlock
+              biometricEnabled: !!activeWallet.biometricUnlock,
+              source: activeWallet.source,
+              signerKind: activeWallet.signer.kind
             }
           : undefined,
       activeAccount: activeAccount ? { publicKey: activeAccount.publicKey } : undefined,
       recentRecipients: activeWallet?.recentRecipients ?? [],
-      canUseUnlockedSigner: !!(activeWallet && this.unlockedSecrets[activeWallet.id]) && !session.locked
+      canUseUnlockedSigner: !!(activeWallet && activeWallet.signer.kind !== 'watch-only' && this.unlockedSecrets[activeWallet.id]) && !session.locked
     };
   }
 
@@ -605,6 +649,9 @@ class WalletController {
 
   async setBiometricUnlock(config: import('@grape/core').BiometricUnlockConfig | null) {
     const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    if (!selectedWallet.vault || selectedWallet.signer.kind === 'watch-only') {
+      throw new RpcError('BIOMETRIC_UNAVAILABLE', 'Biometric unlock is only available for password-protected wallets.');
+    }
     await walletStateStorage.set({
       ...walletState,
       wallets: walletState.wallets.map((wallet) =>
@@ -627,6 +674,12 @@ class WalletController {
     }
     const connection = new Connection(getRpcEndpoint(walletState.selectedNetwork), 'confirmed');
     return connection.getBalance(new PublicKey(activeAccount.publicKey));
+  }
+
+  private assertInteractiveWallet(selectedWallet: NonNullable<ReturnType<typeof getSelectedWallet>>) {
+    if (selectedWallet.signer.kind === 'watch-only') {
+      throw new RpcError('WATCH_ONLY_WALLET', 'This wallet is watch-only and cannot sign messages or transactions.');
+    }
   }
 
   private async scanWalletTokenAccounts(
@@ -914,7 +967,10 @@ class WalletController {
     }
 
     if (selectedWallet.signer.kind !== 'software') {
-      throw new RpcError('EXPORT_UNAVAILABLE', 'Hardware wallets cannot be exported from Grape Wallet.');
+      throw new RpcError('EXPORT_UNAVAILABLE', 'Only software wallets can be exported from Grape.');
+    }
+    if (!selectedWallet.vault) {
+      throw new RpcError('EXPORT_UNAVAILABLE', 'This wallet does not have an exportable local vault.');
     }
 
     const secret = await unlockVaultRecord(selectedWallet.vault, password).catch(() => {
@@ -939,6 +995,7 @@ class WalletController {
 
   async sendTransfer(input: { recipient: string; amount: string; password?: string; asset: SendAsset }) {
     const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    this.assertInteractiveWallet(selectedWallet);
     const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
     if (!activeAccount) {
       throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
@@ -1020,6 +1077,7 @@ class WalletController {
     password?: string;
   }) {
     const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    this.assertInteractiveWallet(selectedWallet);
     const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
     if (!activeAccount) {
       throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
@@ -1044,6 +1102,7 @@ class WalletController {
 
   async closeTokenAccount(input: { mint: string; accountAddress: string; programId: string; password?: string }) {
     const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    this.assertInteractiveWallet(selectedWallet);
     const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
     if (!activeAccount) {
       throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
@@ -1155,6 +1214,7 @@ class WalletController {
     rotateMintAuthorities: boolean;
   }) {
     const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    this.assertInteractiveWallet(selectedWallet);
     const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
     if (!activeAccount) {
       throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
@@ -1424,6 +1484,7 @@ class WalletController {
 
   async executeSwap(input: { quoteResponse: JupiterQuoteResponse; password?: string }) {
     const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    this.assertInteractiveWallet(selectedWallet);
     if (walletState.selectedNetwork !== 'mainnet-beta') {
       throw new RpcError('SWAP_UNAVAILABLE', 'Native swaps are currently available only on mainnet-beta.');
     }
@@ -1517,7 +1578,10 @@ class WalletController {
       }
 
       const approval = await this.createApproval(request, walletState.selectedNetwork, selectedWallet.id, activeAccount.publicKey, {
-        requestedPermissions: ['View your public key', 'Request signatures with approval']
+        requestedPermissions:
+          selectedWallet.signer.kind === 'watch-only'
+            ? ['View your public key']
+            : ['View your public key', 'Request signatures with approval']
       });
       debug?.({
         phase: 'approval_created',
@@ -1534,6 +1598,10 @@ class WalletController {
     const permissions = await permissionsStorage.get();
     if (!hasPermission(permissions, request.origin.origin, 'solana:accounts')) {
       throw new RpcError('NOT_CONNECTED', 'Connect this site before signing.');
+    }
+
+    if (selectedWallet.signer.kind === 'watch-only') {
+      throw new RpcError('WATCH_ONLY_WALLET', 'This wallet is watch-only and cannot sign messages or transactions.');
     }
 
     const transactionSummary =
@@ -1653,15 +1721,21 @@ class WalletController {
     if (approval.kind === 'connect') {
       const permissions = await permissionsStorage.get();
       await permissionsStorage.set(
-        grantPermissions(permissions, approval.origin.origin, ['solana:accounts', 'solana:sign'], {
+        grantPermissions(
+          permissions,
+          approval.origin.origin,
+          approval.requestedPermissions?.includes('Request signatures with approval') ? ['solana:accounts', 'solana:sign'] : ['solana:accounts'],
+          {
           faviconUrl: approval.origin.faviconUrl,
           title: approval.origin.title
-        })
+          }
+        )
       );
       return { publicKey: approval.publicKey };
     }
 
     const { selectedWallet } = await this.ensureReadyWallet();
+    this.assertInteractiveWallet(selectedWallet);
     const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, password);
     switch (approval.kind) {
       case 'sign-message': {
@@ -1810,6 +1884,9 @@ class WalletController {
     const cached = this.unlockedSecrets[walletId];
     if (cached) {
       return cached.secret;
+    }
+    if (!vault) {
+      throw new RpcError('WATCH_ONLY_WALLET', 'This wallet does not have local signing secrets.');
     }
 
     if (!password) {
@@ -2102,15 +2179,27 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
           sendResponse(await controller.getStateResponse());
           break;
         case 'wallet_create':
-          await controller.createWallet({ kind: 'mnemonic', mnemonic: message.mnemonic }, message.password, message.publicKey);
+          await controller.createWallet({ kind: 'mnemonic', mnemonic: message.mnemonic }, message.password, message.publicKey, { kind: 'software' }, 'created');
           sendResponse(await controller.getStateResponse());
           break;
         case 'wallet_import':
-          await controller.createWallet({ kind: 'mnemonic', mnemonic: message.mnemonic }, message.password, message.publicKey);
+          await controller.createWallet(
+            { kind: 'mnemonic', mnemonic: message.mnemonic },
+            message.password,
+            message.publicKey,
+            { kind: 'software' },
+            'imported-mnemonic'
+          );
           sendResponse(await controller.getStateResponse());
           break;
         case 'wallet_import_private_key':
-          await controller.createWallet({ kind: 'private-key', secretKey: message.privateKey }, message.password, message.publicKey);
+          await controller.createWallet(
+            { kind: 'private-key', secretKey: message.privateKey },
+            message.password,
+            message.publicKey,
+            { kind: 'software' },
+            'imported-private-key'
+          );
           sendResponse(await controller.getStateResponse());
           break;
         case 'wallet_import_ledger':
@@ -2122,7 +2211,18 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
               kind: 'ledger',
               transport: 'webhid',
               derivationPath: message.derivationPath
-            }
+            },
+            'ledger'
+          );
+          sendResponse(await controller.getStateResponse());
+          break;
+        case 'wallet_import_watch_only':
+          await controller.createWallet(
+            { kind: 'auth-token', token: crypto.randomUUID() },
+            undefined,
+            message.publicKey,
+            { kind: 'watch-only' },
+            'watch-only'
           );
           sendResponse(await controller.getStateResponse());
           break;

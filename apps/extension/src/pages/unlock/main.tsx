@@ -36,6 +36,15 @@ function UnlockPage() {
     window.location.href = chrome.runtime.getURL(resolveNextPath());
   }
 
+  useEffect(() => {
+    if (!state) {
+      return;
+    }
+    if (!state.session.locked || state.activeWallet?.signerKind === 'watch-only') {
+      handleUnlockSuccess();
+    }
+  }, [state]);
+
   async function handleBiometricUnlock() {
     const selectedWallet = state?.wallet.wallets.find((entry) => entry.id === state.wallet.selectedWalletId) ?? state?.wallet.wallets[0];
     if (!selectedWallet?.biometricUnlock) {

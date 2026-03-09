@@ -1198,6 +1198,16 @@ body[data-surface='popup'] .quick-actions.compact .quick-action-card {
   background: var(--theme-surface-soft-hover);
 }
 
+.quick-action-card:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+  background: color-mix(in srgb, var(--theme-surface-soft) 76%, transparent);
+}
+
+.quick-action-card:disabled:hover {
+  background: color-mix(in srgb, var(--theme-surface-soft) 76%, transparent);
+}
+
 .quick-action-icon {
   width: 34px;
   height: 34px;
@@ -1270,6 +1280,11 @@ body[data-surface='popup'] .quick-actions.compact .quick-action-card {
   text-align: left;
 }
 
+.wallet-menu-meta {
+  margin-top: 2px;
+  font-size: 0.76rem;
+}
+
 .wallet-menu-remove-button {
   width: 40px;
   border: 0;
@@ -1310,6 +1325,11 @@ body[data-surface='popup'] .quick-actions.compact .quick-action-card {
   padding: 10px 12px;
   text-align: left;
   cursor: pointer;
+}
+
+.wallet-menu-action[disabled] {
+  opacity: 0.48;
+  cursor: not-allowed;
 }
 
 .wallet-menu-action-copy {
@@ -2006,6 +2026,36 @@ body[data-surface='popup'] .collectible-grid {
 
 .approval-simulation-copy {
   margin: 0;
+}
+
+.approval-instruction-accounts {
+  display: grid;
+  gap: 8px;
+  padding: 4px 0 2px;
+}
+
+.approval-instruction-accounts-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.approval-instruction-account-list {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--theme-surface-soft) 86%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-divider) 82%, transparent);
+}
+
+.approval-instruction-account-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
 }
 
 .approval-simulation-actions {

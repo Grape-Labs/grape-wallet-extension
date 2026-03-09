@@ -64,6 +64,9 @@ export type WalletSigner =
       kind: 'software';
     }
   | {
+      kind: 'watch-only';
+    }
+  | {
       kind: 'ledger';
       transport: 'webhid';
       derivationPath: string;
@@ -72,8 +75,9 @@ export type WalletSigner =
 export type WalletProfile = {
   id: string;
   name: string;
-  vault: VaultRecord;
+  vault?: VaultRecord;
   signer: WalletSigner;
+  source: 'created' | 'imported-mnemonic' | 'imported-private-key' | 'watch-only' | 'ledger';
   biometricUnlock?: BiometricUnlockConfig;
   accounts: WalletAccount[];
   selectedAccountId: string;
@@ -223,6 +227,7 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
           name: 'Wallet 1',
           vault: input.vault,
           signer: { kind: 'software' },
+          source: 'created',
           accounts: input.accounts,
           selectedAccountId: input.selectedAccountId ?? firstAccount.id,
           recentRecipients: []
@@ -262,6 +267,7 @@ function normalizeWalletProfile(wallet: WalletProfile): WalletProfile {
   return {
     ...wallet,
     signer: wallet.signer ?? { kind: 'software' },
+    source: wallet.source ?? (wallet.signer?.kind === 'ledger' ? 'ledger' : wallet.signer?.kind === 'watch-only' ? 'watch-only' : 'created'),
     biometricUnlock: wallet.biometricUnlock,
     recentRecipients: Array.isArray(wallet.recentRecipients) ? wallet.recentRecipients : []
   };

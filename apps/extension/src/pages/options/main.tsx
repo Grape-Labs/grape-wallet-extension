@@ -9,6 +9,28 @@ import { sendRuntimeMessage } from '../../shared/chrome';
 import { applyDocumentTheme, THEMES } from '../../shared/theme';
 import { mountPage } from '../lib';
 
+function formatWalletSourceLabel(
+  source: 'created' | 'imported-mnemonic' | 'imported-private-key' | 'watch-only' | 'ledger' | undefined,
+  signerKind: 'software' | 'watch-only' | 'ledger' | undefined
+): string {
+  if (signerKind === 'watch-only' || source === 'watch-only') {
+    return 'Watch-only wallet';
+  }
+  if (signerKind === 'ledger' || source === 'ledger') {
+    return 'Ledger hardware wallet';
+  }
+
+  switch (source) {
+    case 'imported-mnemonic':
+      return 'Imported recovery phrase';
+    case 'imported-private-key':
+      return 'Imported private key';
+    case 'created':
+    default:
+      return 'Created in Grape';
+  }
+}
+
 function OptionsPage() {
   const [state, setState] = useState<WalletStateResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -26,6 +48,7 @@ function OptionsPage() {
     mnemonic: false,
     privateKey: false
   });
+  const isWatchOnlyWallet = state?.activeWallet?.signerKind === 'watch-only';
 
   const refresh = async () => {
     try {
@@ -259,14 +282,18 @@ function OptionsPage() {
           <KeyValueRow
             label="Biometric unlock"
             value={
-              biometricSupported
+              isWatchOnlyWallet
+                ? 'Unavailable'
+                : biometricSupported
                 ? state.activeWallet?.biometricEnabled
                   ? 'Enabled'
                   : 'Disabled'
                 : 'Unavailable'
             }
           />
-          {biometricSupported ? (
+          {isWatchOnlyWallet ? (
+            <p className="muted">Watch-only wallets do not have local secrets, so biometric unlock is not needed.</p>
+          ) : biometricSupported ? (
             state.activeWallet?.biometricEnabled ? (
               <div className="stack">
                 <p className="muted">Use Touch ID, Face ID, Windows Hello, or the platform authenticator when available.</p>
@@ -302,7 +329,7 @@ function OptionsPage() {
           <div className="stack">
             <p className="warning-box">Ledger and other hardware-backed wallets cannot be exported from Grape. Back them up on the device instead.</p>
             <KeyValueRow label="Selected wallet" value={selectedWallet.name} />
-            <KeyValueRow label="Signer" value="Ledger" />
+            <KeyValueRow label="Wallet type" value={formatWalletSourceLabel(selectedWallet.source, selectedWallet.signer?.kind)} />
           </div>
         ) : (
           <div className="stack">
@@ -310,6 +337,7 @@ function OptionsPage() {
               Export reveals sensitive wallet material. Only do this offline or into a destination you fully trust.
             </p>
             <KeyValueRow label="Selected wallet" value={selectedWallet.name} />
+            <KeyValueRow label="Wallet type" value={formatWalletSourceLabel(selectedWallet.source, selectedWallet.signer?.kind)} />
             <KeyValueRow label="Public key" value={<span className="mono transfer-signature">{state.activeWallet?.publicKey ?? 'Unknown'}</span>} />
             <label className="stack">
               <span className="muted">Password</span>
