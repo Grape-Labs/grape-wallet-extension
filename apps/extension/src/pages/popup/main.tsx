@@ -1745,11 +1745,13 @@ function PopupPage() {
         {sendError ? <p className="danger-box">{sendError}</p> : null}
         {surfaceError ? <p className="danger-box">{surfaceError}</p> : null}
 
-        <div className="inline wrap-actions send-flow-actions">
-          <Button className="button-block" disabled={submitting || !selectedAsset} onClick={handleSend}>
-            {submitting ? 'Sending...' : 'Send now'}
-          </Button>
-        </div>
+        {!sendResult ? (
+          <div className="inline wrap-actions send-flow-actions">
+            <Button className="button-block" disabled={submitting || !selectedAsset} onClick={handleSend}>
+              {submitting ? 'Sending...' : 'Send now'}
+            </Button>
+          </div>
+        ) : null}
       </>
     );
   }

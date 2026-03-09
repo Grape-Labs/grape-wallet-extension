@@ -33,7 +33,7 @@ function createManifestPlugin(mainnetRpcUrl: string): Plugin {
       const manifest = {
         manifest_version: 3,
         name: 'Grape',
-        version: '0.1.0',
+        version: '0.1.1',
         description: 'Chromium-first Solana wallet extension with Wallet Standard and legacy provider support.',
         icons: {
           '16': 'icons/grape_logo_white-16.png',

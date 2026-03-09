@@ -1,3 +1,5 @@
+import { Buffer } from 'buffer';
+
 import { RpcError } from '@grape/core';
 import {
   Connection,
@@ -112,7 +114,7 @@ export function encodeBurnCheckedData(amount: bigint, decimals: number): Uint8Ar
 
 export function getAssociatedTokenAddress(owner: PublicKey, mint: PublicKey, tokenProgramId: PublicKey): PublicKey {
   const [address] = PublicKey.findProgramAddressSync(
-    [owner.toBuffer(), tokenProgramId.toBuffer(), mint.toBuffer()],
+    [owner.toBytes(), tokenProgramId.toBytes(), mint.toBytes()],
     ASSOCIATED_TOKEN_PROGRAM_ID
   );
   return address;
@@ -220,7 +222,7 @@ export function createSetAuthorityInstruction(
   data[1] = authorityType;
   data[2] = nextAuthority ? 1 : 0;
   if (nextAuthority) {
-    nextAuthority.toBuffer().copy(data, 3);
+    data.set(nextAuthority.toBytes(), 3);
   }
 
   return new TransactionInstruction({

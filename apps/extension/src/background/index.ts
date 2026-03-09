@@ -572,7 +572,7 @@ class WalletController {
       zeroDecimalTokens.map(async (token) => {
         try {
           const metadataPda = PublicKey.findProgramAddressSync(
-            [new TextEncoder().encode('metadata'), METADATA_PROGRAM_ID.toBuffer(), new PublicKey(token.mint).toBuffer()],
+            [new TextEncoder().encode('metadata'), METADATA_PROGRAM_ID.toBytes(), new PublicKey(token.mint).toBytes()],
             METADATA_PROGRAM_ID
           )[0];
           const metadataAccountInfo = await connection.getAccountInfo(metadataPda, 'confirmed');
@@ -750,7 +750,7 @@ class WalletController {
     }
 
     const metadataPda = PublicKey.findProgramAddressSync(
-      [new TextEncoder().encode('metadata'), METADATA_PROGRAM_ID.toBuffer(), new PublicKey(input.mint).toBuffer()],
+      [new TextEncoder().encode('metadata'), METADATA_PROGRAM_ID.toBytes(), new PublicKey(input.mint).toBytes()],
       METADATA_PROGRAM_ID
     )[0].toBase58();
     const metadataAccountInfo = await connection.getAccountInfo(new PublicKey(metadataPda), 'confirmed');
@@ -1798,7 +1798,7 @@ async function fetchCollectibleMetadataHints(
     uniqueMintsNeedingHints.map(async (mint) => {
       try {
         const metadataPda = PublicKey.findProgramAddressSync(
-          [new TextEncoder().encode('metadata'), METADATA_PROGRAM_ID.toBuffer(), new PublicKey(mint).toBuffer()],
+          [new TextEncoder().encode('metadata'), METADATA_PROGRAM_ID.toBytes(), new PublicKey(mint).toBytes()],
           METADATA_PROGRAM_ID
         )[0];
         const metadataAccountInfo = await connection.getAccountInfo(metadataPda, 'confirmed');
