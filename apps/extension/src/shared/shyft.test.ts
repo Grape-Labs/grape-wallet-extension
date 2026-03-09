@@ -5,9 +5,11 @@ import { fetchShyftCollections } from './shyft';
 describe('shyft collections parsing', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   it('parses collections from the documented result.collections shape', async () => {
+    vi.stubEnv('VITE_GRAPE_SHYFT_API_KEY', 'test-api-key');
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => ({
