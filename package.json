@@ -1,7 +1,7 @@
 {
   "name": "grape-wallet-extension",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "packageManager": "pnpm@10.6.3",
   "scripts": {
     "build": "pnpm --filter @grape/core build && pnpm --filter @grape/solana build && pnpm --filter @grape/ui build && pnpm --filter @grape/wallet-adapter build && pnpm --filter @grape/extension build",
