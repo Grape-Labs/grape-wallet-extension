@@ -1,5 +1,8 @@
-const SHYFT_API_KEY = import.meta.env.VITE_GRAPE_SHYFT_API_KEY?.trim();
 const SHYFT_BASE_URL = 'https://api.shyft.to/sol/v1';
+
+function getShyftApiKey(): string | undefined {
+  return import.meta.env.VITE_GRAPE_SHYFT_API_KEY?.trim() || undefined;
+}
 
 type ShyftWalletTokenEntry = {
   address?: string;
@@ -87,7 +90,8 @@ export type ShyftCollectionMetadata = {
 };
 
 function getShyftHeaders(): Record<string, string> | undefined {
-  return SHYFT_API_KEY ? { 'x-api-key': SHYFT_API_KEY } : undefined;
+  const apiKey = getShyftApiKey();
+  return apiKey ? { 'x-api-key': apiKey } : undefined;
 }
 
 function normalizeString(value: unknown): string | undefined {
@@ -115,7 +119,7 @@ function normalizeEntry(entry: ShyftWalletTokenEntry): ShyftTokenMetadata | null
 }
 
 export function hasShyftApiKey(): boolean {
-  return !!SHYFT_API_KEY;
+  return !!getShyftApiKey();
 }
 
 function normalizeImage(entry: {
@@ -136,7 +140,7 @@ export async function fetchShyftWalletTokens(
   network: 'mainnet-beta' | 'devnet',
   wallet: string
 ): Promise<Record<string, ShyftTokenMetadata>> {
-  if (!SHYFT_API_KEY) {
+  if (!getShyftApiKey()) {
     return {};
   }
 
@@ -243,7 +247,7 @@ export async function fetchShyftCollections(
   network: 'mainnet-beta' | 'devnet',
   walletAddress: string
 ): Promise<ShyftCollectionMetadata[]> {
-  if (!SHYFT_API_KEY) {
+  if (!getShyftApiKey()) {
     return [];
   }
 

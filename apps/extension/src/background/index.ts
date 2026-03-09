@@ -1295,12 +1295,15 @@ class WalletController {
     await approvalsStorage.set(approvals);
 
     if (!approval.hostSurfaceId) {
-      await chrome.windows.create({
-        url: chrome.runtime.getURL(`wallet.html?view=approval`),
+      const createdWindow = await chrome.windows.create({
+        url: chrome.runtime.getURL(`approval.html?approvalId=${state.id}`),
         type: 'popup',
         width: 500,
         height: 820
       });
+      if (createdWindow.id !== undefined) {
+        approval.windowId = createdWindow.id;
+      }
     }
 
     approvals[state.id] = approval;
