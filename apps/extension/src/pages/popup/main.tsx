@@ -21,7 +21,8 @@ import {
   SendHorizontal,
   Settings,
   ShieldAlert,
-  Trash2
+  Trash2,
+  X
 } from 'lucide-react';
 import QRCode from 'qrcode';
 
@@ -513,6 +514,8 @@ function PopupPage() {
   const [incidentSubmitting, setIncidentSubmitting] = useState(false);
   const [incidentResult, setIncidentResult] = useState<IncidentResponseResponse | null>(null);
   const [incidentError, setIncidentError] = useState<string | null>(null);
+  const [unlockWelcomeMenuOpen, setUnlockWelcomeMenuOpen] = useState(false);
+  const [walletMenuOpen, setWalletMenuOpen] = useState(false);
   const [incidentOptions, setIncidentOptions] = useState({
     revokeDelegates: true,
     sweepSplTokens: true,
@@ -1275,10 +1278,14 @@ function PopupPage() {
 
   function renderUnlockWelcomeMenu() {
     return (
-      <DropdownMenu.Root>
+      <DropdownMenu.Root open={unlockWelcomeMenuOpen} onOpenChange={setUnlockWelcomeMenuOpen}>
         <DropdownMenu.Trigger asChild>
-          <button type="button" className="menu-button unlock-welcome-menu-button" aria-label="Grape links">
-            <Menu size={18} />
+          <button
+            type="button"
+            className={`menu-button unlock-welcome-menu-button ${unlockWelcomeMenuOpen ? 'open' : ''}`.trim()}
+            aria-label={unlockWelcomeMenuOpen ? 'Close Grape links' : 'Grape links'}
+          >
+            {unlockWelcomeMenuOpen ? <X size={18} /> : <Menu size={18} />}
           </button>
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
@@ -1323,10 +1330,14 @@ function PopupPage() {
 
   function renderWalletMenu() {
     return (
-      <DropdownMenu.Root>
+      <DropdownMenu.Root open={walletMenuOpen} onOpenChange={setWalletMenuOpen}>
         <DropdownMenu.Trigger asChild>
-          <button type="button" className="menu-button" aria-label="Wallet menu">
-            <Menu size={18} />
+          <button
+            type="button"
+            className={`menu-button ${walletMenuOpen ? 'open' : ''}`.trim()}
+            aria-label={walletMenuOpen ? 'Close wallet menu' : 'Wallet menu'}
+          >
+            {walletMenuOpen ? <X size={18} /> : <Menu size={18} />}
           </button>
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
