@@ -56,6 +56,7 @@ export function ApprovalView(props: {
   const [walletState, setWalletState] = useState<WalletStateResponse | null>(null);
   const [biometricSupported, setBiometricSupported] = useState(false);
   const [biometricUnlocking, setBiometricUnlocking] = useState(false);
+  const [showSimulationLogs, setShowSimulationLogs] = useState(false);
   const requiresPassword = approval.kind !== 'connect' && (approval.requiresPassword ?? true);
   const selectedWallet =
     walletState?.wallet.wallets.find((entry) => entry.id === walletState.wallet.selectedWalletId) ?? walletState?.wallet.wallets[0];
@@ -256,10 +257,26 @@ export function ApprovalView(props: {
                   <KeyValueRow label="Compute units" value={approval.transactionSummary.simulation.unitsConsumed.toLocaleString()} />
                 ) : null}
                 {approval.transactionSummary.simulation.logs.length > 0 ? (
-                  <div className="approval-log-box">
-                    {approval.transactionSummary.simulation.logs.map((line, lineIndex) => (
-                      <div key={`${approval.id}-simulation-log-${lineIndex}`}>{line}</div>
-                    ))}
+                  <div className="stack">
+                    <div className="inline approval-simulation-actions">
+                      <p className="muted approval-simulation-hint">
+                        {showSimulationLogs ? 'Simulation logs are expanded below.' : 'Logs are available if you want to inspect execution details.'}
+                      </p>
+                      <button
+                        type="button"
+                        className="button secondary mini-button"
+                        onClick={() => setShowSimulationLogs((current) => !current)}
+                      >
+                        {showSimulationLogs ? 'Hide logs' : 'Show logs'}
+                      </button>
+                    </div>
+                    {showSimulationLogs ? (
+                      <div className="approval-log-box">
+                        {approval.transactionSummary.simulation.logs.map((line, lineIndex) => (
+                          <div key={`${approval.id}-simulation-log-${lineIndex}`}>{line}</div>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
               </div>

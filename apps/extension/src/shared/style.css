@@ -1980,26 +1980,34 @@ body[data-surface='popup'] .collectible-grid {
   margin: 0;
 }
 
+.approval-simulation-actions {
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.approval-simulation-hint {
+  margin: 0;
+  flex: 1;
+}
+
 .approval-log-box {
-  max-height: 180px;
+  max-height: 140px;
   max-width: 100%;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   border-radius: 14px;
   padding: 12px;
   background: color-mix(in srgb, var(--theme-card) 76%, black 24%);
   border: 1px solid color-mix(in srgb, var(--theme-border) 72%, transparent);
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
-  font-size: 0.78rem;
+  font-size: 0.72rem;
   line-height: 1.45;
   color: var(--theme-text-secondary);
-  white-space: nowrap;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
   overscroll-behavior: contain;
-  scrollbar-gutter: stable both-edges;
-}
-
-.approval-log-box > div {
-  display: block;
-  min-width: max-content;
 }
 
 .account-address {
