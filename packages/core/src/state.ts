@@ -207,10 +207,14 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
   }
 
   if ('wallets' in input && Array.isArray(input.wallets)) {
+    const { wallets: normalizedWallets, selectedWalletId } = normalizeWalletIdentity(
+      input.wallets.map(normalizeWalletProfile),
+      input.selectedWalletId
+    );
     return {
-      setup: input.wallets.length > 0 ? 'ready' : input.setup,
-      wallets: input.wallets.map(normalizeWalletProfile),
-      selectedWalletId: input.selectedWalletId ?? input.wallets[0]?.id,
+      setup: normalizedWallets.length > 0 ? 'ready' : input.setup,
+      wallets: normalizedWallets,
+      selectedWalletId: selectedWalletId ?? normalizedWallets[0]?.id,
       selectedNetwork: input.selectedNetwork ?? 'devnet',
       selectedTheme: normalizeTheme(input.selectedTheme),
       idleTimeoutMs: input.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS
@@ -270,5 +274,58 @@ function normalizeWalletProfile(wallet: WalletProfile): WalletProfile {
     source: wallet.source ?? (wallet.signer?.kind === 'ledger' ? 'ledger' : wallet.signer?.kind === 'watch-only' ? 'watch-only' : 'created'),
     biometricUnlock: wallet.biometricUnlock,
     recentRecipients: Array.isArray(wallet.recentRecipients) ? wallet.recentRecipients : []
+  };
+}
+
+function normalizeWalletNames(wallets: WalletProfile[]): WalletProfile[] {
+  let nextDefaultName = 1;
+  return wallets.map((wallet) => {
+    if (/^Wallet \d+$/.test(wallet.name)) {
+      const normalizedName = `Wallet ${nextDefaultName}`;
+      nextDefaultName += 1;
+      if (wallet.name !== normalizedName) {
+        return {
+          ...wallet,
+          name: normalizedName
+        };
+      }
+    }
+    return wallet;
+  });
+}
+
+function normalizeWalletIdentity(
+  wallets: WalletProfile[],
+  selectedWalletId?: string
+): { wallets: WalletProfile[]; selectedWalletId?: string } {
+  const seenIds = new Set<string>();
+  let resolvedSelectedWalletId: string | undefined;
+
+  const dedupedWallets = normalizeWalletNames(
+    wallets.map((wallet) => {
+      let nextId = wallet.id;
+      if (!nextId || seenIds.has(nextId)) {
+        nextId = `wallet-${crypto.randomUUID()}`;
+      }
+      seenIds.add(nextId);
+
+      if (selectedWalletId === wallet.id && !resolvedSelectedWalletId) {
+        resolvedSelectedWalletId = nextId;
+      }
+
+      if (nextId !== wallet.id) {
+        return {
+          ...wallet,
+          id: nextId
+        };
+      }
+
+      return wallet;
+    })
+  );
+
+  return {
+    wallets: dedupedWallets,
+    selectedWalletId: resolvedSelectedWalletId ?? selectedWalletId
   };
 }

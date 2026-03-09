@@ -204,6 +204,40 @@ function formatWalletSourceLabel(
   }
 }
 
+function getWalletSourceBadge(
+  source: WalletStateResponse['activeWallet'] extends { source?: infer T } ? T : string,
+  signerKind?: 'software' | 'watch-only' | 'ledger'
+): { label: string; tone: 'created' | 'imported' | 'watch' | 'hardware'; icon: ReactNode } {
+  if (signerKind === 'watch-only' || source === 'watch-only') {
+    return {
+      label: 'Watch-only wallet',
+      tone: 'watch',
+      icon: <Eye size={11} />
+    };
+  }
+  if (signerKind === 'ledger' || source === 'ledger') {
+    return {
+      label: 'Ledger hardware wallet',
+      tone: 'hardware',
+      icon: <Fingerprint size={11} />
+    };
+  }
+
+  if (source === 'imported-mnemonic' || source === 'imported-private-key') {
+    return {
+      label: formatWalletSourceLabel(source, signerKind),
+      tone: 'imported',
+      icon: <ArrowLeft size={11} />
+    };
+  }
+
+  return {
+    label: 'Created in Grape',
+    tone: 'created',
+    icon: <Check size={11} />
+  };
+}
+
 function buildExplorerUrl(address: string, network: 'mainnet-beta' | 'devnet'): string {
   const cluster = network === 'devnet' ? '?cluster=devnet' : '';
   return `https://explorer.solana.com/address/${address}${cluster}`;
@@ -1445,6 +1479,7 @@ function PopupPage() {
                   walletEntry.accounts.find((account) => account.id === walletEntry.selectedAccountId)?.publicKey ??
                   walletEntry.accounts[0]?.publicKey;
                 const isActiveWallet = wallet.selectedWalletId === walletEntry.id;
+                const sourceBadge = getWalletSourceBadge(walletEntry.source, walletEntry.signer.kind);
 
                 return (
                   <div key={walletEntry.id} className="wallet-menu-row">
@@ -1455,8 +1490,16 @@ function PopupPage() {
                       }}
                     >
                       <div>
-                        <strong>{walletEntry.name}</strong>
-                        <div className="muted wallet-menu-meta">{formatWalletSourceLabel(walletEntry.source, walletEntry.signer.kind)}</div>
+                        <div className="wallet-menu-heading">
+                          <strong>{walletEntry.name}</strong>
+                          <span
+                            className={`wallet-source-badge ${sourceBadge.tone}`.trim()}
+                            title={sourceBadge.label}
+                            aria-label={sourceBadge.label}
+                          >
+                            {sourceBadge.icon}
+                          </span>
+                        </div>
                         <div className="muted mono">{formatAddress(walletPublicKey)}</div>
                       </div>
                       {isActiveWallet ? <StatusPill tone="success">Active</StatusPill> : null}

@@ -429,6 +429,12 @@ class WalletController {
         ? 'imported-private-key'
         : 'created'
   ) {
+    const current = await this.getWalletState();
+    const nextWalletNumber = current.wallets.reduce((max, wallet) => {
+      const match = wallet.name.match(/^Wallet (\d+)$/);
+      const value = match ? Number(match[1]) : 0;
+      return Math.max(max, Number.isFinite(value) ? value : 0);
+    }, 0) + 1;
     const account = {
       id: 'account-0',
       index: 0,
@@ -442,7 +448,6 @@ class WalletController {
             ? `m/44'/501'/0'/0'`
             : 'imported-private-key'
     };
-    const current = await this.getWalletState();
     if (current.setup === 'ready' && signer.kind !== 'watch-only') {
       const passwordProtectedWallet = current.wallets.find((wallet) => !!wallet.vault);
       if (passwordProtectedWallet) {
@@ -456,10 +461,10 @@ class WalletController {
       }
     }
 
-    const walletId = `wallet-${current.wallets.length + 1}`;
+    const walletId = `wallet-${crypto.randomUUID()}`;
     const profile = {
       id: walletId,
-      name: `Wallet ${current.wallets.length + 1}`,
+      name: `Wallet ${nextWalletNumber}`,
       vault: signer.kind === 'watch-only' ? undefined : await createVaultRecord(secret, password ?? ''),
       signer,
       source,
@@ -2214,6 +2219,22 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
             },
             'ledger'
           );
+          sendResponse(await controller.getStateResponse());
+          break;
+        case 'wallet_import_ledger_batch':
+          for (const account of message.accounts) {
+            await controller.createWallet(
+              { kind: 'auth-token', token: crypto.randomUUID() },
+              message.password,
+              account.publicKey,
+              {
+                kind: 'ledger',
+                transport: 'webhid',
+                derivationPath: account.derivationPath
+              },
+              'ledger'
+            );
+          }
           sendResponse(await controller.getStateResponse());
           break;
         case 'wallet_import_watch_only':

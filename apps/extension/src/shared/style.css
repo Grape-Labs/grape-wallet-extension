@@ -1287,9 +1287,49 @@ body[data-surface='popup'] .popup-menu-content {
   text-align: left;
 }
 
-.wallet-menu-meta {
-  margin-top: 2px;
-  font-size: 0.76rem;
+.wallet-menu-heading {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  min-width: 0;
+}
+
+.wallet-source-badge {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  color: var(--theme-subtle);
+  background: color-mix(in srgb, var(--theme-surface-soft) 88%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-divider) 88%, transparent);
+  transition: transform 160ms ease, border-color 160ms ease, color 160ms ease, background-color 160ms ease;
+}
+
+.wallet-source-badge.created {
+  color: var(--theme-success);
+}
+
+.wallet-source-badge.imported {
+  color: var(--theme-accent);
+}
+
+.wallet-source-badge.watch {
+  color: var(--theme-warning);
+}
+
+.wallet-source-badge.hardware {
+  color: var(--theme-nav-active-text);
+}
+
+.wallet-menu-item:hover .wallet-source-badge,
+.wallet-menu-item:focus-visible .wallet-source-badge {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, currentColor 34%, transparent);
+  background: color-mix(in srgb, currentColor 10%, var(--theme-surface-soft));
 }
 
 .wallet-menu-remove-button {

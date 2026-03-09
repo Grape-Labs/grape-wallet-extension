@@ -31,7 +31,12 @@ type LedgerCandidate = {
   publicKey: string;
   derivationPath: string;
   lamports: number;
+  label?: string;
 };
+
+function getLedgerCandidateKey(account: Pick<LedgerCandidate, 'publicKey' | 'derivationPath'>) {
+  return `${account.publicKey}:${account.derivationPath}`;
+}
 
 function formatLamports(lamports: number) {
   return `${(lamports / 1_000_000_000).toLocaleString(undefined, {
@@ -63,7 +68,7 @@ export function OnboardingView(props: OnboardingViewProps) {
   const [importMnemonic, setImportMnemonic] = useState('');
   const [importPrivateKey, setImportPrivateKey] = useState('');
   const [watchOnlyPublicKey, setWatchOnlyPublicKey] = useState('');
-  const [ledgerAccount, setLedgerAccount] = useState<{ publicKey: string; derivationPath: string } | null>(null);
+  const [ledgerSelectedAccounts, setLedgerSelectedAccounts] = useState<Array<{ publicKey: string; derivationPath: string }>>([]);
   const [ledgerAccounts, setLedgerAccounts] = useState<LedgerCandidate[]>([]);
   const [ledgerScanCount, setLedgerScanCount] = useState(LEDGER_ACCOUNT_SCAN_BATCH_SIZE);
   const [network, setNetwork] = useState<'mainnet-beta' | 'devnet'>('devnet');
@@ -110,7 +115,7 @@ export function OnboardingView(props: OnboardingViewProps) {
           ? validateSolanaPrivateKey(importPrivateKey)
           : importMethod === 'watch-only'
             ? validatePublicKey(watchOnlyPublicKey)
-          : !!ledgerAccount;
+          : ledgerSelectedAccounts.length > 0;
 
   const requiresPassword = mode === 'create' || importMethod === 'mnemonic' || importMethod === 'private-key' || importMethod === 'ledger';
   const isPasswordStepValid = !requiresPassword || (!submitting && password.length >= 8 && password === passwordConfirm);
@@ -126,11 +131,17 @@ export function OnboardingView(props: OnboardingViewProps) {
       });
       setLedgerScanCount(nextScanCount);
       setLedgerAccounts(accounts);
-      const selected = accounts.find((account) => account.publicKey === ledgerAccount?.publicKey) ?? accounts[0] ?? null;
-      setLedgerAccount(selected ? { publicKey: selected.publicKey, derivationPath: selected.derivationPath } : null);
+      setLedgerSelectedAccounts((currentSelected) => {
+        const available = new Set(accounts.map((account) => getLedgerCandidateKey(account)));
+        const preserved = currentSelected.filter((account) => available.has(getLedgerCandidateKey(account)));
+        if (preserved.length > 0) {
+          return preserved;
+        }
+        return accounts[0] ? [{ publicKey: accounts[0].publicKey, derivationPath: accounts[0].derivationPath }] : [];
+      });
     } catch (nextError) {
       setLedgerAccounts([]);
-      setLedgerAccount(null);
+      setLedgerSelectedAccounts([]);
       setError(nextError instanceof Error ? nextError.message : 'Unable to scan Ledger accounts.');
     } finally {
       setScanningLedger(false);
@@ -198,15 +209,23 @@ export function OnboardingView(props: OnboardingViewProps) {
             publicKey: watchOnlyPublicKey.trim()
           });
         } else {
-          if (!ledgerAccount) {
-            throw new Error('Connect your Ledger and choose an account first.');
+          if (ledgerSelectedAccounts.length === 0) {
+            throw new Error('Connect your Ledger and choose at least one account first.');
           }
-          await sendRuntimeMessage<WalletStateResponse>({
-            type: 'wallet_import_ledger',
-            derivationPath: ledgerAccount.derivationPath,
-            password,
-            publicKey: ledgerAccount.publicKey
-          });
+          if (ledgerSelectedAccounts.length === 1) {
+            await sendRuntimeMessage<WalletStateResponse>({
+              type: 'wallet_import_ledger',
+              derivationPath: ledgerSelectedAccounts[0].derivationPath,
+              password,
+              publicKey: ledgerSelectedAccounts[0].publicKey
+            });
+          } else {
+            await sendRuntimeMessage<WalletStateResponse>({
+              type: 'wallet_import_ledger_batch',
+              password,
+              accounts: ledgerSelectedAccounts
+            });
+          }
         }
       }
 
@@ -298,7 +317,7 @@ export function OnboardingView(props: OnboardingViewProps) {
                   className={`choice-card ${importMethod === 'private-key' ? 'active' : ''}`.trim()}
                   onClick={() => {
                     setImportMethod('private-key');
-                    setLedgerAccount(null);
+                    setLedgerSelectedAccounts([]);
                     setError(null);
                   }}
                 >
@@ -310,7 +329,7 @@ export function OnboardingView(props: OnboardingViewProps) {
                   className={`choice-card ${importMethod === 'watch-only' ? 'active' : ''}`.trim()}
                   onClick={() => {
                     setImportMethod('watch-only');
-                    setLedgerAccount(null);
+                    setLedgerSelectedAccounts([]);
                     setError(null);
                   }}
                 >
@@ -369,7 +388,7 @@ export function OnboardingView(props: OnboardingViewProps) {
                 </label>
               ) : (
                 <div className="stack">
-                  <p className="muted">Connect your Ledger, unlock it, open the Solana app, then scan derived accounts on {network}.</p>
+                  <p className="muted">Connect your Ledger, unlock it, open the Solana app, then scan derived accounts on {network}. Grape checks both current and legacy Solana Ledger derivation paths.</p>
                   <div className="inline wrap-actions">
                     <Button tone="secondary" onClick={() => void scanLedgerAccounts()} disabled={scanningLedger}>
                       {scanningLedger ? 'Scanning...' : ledgerAccounts.length > 0 ? 'Rescan Ledger' : 'Scan Ledger accounts'}
@@ -388,27 +407,32 @@ export function OnboardingView(props: OnboardingViewProps) {
                     <div className="stack">
                       <div className="space-between">
                         <span className="muted">Detected accounts</span>
-                        <span className="muted">Sorted by SOL balance</span>
+                        <span className="muted">Select one or more, sorted by SOL balance</span>
                       </div>
                       <div className="stack">
                         {ledgerAccounts.map((account) => {
-                          const isActive = ledgerAccount?.publicKey === account.publicKey;
+                          const accountKey = getLedgerCandidateKey(account);
+                          const isActive = ledgerSelectedAccounts.some((entry) => getLedgerCandidateKey(entry) === accountKey);
                           return (
                             <button
                               key={`${account.publicKey}:${account.derivationPath}`}
                               type="button"
                               className={`choice-card ${isActive ? 'active' : ''}`.trim()}
                               onClick={() => {
-                                setLedgerAccount({
-                                  publicKey: account.publicKey,
-                                  derivationPath: account.derivationPath
-                                });
+                                setLedgerSelectedAccounts((currentSelected) =>
+                                  currentSelected.some((entry) => getLedgerCandidateKey(entry) === accountKey)
+                                    ? currentSelected.filter((entry) => getLedgerCandidateKey(entry) !== accountKey)
+                                    : [...currentSelected, { publicKey: account.publicKey, derivationPath: account.derivationPath }]
+                                );
                                 setError(null);
                               }}
                             >
                               <div className="space-between">
-                                <strong>Ledger account {account.index}</strong>
-                                <span>{formatLamports(account.lamports)}</span>
+                                <strong>{account.label ?? `Ledger account ${account.index}`}</strong>
+                                <div className="inline" style={{ gap: '8px', alignItems: 'center' }}>
+                                  {isActive ? <span className="section-label">Selected</span> : null}
+                                  <span>{formatLamports(account.lamports)}</span>
+                                </div>
                               </div>
                               <span className="muted mono">{formatAddress(account.publicKey)}</span>
                               <span className="muted mono">{account.derivationPath}</span>
@@ -483,7 +507,7 @@ export function OnboardingView(props: OnboardingViewProps) {
                         ? 'Enter a valid Solana private key.'
                         : importMethod === 'watch-only'
                           ? 'Enter a valid Solana wallet address.'
-                        : 'Connect your Ledger and choose an account.'
+                        : 'Connect your Ledger and choose at least one account.'
                 );
                 return;
               }
@@ -506,7 +530,13 @@ export function OnboardingView(props: OnboardingViewProps) {
           disabled={!isPasswordStepValid}
           onClick={handleSubmit}
         >
-          {submitting ? 'Setting up...' : mode === 'create' ? 'Create wallet' : 'Import wallet'}
+          {submitting
+            ? 'Setting up...'
+            : mode === 'create'
+              ? 'Create wallet'
+              : importMethod === 'ledger' && ledgerSelectedAccounts.length > 1
+                ? `Import ${ledgerSelectedAccounts.length} wallets`
+                : 'Import wallet'}
         </Button>
       </div>
     );

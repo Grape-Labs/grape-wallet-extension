@@ -5,14 +5,17 @@ import { Buffer } from 'buffer';
 import { parseSerializedTransaction, serializeSignedTransaction } from './signing';
 
 export const LEDGER_DEFAULT_DERIVATION_PATH = `44'/501'/0'/0'`;
-export const LEDGER_ACCOUNT_SCAN_BATCH_SIZE = 8;
+export const LEDGER_ACCOUNT_SCAN_BATCH_SIZE = 16;
 
 export type LedgerDiscoveredAccount = {
   index: number;
   publicKey: string;
   derivationPath: string;
   lamports: number;
+  label?: string;
 };
+
+type LedgerDerivationVariant = 'root' | 'bip44-change' | 'bip44-legacy';
 
 type LedgerTransportModule = {
   default: {
@@ -61,13 +64,13 @@ export async function requestLedgerAccounts(input: {
 
   try {
     const solana = new Solana(transport);
-    const derivations = Array.from({ length: count }, (_value, offset) => {
-      const index = startIndex + offset;
-      return {
+    const derivations = Array.from({ length: count }, (_value, offset) => startIndex + offset).flatMap((index) =>
+      getLedgerDerivationPaths(index).map(({ derivationPath, variant }) => ({
         index,
-        derivationPath: toLedgerDerivationPath(index)
-      };
-    });
+        derivationPath,
+        label: getLedgerDerivationLabel(index, variant)
+      }))
+    );
 
     const discovered = [];
     for (const derivation of derivations) {
@@ -75,7 +78,8 @@ export async function requestLedgerAccounts(input: {
       discovered.push({
         index: derivation.index,
         derivationPath: derivation.derivationPath,
-        publicKey: normalizeLedgerAddress(result.address)
+        publicKey: normalizeLedgerAddress(result.address),
+        label: derivation.label
       });
     }
 
@@ -85,12 +89,20 @@ export async function requestLedgerAccounts(input: {
       'confirmed'
     );
 
-    return discovered
+    const deduped = new Map<string, LedgerDiscoveredAccount>();
+    for (const entry of discovered
       .map((entry, idx) => ({
         ...entry,
         lamports: lamports[idx]?.lamports ?? 0
       }))
-      .sort((left, right) => right.lamports - left.lamports || left.index - right.index);
+      .sort((left, right) => right.lamports - left.lamports || left.index - right.index)) {
+      const existing = deduped.get(entry.publicKey);
+      if (!existing) {
+        deduped.set(entry.publicKey, entry);
+      }
+    }
+
+    return [...deduped.values()].sort((left, right) => right.lamports - left.lamports || left.index - right.index);
   } catch (error) {
     throw normalizeLedgerError(error);
   } finally {
@@ -165,8 +177,39 @@ function normalizeLedgerAddress(input: string | Buffer): string {
   return new PublicKey(input).toBase58();
 }
 
-function toLedgerDerivationPath(index: number): string {
-  return `44'/501'/${index}'/0'`;
+function getLedgerDerivationPaths(index: number): Array<{ derivationPath: string; variant: LedgerDerivationVariant }> {
+  return LEDGER_DERIVATION_VARIANTS
+    .filter((variant) => variant !== 'root' || index === 0)
+    .map((variant) => ({
+      derivationPath: toLedgerDerivationPath(index, variant),
+      variant
+    }));
+}
+
+const LEDGER_DERIVATION_VARIANTS: readonly LedgerDerivationVariant[] = ['root', 'bip44-change', 'bip44-legacy'];
+
+function toLedgerDerivationPath(index: number, variant: LedgerDerivationVariant): string {
+  switch (variant) {
+    case 'root':
+      return `44'/501'`;
+    case 'bip44-legacy':
+      return `44'/501'/${index}'`;
+    case 'bip44-change':
+    default:
+      return `44'/501'/${index}'/0'`;
+  }
+}
+
+function getLedgerDerivationLabel(index: number, variant: LedgerDerivationVariant): string {
+  switch (variant) {
+    case 'root':
+      return 'Ledger root';
+    case 'bip44-legacy':
+      return `Ledger Live ${index}`;
+    case 'bip44-change':
+    default:
+      return `Ledger account ${index}`;
+  }
 }
 
 async function signLedgerTransactionBytes(messageBytes: Uint8Array, derivationPath: string): Promise<Uint8Array> {
