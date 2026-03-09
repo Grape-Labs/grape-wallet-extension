@@ -1,6 +1,6 @@
 # Grape Wallet
 
-Chromium-first Solana wallet extension built as a `pnpm` workspace with Manifest V3, React, TypeScript, Wallet Standard support, and a thin legacy injected provider layer.
+Modern Solana wallet for tokens, collectibles, swaps, and secure dApp connections, built as a `pnpm` workspace with Manifest V3, React, TypeScript, Wallet Standard support, and a thin legacy injected provider layer.
 
 ## What It Does
 

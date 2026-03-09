@@ -34,7 +34,7 @@ function createManifestPlugin(mainnetRpcUrl: string): Plugin {
         manifest_version: 3,
         name: 'Grape',
         version: '0.1.1',
-        description: 'Chromium-first Solana wallet extension with Wallet Standard and legacy provider support.',
+        description: 'Modern Solana wallet for tokens, collectibles, swaps, and secure dApp connections.',
         icons: {
           '16': 'icons/grape_logo_white-16.png',
           '32': 'icons/grape_logo_white-32.png',

@@ -1425,13 +1425,6 @@ class WalletController {
       const nextApprovals = { ...approvals };
       delete nextApprovals[approvalId];
       await approvalsStorage.set(nextApprovals);
-      if (approval.windowId !== undefined) {
-        try {
-          await chrome.windows.remove(approval.windowId);
-        } catch {
-          // Window may already be closed.
-        }
-      }
     }
   }
 

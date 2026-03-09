@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
@@ -414,6 +415,33 @@ function CollectibleCard(props: { item: CollectibleItem; onSelect: () => void })
   );
 }
 
+function ActionStatusCard(props: {
+  tone: 'warning' | 'success';
+  title: string;
+  message: string;
+  children?: ReactNode;
+}) {
+  return (
+    <Card className={`action-status-card ${props.tone === 'success' ? 'action-status-card-success' : ''}`.trim()}>
+      <div className="action-status-body">
+        {props.tone === 'success' ? (
+          <div className="action-status-check" aria-hidden="true">
+            <span />
+          </div>
+        ) : (
+          <div className="action-status-spinner" aria-hidden="true" />
+        )}
+        <StatusPill tone={props.tone}>{props.tone === 'success' ? 'Success' : 'Working'}</StatusPill>
+        <div className="action-status-copy">
+          <h2>{props.title}</h2>
+          <p className="muted">{props.message}</p>
+        </div>
+        {props.children}
+      </div>
+    </Card>
+  );
+}
+
 function PopupPage() {
   const [state, setState] = useState<WalletStateResponse | null>(null);
   const [assets, setAssets] = useState<WalletAssetsResponse>({
@@ -526,10 +554,11 @@ function PopupPage() {
       Object.values(approvals)
         .filter((approval) => approval.hostSurfaceId === surfaceId)
         .sort((left, right) => right.createdAt - left.createdAt)[0] ?? null;
-    setActiveApproval(latestApproval);
     if (latestApproval) {
+      setActiveApproval(latestApproval);
       setView('approval');
-    } else {
+    } else if (view !== 'approval') {
+      setActiveApproval(null);
       setView((current) => (current === 'approval' ? 'home' : current));
     }
   };
@@ -1608,6 +1637,42 @@ function PopupPage() {
       }
     }
 
+    if (submitting) {
+      return (
+        <>
+          <ActionStatusCard
+            tone="warning"
+            title="Sending transfer"
+            message="Grape is signing and submitting the transfer. Keep this window open until it completes."
+          />
+          {sendError ? <p className="danger-box">{sendError}</p> : null}
+        </>
+      );
+    }
+
+    if (sendResult) {
+      return (
+        <>
+          <ActionStatusCard tone="success" title="Transfer sent" message="Your transfer was submitted successfully.">
+            <div className="action-status-details">
+              <KeyValueRow
+                label="Signature"
+                value={<span className="mono transfer-signature">{sendResult.signature}</span>}
+              />
+              <KeyValueRow label="Recipient" value={<span className="mono">{formatAddress(sendResult.recipient)}</span>} />
+            </div>
+            <div className="inline wrap-actions action-status-actions">
+              <Button tone="secondary" onClick={() => setSendResult(null)}>
+                Send another
+              </Button>
+              <Button onClick={() => setView('home')}>Done</Button>
+            </div>
+          </ActionStatusCard>
+          {surfaceError ? <p className="danger-box">{surfaceError}</p> : null}
+        </>
+      );
+    }
+
     return (
       <>
         <Card className="send-flow-card">
@@ -1735,23 +1800,14 @@ function PopupPage() {
           </div>
         </Card>
 
-        {sendResult ? (
-          <Card title="Sent">
-            <KeyValueRow label="Signature" value={<span className="mono transfer-signature">{sendResult.signature}</span>} />
-            <KeyValueRow label="Recipient" value={<span className="mono">{formatAddress(sendResult.recipient)}</span>} />
-          </Card>
-        ) : null}
-
         {sendError ? <p className="danger-box">{sendError}</p> : null}
         {surfaceError ? <p className="danger-box">{surfaceError}</p> : null}
 
-        {!sendResult ? (
-          <div className="inline wrap-actions send-flow-actions">
-            <Button className="button-block" disabled={submitting || !selectedAsset} onClick={handleSend}>
-              {submitting ? 'Sending...' : 'Send now'}
-            </Button>
-          </div>
-        ) : null}
+        <div className="inline wrap-actions send-flow-actions">
+          <Button className="button-block" disabled={!selectedAsset} onClick={handleSend}>
+            Send now
+          </Button>
+        </div>
       </>
     );
   }
@@ -2400,6 +2456,49 @@ function PopupPage() {
             : 'Unknown';
     const quoteOutputValue = swapQuote ? `${swapQuote.outputAmountUi} ${outputAssetSymbol}` : '0';
 
+    if (submittingSwap) {
+      return (
+        <>
+          <ActionStatusCard
+            tone="warning"
+            title="Submitting swap"
+            message="Grape is signing and broadcasting the swap transaction. Keep this window open until it completes."
+          />
+          {swapError ? <p className="danger-box">{swapError}</p> : null}
+        </>
+      );
+    }
+
+    if (swapResult) {
+      return (
+        <>
+          <ActionStatusCard tone="success" title="Swap submitted" message="Your swap transaction was submitted successfully.">
+            <div className="action-status-details">
+              <KeyValueRow
+                label="Signature"
+                value={<span className="mono transfer-signature">{swapResult.signature}</span>}
+              />
+              <KeyValueRow label="From" value={swapResult.inputAmountUi} />
+              <KeyValueRow label="To" value={swapResult.outputAmountUi} />
+            </div>
+            <div className="inline wrap-actions action-status-actions">
+              <Button
+                tone="secondary"
+                onClick={() => {
+                  setSwapResult(null);
+                  setSwapQuote(null);
+                }}
+              >
+                Swap again
+              </Button>
+              <Button onClick={() => setView('home')}>Done</Button>
+            </div>
+          </ActionStatusCard>
+          {swapError ? <p className="danger-box">{swapError}</p> : null}
+        </>
+      );
+    }
+
     function setSwapAmountByRatio(ratio: number) {
       if (!selectedSwapInputAsset) {
         return;
@@ -2670,16 +2769,6 @@ function PopupPage() {
           </Card>
         ) : null}
 
-        {swapResult ? (
-          <Card title="Swap submitted">
-            <div className="stack">
-              <KeyValueRow label="Signature" value={<span className="mono transfer-signature">{swapResult.signature}</span>} />
-              <KeyValueRow label="From" value={swapResult.inputAmountUi} />
-              <KeyValueRow label="To" value={swapResult.outputAmountUi} />
-            </div>
-          </Card>
-        ) : null}
-
         {swapError ? <p className="danger-box">{swapError}</p> : null}
 
         <div className="inline wrap-actions send-flow-actions">
@@ -2693,7 +2782,7 @@ function PopupPage() {
               }
               onClick={() => void handleExecuteSwap()}
             >
-              {submittingSwap ? 'Swapping...' : 'Swap now'}
+              Swap now
             </Button>
           ) : (
             <Button

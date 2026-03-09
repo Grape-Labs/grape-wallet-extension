@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 
 import { Button, Card, Input, KeyValueRow, StatusPill } from '@grape/ui';
 
@@ -36,7 +36,39 @@ export function ApprovalView(props: {
   const { approval, approvalId, inline, onResolved } = props;
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [approved, setApproved] = useState(false);
   const requiresPassword = approval.kind !== 'connect' && (approval.requiresPassword ?? true);
+  const successCopy = useMemo(() => {
+    switch (approval.kind) {
+      case 'connect':
+        return {
+          title: 'Connected',
+          body: 'Grape approved the connection request for this site.'
+        };
+      case 'sign-message':
+        return {
+          title: 'Message signed',
+          body: 'The message was signed successfully and returned to the dApp.'
+        };
+      case 'sign-transaction':
+      case 'sign-all-transactions':
+        return {
+          title: 'Signature approved',
+          body: 'The signed transaction payload was returned to the dApp.'
+        };
+      case 'sign-and-send-transaction':
+        return {
+          title: 'Transaction submitted',
+          body: 'The transaction was approved, signed, and broadcast successfully.'
+        };
+      default:
+        return {
+          title: 'Approved',
+          body: 'The request was approved successfully.'
+        };
+    }
+  }, [approval.kind]);
 
   async function handleResolved() {
     if (inline) {
@@ -44,6 +76,43 @@ export function ApprovalView(props: {
       return;
     }
     closeCurrentWindow();
+  }
+
+  if (submitting) {
+    return (
+      <Card className="action-status-card">
+        <div className="action-status-body">
+          <div className="action-status-spinner" aria-hidden="true" />
+          <StatusPill tone="warning">Working</StatusPill>
+          <div className="action-status-copy">
+            <h2>{approval.kind === 'sign-and-send-transaction' ? 'Submitting transaction' : 'Processing approval'}</h2>
+            <p className="muted">
+              Grape is finalizing this request. Keep this window open until it completes.
+            </p>
+          </div>
+        </div>
+      </Card>
+    );
+  }
+
+  if (approved) {
+    return (
+      <Card className="action-status-card action-status-card-success">
+        <div className="action-status-body">
+          <div className="action-status-check" aria-hidden="true">
+            <span />
+          </div>
+          <StatusPill tone="success">Success</StatusPill>
+          <div className="action-status-copy">
+            <h2>{successCopy.title}</h2>
+            <p className="muted">{successCopy.body}</p>
+          </div>
+          <Button className="button-block" onClick={() => void handleResolved()}>
+            Done
+          </Button>
+        </div>
+      </Card>
+    );
   }
 
   return (
@@ -145,6 +214,7 @@ export function ApprovalView(props: {
       <div className="inline approval-action-row">
         <Button
           tone="danger"
+          disabled={submitting}
           onClick={async () => {
             await sendRuntimeMessage({
               type: 'approval_respond',
@@ -157,8 +227,10 @@ export function ApprovalView(props: {
           Reject
         </Button>
         <Button
+          disabled={submitting || (requiresPassword && !password.trim())}
           onClick={async () => {
             try {
+              setSubmitting(true);
               setError(null);
               await sendRuntimeMessage({
                 type: 'approval_respond',
@@ -166,9 +238,11 @@ export function ApprovalView(props: {
                 approved: true,
                 password: requiresPassword ? password : undefined
               });
-              await handleResolved();
+              setApproved(true);
             } catch (nextError) {
               setError(nextError instanceof Error ? nextError.message : 'Unable to approve request.');
+            } finally {
+              setSubmitting(false);
             }
           }}
         >
