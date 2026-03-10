@@ -11,7 +11,8 @@ const sendAssetSchema = z.discriminatedUnion('kind', [
     kind: z.literal('spl-token'),
     mint: z.string().min(32),
     decimals: z.number().int().min(0).max(255),
-    programId: z.string().min(32)
+    programId: z.string().min(32),
+    accountAddress: z.string().min(32).optional()
   })
 ]);
 

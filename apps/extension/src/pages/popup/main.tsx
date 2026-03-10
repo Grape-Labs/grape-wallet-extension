@@ -77,7 +77,7 @@ type AssetOption =
       symbol: string;
       balance: string;
       logoUri?: string;
-      asset: { kind: 'spl-token'; mint: string; decimals: number; programId: string };
+      asset: { kind: 'spl-token'; mint: string; decimals: number; programId: string; accountAddress?: string };
     };
 
 type AssetPickerDisplayOption = {
@@ -94,7 +94,7 @@ const COMMON_SWAP_TOKENS = [
   { mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', symbol: 'USDC' },
   { mint: 'Es9vMFrzaCERmJfrF4H2FYD1NVr7Di5urN6byN1Nsx3', symbol: 'USDT' },
   { mint: 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN', symbol: 'JUP' },
-  { mint: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6uA9Rh5o1kxU4hA', symbol: 'BONK' }
+  { mint: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263', symbol: 'BONK' }
 ] as const;
 
 type SwapOutputOption = {
@@ -562,6 +562,7 @@ function PopupPage() {
   const [swapError, setSwapError] = useState<string | null>(null);
   const [quotingSwap, setQuotingSwap] = useState(false);
   const [submittingSwap, setSubmittingSwap] = useState(false);
+  const swapQuoteRequestRef = useRef(0);
   const [assetsLoading, setAssetsLoading] = useState(false);
   const [stakeAccounts, setStakeAccounts] = useState<StakeAccountRow[]>([]);
   const [stakeSource, setStakeSource] = useState<'shyft' | 'rpc' | 'none'>('none');
@@ -865,6 +866,19 @@ function PopupPage() {
   const solValue = useMemo(() => formatUsd(assets.nativeValueUsd), [assets.nativeValueUsd]);
   const solChange = useMemo(() => formatPercent(assets.nativePriceChange24h), [assets.nativePriceChange24h]);
   const solUnitPrice = useMemo(() => formatUnitPrice(assets.nativePriceUsd), [assets.nativePriceUsd]);
+  const collectibleItems = useMemo(
+    () =>
+      (assets.collections ?? []).flatMap((collection) =>
+        collection.items.map((item) => ({
+          ...item,
+          collectionId: item.collectionId ?? collection.id,
+          collectionName: item.collectionName ?? collection.name,
+          collectionSymbol: item.collectionSymbol ?? collection.symbol,
+          imageUri: item.imageUri ?? collection.imageUri
+        }))
+      ),
+    [assets.collections]
+  );
   const assetOptions = useMemo<AssetOption[]>(() => {
     const tokenOptions = assets.tokens.map((token) => ({
       id: `${token.mint}:${token.programId}`,
@@ -877,7 +891,8 @@ function PopupPage() {
         kind: 'spl-token' as const,
         mint: token.mint,
         decimals: token.decimals,
-        programId: token.programId
+        programId: token.programId,
+        accountAddress: token.accountAddress
       }
     }));
 
@@ -895,10 +910,37 @@ function PopupPage() {
       ...tokenOptions
     ];
   }, [assets, homeBalance]);
+  const sendAssetOptions = useMemo<AssetOption[]>(() => {
+    const collectibleOptions = collectibleItems
+      .filter((item) => item.accountAddress && item.programId)
+      .map((item) => ({
+        id: `collectible:${item.mint}:${item.programId}:${item.accountAddress}`,
+        label: item.symbol ? `${item.symbol} collectible` : `${formatAddress(item.mint)} collectible`,
+        name: item.name ?? item.symbol ?? formatAddress(item.mint),
+        symbol: item.symbol ?? 'NFT',
+        balance: '1 NFT',
+        logoUri: item.imageUri,
+        asset: {
+          kind: 'spl-token' as const,
+          mint: item.mint,
+          decimals: 0,
+          programId: item.programId!,
+          accountAddress: item.accountAddress!
+        }
+      }));
 
-  const selectedAsset = assetOptions.find((option) => option.id === assetId) ?? assetOptions[0];
+    return [...assetOptions, ...collectibleOptions];
+  }, [assetOptions, collectibleItems]);
+
+  const selectedAsset = sendAssetOptions.find((option) => option.id === assetId) ?? sendAssetOptions[0];
   const selectedTokenHolding =
     assetId === 'sol' ? null : assets.tokens.find((token) => `${token.mint}:${token.programId}` === assetId) ?? null;
+  const selectedSendCollectible =
+    assetId === 'sol'
+      ? null
+      : collectibleItems.find(
+          (item) => `collectible:${item.mint}:${item.programId}:${item.accountAddress}` === assetId
+        ) ?? null;
   const selectedSwapInputAsset = assetOptions.find((option) => option.id === swapInputAssetId) ?? assetOptions[0];
   const selectedSwapInputHolding =
     swapInputAssetId === 'sol'
@@ -913,22 +955,9 @@ function PopupPage() {
       (token, index, allTokens) => allTokens.findIndex((candidate) => candidate.mint === token.mint) === index
     );
   }, [assets.tokens]);
-  const selectedSwapOutputToken = assets.tokens.find((token) => token.mint === swapOutputMint) ?? null;
-  const collectibleItems = useMemo(
-    () =>
-      (assets.collections ?? []).flatMap((collection) =>
-        collection.items.map((item) => ({
-          ...item,
-          collectionId: item.collectionId ?? collection.id,
-          collectionName: item.collectionName ?? collection.name,
-          collectionSymbol: item.collectionSymbol ?? collection.symbol,
-          imageUri: item.imageUri ?? collection.imageUri
-        }))
-      ),
-    [assets.collections]
-  );
-  const selectedSwapOutputOption = swapOutputOptions.find((option) => option.mint === swapOutputMint) ?? null;
   const effectiveSwapOutputMint = swapUseCustomOutputMint ? swapCustomOutputMint.trim() : swapOutputMint;
+  const selectedSwapOutputToken = assets.tokens.find((token) => token.mint === effectiveSwapOutputMint) ?? null;
+  const selectedSwapOutputOption = swapOutputOptions.find((option) => option.mint === effectiveSwapOutputMint) ?? null;
   const swapOutputPickerOptions = useMemo<AssetPickerDisplayOption[]>(
     () =>
       swapOutputOptions.map((option) => {
@@ -960,12 +989,13 @@ function PopupPage() {
     }
   }
 
-  async function handleGetSwapQuote() {
+  async function handleGetSwapQuote(requestId = Date.now()) {
     if (!selectedSwapInputAsset || !effectiveSwapOutputMint) {
       return;
     }
 
     try {
+      swapQuoteRequestRef.current = requestId;
       setQuotingSwap(true);
       setSwapError(null);
       setSwapResult(null);
@@ -976,12 +1006,18 @@ function PopupPage() {
         inputAsset: selectedSwapInputAsset.asset,
         outputMint: effectiveSwapOutputMint
       });
-      setSwapQuote(quote);
+      if (swapQuoteRequestRef.current === requestId) {
+        setSwapQuote(quote);
+      }
     } catch (error) {
-      setSwapQuote(null);
-      setSwapError(error instanceof Error ? error.message : 'Unable to fetch swap quote.');
+      if (swapQuoteRequestRef.current === requestId) {
+        setSwapQuote(null);
+        setSwapError(error instanceof Error ? error.message : 'Unable to fetch swap quote.');
+      }
     } finally {
-      setQuotingSwap(false);
+      if (swapQuoteRequestRef.current === requestId) {
+        setQuotingSwap(false);
+      }
     }
   }
 
@@ -1009,6 +1045,48 @@ function PopupPage() {
       setSubmittingSwap(false);
     }
   }
+
+  useEffect(() => {
+    if (view !== 'swap' || submittingSwap || Boolean(swapResult)) {
+      return;
+    }
+
+    const slippage = Number(swapSlippageBps);
+    if (
+      state?.wallet.selectedNetwork !== 'mainnet-beta' ||
+      !selectedSwapInputAsset ||
+      !swapAmount.trim() ||
+      !effectiveSwapOutputMint ||
+      effectiveSwapOutputMint.length < 32 ||
+      !Number.isFinite(slippage)
+    ) {
+      swapQuoteRequestRef.current = 0;
+      setQuotingSwap(false);
+      return;
+    }
+
+    const requestId = Date.now();
+    swapQuoteRequestRef.current = requestId;
+    const timeoutId = window.setTimeout(() => {
+      void handleGetSwapQuote(requestId);
+    }, 350);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [
+    effectiveSwapOutputMint,
+    selectedSwapInputAsset,
+    swapAmount,
+    swapInputAssetId,
+    swapOutputMint,
+    swapSlippageBps,
+    swapUseCustomOutputMint,
+    submittingSwap,
+    swapResult,
+    view,
+    state?.wallet.selectedNetwork
+  ]);
 
   async function handleCreateStake() {
     try {
@@ -1157,6 +1235,22 @@ function PopupPage() {
 
   function openSend(nextAssetId = 'sol') {
     setAssetId(nextAssetId);
+    setSendAssetPickerOpen(false);
+    setSendError(null);
+    setSendResult(null);
+    setView('send');
+  }
+
+  function openSendForCollectible(item: CollectibleItem) {
+    if (!item.accountAddress || !item.programId) {
+      setSurfaceError('This collectible is missing token account metadata, so it cannot be sent yet.');
+      return;
+    }
+
+    setAssetId(`collectible:${item.mint}:${item.programId}:${item.accountAddress}`);
+    setAmount('1');
+    setRecipient('');
+    setPassword('');
     setSendAssetPickerOpen(false);
     setSendError(null);
     setSendResult(null);
@@ -2089,17 +2183,31 @@ function PopupPage() {
       );
     }
 
+    const isCollectibleSend = !!selectedSendCollectible;
     const selectedAssetName =
-      assetId === 'sol' ? 'Solana' : selectedTokenHolding?.name ?? selectedTokenHolding?.symbol ?? selectedAsset?.label ?? 'Token';
+      assetId === 'sol'
+        ? 'Solana'
+        : selectedSendCollectible?.name ?? selectedTokenHolding?.name ?? selectedTokenHolding?.symbol ?? selectedAsset?.label ?? 'Token';
     const selectedAssetSymbol =
-      assetId === 'sol' ? 'SOL' : selectedTokenHolding?.symbol ?? selectedAsset?.label.replace(/ token$/i, '') ?? 'Token';
+      assetId === 'sol'
+        ? 'SOL'
+        : selectedSendCollectible?.symbol ?? selectedTokenHolding?.symbol ?? selectedAsset?.label.replace(/ token$/i, '') ?? 'Token';
     const selectedAmountNumber = Number(amount || '0');
     const selectedUnitPrice = assetId === 'sol' ? assets.nativePriceUsd ?? null : selectedTokenHolding?.priceUsd ?? null;
     const selectedFiatValue =
-      Number.isFinite(selectedAmountNumber) && typeof selectedUnitPrice === 'number' ? formatUsd(selectedAmountNumber * selectedUnitPrice) : '$0.00';
-    const availableBalanceLabel = selectedAsset?.balance ?? 'Unavailable';
+      isCollectibleSend
+        ? null
+        : Number.isFinite(selectedAmountNumber) && typeof selectedUnitPrice === 'number'
+          ? formatUsd(selectedAmountNumber * selectedUnitPrice)
+          : '$0.00';
+    const availableBalanceLabel = isCollectibleSend ? '1 NFT available' : selectedAsset?.balance ?? 'Unavailable';
 
     function handleMaxAmount() {
+      if (isCollectibleSend) {
+        setAmount('1');
+        return;
+      }
+
       if (assetId === 'sol') {
         const lamports = typeof assets.lamports === 'number' ? assets.lamports : 0;
         const reservedLamports = 10_000;
@@ -2168,13 +2276,14 @@ function PopupPage() {
                 placeholder="0"
                 inputMode="decimal"
                 aria-label="Amount"
+                readOnly={isCollectibleSend}
               />
-              <button type="button" className="send-max-button" onClick={handleMaxAmount}>
-                Max
+              <button type="button" className="send-max-button" onClick={handleMaxAmount} disabled={isCollectibleSend && amount === '1'}>
+                {isCollectibleSend ? 'NFT' : 'Max'}
               </button>
             </div>
             <div className="send-flow-amount-meta">
-              <span>{selectedFiatValue}</span>
+              <span>{selectedFiatValue ?? 'Collectible transfer'}</span>
               <span>{availableBalanceLabel}</span>
             </div>
           </div>
@@ -2197,13 +2306,16 @@ function PopupPage() {
                   <div className="send-asset-menu">
                     <div className="popup-menu-section">Assets</div>
                     <div className="send-asset-menu-list">
-                      {assetOptions.map((option) => (
+                      {sendAssetOptions.map((option) => (
                         <AssetPickerOptionRow
                           key={option.id}
                           option={option}
                           active={option.id === assetId}
                           onSelect={() => {
                             setAssetId(option.id);
+                            if (option.id.startsWith('collectible:')) {
+                              setAmount('1');
+                            }
                             setSendAssetPickerOpen(false);
                           }}
                         />
@@ -2280,7 +2392,7 @@ function PopupPage() {
         {surfaceError ? <p className="danger-box">{surfaceError}</p> : null}
 
         <div className="inline wrap-actions send-flow-actions">
-          <Button className="button-block" disabled={!selectedAsset} onClick={handleSend}>
+          <Button className="button-block" disabled={!selectedAsset || !recipient.trim() || !amount.trim()} onClick={handleSend}>
             Send now
           </Button>
         </div>
@@ -2398,7 +2510,20 @@ function PopupPage() {
                 <span className="quick-action-icon">{detailActionIcon}</span>
               </button>
             </div>
-          ) : null}
+          ) : (
+            <div className="quick-actions compact asset-detail-actions">
+              <button
+                type="button"
+                className="quick-action-card"
+                onClick={() => selectedCollectible && openSendForCollectible(selectedCollectible)}
+                aria-label="Send collectible"
+                title="Send"
+                disabled={isWatchOnlyWallet || !selectedCollectible?.accountAddress || !selectedCollectible?.programId}
+              >
+                <span className="quick-action-icon"><SendHorizontal size={18} /></span>
+              </button>
+            </div>
+          )}
         </Card>
 
         <Card title={isCollectibleView ? 'NFT Details' : 'Token details'}>
@@ -2927,21 +3052,20 @@ function PopupPage() {
         ? 'SOL'
         : selectedSwapInputHolding?.symbol ?? selectedSwapInputAsset?.label.replace(/ token$/i, '') ?? 'Token';
     const inputAssetBalance = selectedSwapInputAsset?.balance ?? '0';
+    const isNativeSwapOutput = effectiveSwapOutputMint === JUPITER_SOL_MINT;
     const outputAssetSymbol = swapUseCustomOutputMint
       ? effectiveSwapOutputMint
         ? formatAddress(effectiveSwapOutputMint)
         : 'Custom mint'
-      : selectedSwapOutputToken?.symbol ?? selectedSwapOutputOption?.symbol ?? formatAddress(swapOutputMint);
+      : selectedSwapOutputToken?.symbol ?? selectedSwapOutputOption?.symbol ?? formatAddress(effectiveSwapOutputMint || swapOutputMint);
     const outputAssetBalance =
-      swapUseCustomOutputMint
-        ? assets.tokens.find((token) => token.mint === effectiveSwapOutputMint)
-          ? formatTokenAmount(assets.tokens.find((token) => token.mint === effectiveSwapOutputMint)!)
-          : 'Not owned yet'
+      isNativeSwapOutput
+        ? homeBalance
         : selectedSwapOutputToken
-          ? formatTokenAmount(selectedSwapOutputToken)
-          : selectedSwapOutputOption?.symbol
-            ? 'Not owned yet'
-            : 'Unknown';
+        ? formatTokenAmount(selectedSwapOutputToken)
+        : selectedSwapOutputOption?.symbol
+          ? 'Not owned yet'
+          : 'Unknown';
     const quoteOutputValue = swapQuote ? `${swapQuote.outputAmountUi} ${outputAssetSymbol}` : '0';
 
     if (submittingSwap) {
@@ -3002,11 +3126,12 @@ function PopupPage() {
     }
 
     function handleFlipSwapDirection() {
+      const nextOutputMint = effectiveSwapOutputMint;
       const nextInputId =
-        swapOutputMint === JUPITER_SOL_MINT
+        nextOutputMint === JUPITER_SOL_MINT
           ? 'sol'
-          : assets.tokens.find((token) => token.mint === swapOutputMint)
-            ? `${swapOutputMint}:${assets.tokens.find((token) => token.mint === swapOutputMint)?.programId}`
+          : assets.tokens.find((token) => token.mint === nextOutputMint)
+            ? `${nextOutputMint}:${assets.tokens.find((token) => token.mint === nextOutputMint)?.programId}`
             : null;
       const currentInputMint =
         selectedSwapInputAsset?.asset.kind === 'sol' ? JUPITER_SOL_MINT : selectedSwapInputAsset?.asset.kind === 'spl-token' ? selectedSwapInputAsset.asset.mint : null;
@@ -3128,11 +3253,11 @@ function PopupPage() {
                         balance: outputAssetBalance,
                         logoUri:
                           swapUseCustomOutputMint
-                            ? assets.tokens.find((token) => token.mint === effectiveSwapOutputMint)?.logoUri
-                            : swapOutputMint === JUPITER_SOL_MINT
+                            ? selectedSwapOutputToken?.logoUri
+                            : isNativeSwapOutput
                               ? SOLANA_LOGO_URL
                               : selectedSwapOutputToken?.logoUri,
-                        sol: !swapUseCustomOutputMint && swapOutputMint === JUPITER_SOL_MINT
+                        sol: !swapUseCustomOutputMint && isNativeSwapOutput
                       }}
                     />
                     <ChevronDown className="send-select-chevron" size={18} />
@@ -3272,7 +3397,7 @@ function PopupPage() {
             >
               Swap now
             </Button>
-          ) : (
+          ) : swapError ? (
             <Button
               className="button-block"
               disabled={
@@ -3284,9 +3409,16 @@ function PopupPage() {
                 effectiveSwapOutputMint.length < 32 ||
                 !Number.isFinite(Number(swapSlippageBps))
               }
-              onClick={() => void handleGetSwapQuote()}
+              onClick={() => void handleGetSwapQuote(Date.now())}
             >
-              {quotingSwap ? 'Quoting...' : 'Get quote'}
+              {quotingSwap ? 'Updating quote...' : 'Retry quote'}
+            </Button>
+          ) : (
+            <Button
+              className="button-block"
+              disabled
+            >
+              {quotingSwap ? 'Updating quote...' : 'Quote updates automatically'}
             </Button>
           )}
         </div>

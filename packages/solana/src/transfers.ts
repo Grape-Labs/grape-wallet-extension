@@ -40,6 +40,7 @@ export type SplTokenTransferInput = {
   mint: string;
   decimals: number;
   programId: string;
+  accountAddress?: string;
 };
 
 export type BurnSplTokenInput = {
@@ -268,7 +269,9 @@ export async function buildSplTokenTransferTransaction(
 
   const mint = new PublicKey(input.mint);
   const recipient = new PublicKey(input.recipient);
-  const sourceAta = getAssociatedTokenAddress(owner, mint, tokenProgramId);
+  const sourceAta = input.accountAddress
+    ? new PublicKey(input.accountAddress)
+    : getAssociatedTokenAddress(owner, mint, tokenProgramId);
   const destinationAta = getAssociatedTokenAddress(recipient, mint, tokenProgramId);
   const amount = parseDecimalAmount(input.amount, input.decimals);
   const { blockhash } = await connection.getLatestBlockhash('confirmed');
