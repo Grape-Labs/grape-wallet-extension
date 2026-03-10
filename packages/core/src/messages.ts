@@ -163,6 +163,15 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     theme: z.enum(['grape', 'comic', 'sunset', 'matrix', 'apple', 'aurora', 'champagne', 'liquid-chrome', 'obsidian'])
   }),
   z.object({
+    type: z.literal('wallet_set_privacy_mode'),
+    enabled: z.boolean()
+  }),
+  z.object({
+    type: z.literal('wallet_set_custom_rpc'),
+    network: z.enum(['mainnet-beta', 'devnet']),
+    rpcUrl: z.string().url().nullable()
+  }),
+  z.object({
     type: z.literal('wallet_select'),
     walletId: z.string().min(1)
   }),

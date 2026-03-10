@@ -90,6 +90,8 @@ export type WalletState = {
   selectedWalletId?: string;
   selectedNetwork: GrapeNetwork;
   selectedTheme: GrapeTheme;
+  privacyMode: boolean;
+  customRpcUrls: Partial<Record<GrapeNetwork, string>>;
   idleTimeoutMs: number;
 };
 
@@ -100,6 +102,8 @@ export type LegacyWalletState = {
   selectedAccountId?: string;
   selectedNetwork?: GrapeNetwork;
   selectedTheme?: GrapeTheme;
+  privacyMode?: boolean;
+  customRpcUrls?: Partial<Record<GrapeNetwork, string>>;
   idleTimeoutMs?: number;
 };
 
@@ -143,6 +147,8 @@ export function createEmptyWalletState(): WalletState {
     wallets: [],
     selectedNetwork: 'devnet',
     selectedTheme: DEFAULT_THEME,
+    privacyMode: false,
+    customRpcUrls: {},
     idleTimeoutMs: DEFAULT_IDLE_TIMEOUT_MS
   };
 }
@@ -217,6 +223,8 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
       selectedWalletId: selectedWalletId ?? normalizedWallets[0]?.id,
       selectedNetwork: input.selectedNetwork ?? 'devnet',
       selectedTheme: normalizeTheme(input.selectedTheme),
+      privacyMode: input.privacyMode ?? false,
+      customRpcUrls: normalizeCustomRpcUrls(input.customRpcUrls),
       idleTimeoutMs: input.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS
     };
   }
@@ -240,6 +248,8 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
       selectedWalletId: 'wallet-1',
       selectedNetwork: input.selectedNetwork ?? 'devnet',
       selectedTheme: normalizeTheme(input.selectedTheme),
+      privacyMode: input.privacyMode ?? false,
+      customRpcUrls: normalizeCustomRpcUrls(input.customRpcUrls),
       idleTimeoutMs: input.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS
     };
   }
@@ -249,6 +259,8 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
     wallets: [],
     selectedNetwork: input.selectedNetwork ?? 'devnet',
     selectedTheme: normalizeTheme(input.selectedTheme),
+    privacyMode: input.privacyMode ?? false,
+    customRpcUrls: normalizeCustomRpcUrls(input.customRpcUrls),
     idleTimeoutMs: input.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS
   };
 }
@@ -275,6 +287,23 @@ function normalizeWalletProfile(wallet: WalletProfile): WalletProfile {
     biometricUnlock: wallet.biometricUnlock,
     recentRecipients: Array.isArray(wallet.recentRecipients) ? wallet.recentRecipients : []
   };
+}
+
+function normalizeCustomRpcUrls(
+  customRpcUrls: Partial<Record<GrapeNetwork, string>> | undefined
+): Partial<Record<GrapeNetwork, string>> {
+  if (!customRpcUrls) {
+    return {};
+  }
+
+  const next: Partial<Record<GrapeNetwork, string>> = {};
+  for (const network of ['mainnet-beta', 'devnet'] as const) {
+    const value = customRpcUrls[network]?.trim();
+    if (value) {
+      next[network] = value;
+    }
+  }
+  return next;
 }
 
 function normalizeWalletNames(wallets: WalletProfile[]): WalletProfile[] {

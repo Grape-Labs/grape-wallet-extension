@@ -1176,16 +1176,15 @@ body[data-theme='grape'] .wallet-home-card {
 }
 
 body[data-theme='grape'] .wallet-home-card::after {
-  right: -20%;
-  bottom: -20%;
+  inset: auto -35% 15% auto;
   top: auto;
-  width: 86%;
+  width: 100%;
   height: auto;
   aspect-ratio: 1;
   border-radius: 0;
-  background: url('/icons/grape_logo_white.svg') center / contain no-repeat;
-  opacity: 0.01;
-  filter: saturate(0.95);
+  background: url('/icons/grape_logo_white.svg') right bottom / 74% auto no-repeat;
+  opacity: 0.02;
+  filter: blur(0.2px) saturate(0.85);
 }
 
 .wallet-home-topbar {
@@ -3319,6 +3318,22 @@ body[data-surface='popup'] .token-change {
   justify-content: flex-start;
   gap: 8px;
   align-items: center;
+}
+
+.compact-settings-toggle {
+  align-items: flex-start;
+}
+
+.compact-settings-toggle span {
+  display: grid;
+  gap: 2px;
+}
+
+.settings-inline-value {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .bottom-nav {

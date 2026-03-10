@@ -38,6 +38,8 @@ describe('wallet state', () => {
       ],
       selectedWalletId: 'wallet-1',
       selectedNetwork: 'devnet',
+      privacyMode: false,
+      customRpcUrls: {},
       idleTimeoutMs: 1_000
     });
 
@@ -121,6 +123,8 @@ describe('wallet state', () => {
         selectedWalletId: 'wallet-1',
         selectedNetwork: 'devnet',
         selectedTheme: 'aurora',
+        privacyMode: false,
+        customRpcUrls: {},
         idleTimeoutMs: 1_000
       },
       'wallet-1'
@@ -157,6 +161,8 @@ describe('wallet state', () => {
         selectedWalletId: 'wallet-1',
         selectedNetwork: 'devnet',
         selectedTheme: 'aurora',
+        privacyMode: false,
+        customRpcUrls: {},
         idleTimeoutMs: 1_000
       },
       'wallet-1'

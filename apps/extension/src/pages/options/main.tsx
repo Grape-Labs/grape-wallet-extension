@@ -44,6 +44,10 @@ function OptionsPage() {
   const [biometricLoading, setBiometricLoading] = useState(false);
   const [biometricPassword, setBiometricPassword] = useState('');
   const [biometricError, setBiometricError] = useState<string | null>(null);
+  const [customRpcEnabled, setCustomRpcEnabled] = useState(false);
+  const [customRpcInput, setCustomRpcInput] = useState('');
+  const [customRpcLoading, setCustomRpcLoading] = useState(false);
+  const [customRpcError, setCustomRpcError] = useState<string | null>(null);
   const [revealedFields, setRevealedFields] = useState<{ mnemonic: boolean; privateKey: boolean }>({
     mnemonic: false,
     privateKey: false
@@ -91,6 +95,20 @@ function OptionsPage() {
   useEffect(() => {
     applyDocumentTheme(state?.wallet.selectedTheme);
   }, [state?.wallet.selectedTheme]);
+
+  useEffect(() => {
+    if (!state) {
+      setCustomRpcEnabled(false);
+      setCustomRpcInput('');
+      setCustomRpcError(null);
+      return;
+    }
+
+    const nextCustomRpc = state.wallet.customRpcUrls[state.wallet.selectedNetwork] ?? '';
+    setCustomRpcEnabled(!!nextCustomRpc);
+    setCustomRpcInput(nextCustomRpc);
+    setCustomRpcError(null);
+  }, [state?.wallet.customRpcUrls, state?.wallet.selectedNetwork]);
 
   if (loading) {
     return (
@@ -223,6 +241,27 @@ function OptionsPage() {
     }
   }
 
+  async function handleSaveCustomRpc() {
+    if (!state) {
+      return;
+    }
+
+    try {
+      setCustomRpcLoading(true);
+      setCustomRpcError(null);
+      await sendRuntimeMessage({
+        type: 'wallet_set_custom_rpc',
+        network: state.wallet.selectedNetwork,
+        rpcUrl: customRpcEnabled ? customRpcInput.trim() || null : null
+      });
+      await refresh();
+    } catch (error) {
+      setCustomRpcError(error instanceof Error ? error.message : 'Unable to update custom RPC.');
+    } finally {
+      setCustomRpcLoading(false);
+    }
+  }
+
   return (
     <PageShell title="Settings" subtitle="Manage security and connected sites.">
       <Card title="Security">
@@ -278,6 +317,89 @@ function OptionsPage() {
             ))}
           </select>
         </label>
+        <label className="inline checkbox-row">
+          <input
+            type="checkbox"
+            checked={state.wallet.privacyMode}
+            onChange={async (event) => {
+              await sendRuntimeMessage({
+                type: 'wallet_set_privacy_mode',
+                enabled: event.target.checked
+              });
+              await refresh();
+            }}
+          />
+          <span>
+            <strong>Privacy mode</strong>
+            <small className="muted">Hide total balance, token values, and token balances with ***.</small>
+          </span>
+        </label>
+        <div className="stack">
+          <label className="inline checkbox-row">
+            <input
+              type="checkbox"
+              checked={customRpcEnabled}
+              onChange={(event) => {
+                setCustomRpcEnabled(event.target.checked);
+                if (!event.target.checked) {
+                  setCustomRpcError(null);
+                }
+              }}
+            />
+            <span>
+              <strong>Custom RPC</strong>
+              <small className="muted">Override the default endpoint for {state.wallet.selectedNetwork}.</small>
+            </span>
+          </label>
+          {customRpcEnabled ? (
+            <>
+              <Input
+                type="url"
+                value={customRpcInput}
+                onChange={(event) => setCustomRpcInput(event.target.value)}
+                placeholder={`Custom ${state.wallet.selectedNetwork} RPC URL`}
+              />
+              <div className="inline wrap-actions">
+                <Button onClick={() => void handleSaveCustomRpc()} disabled={customRpcLoading || !customRpcInput.trim()}>
+                  {customRpcLoading ? 'Saving...' : 'Save RPC'}
+                </Button>
+                {(state.wallet.customRpcUrls[state.wallet.selectedNetwork] ?? '') ? (
+                  <Button
+                    tone="secondary"
+                    onClick={async () => {
+                      setCustomRpcLoading(true);
+                      setCustomRpcError(null);
+                      try {
+                        await sendRuntimeMessage({
+                          type: 'wallet_set_custom_rpc',
+                          network: state.wallet.selectedNetwork,
+                          rpcUrl: null
+                        });
+                        await refresh();
+                      } catch (error) {
+                        setCustomRpcError(error instanceof Error ? error.message : 'Unable to update custom RPC.');
+                      } finally {
+                        setCustomRpcLoading(false);
+                      }
+                    }}
+                    disabled={customRpcLoading}
+                  >
+                    Reset to default
+                  </Button>
+                ) : null}
+              </div>
+            </>
+          ) : null}
+          {state.wallet.customRpcUrls[state.wallet.selectedNetwork] ? (
+            <KeyValueRow
+              label="Current RPC"
+              value={<span className="mono transfer-signature">{state.wallet.customRpcUrls[state.wallet.selectedNetwork]}</span>}
+            />
+          ) : (
+            <p className="muted">Using the default RPC for {state.wallet.selectedNetwork}.</p>
+          )}
+          {customRpcError ? <p className="danger-box">{customRpcError}</p> : null}
+        </div>
         <div className="stack">
           <KeyValueRow
             label="Biometric unlock"

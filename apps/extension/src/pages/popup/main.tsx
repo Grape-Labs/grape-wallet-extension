@@ -165,6 +165,14 @@ function formatUsd(value: number | null | undefined): string | null {
   }).format(value);
 }
 
+function maskSensitiveValue(value: string | null | undefined, privacyMode: boolean, masked = '***'): string {
+  if (privacyMode) {
+    return masked;
+  }
+
+  return value ?? masked;
+}
+
 function formatUnitPrice(value: number | null | undefined): string | null {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     return null;
@@ -367,7 +375,7 @@ function TokenAvatar(props: { token: Pick<TokenHolding, 'symbol' | 'logoUri'>; f
   return <div className="token-avatar">{props.fallbackLabel ?? props.token.symbol?.slice(0, 1) ?? 'T'}</div>;
 }
 
-function TokenRow(props: { token: TokenHolding; onSelect: () => void }) {
+function TokenRow(props: { token: TokenHolding; onSelect: () => void; privacyMode?: boolean }) {
   const changeLabel = formatPercent(props.token.priceChange24h);
   const valueLabel = formatUsd(props.token.valueUsd);
   const quantityLabel = `${formatTokenAmount(props.token)}${props.token.symbol ? ` ${props.token.symbol}` : ''}`;
@@ -396,9 +404,9 @@ function TokenRow(props: { token: TokenHolding; onSelect: () => void }) {
             </div>
           </div>
         </div>
-        <div className="token-amount-group">
-          <div className="token-amount">{valueLabel ?? quantityLabel}</div>
-          {valueLabel ? <div className="token-subtitle token-amount-subtitle">{quantityLabel}</div> : null}
+          <div className="token-amount-group">
+          <div className="token-amount">{maskSensitiveValue(valueLabel ?? quantityLabel, !!props.privacyMode)}</div>
+          {valueLabel ? <div className="token-subtitle token-amount-subtitle">{maskSensitiveValue(quantityLabel, !!props.privacyMode)}</div> : null}
         </div>
       </div>
     </button>
@@ -425,7 +433,7 @@ function AssetSkeletonRow() {
   );
 }
 
-function AssetPickerOptionRow(props: { option: AssetPickerDisplayOption; active?: boolean; onSelect?: () => void }) {
+function AssetPickerOptionRow(props: { option: AssetPickerDisplayOption; active?: boolean; onSelect?: () => void; privacyMode?: boolean }) {
   const content = (
     <>
       <div className="token-leading">
@@ -442,7 +450,7 @@ function AssetPickerOptionRow(props: { option: AssetPickerDisplayOption; active?
         </div>
       </div>
       <div className="token-amount-group">
-        <div className="token-amount">{props.option.balance}</div>
+        <div className="token-amount">{maskSensitiveValue(props.option.balance, !!props.privacyMode)}</div>
       </div>
     </>
   );
@@ -548,6 +556,10 @@ function PopupPage() {
   const [biometricSettingsPassword, setBiometricSettingsPassword] = useState('');
   const [biometricSettingsError, setBiometricSettingsError] = useState<string | null>(null);
   const [biometricSettingsBusy, setBiometricSettingsBusy] = useState(false);
+  const [customRpcEnabled, setCustomRpcEnabled] = useState(false);
+  const [customRpcInput, setCustomRpcInput] = useState('');
+  const [customRpcBusy, setCustomRpcBusy] = useState(false);
+  const [customRpcError, setCustomRpcError] = useState<string | null>(null);
   const [swapInputAssetId, setSwapInputAssetId] = useState('sol');
   const [swapOutputMint, setSwapOutputMint] = useState<string>(COMMON_SWAP_TOKENS[1].mint);
   const [swapInputPickerOpen, setSwapInputPickerOpen] = useState(false);
@@ -713,6 +725,20 @@ function PopupPage() {
   }, [state?.canUseUnlockedSigner]);
 
   useEffect(() => {
+    if (!state) {
+      setCustomRpcEnabled(false);
+      setCustomRpcInput('');
+      setCustomRpcError(null);
+      return;
+    }
+
+    const nextCustomRpc = state.wallet.customRpcUrls[state.wallet.selectedNetwork] ?? '';
+    setCustomRpcEnabled(!!nextCustomRpc);
+    setCustomRpcInput(nextCustomRpc);
+    setCustomRpcError(null);
+  }, [state?.wallet.customRpcUrls, state?.wallet.selectedNetwork]);
+
+  useEffect(() => {
     if (homeTab !== 'staking' || state?.wallet.setup !== 'ready' || view !== 'home') {
       return;
     }
@@ -844,6 +870,7 @@ function PopupPage() {
   }, []);
 
   const activePublicKey = state?.activeAccount?.publicKey;
+  const privacyModeEnabled = state?.wallet.privacyMode ?? false;
 
   useEffect(() => {
     if (!activePublicKey) {
@@ -885,7 +912,7 @@ function PopupPage() {
       label: token.symbol ? `${token.symbol} token` : `${formatAddress(token.mint)} token`,
       name: token.name ?? token.symbol ?? formatAddress(token.mint),
       symbol: token.symbol ?? formatAddress(token.mint),
-      balance: formatTokenAmount(token),
+        balance: privacyModeEnabled ? '***' : formatTokenAmount(token),
       logoUri: token.logoUri,
       asset: {
         kind: 'spl-token' as const,
@@ -902,14 +929,14 @@ function PopupPage() {
         label: 'SOL',
         name: 'Solana',
         symbol: 'SOL',
-        balance: homeBalance,
+        balance: privacyModeEnabled ? '***' : homeBalance,
         logoUri: SOLANA_LOGO_URL,
         sol: true,
         asset: { kind: 'sol' as const }
       },
       ...tokenOptions
     ];
-  }, [assets, homeBalance]);
+  }, [assets, homeBalance, privacyModeEnabled]);
   const sendAssetOptions = useMemo<AssetOption[]>(() => {
     const collectibleOptions = collectibleItems
       .filter((item) => item.accountAddress && item.programId)
@@ -971,15 +998,19 @@ function PopupPage() {
           symbol: option.symbol ?? ownedToken?.symbol ?? formatAddress(option.mint),
           balance:
             option.mint === JUPITER_SOL_MINT
-              ? homeBalance
+              ? privacyModeEnabled
+                ? '***'
+                : homeBalance
               : ownedToken
-                ? formatTokenAmount(ownedToken)
+                ? privacyModeEnabled
+                  ? '***'
+                  : formatTokenAmount(ownedToken)
                 : 'Not owned yet',
           logoUri: option.mint === JUPITER_SOL_MINT ? SOLANA_LOGO_URL : ownedToken?.logoUri,
           sol: option.mint === JUPITER_SOL_MINT
         };
       }),
-    [assets.tokens, homeBalance, swapOutputOptions]
+    [assets.tokens, homeBalance, privacyModeEnabled, swapOutputOptions]
   );
 
   async function handleOpenInTab() {
@@ -1438,6 +1469,8 @@ function PopupPage() {
   const activeWallet = state.activeWallet;
   const isWatchOnlyWallet = activeWallet?.signerKind === 'watch-only';
   const recentRecipients = state.recentRecipients;
+  const privacyMode = wallet.privacyMode;
+  const selectedNetworkCustomRpc = wallet.customRpcUrls[wallet.selectedNetwork] ?? '';
 
   if (session.locked && !isWatchOnlyWallet) {
     return (
@@ -1485,6 +1518,23 @@ function PopupPage() {
     setView('home');
     setWalletMenuOpen(false);
     await refresh();
+  }
+
+  async function handleSaveCustomRpc() {
+    try {
+      setCustomRpcBusy(true);
+      setCustomRpcError(null);
+      await sendRuntimeMessage<WalletStateResponse>({
+        type: 'wallet_set_custom_rpc',
+        network: wallet.selectedNetwork,
+        rpcUrl: customRpcEnabled ? customRpcInput.trim() || null : null
+      });
+      await refresh();
+    } catch (error) {
+      setCustomRpcError(error instanceof Error ? error.message : 'Unable to update custom RPC.');
+    } finally {
+      setCustomRpcBusy(false);
+    }
   }
 
   async function handleUnlockInline() {
@@ -1886,7 +1936,11 @@ function PopupPage() {
 
           <div className="portfolio-copy">
             <div className="portfolio-label">Total Balance</div>
-            {assetsLoading ? <div className="skeleton-block skeleton-line skeleton-hero-balance" /> : <div className="hero-balance">{portfolioValue}</div>}
+            {assetsLoading ? (
+              <div className="skeleton-block skeleton-line skeleton-hero-balance" />
+            ) : (
+              <div className="hero-balance">{maskSensitiveValue(portfolioValue, privacyMode)}</div>
+            )}
           </div>
 
           <div className="wallet-home-header compact wallet-home-header-compact">
@@ -1986,8 +2040,8 @@ function PopupPage() {
                         </div>
                       </div>
                       <div className="token-amount-group">
-                        <div className="token-amount">{solValue ?? homeBalance}</div>
-                        {solValue ? <div className="token-subtitle token-amount-subtitle">{homeBalance}</div> : null}
+                        <div className="token-amount">{maskSensitiveValue(solValue ?? homeBalance, privacyMode)}</div>
+                        {solValue ? <div className="token-subtitle token-amount-subtitle">{maskSensitiveValue(homeBalance, privacyMode)}</div> : null}
                       </div>
                     </div>
                   </button>
@@ -2000,6 +2054,7 @@ function PopupPage() {
                         <TokenRow
                           key={`${token.mint}:${token.programId}`}
                           token={token}
+                          privacyMode={privacyMode}
                           onSelect={() => openAssetDetails(token)}
                         />
                       ))}
@@ -2299,7 +2354,7 @@ function PopupPage() {
                   aria-expanded={sendAssetPickerOpen}
                   onClick={() => setSendAssetPickerOpen((value) => !value)}
                 >
-                  <AssetPickerOptionRow option={selectedAsset} />
+                  <AssetPickerOptionRow option={selectedAsset} privacyMode={privacyMode} />
                   <ChevronDown className="send-select-chevron" size={18} />
                 </button>
                 {sendAssetPickerOpen ? (
@@ -2310,6 +2365,7 @@ function PopupPage() {
                         <AssetPickerOptionRow
                           key={option.id}
                           option={option}
+                          privacyMode={privacyMode}
                           active={option.id === assetId}
                           onSelect={() => {
                             setAssetId(option.id);
@@ -2474,12 +2530,14 @@ function PopupPage() {
             />
             <div className="asset-detail-copy">
               <div className="hero-balance asset-detail-balance">
-                {isCollectibleView ? assetDetails.name ?? selectedCollectible?.name ?? 'NFT' : assetDetails.amount}
+                {isCollectibleView
+                  ? assetDetails.name ?? selectedCollectible?.name ?? 'NFT'
+                  : maskSensitiveValue(assetDetails.amount, privacyMode)}
               </div>
               <div className="muted">
                 {isCollectibleView
                   ? selectedCollectible?.collectionSymbol ?? assetDetails.symbol ?? formatAddress(assetDetails.mint)
-                  : `${assetDetails.symbol ?? formatAddress(assetDetails.mint)}${tokenValue ? ` · ${tokenValue}` : ''}`}
+                  : `${assetDetails.symbol ?? formatAddress(assetDetails.mint)}${tokenValue ? ` · ${maskSensitiveValue(tokenValue, privacyMode)}` : ''}`}
               </div>
             </div>
           </div>
@@ -2728,10 +2786,103 @@ function PopupPage() {
                 <option value="mainnet-beta">Mainnet Beta</option>
               </select>
             </label>
+            <div className="stack">
+              <label className="incident-toggle compact-settings-toggle">
+                <input
+                  type="checkbox"
+                  checked={customRpcEnabled}
+                  onChange={(event) => {
+                    setCustomRpcEnabled(event.target.checked);
+                    if (!event.target.checked) {
+                      setCustomRpcError(null);
+                    }
+                  }}
+                />
+                <span>
+                  <strong>Custom RPC</strong>
+                  <small className="muted">Use a custom endpoint for {wallet.selectedNetwork}.</small>
+                </span>
+              </label>
+              {customRpcEnabled ? (
+                <>
+                  <Input
+                    type="url"
+                    value={customRpcInput}
+                    onChange={(event) => setCustomRpcInput(event.target.value)}
+                    placeholder={`Custom ${wallet.selectedNetwork} RPC URL`}
+                  />
+                  <div className="inline wrap-actions">
+                    <Button onClick={() => void handleSaveCustomRpc()} disabled={customRpcBusy || !customRpcInput.trim()}>
+                      {customRpcBusy ? 'Saving...' : 'Save RPC'}
+                    </Button>
+                    {selectedNetworkCustomRpc ? (
+                      <Button
+                        tone="secondary"
+                        onClick={async () => {
+                          setCustomRpcBusy(true);
+                          setCustomRpcError(null);
+                          try {
+                            await sendRuntimeMessage({
+                              type: 'wallet_set_custom_rpc',
+                              network: wallet.selectedNetwork,
+                              rpcUrl: null
+                            });
+                            await refresh();
+                          } catch (error) {
+                            setCustomRpcError(error instanceof Error ? error.message : 'Unable to update custom RPC.');
+                          } finally {
+                            setCustomRpcBusy(false);
+                          }
+                        }}
+                        disabled={customRpcBusy}
+                      >
+                        Reset to default
+                      </Button>
+                    ) : null}
+                  </div>
+                  {customRpcError ? <p className="danger-box">{customRpcError}</p> : null}
+                </>
+              ) : selectedNetworkCustomRpc ? (
+                <div className="inline wrap-actions">
+                  <span className="muted mono settings-inline-value">{selectedNetworkCustomRpc}</span>
+                  <Button
+                    tone="secondary"
+                    onClick={async () => {
+                      await sendRuntimeMessage({
+                        type: 'wallet_set_custom_rpc',
+                        network: wallet.selectedNetwork,
+                        rpcUrl: null
+                      });
+                      await refresh();
+                    }}
+                    disabled={customRpcBusy}
+                  >
+                    Reset to default
+                  </Button>
+                </div>
+              ) : null}
+            </div>
             <div className="settings-row">
               <span className="muted">Connected sites</span>
               <strong>{permissions.length}</strong>
             </div>
+            <label className="incident-toggle compact-settings-toggle">
+              <input
+                type="checkbox"
+                checked={wallet.privacyMode}
+                onChange={async (event) => {
+                  await sendRuntimeMessage({
+                    type: 'wallet_set_privacy_mode',
+                    enabled: event.target.checked
+                  });
+                  await refresh();
+                }}
+              />
+              <span>
+                <strong>Privacy mode</strong>
+                <small className="muted">Hide portfolio values and token balances with ***.</small>
+              </span>
+            </label>
             <label className="stack">
               <span className="muted">Theme</span>
               <select
@@ -3060,9 +3211,13 @@ function PopupPage() {
       : selectedSwapOutputToken?.symbol ?? selectedSwapOutputOption?.symbol ?? formatAddress(effectiveSwapOutputMint || swapOutputMint);
     const outputAssetBalance =
       isNativeSwapOutput
-        ? homeBalance
+        ? privacyMode
+          ? '***'
+          : homeBalance
         : selectedSwapOutputToken
-        ? formatTokenAmount(selectedSwapOutputToken)
+        ? privacyMode
+          ? '***'
+          : formatTokenAmount(selectedSwapOutputToken)
         : selectedSwapOutputOption?.symbol
           ? 'Not owned yet'
           : 'Unknown';
@@ -3185,7 +3340,7 @@ function PopupPage() {
                     aria-expanded={swapInputPickerOpen}
                     onClick={() => setSwapInputPickerOpen((value) => !value)}
                   >
-                    <AssetPickerOptionRow option={selectedSwapInputAsset} />
+                    <AssetPickerOptionRow option={selectedSwapInputAsset} privacyMode={privacyMode} />
                     <ChevronDown className="send-select-chevron" size={18} />
                   </button>
                   {swapInputPickerOpen ? (
@@ -3196,6 +3351,7 @@ function PopupPage() {
                           <AssetPickerOptionRow
                             key={option.id}
                             option={option}
+                            privacyMode={privacyMode}
                             active={option.id === swapInputAssetId}
                             onSelect={() => {
                               setSwapInputAssetId(option.id);
@@ -3259,6 +3415,7 @@ function PopupPage() {
                               : selectedSwapOutputToken?.logoUri,
                         sol: !swapUseCustomOutputMint && isNativeSwapOutput
                       }}
+                      privacyMode={privacyMode}
                     />
                     <ChevronDown className="send-select-chevron" size={18} />
                   </button>
@@ -3270,6 +3427,7 @@ function PopupPage() {
                           <AssetPickerOptionRow
                             key={option.id}
                             option={option}
+                            privacyMode={privacyMode}
                             active={!swapUseCustomOutputMint && option.id === swapOutputMint}
                             onSelect={() => {
                               setSwapUseCustomOutputMint(false);

@@ -1,4 +1,4 @@
-import type { GrapeNetwork } from '@grape/core';
+import type { GrapeNetwork, WalletState } from '@grape/core';
 
 const DEFAULT_MAINNET_RPC_URL = 'https://api.mainnet-beta.solana.com';
 const DEFAULT_DEVNET_RPC_URL = 'https://api.devnet.solana.com';
@@ -10,7 +10,10 @@ export const EXTENSION_RPC_ENDPOINTS: Record<GrapeNetwork, string> = {
   devnet: DEFAULT_DEVNET_RPC_URL
 };
 
-export function getRpcEndpoint(network: GrapeNetwork): string {
-  return EXTENSION_RPC_ENDPOINTS[network];
+export function getRpcEndpoint(
+  network: GrapeNetwork,
+  customRpcUrls?: Partial<WalletState['customRpcUrls']>
+): string {
+  const customRpcUrl = customRpcUrls?.[network]?.trim();
+  return customRpcUrl || EXTENSION_RPC_ENDPOINTS[network];
 }
-

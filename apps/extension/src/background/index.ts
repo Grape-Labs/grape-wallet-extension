@@ -189,6 +189,20 @@ class WalletController {
     await assetCacheStorage.set(cache);
   }
 
+  private resolveRpcEndpoint(
+    network: 'mainnet-beta' | 'devnet',
+    walletState: Awaited<ReturnType<WalletController['getWalletState']>>
+  ) {
+    return getRpcEndpoint(network, walletState.customRpcUrls);
+  }
+
+  private createConnection(
+    network: 'mainnet-beta' | 'devnet',
+    walletState: Awaited<ReturnType<WalletController['getWalletState']>>
+  ) {
+    return new Connection(this.resolveRpcEndpoint(network, walletState), 'confirmed');
+  }
+
   private async refreshAssetsCache(
     walletId: string,
     network: 'mainnet-beta' | 'devnet',
@@ -201,8 +215,9 @@ class WalletController {
     }
 
     const refreshPromise = (async () => {
+      const walletState = await this.getWalletState();
       const owner = new PublicKey(publicKey);
-      const connection = new Connection(getRpcEndpoint(network), 'confirmed');
+      const connection = this.createConnection(network, walletState);
       const [lamports, shyftMetadataResult, shyftCollectionsResult] = await Promise.all([
         connection.getBalance(owner),
         hasShyftApiKey() ? fetchShyftWalletTokens(network, publicKey).catch(() => ({})) : Promise.resolve({}),
@@ -650,6 +665,35 @@ class WalletController {
     return this.getStateResponse();
   }
 
+  async setPrivacyMode(enabled: boolean) {
+    const walletState = await this.getWalletState();
+    await walletStateStorage.set({
+      ...walletState,
+      privacyMode: enabled
+    });
+    return this.getStateResponse();
+  }
+
+  async setCustomRpc(network: 'mainnet-beta' | 'devnet', rpcUrl: string | null) {
+    const walletState = await this.getWalletState();
+    const nextCustomRpcUrls = {
+      ...walletState.customRpcUrls
+    };
+
+    if (rpcUrl?.trim()) {
+      nextCustomRpcUrls[network] = rpcUrl.trim();
+    } else {
+      delete nextCustomRpcUrls[network];
+    }
+
+    await walletStateStorage.set({
+      ...walletState,
+      customRpcUrls: nextCustomRpcUrls
+    });
+    await this.invalidateAssetCache();
+    return this.getStateResponse();
+  }
+
   async selectWallet(walletId: string) {
     const walletState = await this.getWalletState();
     const selectedWallet = walletState.wallets.find((wallet) => wallet.id === walletId);
@@ -698,7 +742,7 @@ class WalletController {
     if (!activeAccount) {
       return null;
     }
-    const connection = new Connection(getRpcEndpoint(walletState.selectedNetwork), 'confirmed');
+    const connection = this.createConnection(walletState.selectedNetwork, walletState);
     return connection.getBalance(new PublicKey(activeAccount.publicKey));
   }
 
@@ -917,7 +961,7 @@ class WalletController {
       }
     }
 
-    const connection = new Connection(getRpcEndpoint(walletState.selectedNetwork), 'confirmed');
+    const connection = this.createConnection(walletState.selectedNetwork, walletState);
     const authority = new PublicKey(activeAccount.publicKey);
     const getProgramAccountsByAuthority = async (offset: number) =>
       connection.getProgramAccounts(StakeProgram.programId, {
@@ -1014,7 +1058,7 @@ class WalletController {
       throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
     }
 
-    const connection = new Connection(getRpcEndpoint(walletState.selectedNetwork), 'confirmed');
+    const connection = this.createConnection(walletState.selectedNetwork, walletState);
     const [shyftMetadataResult, tokenAccountInfo, mintAccountInfo] = await Promise.all([
       hasShyftApiKey()
         ? fetchShyftWalletTokens(walletState.selectedNetwork, activeAccount.publicKey).catch(() => ({}))
@@ -1104,7 +1148,7 @@ class WalletController {
   }
 
   async exportWalletSecret(password: string) {
-    const { selectedWallet } = await this.ensureReadyWallet();
+    const { walletState, selectedWallet } = await this.ensureReadyWallet();
     const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
     if (!activeAccount) {
       throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
@@ -1146,7 +1190,7 @@ class WalletController {
     }
 
     const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
-    const connection = new Connection(getRpcEndpoint(walletState.selectedNetwork), 'confirmed');
+    const connection = this.createConnection(walletState.selectedNetwork, walletState);
     const owner = new PublicKey(activeAccount.publicKey);
     const votePubkey = new PublicKey(input.voteAccount.trim());
     const stakeLamportsBigint = parseDecimalAmount(input.amount, 9);
@@ -1209,7 +1253,7 @@ class WalletController {
     }
 
     const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
-    const connection = new Connection(getRpcEndpoint(walletState.selectedNetwork), 'confirmed');
+    const connection = this.createConnection(walletState.selectedNetwork, walletState);
     const owner = new PublicKey(activeAccount.publicKey);
     const signature = await this.submitInstructionBatches(
       selectedWallet,
@@ -1241,7 +1285,7 @@ class WalletController {
     }
 
     const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
-    const connection = new Connection(getRpcEndpoint(walletState.selectedNetwork), 'confirmed');
+    const connection = this.createConnection(walletState.selectedNetwork, walletState);
     const owner = new PublicKey(activeAccount.publicKey);
     const lamportsBigint = parseDecimalAmount(input.amount, 9);
     if (lamportsBigint > BigInt(Number.MAX_SAFE_INTEGER)) {
@@ -1281,7 +1325,7 @@ class WalletController {
     }
 
     const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
-    const connection = new Connection(getRpcEndpoint(walletState.selectedNetwork), 'confirmed');
+    const connection = this.createConnection(walletState.selectedNetwork, walletState);
     const owner = new PublicKey(activeAccount.publicKey);
 
     const transaction =
@@ -1363,7 +1407,7 @@ class WalletController {
     }
 
     const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
-    const connection = new Connection(getRpcEndpoint(walletState.selectedNetwork), 'confirmed');
+    const connection = this.createConnection(walletState.selectedNetwork, walletState);
     const owner = new PublicKey(activeAccount.publicKey);
     const transaction = await buildBurnSplTokenTransaction(connection, owner, input);
     const signature = await this.submitTransactionForWallet(selectedWallet, activeAccount.publicKey, secret, connection, transaction);
@@ -1388,7 +1432,7 @@ class WalletController {
     }
 
     const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
-    const connection = new Connection(getRpcEndpoint(walletState.selectedNetwork), 'confirmed');
+    const connection = this.createConnection(walletState.selectedNetwork, walletState);
     const owner = new PublicKey(activeAccount.publicKey);
     const tokenAccounts = await this.scanWalletTokenAccounts(connection, owner, {});
     const tokenAccount = tokenAccounts.find(
@@ -1427,7 +1471,7 @@ class WalletController {
       throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
     }
 
-    const connection = new Connection(getRpcEndpoint(walletState.selectedNetwork), 'confirmed');
+    const connection = this.createConnection(walletState.selectedNetwork, walletState);
     const owner = new PublicKey(activeAccount.publicKey);
     const [shyftMetadataResult, shyftCollectionsResult] = await Promise.all([
       hasShyftApiKey()
@@ -1500,7 +1544,7 @@ class WalletController {
     }
 
     const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
-    const connection = new Connection(getRpcEndpoint(walletState.selectedNetwork), 'confirmed');
+    const connection = this.createConnection(walletState.selectedNetwork, walletState);
     const owner = new PublicKey(activeAccount.publicKey);
     const safeWallet = new PublicKey(input.safeWallet);
     const [shyftMetadataResult, shyftCollectionsResult] = await Promise.all([
@@ -1730,7 +1774,7 @@ class WalletController {
       throw new RpcError('SWAP_UNAVAILABLE', 'Native swaps are currently available only on mainnet-beta.');
     }
 
-    const connection = new Connection(getRpcEndpoint(walletState.selectedNetwork), 'confirmed');
+    const connection = this.createConnection(walletState.selectedNetwork, walletState);
     const inputMint = input.inputAsset.kind === 'sol' ? JUPITER_SOL_MINT : input.inputAsset.mint;
     if (inputMint === input.outputMint) {
       throw new RpcError('INVALID_SWAP', 'Choose a different output token.');
@@ -1774,7 +1818,7 @@ class WalletController {
     }
 
     const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
-    const connection = new Connection(getRpcEndpoint(walletState.selectedNetwork), 'confirmed');
+    const connection = this.createConnection(walletState.selectedNetwork, walletState);
     const swap = await createJupiterSwapTransaction({
       quoteResponse: input.quoteResponse,
       userPublicKey: activeAccount.publicKey
@@ -1788,12 +1832,12 @@ class WalletController {
               swap.swapTransaction,
               activeAccount.publicKey,
               selectedWallet.signer.derivationPath,
-              getRpcEndpoint(walletState.selectedNetwork)
+              this.resolveRpcEndpoint(walletState.selectedNetwork, walletState)
             )
           : await signAndSendSerializedTransaction(
               swap.swapTransaction,
               resolveSolanaVaultSecret(secret),
-              getRpcEndpoint(walletState.selectedNetwork)
+              this.resolveRpcEndpoint(walletState.selectedNetwork, walletState)
             );
     } catch (error) {
       throw normalizeSigningError(error);
@@ -1885,12 +1929,12 @@ class WalletController {
 
     const transactionSummary =
       request.method === 'signTransaction' || request.method === 'signAndSendTransaction' || request.method === 'sendTransaction'
-        ? await inspectTransaction(request.params.transaction, new Connection(getRpcEndpoint(walletState.selectedNetwork), 'confirmed'))
+        ? await inspectTransaction(request.params.transaction, this.createConnection(walletState.selectedNetwork, walletState))
         : request.method === 'signAllTransactions'
           ? {
               ...(await inspectTransaction(
                 request.params.transactions[0],
-                new Connection(getRpcEndpoint(walletState.selectedNetwork), 'confirmed')
+                this.createConnection(walletState.selectedNetwork, walletState)
               )),
               warnings: ['Only the first transaction in this batch was decoded and simulated.']
             }
@@ -2013,7 +2057,7 @@ class WalletController {
       return { publicKey: approval.publicKey };
     }
 
-    const { selectedWallet } = await this.ensureReadyWallet();
+    const { walletState, selectedWallet } = await this.ensureReadyWallet();
     this.assertInteractiveWallet(selectedWallet);
     const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, password);
     switch (approval.kind) {
@@ -2072,12 +2116,12 @@ class WalletController {
                     transactionRequest.params.transaction,
                     approval.publicKey ?? '',
                     selectedWallet.signer.derivationPath,
-                    getRpcEndpoint(approval.network)
+                    this.resolveRpcEndpoint(approval.network, walletState)
                   )
                 : await signAndSendSerializedTransaction(
                     transactionRequest.params.transaction,
                     resolveSolanaVaultSecret(secret),
-                    getRpcEndpoint(approval.network)
+                    this.resolveRpcEndpoint(approval.network, walletState)
                   )
           };
         } catch (error) {
@@ -2550,6 +2594,12 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
           break;
         case 'wallet_set_theme':
           sendResponse(await controller.setTheme(message.theme));
+          break;
+        case 'wallet_set_privacy_mode':
+          sendResponse(await controller.setPrivacyMode(message.enabled));
+          break;
+        case 'wallet_set_custom_rpc':
+          sendResponse(await controller.setCustomRpc(message.network, message.rpcUrl));
           break;
         case 'wallet_select':
           sendResponse(await controller.selectWallet(message.walletId));
