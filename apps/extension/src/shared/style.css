@@ -99,9 +99,9 @@ body[data-theme='comic'] {
 
 body[data-theme='grape'] {
   --theme-background:
-    linear-gradient(180deg, rgba(16, 4, 24, 0.76) 0%, rgba(20, 6, 31, 0.7) 34%, rgba(11, 3, 17, 0.84) 100%),
-    radial-gradient(circle at 18% 18%, rgba(255, 104, 239, 0.12) 0%, transparent 26%),
-    radial-gradient(circle at 84% 10%, rgba(115, 95, 255, 0.12) 0%, transparent 28%),
+    linear-gradient(180deg, rgba(16, 4, 24, 0.62) 0%, rgba(20, 6, 31, 0.54) 34%, rgba(11, 3, 17, 0.72) 100%),
+    radial-gradient(circle at 18% 18%, rgba(255, 104, 239, 0.1) 0%, transparent 26%),
+    radial-gradient(circle at 84% 10%, rgba(115, 95, 255, 0.1) 0%, transparent 28%),
     linear-gradient(180deg, #0f0418 0%, #14061f 34%, #0b0311 100%);
   --theme-text: #fbf5ff;
   --theme-muted: rgba(251, 245, 255, 0.74);
@@ -135,15 +135,15 @@ body[data-theme='grape'] {
     linear-gradient(145deg, rgba(40, 12, 54, 0.96) 0%, rgba(31, 10, 46, 0.98) 44%, rgba(18, 7, 30, 0.98) 100%);
   --theme-home-card-glow: radial-gradient(circle, rgba(255, 115, 233, 0.18) 0%, rgba(255, 115, 233, 0) 72%);
   --theme-ambient-primary:
-    linear-gradient(180deg, rgba(12, 4, 19, 0.22) 0%, rgba(12, 4, 19, 0.16) 100%),
+    linear-gradient(180deg, rgba(12, 4, 19, 0.06) 0%, rgba(12, 4, 19, 0.03) 100%),
     url('/icons/bg_grape.png') center / cover no-repeat,
-    radial-gradient(circle at 22% 22%, rgba(255, 66, 213, 0.28) 0%, rgba(255, 66, 213, 0.14) 18%, transparent 46%),
-    radial-gradient(circle at 36% 62%, rgba(103, 238, 255, 0.16) 0%, transparent 34%);
+    radial-gradient(circle at 22% 22%, rgba(255, 66, 213, 0.2) 0%, rgba(255, 66, 213, 0.08) 18%, transparent 46%),
+    radial-gradient(circle at 36% 62%, rgba(103, 238, 255, 0.12) 0%, transparent 34%);
   --theme-ambient-secondary:
-    radial-gradient(circle at 78% 18%, rgba(112, 112, 255, 0.32) 0%, rgba(112, 112, 255, 0.16) 20%, transparent 44%),
-    radial-gradient(circle at 74% 72%, rgba(255, 119, 194, 0.18) 0%, transparent 36%);
-  --theme-ambient-opacity: 0.78;
-  --theme-ambient-filter: blur(28px) saturate(124%);
+    radial-gradient(circle at 78% 18%, rgba(112, 112, 255, 0.22) 0%, rgba(112, 112, 255, 0.1) 20%, transparent 44%),
+    radial-gradient(circle at 74% 72%, rgba(255, 119, 194, 0.12) 0%, transparent 36%);
+  --theme-ambient-opacity: 0.96;
+  --theme-ambient-filter: blur(14px) saturate(128%);
   --theme-backdrop-blur: blur(8px);
   --theme-backdrop-saturate: saturate(120%);
 }
@@ -170,6 +170,7 @@ body[data-theme='matrix'] {
   color-scheme: dark;
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
   --theme-background:
+    linear-gradient(180deg, rgba(2, 7, 4, 0.56) 0%, rgba(4, 11, 6, 0.48) 40%, rgba(2, 4, 3, 0.78) 100%),
     radial-gradient(circle at top left, rgba(34, 197, 94, 0.18), transparent 22%),
     linear-gradient(180deg, #030806 0%, #07110a 40%, #020403 100%);
   --theme-text: #d4ffe2;
@@ -201,6 +202,17 @@ body[data-theme='matrix'] {
     radial-gradient(circle at 12% 18%, rgba(34, 197, 94, 0.16), transparent 22%),
     linear-gradient(145deg, rgba(5, 14, 9, 0.98) 0%, rgba(4, 10, 7, 0.96) 55%, rgba(2, 5, 3, 0.98) 100%);
   --theme-home-card-glow: radial-gradient(circle, rgba(34, 197, 94, 0.14) 0%, rgba(34, 197, 94, 0) 72%);
+  --theme-ambient-primary:
+    linear-gradient(180deg, rgba(2, 7, 4, 0.14) 0%, rgba(2, 7, 4, 0.08) 100%),
+    url('/icons/bg_matrix.png') center / cover no-repeat,
+    radial-gradient(circle at 18% 18%, rgba(74, 222, 128, 0.18) 0%, rgba(74, 222, 128, 0.08) 18%, transparent 42%);
+  --theme-ambient-secondary:
+    radial-gradient(circle at 78% 18%, rgba(34, 197, 94, 0.2) 0%, rgba(34, 197, 94, 0.08) 18%, transparent 40%),
+    radial-gradient(circle at 66% 72%, rgba(187, 247, 208, 0.1) 0%, transparent 34%);
+  --theme-ambient-opacity: 0.72;
+  --theme-ambient-filter: blur(24px) saturate(118%);
+  --theme-backdrop-blur: blur(2px);
+  --theme-backdrop-saturate: saturate(112%);
 }
 
 body[data-theme='space'] {
