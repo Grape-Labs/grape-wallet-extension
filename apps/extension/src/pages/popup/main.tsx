@@ -21,7 +21,9 @@ import {
   Home,
   Landmark,
   Menu,
+  PanelRightOpen,
   Pencil,
+  Plus,
   QrCode,
   RefreshCcw,
   SendHorizontal,
@@ -2062,21 +2064,13 @@ function PopupPage() {
             <DropdownMenu.Item
               className="wallet-menu-action"
               onSelect={() => {
-                if (!isWatchOnlyWallet) {
-                  setView('swap');
-                }
-              }}
-              disabled={isWatchOnlyWallet}
-            >
-              Swap
-            </DropdownMenu.Item>
-            <DropdownMenu.Item
-              className="wallet-menu-action"
-              onSelect={() => {
                 setView('security');
               }}
             >
-              Security
+              <span className="wallet-menu-action-copy">
+                <ShieldAlert size={15} className="wallet-menu-action-icon" />
+                <span>Security</span>
+              </span>
             </DropdownMenu.Item>
             <DropdownMenu.Separator className="menu-separator" />
             <DropdownMenu.Item
@@ -2085,7 +2079,10 @@ function PopupPage() {
                 void handleOpenInTab();
               }}
             >
-              Open expanded view
+              <span className="wallet-menu-action-copy">
+                <ExternalLink size={15} className="wallet-menu-action-icon" />
+                <span>Open expanded view</span>
+              </span>
             </DropdownMenu.Item>
             <DropdownMenu.Item
               className="wallet-menu-action"
@@ -2093,7 +2090,10 @@ function PopupPage() {
                 void handleOpenInSidePanel();
               }}
             >
-              Open side panel
+              <span className="wallet-menu-action-copy">
+                <PanelRightOpen size={15} className="wallet-menu-action-icon" />
+                <span>Open side panel</span>
+              </span>
             </DropdownMenu.Item>
             <DropdownMenu.Separator className="menu-separator" />
             <DropdownMenu.Item
@@ -2102,7 +2102,10 @@ function PopupPage() {
                 openExtensionPage('onboarding.html?append=1&mode=create');
               }}
             >
-              Create wallet
+              <span className="wallet-menu-action-copy">
+                <Plus size={15} className="wallet-menu-action-icon" />
+                <span>Create wallet</span>
+              </span>
             </DropdownMenu.Item>
             <DropdownMenu.Item
               className="wallet-menu-action"
@@ -2110,7 +2113,10 @@ function PopupPage() {
                 openExtensionPage('onboarding.html?append=1&mode=import');
               }}
             >
-              Import wallet
+              <span className="wallet-menu-action-copy">
+                <ArrowDownLeft size={15} className="wallet-menu-action-icon" />
+                <span>Import wallet</span>
+              </span>
             </DropdownMenu.Item>
           </DropdownMenu.Content>
         </DropdownMenu.Portal>

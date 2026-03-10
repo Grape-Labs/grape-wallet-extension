@@ -674,7 +674,7 @@ body[data-surface='popup'] .page-shell {
 }
 
 body[data-surface='page'] .page-shell {
-  max-width: 960px;
+  max-width: 1120px;
   margin: 0 auto;
   padding: 40px 32px 80px;
 }
@@ -735,15 +735,17 @@ body[data-surface='popup'] .page-actions {
 }
 
 body[data-surface='popup'] .page-content {
-  padding-bottom: 84px;
+  padding-bottom: 112px;
 }
 
 body[data-surface='page'] .page-content {
-  max-width: 760px;
+  width: 100%;
+  max-width: 100%;
+  padding-bottom: 100px;
 }
 
 body[data-surface='panel'] .page-content {
-  padding-bottom: 84px;
+  padding-bottom: 112px;
 }
 
 .eyebrow {
@@ -1440,6 +1442,7 @@ body[data-surface='popup'] .quick-actions.compact .quick-action-card {
 .popup-menu-content {
   width: min(320px, calc(100vw - 36px));
   max-height: min(560px, calc(var(--radix-dropdown-menu-content-available-height, 100vh) - 8px));
+  margin-bottom: 14px;
   border-radius: 20px;
   border: 1px solid var(--theme-card-border);
   background: color-mix(in srgb, var(--theme-card-bg) 92%, black 8%);
@@ -1453,7 +1456,13 @@ body[data-surface='popup'] .quick-actions.compact .quick-action-card {
 }
 
 body[data-surface='popup'] .popup-menu-content {
+  margin-bottom: 6px;
   max-height: calc(var(--radix-dropdown-menu-content-available-height, 100vh) - 6px);
+}
+
+body[data-surface='page'] .popup-menu-content,
+body[data-surface='panel'] .popup-menu-content {
+  margin-bottom: 22px;
 }
 
 .popup-menu-section {
@@ -1604,6 +1613,11 @@ body[data-surface='popup'] .popup-menu-content {
   display: inline-flex;
   align-items: center;
   gap: 10px;
+}
+
+.wallet-menu-action-icon {
+  color: var(--theme-subtle);
+  flex: 0 0 auto;
 }
 
 .wallet-menu-action-danger {
@@ -3601,13 +3615,15 @@ body[data-surface='popup'] .token-change {
 
 .bottom-nav {
   position: absolute;
-  left: 18px;
-  right: 18px;
-  bottom: 18px;
+  left: 16px;
+  right: 16px;
+  bottom: 14px;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: center;
   gap: 8px;
-  padding: 10px;
+  padding: 8px 10px;
+  min-height: 68px;
   border-radius: 24px;
   background: var(--theme-surface-strong);
   border: 1px solid var(--theme-divider);
@@ -3628,6 +3644,7 @@ body[data-surface='panel'] .bottom-nav {
   border: 0;
   background: transparent;
   color: var(--theme-muted);
+  min-height: 48px;
   padding: 10px 12px;
   border-radius: 16px;
   cursor: pointer;
