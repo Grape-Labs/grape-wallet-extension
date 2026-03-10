@@ -164,7 +164,18 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('wallet_set_theme'),
-    theme: z.enum(['grape', 'comic', 'sunset', 'matrix', 'apple', 'aurora', 'champagne', 'liquid-chrome', 'obsidian'])
+    theme: z.enum([
+      'grape',
+      'comic',
+      'sunset',
+      'matrix',
+      'tron',
+      'apple',
+      'aurora',
+      'champagne',
+      'liquid-chrome',
+      'obsidian'
+    ])
   }),
   z.object({
     type: z.literal('wallet_set_privacy_mode'),

@@ -210,6 +210,61 @@ body[data-theme='matrix'] {
   --theme-backdrop-saturate: saturate(112%);
 }
 
+body[data-theme='tron'] {
+  color-scheme: dark;
+  font-family: 'SF Pro Display', 'Avenir Next', 'Segoe UI', sans-serif;
+  --theme-background:
+    linear-gradient(180deg, rgba(7, 7, 10, 0.52) 0%, rgba(10, 10, 15, 0.42) 42%, rgba(4, 4, 6, 0.68) 100%),
+    radial-gradient(circle at 12% 10%, rgba(255, 92, 40, 0.12), transparent 22%),
+    radial-gradient(circle at 88% 12%, rgba(255, 140, 71, 0.08), transparent 20%),
+    linear-gradient(180deg, #060607 0%, #0a0a0e 46%, #040405 100%);
+  --theme-text: #fff4f1;
+  --theme-muted: rgba(255, 244, 241, 0.72);
+  --theme-subtle: rgba(255, 244, 241, 0.48);
+  --theme-card-bg: rgba(20, 13, 12, 0.84);
+  --theme-card-border: rgba(255, 110, 63, 0.24);
+  --theme-card-shadow: 0 26px 56px rgba(0, 0, 0, 0.44);
+  --theme-accent: #ff6e3f;
+  --theme-accent-2: #ff9b54;
+  --theme-accent-soft: rgba(255, 110, 63, 0.14);
+  --theme-button-text: #180705;
+  --theme-button-secondary-bg: rgba(255, 255, 255, 0.08);
+  --theme-button-secondary-text: #fff4f1;
+  --theme-danger-bg: rgba(255, 95, 95, 0.14);
+  --theme-danger-text: #ffd6cf;
+  --theme-input-bg: rgba(255, 255, 255, 0.05);
+  --theme-input-border: rgba(255, 126, 87, 0.18);
+  --theme-surface-strong: rgba(11, 8, 8, 0.94);
+  --theme-surface-soft: rgba(255, 255, 255, 0.05);
+  --theme-surface-soft-hover: rgba(255, 255, 255, 0.08);
+  --theme-divider: rgba(255, 255, 255, 0.08);
+  --theme-success: #ffc18f;
+  --theme-warning: #ffd18b;
+  --theme-error: #ffb0a6;
+  --theme-token-grad-start: #ff5c28;
+  --theme-token-grad-end: #ff994a;
+  --theme-sol-grad: linear-gradient(135deg, #ffb37a 0%, #ff6e3f 52%, #ff3d2e 100%);
+  --theme-nav-active-bg: rgba(255, 110, 63, 0.16);
+  --theme-nav-active-text: #fff1ea;
+  --theme-home-card-bg:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0.01)),
+    radial-gradient(circle at 14% 18%, rgba(255, 110, 63, 0.14), transparent 22%),
+    radial-gradient(circle at 88% 14%, rgba(255, 162, 97, 0.1), transparent 18%),
+    linear-gradient(145deg, rgba(15, 10, 10, 0.98) 0%, rgba(13, 9, 9, 0.96) 56%, rgba(6, 5, 5, 0.99) 100%);
+  --theme-home-card-glow: radial-gradient(circle, rgba(255, 110, 63, 0.12) 0%, rgba(255, 110, 63, 0) 72%);
+  --theme-ambient-primary:
+    linear-gradient(180deg, rgba(4, 4, 5, 0.1) 0%, rgba(4, 4, 5, 0.06) 100%),
+    url('/icons/bg_tron.png') center / cover no-repeat,
+    radial-gradient(circle at 18% 18%, rgba(255, 112, 68, 0.16) 0%, rgba(255, 112, 68, 0.04) 18%, transparent 40%);
+  --theme-ambient-secondary:
+    radial-gradient(circle at 82% 14%, rgba(255, 160, 88, 0.14) 0%, rgba(255, 160, 88, 0.04) 16%, transparent 38%),
+    radial-gradient(circle at 68% 78%, rgba(255, 255, 255, 0.05) 0%, transparent 26%);
+  --theme-ambient-opacity: 0.88;
+  --theme-ambient-filter: blur(1px) saturate(112%);
+  --theme-backdrop-blur: blur(6px);
+  --theme-backdrop-saturate: saturate(116%);
+}
+
 body[data-theme='space'] {
   font-family: 'Avenir Next', 'Segoe UI', sans-serif;
   --theme-background:
@@ -583,6 +638,14 @@ body[data-theme='matrix']::after {
   animation: theme-matrix-drift-b 24s ease-in-out infinite alternate;
 }
 
+body[data-theme='tron']::before {
+  animation: theme-tron-pulse 18s ease-in-out infinite alternate;
+}
+
+body[data-theme='tron']::after {
+  animation: theme-tron-drift 24s ease-in-out infinite alternate;
+}
+
 body[data-surface='popup'] {
   width: 344px;
   min-width: 344px;
@@ -660,6 +723,30 @@ select {
   }
   100% {
     transform: translate3d(-1%, -7%, 0) scale(1.04);
+  }
+}
+
+@keyframes theme-tron-pulse {
+  0% {
+    transform: translate3d(-1%, -1%, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(0%, 1%, 0) scale(1.05);
+  }
+  100% {
+    transform: translate3d(1%, 2%, 0) scale(1.1);
+  }
+}
+
+@keyframes theme-tron-drift {
+  0% {
+    transform: translate3d(1%, -2%, 0) scale(1.02);
+  }
+  50% {
+    transform: translate3d(0%, 0%, 0) scale(1.08);
+  }
+  100% {
+    transform: translate3d(-1%, 2%, 0) scale(1.14);
   }
 }
 
@@ -1580,6 +1667,30 @@ body[data-surface='panel'] .popup-menu-content {
   background: color-mix(in srgb, var(--theme-surface-soft) 88%, transparent);
   border: 1px solid color-mix(in srgb, var(--theme-divider) 88%, transparent);
   transition: transform 160ms ease, border-color 160ms ease, color 160ms ease, background-color 160ms ease;
+}
+
+.wallet-menu-copy-button {
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  padding: 0;
+  background: transparent;
+  color: var(--theme-subtle);
+  cursor: pointer;
+  transition: color 160ms ease, background-color 160ms ease, transform 160ms ease;
+}
+
+.wallet-menu-copy-button:hover,
+.wallet-menu-copy-button:focus-visible {
+  color: var(--theme-accent);
+  background: color-mix(in srgb, var(--theme-accent-soft) 80%, transparent);
+  outline: none;
+  transform: translateY(-1px);
 }
 
 .wallet-source-badge.created {

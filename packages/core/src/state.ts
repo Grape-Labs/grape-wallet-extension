@@ -15,6 +15,7 @@ export type GrapeTheme =
   | 'comic'
   | 'sunset'
   | 'matrix'
+  | 'tron'
   | 'apple'
   | 'aurora'
   | 'champagne'
@@ -26,6 +27,7 @@ export const SUPPORTED_THEMES = [
   'comic',
   'sunset',
   'matrix',
+  'tron',
   'apple',
   'aurora',
   'champagne',
@@ -145,6 +147,7 @@ export function normalizeTheme(theme: unknown): GrapeTheme {
     case 'comic':
     case 'sunset':
     case 'matrix':
+    case 'tron':
     case 'apple':
     case 'aurora':
     case 'champagne':

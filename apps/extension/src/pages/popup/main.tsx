@@ -827,6 +827,7 @@ function PopupPage() {
   const [incidentError, setIncidentError] = useState<string | null>(null);
   const [unlockWelcomeMenuOpen, setUnlockWelcomeMenuOpen] = useState(false);
   const [walletMenuOpen, setWalletMenuOpen] = useState(false);
+  const [copiedWalletId, setCopiedWalletId] = useState<string | null>(null);
   const [incidentOptions, setIncidentOptions] = useState({
     revokeDelegates: true,
     sweepSplTokens: true,
@@ -1441,6 +1442,17 @@ function PopupPage() {
     await navigator.clipboard.writeText(activePublicKey);
     setCopiedAddress(true);
     window.setTimeout(() => setCopiedAddress(false), 1200);
+  }
+
+  async function handleCopyWalletAddress(walletId: string, address: string | undefined) {
+    if (!address) {
+      return;
+    }
+    await navigator.clipboard.writeText(address);
+    setCopiedWalletId(walletId);
+    window.setTimeout(() => {
+      setCopiedWalletId((current) => (current === walletId ? null : current));
+    }, 1200);
   }
 
   async function refreshAssetDetails(nextToken: Pick<TokenHolding, 'mint' | 'accountAddress' | 'programId'>) {
@@ -2064,6 +2076,19 @@ function PopupPage() {
                           >
                             {sourceBadge.icon}
                           </span>
+                          <button
+                            type="button"
+                            className="wallet-menu-copy-button"
+                            aria-label={`Copy address for ${walletEntry.name}`}
+                            title={`Copy ${formatAddress(walletPublicKey)}`}
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              void handleCopyWalletAddress(walletEntry.id, walletPublicKey);
+                            }}
+                          >
+                            {copiedWalletId === walletEntry.id ? <Check size={12} /> : <Copy size={12} />}
+                          </button>
                         </div>
                         <div className="muted mono">{formatAddress(walletPublicKey)}</div>
                       </div>
