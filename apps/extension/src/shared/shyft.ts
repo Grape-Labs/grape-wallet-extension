@@ -1,4 +1,7 @@
+import type { WalletActivityAction, WalletActivityItem } from './models';
+
 const SHYFT_BASE_URL = 'https://api.shyft.to/sol/v1';
+const SHYFT_RETRYABLE_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);
 
 function getShyftApiKey(): string | undefined {
   return import.meta.env.VITE_GRAPE_SHYFT_API_KEY?.trim() || undefined;
@@ -102,6 +105,32 @@ export type ShyftStakeAccount = {
   withdrawer: string | null;
 };
 
+type ShyftTransactionProtocol = {
+  address?: string;
+  name?: string;
+};
+
+type ShyftTransactionAction = {
+  type?: string;
+  info?: Record<string, unknown>;
+  source_protocol?: ShyftTransactionProtocol;
+  parent_protocol?: ShyftTransactionProtocol;
+};
+
+type ShyftTransactionEntry = {
+  signature?: string;
+  signatures?: string[];
+  timestamp?: string | number;
+  status?: string | boolean;
+  type?: string;
+  fee?: string | number;
+  fee_payer?: string;
+  feePayer?: string;
+  signers?: string[];
+  protocol?: ShyftTransactionProtocol;
+  actions?: ShyftTransactionAction[];
+};
+
 function getShyftHeaders(): Record<string, string> | undefined {
   const apiKey = getShyftApiKey();
   return apiKey ? { 'x-api-key': apiKey } : undefined;
@@ -149,6 +178,33 @@ function normalizeImage(entry: {
   );
 }
 
+function delay(ms: number) {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function fetchShyftJsonWithRetry(url: URL, init?: RequestInit, maxAttempts = 3): Promise<ShyftResponse> {
+  let lastStatus: number | null = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const response = await fetch(url, init);
+
+    if (response.ok) {
+      return (await response.json()) as ShyftResponse;
+    }
+
+    lastStatus = response.status;
+    if (!SHYFT_RETRYABLE_STATUS_CODES.has(response.status) || attempt === maxAttempts) {
+      throw new Error(`Shyft request failed with ${response.status}.`);
+    }
+
+    await delay(250 * attempt);
+  }
+
+  throw new Error(`Shyft request failed with ${lastStatus ?? 'unknown status'}.`);
+}
+
 export async function fetchShyftWalletTokens(
   network: 'mainnet-beta' | 'devnet',
   wallet: string
@@ -161,15 +217,9 @@ export async function fetchShyftWalletTokens(
   url.searchParams.set('network', network);
   url.searchParams.set('wallet', wallet);
 
-  const response = await fetch(url, {
+  const payload = await fetchShyftJsonWithRetry(url, {
     headers: getShyftHeaders()
   });
-
-  if (!response.ok) {
-    throw new Error(`Shyft wallet token request failed with ${response.status}.`);
-  }
-
-  const payload = (await response.json()) as ShyftResponse;
   const entries = Array.isArray(payload.result) ? payload.result : [];
 
   return Object.fromEntries(
@@ -250,6 +300,251 @@ function parseNumberish(value: unknown) {
     return Number.isFinite(parsed) ? parsed : 0;
   }
   return 0;
+}
+
+function formatTypeLabel(value: string | undefined): string {
+  const normalized = normalizeString(value);
+  if (!normalized) {
+    return 'Activity';
+  }
+
+  return normalized
+    .replace(/[_-]+/g, ' ')
+    .toLowerCase()
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function parseTimestampMs(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value > 1_000_000_000_000 ? value : value * 1000;
+  }
+
+  if (typeof value === 'string' && value.trim()) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) {
+      return parseTimestampMs(numeric);
+    }
+
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return Date.now();
+}
+
+function normalizeStatus(value: unknown): WalletActivityItem['status'] {
+  if (typeof value === 'boolean') {
+    return value ? 'success' : 'failed';
+  }
+
+  const normalized = normalizeString(value)?.toLowerCase();
+  if (!normalized) {
+    return 'unknown';
+  }
+
+  if (normalized.includes('success')) {
+    return 'success';
+  }
+
+  if (normalized.includes('fail') || normalized.includes('error')) {
+    return 'failed';
+  }
+
+  return 'unknown';
+}
+
+function extractStringFromRecord(record: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = normalizeString(record[key]);
+    if (value) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function extractAmountFromRecord(record: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value.toLocaleString(undefined, {
+        maximumFractionDigits: value >= 1 ? 4 : 6
+      });
+    }
+    if (typeof value === 'string' && value.trim()) {
+      const numeric = Number(value);
+      if (Number.isFinite(numeric)) {
+        return numeric.toLocaleString(undefined, {
+          maximumFractionDigits: numeric >= 1 ? 4 : 6
+        });
+      }
+      return value.trim();
+    }
+  }
+
+  return null;
+}
+
+function extractActionAsset(record: Record<string, unknown>): string | null {
+  return extractStringFromRecord(record, [
+    'symbol',
+    'token_symbol',
+    'tokenSymbol',
+    'asset_symbol',
+    'assetSymbol',
+    'currency',
+    'currency_symbol',
+    'currencySymbol',
+    'mint_symbol',
+    'mintSymbol',
+    'name'
+  ]);
+}
+
+function normalizeActivityAction(action: ShyftTransactionAction): WalletActivityAction {
+  const info = typeof action.info === 'object' && action.info ? action.info : {};
+  const protocolName =
+    normalizeString(action.source_protocol?.name) ??
+    normalizeString(action.parent_protocol?.name) ??
+    null;
+
+  return {
+    type: normalizeString(action.type) ?? 'unknown',
+    label: formatTypeLabel(normalizeString(action.type) ?? 'unknown'),
+    amount: extractAmountFromRecord(info, [
+      'amount',
+      'amount_in',
+      'amount_out',
+      'in_amount',
+      'out_amount',
+      'deposit_amount',
+      'withdraw_amount',
+      'payment_amount',
+      'value',
+      'ui_amount',
+      'uiAmount'
+    ]),
+    asset: extractActionAsset(info),
+    address: extractStringFromRecord(info, [
+      'address',
+      'mint',
+      'token_address',
+      'tokenAddress',
+      'receiver',
+      'recipient',
+      'destination',
+      'to',
+      'to_address',
+      'toAddress',
+      'seller',
+      'buyer',
+      'owner',
+      'account'
+    ]),
+    protocolName
+  };
+}
+
+function buildActivityDescription(entry: ShyftTransactionEntry, actions: WalletActivityAction[]): string {
+  const baseType = formatTypeLabel(normalizeString(entry.type) ?? 'activity');
+  const protocolName =
+    normalizeString(entry.protocol?.name) ??
+    actions.find((action) => action.protocolName)?.protocolName ??
+    null;
+  const action = actions[0];
+  const amountLabel =
+    action?.amount && action?.asset ? `${action.amount} ${action.asset}` : action?.amount ?? action?.asset ?? null;
+
+  if (amountLabel && protocolName) {
+    return `${baseType} • ${amountLabel} • ${protocolName}`;
+  }
+
+  if (amountLabel) {
+    return `${baseType} • ${amountLabel}`;
+  }
+
+  if (protocolName) {
+    return `${baseType} • ${protocolName}`;
+  }
+
+  return baseType;
+}
+
+function extractTransactionEntries(payload: ShyftResponse): ShyftTransactionEntry[] {
+  if (Array.isArray(payload.result)) {
+    return payload.result as ShyftTransactionEntry[];
+  }
+
+  const result =
+    payload.result as
+      | {
+          transactions?: unknown;
+          history?: unknown;
+          txs?: unknown;
+          result?: {
+            transactions?: unknown;
+            history?: unknown;
+            txs?: unknown;
+          };
+        }
+      | undefined;
+
+  if (Array.isArray(result?.transactions)) {
+    return result.transactions as ShyftTransactionEntry[];
+  }
+
+  if (Array.isArray(result?.history)) {
+    return result.history as ShyftTransactionEntry[];
+  }
+
+  if (Array.isArray(result?.txs)) {
+    return result.txs as ShyftTransactionEntry[];
+  }
+
+  if (Array.isArray(result?.result?.transactions)) {
+    return result.result.transactions as ShyftTransactionEntry[];
+  }
+
+  if (Array.isArray(result?.result?.history)) {
+    return result.result.history as ShyftTransactionEntry[];
+  }
+
+  if (Array.isArray(result?.result?.txs)) {
+    return result.result.txs as ShyftTransactionEntry[];
+  }
+
+  return [];
+}
+
+function normalizeTransactionEntry(entry: ShyftTransactionEntry): WalletActivityItem | null {
+  const signature =
+    normalizeString(entry.signature) ??
+    (Array.isArray(entry.signatures) ? normalizeString(entry.signatures[0]) : undefined);
+  if (!signature) {
+    return null;
+  }
+
+  const actions = (Array.isArray(entry.actions) ? entry.actions : []).map(normalizeActivityAction);
+  const protocolName = normalizeString(entry.protocol?.name) ?? actions.find((action) => action.protocolName)?.protocolName ?? null;
+  const protocolAddress = normalizeString(entry.protocol?.address) ?? null;
+  const fee = parseNumberish(entry.fee);
+
+  return {
+    signature,
+    timestamp: parseTimestampMs(entry.timestamp),
+    status: normalizeStatus(entry.status),
+    type: normalizeString(entry.type) ?? 'activity',
+    description: buildActivityDescription(entry, actions),
+    feeSol: Number.isFinite(fee) ? fee : null,
+    feePayer: normalizeString(entry.fee_payer) ?? normalizeString(entry.feePayer) ?? null,
+    protocolName,
+    protocolAddress,
+    signers: Array.isArray(entry.signers) ? entry.signers.map((signer) => normalizeString(signer)).filter((signer): signer is string => !!signer) : [],
+    actions
+  };
 }
 
 function normalizeStakeAccount(account: Record<string, unknown>): ShyftStakeAccount | null {
@@ -334,15 +629,9 @@ export async function fetchShyftCollections(
   url.searchParams.set('network', network);
   url.searchParams.set('wallet_address', walletAddress);
 
-  const response = await fetch(url, {
+  const payload = await fetchShyftJsonWithRetry(url, {
     headers: getShyftHeaders()
   });
-
-  if (!response.ok) {
-    throw new Error(`Shyft wallet collections request failed with ${response.status}.`);
-  }
-
-  const payload = (await response.json()) as ShyftResponse;
   const entries = extractCollectionEntries(payload);
 
   return entries
@@ -370,15 +659,9 @@ export async function fetchShyftStakeAccounts(
     url.searchParams.set('page', String(page));
     url.searchParams.set('size', String(pageSize));
 
-    const response = await fetch(url, {
+    const payload = await fetchShyftJsonWithRetry(url, {
       headers: getShyftHeaders()
     });
-
-    if (!response.ok) {
-      throw new Error(`Shyft stake account request failed with ${response.status}.`);
-    }
-
-    const payload = (await response.json()) as ShyftResponse;
     const pageItems = Array.isArray(payload.result)
       ? payload.result
       : Array.isArray((payload.result as { stake_accounts?: unknown } | undefined)?.stake_accounts)
@@ -402,4 +685,31 @@ export async function fetchShyftStakeAccounts(
   });
 
   return Array.from(deduped.values()).sort((left, right) => right.lamports - left.lamports);
+}
+
+export async function fetchShyftTransactionHistory(
+  network: 'mainnet-beta' | 'devnet',
+  walletAddress: string,
+  limit = 30
+): Promise<WalletActivityItem[]> {
+  if (!getShyftApiKey()) {
+    return [];
+  }
+
+  const url = new URL(`${SHYFT_BASE_URL}/transaction/history`);
+  url.searchParams.set('network', network);
+  url.searchParams.set('account', walletAddress);
+  url.searchParams.set('tx_num', String(limit));
+  url.searchParams.set('enable_raw', 'false');
+  url.searchParams.set('enable_events', 'true');
+
+  const payload = await fetchShyftJsonWithRetry(url, {
+    headers: getShyftHeaders()
+  });
+  const entries = extractTransactionEntries(payload);
+
+  return entries
+    .map((entry) => normalizeTransactionEntry((entry ?? {}) as ShyftTransactionEntry))
+    .filter((entry): entry is WalletActivityItem => !!entry)
+    .sort((left, right) => right.timestamp - left.timestamp);
 }

@@ -195,6 +195,36 @@ export type WalletStakeActionResponse = {
   network: WalletState['selectedNetwork'];
 };
 
+export type WalletActivityAction = {
+  type: string;
+  label: string;
+  amount?: string | null;
+  asset?: string | null;
+  address?: string | null;
+  protocolName?: string | null;
+};
+
+export type WalletActivityItem = {
+  signature: string;
+  timestamp: number;
+  status: 'success' | 'failed' | 'unknown';
+  type: string;
+  description: string;
+  feeSol: number | null;
+  feePayer: string | null;
+  protocolName: string | null;
+  protocolAddress: string | null;
+  signers: string[];
+  actions: WalletActivityAction[];
+};
+
+export type WalletActivityResponse = {
+  items: WalletActivityItem[];
+  source: 'shyft' | 'none';
+  network: WalletState['selectedNetwork'];
+  refreshedAt: number;
+};
+
 export type DelegatedTokenRisk = {
   accountAddress: string;
   mint: string;

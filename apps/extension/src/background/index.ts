@@ -64,6 +64,7 @@ import {
 
 import type {
   ApprovalRecord,
+  WalletActivityResponse,
   CollectionHolding,
   CollectibleItem,
   StakeAccountRow,
@@ -81,7 +82,13 @@ import {
   type JupiterQuoteResponse
 } from '../shared/jupiter';
 import { getRpcEndpoint } from '../shared/rpc';
-import { fetchShyftCollections, fetchShyftStakeAccounts, fetchShyftWalletTokens, hasShyftApiKey } from '../shared/shyft';
+import {
+  fetchShyftCollections,
+  fetchShyftStakeAccounts,
+  fetchShyftTransactionHistory,
+  fetchShyftWalletTokens,
+  hasShyftApiKey
+} from '../shared/shyft';
 
 const approvalsStorage = new ChromeStorageArea<Record<string, ApprovalRecord>>(chrome.storage.local, STORAGE_KEYS.approvals, {});
 const assetCacheStorage = new ChromeStorageArea<Record<string, { cachedAt: number; data: WalletAssetsResponse }>>(
@@ -110,6 +117,7 @@ const KNOWN_TOKEN_SYMBOLS: Record<string, string> = {
 };
 const INCIDENT_BATCH_SIZE = 6;
 const ASSET_CACHE_TTL_MS = 45_000;
+const STAKE_RETRY_ATTEMPTS = 3;
 
 type ParsedWalletTokenAccount = TokenHolding & {
   rawAmount: string;
@@ -164,6 +172,33 @@ type ProviderDebugPayload = {
   code?: string;
   message?: string;
 };
+
+function delay(ms: number) {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function isLikelyRetryableRpcError(error: unknown) {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : '';
+  const normalized = message.toLowerCase();
+
+  return (
+    normalized.includes('504') ||
+    normalized.includes('503') ||
+    normalized.includes('502') ||
+    normalized.includes('500') ||
+    normalized.includes('gateway timeout') ||
+    normalized.includes('timed out') ||
+    normalized.includes('timeout') ||
+    normalized.includes('429')
+  );
+}
 
 class WalletController {
   private readonly pendingApprovals = new Map<string, PendingResolver>();
@@ -708,6 +743,32 @@ class WalletController {
     return this.getStateResponse();
   }
 
+  async setWalletLabel(walletId: string, name: string) {
+    const walletState = await this.getWalletState();
+    const targetWallet = walletState.wallets.find((wallet) => wallet.id === walletId);
+    if (!targetWallet) {
+      throw new RpcError('WALLET_NOT_FOUND', 'Wallet could not be found.');
+    }
+
+    const nextName = name.trim();
+    if (!nextName) {
+      throw new RpcError('INVALID_WALLET_NAME', 'Wallet label cannot be empty.');
+    }
+
+    await walletStateStorage.set({
+      ...walletState,
+      wallets: walletState.wallets.map((wallet) =>
+        wallet.id === walletId
+          ? {
+              ...wallet,
+              name: nextName
+            }
+          : wallet
+      )
+    });
+    return this.getStateResponse();
+  }
+
   async setIdleTimeout(idleTimeoutMs: number) {
     const { walletState } = await this.ensureReadyWallet();
     await walletStateStorage.set({
@@ -963,19 +1024,34 @@ class WalletController {
 
     const connection = this.createConnection(walletState.selectedNetwork, walletState);
     const authority = new PublicKey(activeAccount.publicKey);
-    const getProgramAccountsByAuthority = async (offset: number) =>
-      connection.getProgramAccounts(StakeProgram.programId, {
-        commitment: 'confirmed',
-        encoding: 'base64',
-        dataSlice: {
-          offset: 0,
-          length: 0
-        },
-        filters: [
-          { dataSize: StakeProgram.space },
-          { memcmp: { offset, bytes: authority.toBase58() } }
-        ]
-      });
+    const getProgramAccountsByAuthority = async (offset: number) => {
+      let lastError: unknown = null;
+
+      for (let attempt = 1; attempt <= STAKE_RETRY_ATTEMPTS; attempt += 1) {
+        try {
+          return await connection.getProgramAccounts(StakeProgram.programId, {
+            commitment: 'confirmed',
+            encoding: 'base64',
+            dataSlice: {
+              offset: 0,
+              length: 0
+            },
+            filters: [
+              { dataSize: StakeProgram.space },
+              { memcmp: { offset, bytes: authority.toBase58() } }
+            ]
+          });
+        } catch (error) {
+          lastError = error;
+          if (!isLikelyRetryableRpcError(error) || attempt === STAKE_RETRY_ATTEMPTS) {
+            throw error;
+          }
+          await delay(250 * attempt);
+        }
+      }
+
+      throw lastError;
+    };
 
     const [asStaker, asWithdrawer] = await Promise.all([
       getProgramAccountsByAuthority(12),
@@ -1005,7 +1081,23 @@ class WalletController {
       const chunkRows = enrichedRows.slice(startIndex, startIndex + chunkSize);
       const chunkResponses = await Promise.allSettled(
         chunkRows.map(async (row) => {
-          const accountInfo = await connection.getParsedAccountInfo(new PublicKey(row.address), 'confirmed');
+          let accountInfo: Awaited<ReturnType<typeof connection.getParsedAccountInfo>> | null = null;
+          let lastError: unknown = null;
+          for (let attempt = 1; attempt <= STAKE_RETRY_ATTEMPTS; attempt += 1) {
+            try {
+              accountInfo = await connection.getParsedAccountInfo(new PublicKey(row.address), 'confirmed');
+              break;
+            } catch (error) {
+              lastError = error;
+              if (!isLikelyRetryableRpcError(error) || attempt === STAKE_RETRY_ATTEMPTS) {
+                throw error;
+              }
+              await delay(200 * attempt);
+            }
+          }
+          if (!accountInfo) {
+            throw lastError instanceof Error ? lastError : new Error('Unable to load parsed stake account info.');
+          }
           if (!accountInfo.value) {
             return null;
           }
@@ -1046,6 +1138,27 @@ class WalletController {
     return {
       accounts: enrichedRows,
       source: enrichedRows.length > 0 ? ('rpc' as const) : ('none' as const),
+      network: walletState.selectedNetwork,
+      refreshedAt: Date.now()
+    };
+  }
+
+  async getActivity(limit = 30): Promise<WalletActivityResponse> {
+    const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
+    if (!activeAccount || !hasShyftApiKey()) {
+      return {
+        items: [],
+        source: 'none',
+        network: walletState.selectedNetwork,
+        refreshedAt: Date.now()
+      };
+    }
+
+    const items = await fetchShyftTransactionHistory(walletState.selectedNetwork, activeAccount.publicKey, limit);
+    return {
+      items,
+      source: 'shyft',
       network: walletState.selectedNetwork,
       refreshedAt: Date.now()
     };
@@ -2604,6 +2717,9 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
         case 'wallet_select':
           sendResponse(await controller.selectWallet(message.walletId));
           break;
+        case 'wallet_set_label':
+          sendResponse(await controller.setWalletLabel(message.walletId, message.name));
+          break;
         case 'wallet_remove':
           sendResponse(await controller.removeWallet(message.walletId));
           break;
@@ -2618,6 +2734,9 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
           break;
         case 'wallet_get_assets':
           sendResponse(await controller.getAssets({ staleWhileRevalidate: message.staleWhileRevalidate }));
+          break;
+        case 'wallet_get_activity':
+          sendResponse(await controller.getActivity(message.limit));
           break;
         case 'wallet_get_stake_accounts':
           sendResponse(await controller.getStakeAccounts());

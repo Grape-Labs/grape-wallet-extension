@@ -5,18 +5,23 @@ import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import * as Tabs from '@radix-ui/react-tabs';
 import {
   AlertTriangle,
+  ArrowDownLeft,
   ArrowLeft,
   ArrowLeftRight,
+  ArrowUpRight,
   Check,
   ChevronDown,
+  Clock3,
   Copy,
   Eye,
   EyeOff,
+  ExternalLink,
   Fingerprint,
   Flame,
   Home,
   Landmark,
   Menu,
+  Pencil,
   QrCode,
   RefreshCcw,
   SendHorizontal,
@@ -32,6 +37,8 @@ import { STORAGE_KEYS } from '@grape/core';
 
 import type {
   ApprovalRecord,
+  WalletActivityItem,
+  WalletActivityResponse,
   CollectibleItem,
   CollectionHolding,
   IncidentResponseResponse,
@@ -59,7 +66,7 @@ import { mountPage } from '../lib';
 import { OnboardingView } from '../onboarding/OnboardingView';
 
 type PopupView = 'home' | 'send' | 'receive' | 'swap' | 'settings' | 'asset' | 'security' | 'approval';
-type HomeTab = 'tokens' | 'collectibles' | 'staking';
+type HomeTab = 'tokens' | 'collectibles' | 'activity' | 'staking';
 type AssetOption =
   | {
       id: 'sol';
@@ -255,6 +262,11 @@ function buildExplorerUrl(address: string, network: 'mainnet-beta' | 'devnet'): 
   return `https://explorer.solana.com/address/${address}${cluster}`;
 }
 
+function buildTransactionExplorerUrl(signature: string, network: 'mainnet-beta' | 'devnet'): string {
+  const cluster = network === 'devnet' ? '?cluster=devnet' : '';
+  return `https://explorer.solana.com/tx/${signature}${cluster}`;
+}
+
 function formatBoolean(value: boolean | null | undefined): string {
   if (value == null) {
     return 'Unavailable';
@@ -299,6 +311,77 @@ function formatSolAmountFromLamports(lamports: number): string {
     minimumFractionDigits: 0,
     maximumFractionDigits: 6
   });
+}
+
+function formatActivityType(value: string): string {
+  return value
+    .replace(/[_-]+/g, ' ')
+    .toLowerCase()
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function formatActivityFee(value: number | null): string | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return null;
+  }
+
+  if (value < 0.001) {
+    return `${value.toFixed(6)} SOL`;
+  }
+
+  return `${value.toLocaleString(undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 4
+  })} SOL`;
+}
+
+function formatActivityTime(timestamp: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: 'numeric',
+    minute: '2-digit'
+  }).format(timestamp);
+}
+
+function formatActivityDayLabel(timestamp: number): string {
+  const now = new Date();
+  const date = new Date(timestamp);
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const target = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const dayDiff = Math.round((today - target) / 86_400_000);
+
+  if (dayDiff === 0) {
+    return 'Today';
+  }
+
+  if (dayDiff === 1) {
+    return 'Yesterday';
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric'
+  }).format(timestamp);
+}
+
+function groupActivityByDay(items: WalletActivityItem[]) {
+  const groups: Array<{ label: string; items: WalletActivityItem[] }> = [];
+  const grouped = new Map<string, WalletActivityItem[]>();
+
+  items.forEach((item) => {
+    const label = formatActivityDayLabel(item.timestamp);
+    const existing = grouped.get(label);
+    if (existing) {
+      existing.push(item);
+    } else {
+      grouped.set(label, [item]);
+    }
+  });
+
+  for (const [label, groupItems] of grouped.entries()) {
+    groups.push({ label, items: groupItems });
+  }
+
+  return groups;
 }
 
 function SolanaMark() {
@@ -501,6 +584,123 @@ function CollectibleCard(props: { item: CollectibleItem; onSelect: () => void })
   );
 }
 
+function ActivityTypeIcon(props: { item: WalletActivityItem }) {
+  const type = props.item.type.toLowerCase();
+
+  if (type.includes('swap')) {
+    return <ArrowLeftRight size={15} />;
+  }
+
+  if (type.includes('transfer') || type.includes('send')) {
+    return props.item.actions.some((action) => action.type.toLowerCase().includes('receive')) ? <ArrowDownLeft size={15} /> : <ArrowUpRight size={15} />;
+  }
+
+  if (type.includes('stake') || type.includes('vote') || type.includes('governance')) {
+    return <Landmark size={15} />;
+  }
+
+  if (type.includes('burn')) {
+    return <Flame size={15} />;
+  }
+
+  return <Clock3 size={15} />;
+}
+
+function ActivityRow(props: {
+  item: WalletActivityItem;
+  expanded: boolean;
+  network: 'mainnet-beta' | 'devnet';
+  onToggle: () => void;
+}) {
+  const statusLabel =
+    props.item.status === 'success'
+      ? 'Success'
+      : props.item.status === 'failed'
+        ? 'Failed'
+        : 'Unknown';
+  const feeLabel = formatActivityFee(props.item.feeSol);
+
+  return (
+    <div
+      className={`activity-row ${props.expanded ? 'expanded' : ''}`.trim()}
+      onClick={props.onToggle}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          props.onToggle();
+        }
+      }}
+      role="button"
+      tabIndex={0}
+    >
+      <div className="activity-row-summary">
+        <div className="activity-leading">
+          <span className={`activity-icon activity-status-${props.item.status}`.trim()} aria-hidden="true">
+            <ActivityTypeIcon item={props.item} />
+          </span>
+          <div className="activity-copy">
+            <strong className="activity-title">{formatActivityType(props.item.type)}</strong>
+            <span className="activity-description">{props.item.description}</span>
+          </div>
+        </div>
+        <div className="activity-meta">
+          <span className={`activity-status-pill activity-status-${props.item.status}`.trim()}>{statusLabel}</span>
+          <span className="activity-time">{formatActivityTime(props.item.timestamp)}</span>
+        </div>
+      </div>
+
+      {props.expanded ? (
+        <div className="activity-details">
+          <div className="activity-detail-grid">
+            <div className="activity-detail-item">
+              <span className="muted">Signature</span>
+              <span className="mono">{formatAddress(props.item.signature)}</span>
+            </div>
+            <div className="activity-detail-item">
+              <span className="muted">Fee</span>
+              <span>{feeLabel ?? 'Unavailable'}</span>
+            </div>
+            <div className="activity-detail-item">
+              <span className="muted">Protocol</span>
+              <span>{props.item.protocolName ?? 'Direct'}</span>
+            </div>
+            <div className="activity-detail-item">
+              <span className="muted">Signers</span>
+              <span>{props.item.signers.length || 0}</span>
+            </div>
+          </div>
+
+          {props.item.actions.length > 0 ? (
+            <div className="activity-action-list">
+              {props.item.actions.map((action, index) => (
+                <div key={`${props.item.signature}:${index}:${action.type}`} className="activity-action-item">
+                  <span className="activity-action-label">{action.label}</span>
+                  <span className="activity-action-copy">
+                    {[action.amount, action.asset, action.address ? formatAddress(action.address) : null].filter(Boolean).join(' • ') || 'No parsed fields'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          <div className="activity-actions">
+            <Button
+              tone="secondary"
+              onClick={(event) => {
+                event.stopPropagation();
+                window.open(buildTransactionExplorerUrl(props.item.signature, props.network), '_blank', 'noopener,noreferrer');
+              }}
+            >
+              <ExternalLink size={14} />
+              View on Explorer
+            </Button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function ActionStatusCard(props: {
   tone: 'warning' | 'success';
   title: string;
@@ -576,6 +776,10 @@ function PopupPage() {
   const [submittingSwap, setSubmittingSwap] = useState(false);
   const swapQuoteRequestRef = useRef(0);
   const [assetsLoading, setAssetsLoading] = useState(false);
+  const [activity, setActivity] = useState<WalletActivityItem[]>([]);
+  const [activityLoading, setActivityLoading] = useState(false);
+  const [activityError, setActivityError] = useState<string | null>(null);
+  const [expandedActivitySignature, setExpandedActivitySignature] = useState<string | null>(null);
   const [stakeAccounts, setStakeAccounts] = useState<StakeAccountRow[]>([]);
   const [stakeSource, setStakeSource] = useState<'shyft' | 'rpc' | 'none'>('none');
   const [stakeLoading, setStakeLoading] = useState(false);
@@ -670,10 +874,27 @@ function PopupPage() {
       setStakeError(null);
     } catch (error) {
       setStakeError(error instanceof Error ? error.message : 'Unable to load stake accounts.');
-      setStakeAccounts([]);
-      setStakeSource('none');
     } finally {
       setStakeLoading(false);
+    }
+  };
+
+  const refreshActivity = async () => {
+    if (!state || state.wallet.setup !== 'ready') {
+      setActivity([]);
+      return;
+    }
+
+    setActivityLoading(true);
+    try {
+      const nextActivity = await sendRuntimeMessage<WalletActivityResponse>({ type: 'wallet_get_activity', limit: 30 });
+      setActivity(nextActivity.items);
+      setActivityError(null);
+    } catch (error) {
+      setActivityError(error instanceof Error ? error.message : 'Unable to load activity.');
+      setActivity([]);
+    } finally {
+      setActivityLoading(false);
     }
   };
 
@@ -749,6 +970,18 @@ function PopupPage() {
 
     void refreshStakeAccounts();
   }, [homeTab, view, state?.wallet.setup, state?.session.locked, state?.activeWallet?.signerKind, state?.wallet.selectedWalletId]);
+
+  useEffect(() => {
+    if (homeTab !== 'activity' || state?.wallet.setup !== 'ready' || view !== 'home') {
+      return;
+    }
+
+    if (state.session.locked && state.activeWallet?.signerKind !== 'watch-only') {
+      return;
+    }
+
+    void refreshActivity();
+  }, [homeTab, view, state?.wallet.setup, state?.session.locked, state?.activeWallet?.signerKind, state?.wallet.selectedWalletId, state?.wallet.selectedNetwork]);
 
   useEffect(() => {
     const cacheKey = buildAssetCacheKey(state);
@@ -1489,6 +1722,20 @@ function PopupPage() {
     await refresh();
   }
 
+  async function handleWalletRename(walletId: string, currentName: string) {
+    const nextName = window.prompt('Set a wallet label.', currentName)?.trim();
+    if (!nextName || nextName === currentName.trim()) {
+      return;
+    }
+
+    await sendRuntimeMessage<WalletStateResponse>({
+      type: 'wallet_set_label',
+      walletId,
+      name: nextName
+    });
+    await refresh();
+  }
+
   async function handleWalletRemove(walletId: string, walletName: string) {
     const warning =
       wallet.wallets.length === 1
@@ -1783,6 +2030,19 @@ function PopupPage() {
                     </DropdownMenu.Item>
                     <button
                       type="button"
+                      className="wallet-menu-edit-button"
+                      aria-label={`Rename ${walletEntry.name}`}
+                      title={`Rename ${walletEntry.name}`}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        void handleWalletRename(walletEntry.id, walletEntry.name);
+                      }}
+                    >
+                      <Pencil size={13} />
+                    </button>
+                    <button
+                      type="button"
                       className="wallet-menu-remove-button"
                       aria-label={`Remove ${walletEntry.name}`}
                       title={`Remove ${walletEntry.name}`}
@@ -2005,12 +2265,12 @@ function PopupPage() {
             <Tabs.Trigger className="content-tab" value="collectibles">
               <span className="content-tab-copy">Collectibles</span>
             </Tabs.Trigger>
-            {/*
+            <Tabs.Trigger className="content-tab" value="activity">
+              <span className="content-tab-copy">Activity</span>
+            </Tabs.Trigger>
             <Tabs.Trigger className="content-tab" value="staking">
-              <Landmark size={14} />
               <span className="content-tab-copy">Staking</span>
             </Tabs.Trigger>
-            */}
           </Tabs.List>
 
           <Tabs.Content value="tokens">
@@ -2080,6 +2340,44 @@ function PopupPage() {
               ) : (
                 <p className="muted">No NFT collections found for this wallet on {wallet.selectedNetwork}.</p>
               )}
+            </Card>
+          </Tabs.Content>
+
+          <Tabs.Content value="activity">
+            <Card className="asset-panel-card activity-panel-card">
+              {activityError ? <p className="danger-box">{activityError}</p> : null}
+              {!activityError && activityLoading ? <p className="muted">Loading recent activity...</p> : null}
+              {!activityError && !activityLoading && activity.length === 0 ? (
+                <p className="muted">
+                  {state?.wallet.setup === 'ready'
+                    ? 'No recent activity found for the past few days.'
+                    : 'Set up a wallet to load activity.'}
+                </p>
+              ) : null}
+              {!activityError && activity.length > 0 ? (
+                <div className="activity-groups">
+                  {groupActivityByDay(activity).map((group) => (
+                    <section key={group.label} className="activity-group">
+                      <div className="activity-group-header">
+                        <span className="activity-group-label">{group.label}</span>
+                      </div>
+                      <div className="activity-list">
+                        {group.items.map((item) => (
+                          <ActivityRow
+                            key={item.signature}
+                            item={item}
+                            expanded={expandedActivitySignature === item.signature}
+                            network={wallet.selectedNetwork}
+                            onToggle={() =>
+                              setExpandedActivitySignature((current) => (current === item.signature ? null : item.signature))
+                            }
+                          />
+                        ))}
+                      </div>
+                    </section>
+                  ))}
+                </div>
+              ) : null}
             </Card>
           </Tabs.Content>
 
@@ -2880,7 +3178,7 @@ function PopupPage() {
               />
               <span>
                 <strong>Privacy mode</strong>
-                <small className="muted">Hide portfolio values and token balances with ***.</small>
+                <small className="muted">Hide portfolio values and token balances with ***</small>
               </span>
             </label>
             <label className="stack">

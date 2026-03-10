@@ -176,6 +176,11 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     walletId: z.string().min(1)
   }),
   z.object({
+    type: z.literal('wallet_set_label'),
+    walletId: z.string().min(1),
+    name: z.string().trim().min(1).max(32)
+  }),
+  z.object({
     type: z.literal('wallet_remove'),
     walletId: z.string().min(1)
   }),
@@ -208,6 +213,10 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('wallet_get_assets'),
     staleWhileRevalidate: z.boolean().optional()
+  }),
+  z.object({
+    type: z.literal('wallet_get_activity'),
+    limit: z.number().int().min(1).max(100).optional()
   }),
   z.object({
     type: z.literal('wallet_get_stake_accounts')
