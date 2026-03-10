@@ -38,11 +38,16 @@ describe('transactions', () => {
     expect(summary.instructions[0]?.details?.some((detail) => detail.label === 'Amount' && detail.value.includes('SOL'))).toBe(
       true
     );
+    expect(summary.balanceChanges).toHaveLength(2);
+    expect(summary.balanceChanges[0]?.assetLabel).toBe('SOL');
   });
 
   it('attaches simulation details when RPC simulation succeeds', async () => {
     const serialized = createSerializedTransfer();
     const connection = {
+      getFeeForMessage: vi.fn().mockResolvedValue({
+        value: 5000
+      }),
       simulateTransaction: vi.fn().mockResolvedValue({
         value: {
           err: null,
@@ -57,7 +62,9 @@ describe('transactions', () => {
 
     const summary = await inspectTransaction(serialized, connection as never);
 
+    expect(connection.getFeeForMessage).toHaveBeenCalledTimes(1);
     expect(connection.simulateTransaction).toHaveBeenCalledTimes(1);
+    expect(summary.estimatedFeeLamports).toBe(5000);
     expect(summary.simulation?.ok).toBe(true);
     expect(summary.simulation?.unitsConsumed).toBe(5400);
     expect(summary.simulation?.logs).toHaveLength(1);

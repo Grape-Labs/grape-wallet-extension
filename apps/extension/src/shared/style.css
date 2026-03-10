@@ -1171,6 +1171,23 @@ body[data-theme='grape'] .wallet-home-card::before {
     linear-gradient(180deg, rgba(255, 255, 255, 0.03) 0%, transparent 100%);
 }
 
+body[data-theme='grape'] .wallet-home-card {
+  background: var(--theme-home-card-bg);
+}
+
+body[data-theme='grape'] .wallet-home-card::after {
+  right: -20%;
+  bottom: -20%;
+  top: auto;
+  width: 86%;
+  height: auto;
+  aspect-ratio: 1;
+  border-radius: 0;
+  background: url('/icons/grape_logo_white.svg') center / contain no-repeat;
+  opacity: 0.01;
+  filter: saturate(0.95);
+}
+
 .wallet-home-topbar {
   display: flex;
   justify-content: space-between;
@@ -2464,6 +2481,53 @@ body[data-surface='popup'] .collectible-grid {
 
 .approval-simulation-copy {
   margin: 0;
+}
+
+.approval-balance-summary {
+  gap: 8px;
+  padding: 2px 0 4px;
+}
+
+.approval-balance-change-list {
+  display: grid;
+  gap: 8px;
+}
+
+.approval-balance-change-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--theme-surface-soft) 88%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-divider) 82%, transparent);
+}
+
+.approval-balance-change-copy {
+  min-width: 0;
+}
+
+.approval-balance-change-amount {
+  font-weight: 700;
+}
+
+.approval-balance-change-amount.positive {
+  color: var(--theme-success);
+}
+
+.approval-balance-change-amount.negative {
+  color: var(--theme-warning);
+}
+
+.approval-balance-change-asset,
+.approval-balance-change-account {
+  display: block;
+  max-width: 100%;
+}
+
+.approval-balance-change-account {
+  justify-self: end;
 }
 
 .approval-instruction-accounts {

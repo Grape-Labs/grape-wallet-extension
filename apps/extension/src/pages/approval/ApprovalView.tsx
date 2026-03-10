@@ -30,6 +30,17 @@ function summarizeMessage(base64Message: string): string {
   }
 }
 
+function formatLamports(lamports: number | null | undefined): string {
+  if (lamports == null) {
+    return 'Unknown';
+  }
+
+  return `${(lamports / 1_000_000_000).toLocaleString(undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 9
+  })} SOL`;
+}
+
 function renderInstructionValue(value: string, isAddress?: boolean) {
   if (!isAddress) {
     return value;
@@ -219,6 +230,34 @@ export function ApprovalView(props: {
                 </span>
               }
             />
+            {approval.transactionSummary.estimatedFeeLamports != null ? (
+              <KeyValueRow label="Estimated fee" value={formatLamports(approval.transactionSummary.estimatedFeeLamports)} />
+            ) : null}
+            {approval.transactionSummary.balanceChanges.length ? (
+              <div className="stack approval-balance-summary">
+                <span className="muted">Balance changes</span>
+                <div className="approval-balance-change-list">
+                  {approval.transactionSummary.balanceChanges.map((change, index) => (
+                    <div key={`${change.account}-${change.assetAddress ?? change.assetLabel}-${index}`} className="approval-balance-change-row">
+                      <div className="approval-balance-change-copy">
+                        <div className={`approval-balance-change-amount ${change.direction === 'in' ? 'positive' : 'negative'}`.trim()}>
+                          {change.direction === 'in' ? '+' : '-'}
+                          {change.amount} {change.assetLabel}
+                        </div>
+                        {change.assetAddress ? (
+                          <div className="mono muted approval-balance-change-asset" title={change.assetAddress}>
+                            {formatAddress(change.assetAddress)}
+                          </div>
+                        ) : null}
+                      </div>
+                      <div className="mono approval-address approval-balance-change-account" title={change.account}>
+                        {formatAddress(change.account)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             <KeyValueRow label="Instructions" value={approval.transactionSummary.instructionCount} />
             {approval.transactionSummary.instructions.map((instruction, index) => (
               <div key={`${instruction.programId}-${index}`} className="card">

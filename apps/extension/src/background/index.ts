@@ -93,9 +93,12 @@ type ActiveWalletSurface = {
   port: chrome.runtime.Port;
   surfaceId: string;
   page: string;
+  visible: boolean;
+  lastSeenAt: number;
 };
 
 const activeWalletSurfacePorts = new Map<chrome.runtime.Port, ActiveWalletSurface>();
+const SURFACE_STALE_MS = 15_000;
 const TOKEN_PROGRAM_IDS = [
   'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
   'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb'
@@ -2192,7 +2195,10 @@ function getSurfacePriority(page: string): number {
 }
 
 function getPreferredApprovalSurface(): ActiveWalletSurface | undefined {
-  return [...activeWalletSurfacePorts.values()].sort((left, right) => getSurfacePriority(right.page) - getSurfacePriority(left.page))[0];
+  const now = Date.now();
+  return [...activeWalletSurfacePorts.values()]
+    .filter((surface) => surface.visible && now - surface.lastSeenAt <= SURFACE_STALE_MS)
+    .sort((left, right) => getSurfacePriority(right.page) - getSurfacePriority(left.page))[0];
 }
 
 async function assignPendingApprovalsToPreferredSurface() {
@@ -2224,6 +2230,16 @@ async function reassignApprovalsFromSurface(surfaceId: string) {
     if (approval.hostSurfaceId === surfaceId) {
       approval.hostSurfaceId = preferred?.surfaceId;
       changed = true;
+      if (!preferred && !approval.windowId) {
+        const createdWindow = await chrome.windows.create({
+          url: chrome.runtime.getURL(`approval.html?approvalId=${approval.id}`),
+          type: 'popup',
+          focused: true,
+          width: 520,
+          height: 820
+        });
+        approval.windowId = createdWindow.id;
+      }
     }
   }
 
@@ -2697,9 +2713,27 @@ chrome.runtime.onConnect.addListener((port) => {
         activeWalletSurfacePorts.set(port, {
           port,
           surfaceId: message.surfaceId,
-          page: message.page
+          page: message.page,
+          visible: message.visible !== false,
+          lastSeenAt: Date.now()
         });
         void assignPendingApprovalsToPreferredSurface();
+      } else if (
+        message &&
+        typeof message === 'object' &&
+        message.type === 'surface-visibility' &&
+        typeof message.surfaceId === 'string'
+      ) {
+        const current = activeWalletSurfacePorts.get(port);
+        if (current && current.surfaceId === message.surfaceId) {
+          current.visible = message.visible !== false;
+          current.lastSeenAt = Date.now();
+          if (!current.visible) {
+            void reassignApprovalsFromSurface(current.surfaceId);
+          } else {
+            void assignPendingApprovalsToPreferredSurface();
+          }
+        }
       }
     });
     port.onDisconnect.addListener(() => {

@@ -44,9 +44,23 @@ export function mountPage(element: React.ReactNode) {
       surfacePort.postMessage({
         type: 'register-surface',
         surfaceId,
-        page
+        page,
+        visible: !document.hidden
       });
+      const reportVisibility = () => {
+        surfacePort?.postMessage({
+          type: 'surface-visibility',
+          surfaceId,
+          visible: !document.hidden
+        });
+      };
+      document.addEventListener('visibilitychange', reportVisibility);
+      window.addEventListener('focus', reportVisibility);
+      window.addEventListener('pageshow', reportVisibility);
       window.addEventListener('beforeunload', () => {
+        document.removeEventListener('visibilitychange', reportVisibility);
+        window.removeEventListener('focus', reportVisibility);
+        window.removeEventListener('pageshow', reportVisibility);
         surfacePort?.disconnect();
         surfacePort = null;
       }, { once: true });

@@ -675,7 +675,7 @@ function PopupPage() {
     if (latestApproval) {
       setActiveApproval(latestApproval);
       setView('approval');
-    } else if (view !== 'approval') {
+    } else {
       setActiveApproval(null);
       setView((current) => (current === 'approval' ? 'home' : current));
     }

@@ -54,12 +54,24 @@ export type TransactionSimulationSummary = {
   logs: string[];
 };
 
+export type TransactionBalanceChange = {
+  account: string;
+  direction: 'in' | 'out';
+  amount: string;
+  rawAmount: string;
+  decimals: number;
+  assetLabel: string;
+  assetAddress?: string;
+};
+
 export type TransactionSummary = {
   feePayer?: string;
   recentBlockhash: string;
   instructionCount: number;
   instructions: TransactionInstructionSummary[];
   warnings: string[];
+  estimatedFeeLamports?: number | null;
+  balanceChanges: TransactionBalanceChange[];
   simulation?: TransactionSimulationSummary;
 };
 
@@ -67,6 +79,14 @@ type ResolvedInstruction = {
   programId: PublicKey;
   keys: Array<PublicKey | null>;
   data: Uint8Array;
+};
+
+type BalanceChangeAggregate = {
+  account: string;
+  assetLabel: string;
+  assetAddress?: string;
+  decimals: number;
+  amount: bigint;
 };
 
 function formatUiAmount(rawAmount: bigint, decimals = 0): string {
@@ -105,6 +125,143 @@ function readU64Le(bytes: Uint8Array, offset: number): bigint {
 
 function accountLabel(account: PublicKey | null | undefined): string {
   return account?.toBase58() ?? 'Lookup table account';
+}
+
+function addBalanceChange(
+  changes: Map<string, BalanceChangeAggregate>,
+  account: PublicKey | null | undefined,
+  assetLabel: string,
+  decimals: number,
+  delta: bigint,
+  assetAddress?: string
+) {
+  if (!account || delta === 0n) {
+    return;
+  }
+
+  const key = [account.toBase58(), assetLabel, assetAddress ?? '', decimals.toString()].join(':');
+  const current = changes.get(key);
+
+  if (current) {
+    current.amount += delta;
+    return;
+  }
+
+  changes.set(key, {
+    account: account.toBase58(),
+    assetLabel,
+    assetAddress,
+    decimals,
+    amount: delta
+  });
+}
+
+function summarizeBalanceChanges(instructions: ResolvedInstruction[]): TransactionBalanceChange[] {
+  const changes = new Map<string, BalanceChangeAggregate>();
+
+  for (const instruction of instructions) {
+    const programId = instruction.programId.toBase58();
+
+    if (programId === SystemProgram.programId.toBase58()) {
+      try {
+        const decoded = SystemInstruction.decodeInstructionType(
+          new TransactionInstruction({
+            programId: instruction.programId,
+            keys: instruction.keys.map((pubkey) => ({
+              pubkey: pubkey ?? SystemProgram.programId,
+              isSigner: false,
+              isWritable: false
+            })),
+            data: Buffer.from(instruction.data)
+          })
+        );
+
+        if (decoded === 'Transfer') {
+          const transfer = SystemInstruction.decodeTransfer(
+            new TransactionInstruction({
+              programId: instruction.programId,
+              keys: instruction.keys.map((pubkey) => ({
+                pubkey: pubkey ?? SystemProgram.programId,
+                isSigner: false,
+                isWritable: false
+              })),
+              data: Buffer.from(instruction.data)
+            })
+          );
+          addBalanceChange(changes, transfer.fromPubkey, 'SOL', 9, -BigInt(transfer.lamports));
+          addBalanceChange(changes, transfer.toPubkey, 'SOL', 9, BigInt(transfer.lamports));
+        } else if (decoded === 'Create') {
+          const created = SystemInstruction.decodeCreateAccount(
+            new TransactionInstruction({
+              programId: instruction.programId,
+              keys: instruction.keys.map((pubkey) => ({
+                pubkey: pubkey ?? SystemProgram.programId,
+                isSigner: false,
+                isWritable: false
+              })),
+              data: Buffer.from(instruction.data)
+            })
+          );
+          addBalanceChange(changes, created.fromPubkey, 'SOL', 9, -BigInt(created.lamports));
+          addBalanceChange(changes, created.newAccountPubkey, 'SOL', 9, BigInt(created.lamports));
+        }
+      } catch {
+        // Ignore undecodable system instructions.
+      }
+
+      continue;
+    }
+
+    if (programId === TOKEN_PROGRAM_ID.toBase58() || programId === TOKEN_2022_PROGRAM_ID.toBase58()) {
+      const tag = instruction.data[0];
+
+      if (tag === 3 || tag === 12) {
+        const amount = readU64Le(instruction.data, 1);
+        const decimals = tag === 12 ? (instruction.data[9] ?? 0) : 0;
+        const mintAddress = tag === 12 ? accountLabel(instruction.keys[1]) : undefined;
+        const sourceIndex = 0;
+        const destinationIndex = tag === 12 ? 2 : 1;
+        addBalanceChange(changes, instruction.keys[sourceIndex], 'Token', decimals, -amount, mintAddress);
+        addBalanceChange(changes, instruction.keys[destinationIndex], 'Token', decimals, amount, mintAddress);
+        continue;
+      }
+
+      if (tag === 7 || tag === 14) {
+        const amount = readU64Le(instruction.data, 1);
+        const decimals = tag === 14 ? (instruction.data[9] ?? 0) : 0;
+        const mintAddress = accountLabel(instruction.keys[0]);
+        addBalanceChange(changes, instruction.keys[1], 'Token', decimals, amount, mintAddress);
+        continue;
+      }
+
+      if (tag === 8 || tag === 15) {
+        const amount = readU64Le(instruction.data, 1);
+        const decimals = tag === 15 ? (instruction.data[9] ?? 0) : 0;
+        const mintAddress = accountLabel(instruction.keys[1]);
+        addBalanceChange(changes, instruction.keys[0], 'Token', decimals, -amount, mintAddress);
+      }
+    }
+  }
+
+  return Array.from(changes.values())
+    .filter((change) => change.amount !== 0n)
+    .sort((left, right) => {
+      const leftAbs = left.amount < 0n ? -left.amount : left.amount;
+      const rightAbs = right.amount < 0n ? -right.amount : right.amount;
+      if (leftAbs === rightAbs) {
+        return left.account.localeCompare(right.account);
+      }
+      return rightAbs > leftAbs ? 1 : -1;
+    })
+    .map((change) => ({
+      account: change.account,
+      direction: change.amount < 0n ? 'out' : 'in',
+      amount: formatUiAmount(change.amount < 0n ? -change.amount : change.amount, change.decimals),
+      rawAmount: (change.amount < 0n ? -change.amount : change.amount).toString(),
+      decimals: change.decimals,
+      assetLabel: change.assetLabel,
+      assetAddress: change.assetAddress
+    }));
 }
 
 function summarizeProgram(programId: PublicKey, accountCount: number, dataLength: number): TransactionInstructionSummary {
@@ -423,13 +580,22 @@ export function summarizeTransaction(serialized: string): TransactionSummary {
     recentBlockhash: resolved.recentBlockhash,
     instructionCount: instructions.length,
     instructions,
-    warnings: [...resolved.warnings, ...instructions.flatMap((instruction) => (instruction.warning ? [instruction.warning] : []))]
+    warnings: [...resolved.warnings, ...instructions.flatMap((instruction) => (instruction.warning ? [instruction.warning] : []))],
+    balanceChanges: summarizeBalanceChanges(resolved.instructions)
   };
 }
 
 export async function inspectTransaction(serialized: string, connection: Connection): Promise<TransactionSummary> {
   const summary = summarizeTransaction(serialized);
   const parsed = parseSerializedTransaction(serialized);
+
+  try {
+    const message = parsed.kind === 'versioned' ? parsed.transaction.message : parsed.transaction.compileMessage();
+    const fee = await connection.getFeeForMessage(message, 'processed');
+    summary.estimatedFeeLamports = fee.value ?? null;
+  } catch {
+    summary.estimatedFeeLamports = null;
+  }
 
   try {
     const response =
