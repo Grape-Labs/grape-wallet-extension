@@ -36,6 +36,7 @@ export type WalletStateResponse = {
     id: string;
     name: string;
     publicKey: string;
+    chain?: WalletState['selectedChain'];
     biometricEnabled?: boolean;
     source?: 'created' | 'imported-mnemonic' | 'imported-private-key' | 'watch-only' | 'ledger';
     signerKind?: 'software' | 'watch-only' | 'ledger';

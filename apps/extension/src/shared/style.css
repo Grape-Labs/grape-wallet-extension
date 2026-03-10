@@ -1195,26 +1195,86 @@ body[data-theme='grape'] .wallet-home-card::after {
   margin-bottom: 0;
 }
 
+.wallet-home-network .status-pill {
+  padding: 4px 9px;
+  font-size: 0.72rem;
+  line-height: 1;
+  letter-spacing: 0.02em;
+}
+
+.stack-tight {
+  display: grid;
+  gap: 8px;
+}
+
+.chain-switcher {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  padding: 4px;
+  border-radius: 999px;
+  background: var(--theme-surface-soft);
+  border: 1px solid var(--theme-divider);
+  width: fit-content;
+}
+
+.chain-switcher.compact {
+  gap: 4px;
+  padding: 3px;
+}
+
+.chain-switcher-item {
+  border: 0;
+  background: transparent;
+  color: var(--theme-muted);
+  border-radius: 999px;
+  padding: 7px 12px;
+  min-width: 84px;
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 0.84rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, opacity 140ms ease;
+}
+
+.chain-switcher-item small {
+  font-size: 0.66rem;
+  line-height: 1;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.72;
+}
+
+.chain-switcher-item.active {
+  background: var(--theme-nav-active-bg);
+  color: var(--theme-nav-active-text);
+}
+
+.chain-switcher-item:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.chain-switcher.compact .chain-switcher-item {
+  min-width: 0;
+  min-height: 28px;
+  padding: 6px 10px;
+  font-size: 0.76rem;
+}
+
+.chain-switcher.compact .chain-switcher-item small {
+  display: none;
+}
+
 .wallet-home-controls {
   display: flex;
   gap: 8px;
   align-items: center;
   flex-shrink: 0;
-}
-
-.wallet-session-state {
-  font-size: 0.76rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--theme-subtle);
-}
-
-.wallet-session-state.locked {
-  color: var(--theme-warning);
-}
-
-.wallet-session-state.ready {
-  color: var(--theme-success);
 }
 
 .wallet-home-header {

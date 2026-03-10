@@ -8,6 +8,7 @@ export const STORAGE_KEYS = {
 } as const;
 
 export type WalletSetupState = 'empty' | 'ready';
+export type GrapeChain = 'solana' | 'sui';
 export type GrapeNetwork = 'mainnet-beta' | 'devnet';
 export type GrapeTheme =
   | 'grape'
@@ -31,6 +32,8 @@ export const SUPPORTED_THEMES = [
   'liquid-chrome',
   'obsidian'
 ] as const satisfies readonly GrapeTheme[];
+
+export const SUPPORTED_CHAINS = ['solana', 'sui'] as const satisfies readonly GrapeChain[];
 
 export type VaultRecord = {
   version: 1;
@@ -75,6 +78,7 @@ export type WalletSigner =
 export type WalletProfile = {
   id: string;
   name: string;
+  chain: GrapeChain;
   vault?: VaultRecord;
   signer: WalletSigner;
   source: 'created' | 'imported-mnemonic' | 'imported-private-key' | 'watch-only' | 'ledger';
@@ -84,9 +88,24 @@ export type WalletProfile = {
   recentRecipients: WalletRecipient[];
 };
 
+export type SolanaChainState = {
+  selectedNetwork: GrapeNetwork;
+  customRpcUrls: Partial<Record<GrapeNetwork, string>>;
+};
+
+export type SuiChainState = {
+  customRpcUrl?: string;
+};
+
 export type WalletState = {
   setup: WalletSetupState;
   wallets: WalletProfile[];
+  selectedChain: GrapeChain;
+  selectedWalletIds: Partial<Record<GrapeChain, string>>;
+  chainState: {
+    solana: SolanaChainState;
+    sui: SuiChainState;
+  };
   selectedWalletId?: string;
   selectedNetwork: GrapeNetwork;
   selectedTheme: GrapeTheme;
@@ -100,6 +119,9 @@ export type LegacyWalletState = {
   vault?: VaultRecord;
   accounts?: WalletAccount[];
   selectedAccountId?: string;
+  selectedChain?: GrapeChain;
+  selectedWalletIds?: Partial<Record<GrapeChain, string>>;
+  chainState?: Partial<WalletState['chainState']>;
   selectedNetwork?: GrapeNetwork;
   selectedTheme?: GrapeTheme;
   privacyMode?: boolean;
@@ -115,6 +137,7 @@ export type SessionState = {
 export const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 export const MAX_RECENT_RECIPIENTS = 8;
 export const DEFAULT_THEME: GrapeTheme = 'aurora';
+export const DEFAULT_CHAIN: GrapeChain = 'solana';
 
 export function normalizeTheme(theme: unknown): GrapeTheme {
   switch (theme) {
@@ -145,6 +168,15 @@ export function createEmptyWalletState(): WalletState {
   return {
     setup: 'empty',
     wallets: [],
+    selectedChain: DEFAULT_CHAIN,
+    selectedWalletIds: {},
+    chainState: {
+      solana: {
+        selectedNetwork: 'devnet',
+        customRpcUrls: {}
+      },
+      sui: {}
+    },
     selectedNetwork: 'devnet',
     selectedTheme: DEFAULT_THEME,
     privacyMode: false,
@@ -168,7 +200,21 @@ export function isSessionExpired(session: SessionState, idleTimeoutMs: number, n
 }
 
 export function getSelectedWallet(state: WalletState): WalletProfile | undefined {
-  return state.wallets.find((wallet) => wallet.id === state.selectedWalletId) ?? state.wallets[0];
+  return getSelectedWalletForChain(state, state.selectedChain);
+}
+
+export function getSelectedWalletForChain(state: WalletState, chain: GrapeChain): WalletProfile | undefined {
+  const chainWallets = state.wallets.filter((wallet) => wallet.chain === chain);
+  const selectedWalletId = getSelectedWalletIdForChain(state, chain);
+  return chainWallets.find((wallet) => wallet.id === selectedWalletId) ?? chainWallets[0];
+}
+
+export function getSelectedWalletIdForChain(state: WalletState, chain: GrapeChain): string | undefined {
+  return state.selectedWalletIds[chain] ?? (chain === 'solana' ? state.selectedWalletId : undefined);
+}
+
+export function getSelectedSolanaChainState(state: WalletState): SolanaChainState {
+  return state.chainState.solana;
 }
 
 export function rememberWalletRecipient(wallet: WalletProfile, address: string, lastUsedAt = Date.now()): WalletProfile {
@@ -185,6 +231,7 @@ export function rememberWalletRecipient(wallet: WalletProfile, address: string, 
 }
 
 export function removeWalletProfile(state: WalletState, walletId: string): WalletState {
+  const removedWallet = state.wallets.find((wallet) => wallet.id === walletId);
   const nextWallets = state.wallets.filter((wallet) => wallet.id !== walletId);
 
   if (nextWallets.length === 0) {
@@ -192,18 +239,37 @@ export function removeWalletProfile(state: WalletState, walletId: string): Walle
       ...state,
       setup: 'empty',
       wallets: [],
+      selectedWalletIds: {},
       selectedWalletId: undefined
     };
   }
 
-  const nextSelectedWalletId =
-    state.selectedWalletId === walletId ? nextWallets[0]?.id : state.selectedWalletId ?? nextWallets[0]?.id;
-
-  return {
+  const nextState: WalletState = {
     ...state,
     setup: 'ready',
-    wallets: nextWallets,
-    selectedWalletId: nextSelectedWalletId
+    wallets: nextWallets
+  };
+
+  if (removedWallet) {
+    const chainWallets = nextWallets.filter((wallet) => wallet.chain === removedWallet.chain);
+    const nextSelectedWalletIds = {
+      ...state.selectedWalletIds
+    };
+    if (nextSelectedWalletIds[removedWallet.chain] === walletId) {
+      if (chainWallets[0]?.id) {
+        nextSelectedWalletIds[removedWallet.chain] = chainWallets[0].id;
+      } else {
+        delete nextSelectedWalletIds[removedWallet.chain];
+      }
+    }
+    nextState.selectedWalletIds = nextSelectedWalletIds;
+  }
+
+  const nextSelectedSolanaWalletId = getSelectedWalletIdForChain(nextState, 'solana') ?? nextWallets[0]?.id;
+
+  return {
+    ...nextState,
+    selectedWalletId: nextSelectedSolanaWalletId
   };
 }
 
@@ -217,14 +283,24 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
       input.wallets.map(normalizeWalletProfile),
       input.selectedWalletId
     );
+    const selectedChain = input.selectedChain ?? DEFAULT_CHAIN;
+    const chainState = normalizeChainState(input.chainState, input.selectedNetwork, input.customRpcUrls);
+    const selectedWalletIds = normalizeSelectedWalletIds(
+      input.selectedWalletIds,
+      normalizedWallets,
+      selectedWalletId
+    );
     return {
       setup: normalizedWallets.length > 0 ? 'ready' : input.setup,
       wallets: normalizedWallets,
-      selectedWalletId: selectedWalletId ?? normalizedWallets[0]?.id,
-      selectedNetwork: input.selectedNetwork ?? 'devnet',
+      selectedChain,
+      selectedWalletIds,
+      chainState,
+      selectedWalletId: selectedWalletId ?? selectedWalletIds.solana ?? normalizedWallets.find((wallet) => wallet.chain === 'solana')?.id,
+      selectedNetwork: chainState.solana.selectedNetwork,
       selectedTheme: normalizeTheme(input.selectedTheme),
       privacyMode: input.privacyMode ?? false,
-      customRpcUrls: normalizeCustomRpcUrls(input.customRpcUrls),
+      customRpcUrls: chainState.solana.customRpcUrls,
       idleTimeoutMs: input.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS
     };
   }
@@ -237,6 +313,7 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
         {
           id: 'wallet-1',
           name: 'Wallet 1',
+          chain: 'solana',
           vault: input.vault,
           signer: { kind: 'software' },
           source: 'created',
@@ -245,6 +322,17 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
           recentRecipients: []
         }
       ],
+      selectedChain: DEFAULT_CHAIN,
+      selectedWalletIds: {
+        solana: 'wallet-1'
+      },
+      chainState: {
+        solana: {
+          selectedNetwork: input.selectedNetwork ?? 'devnet',
+          customRpcUrls: normalizeCustomRpcUrls(input.customRpcUrls)
+        },
+        sui: {}
+      },
       selectedWalletId: 'wallet-1',
       selectedNetwork: input.selectedNetwork ?? 'devnet',
       selectedTheme: normalizeTheme(input.selectedTheme),
@@ -257,6 +345,9 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
   return {
     setup: 'empty',
     wallets: [],
+    selectedChain: input.selectedChain ?? DEFAULT_CHAIN,
+    selectedWalletIds: {},
+    chainState: normalizeChainState(input.chainState, input.selectedNetwork, input.customRpcUrls),
     selectedNetwork: input.selectedNetwork ?? 'devnet',
     selectedTheme: normalizeTheme(input.selectedTheme),
     privacyMode: input.privacyMode ?? false,
@@ -282,6 +373,7 @@ function isLegacyReadyWalletState(input: WalletState | LegacyWalletState): input
 function normalizeWalletProfile(wallet: WalletProfile): WalletProfile {
   return {
     ...wallet,
+    chain: wallet.chain ?? 'solana',
     signer: wallet.signer ?? { kind: 'software' },
     source: wallet.source ?? (wallet.signer?.kind === 'ledger' ? 'ledger' : wallet.signer?.kind === 'watch-only' ? 'watch-only' : 'created'),
     biometricUnlock: wallet.biometricUnlock,
@@ -303,6 +395,48 @@ function normalizeCustomRpcUrls(
       next[network] = value;
     }
   }
+  return next;
+}
+
+function normalizeChainState(
+  chainState: Partial<WalletState['chainState']> | undefined,
+  selectedNetwork: GrapeNetwork | undefined,
+  customRpcUrls: Partial<Record<GrapeNetwork, string>> | undefined
+): WalletState['chainState'] {
+  const normalizedSolanaCustomRpc = normalizeCustomRpcUrls(
+    chainState?.solana?.customRpcUrls ?? customRpcUrls
+  );
+  return {
+    solana: {
+      selectedNetwork: chainState?.solana?.selectedNetwork ?? selectedNetwork ?? 'devnet',
+      customRpcUrls: normalizedSolanaCustomRpc
+    },
+    sui: {
+      customRpcUrl: chainState?.sui?.customRpcUrl?.trim() || undefined
+    }
+  };
+}
+
+function normalizeSelectedWalletIds(
+  selectedWalletIds: Partial<Record<GrapeChain, string>> | undefined,
+  wallets: WalletProfile[],
+  fallbackSelectedWalletId?: string
+): Partial<Record<GrapeChain, string>> {
+  const next: Partial<Record<GrapeChain, string>> = {
+    ...selectedWalletIds
+  };
+
+  if (!next.solana) {
+    next.solana =
+      fallbackSelectedWalletId && wallets.some((wallet) => wallet.chain === 'solana' && wallet.id === fallbackSelectedWalletId)
+        ? fallbackSelectedWalletId
+        : wallets.find((wallet) => wallet.chain === 'solana')?.id;
+  }
+
+  if (!next.sui) {
+    next.sui = wallets.find((wallet) => wallet.chain === 'sui')?.id;
+  }
+
   return next;
 }
 

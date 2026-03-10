@@ -51,6 +51,7 @@ describe('wallet state', () => {
     const wallet: WalletProfile = {
       id: 'wallet-1',
       name: 'Wallet 1',
+      chain: 'solana',
       vault: vaultRecord,
       signer: { kind: 'software' },
       source: 'created',
@@ -88,6 +89,7 @@ describe('wallet state', () => {
           {
             id: 'wallet-1',
             name: 'Wallet 1',
+            chain: 'solana',
             vault: vaultRecord,
             signer: { kind: 'software' },
             source: 'created',
@@ -105,6 +107,7 @@ describe('wallet state', () => {
           {
             id: 'wallet-2',
             name: 'Wallet 2',
+            chain: 'solana',
             vault: vaultRecord,
             signer: { kind: 'software' },
             source: 'imported-private-key',
@@ -120,6 +123,17 @@ describe('wallet state', () => {
             recentRecipients: []
           }
         ],
+        selectedChain: 'solana',
+        selectedWalletIds: {
+          solana: 'wallet-1'
+        },
+        chainState: {
+          solana: {
+            selectedNetwork: 'devnet',
+            customRpcUrls: {}
+          },
+          sui: {}
+        },
         selectedWalletId: 'wallet-1',
         selectedNetwork: 'devnet',
         selectedTheme: 'aurora',
@@ -143,6 +157,7 @@ describe('wallet state', () => {
           {
             id: 'wallet-1',
             name: 'Wallet 1',
+            chain: 'solana',
             vault: vaultRecord,
             signer: { kind: 'software' },
             source: 'created',
@@ -158,6 +173,17 @@ describe('wallet state', () => {
             recentRecipients: []
           }
         ],
+        selectedChain: 'solana',
+        selectedWalletIds: {
+          solana: 'wallet-1'
+        },
+        chainState: {
+          solana: {
+            selectedNetwork: 'devnet',
+            customRpcUrls: {}
+          },
+          sui: {}
+        },
         selectedWalletId: 'wallet-1',
         selectedNetwork: 'devnet',
         selectedTheme: 'aurora',

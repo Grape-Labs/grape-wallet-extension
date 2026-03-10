@@ -159,6 +159,10 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     network: z.enum(['mainnet-beta', 'devnet'])
   }),
   z.object({
+    type: z.literal('wallet_set_chain'),
+    chain: z.enum(['solana', 'sui'])
+  }),
+  z.object({
     type: z.literal('wallet_set_theme'),
     theme: z.enum(['grape', 'comic', 'sunset', 'matrix', 'apple', 'aurora', 'champagne', 'liquid-chrome', 'obsidian'])
   }),

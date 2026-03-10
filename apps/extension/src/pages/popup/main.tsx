@@ -114,6 +114,10 @@ const SOLANA_LOGO_URL =
   'https://media.solana-cdn.com/image/width=100/https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/solana/info/logo.png';
 const GRAPE_LOGO_URL = chrome.runtime.getURL('icons/grape_logo_white.png');
 const ASSET_CACHE_STORAGE_KEY = 'grape:asset-cache';
+const CHAIN_OPTIONS = [
+  { id: 'solana', label: 'Solana', enabled: true },
+  { id: 'sui', label: 'Sui', enabled: false }
+] as const;
 
 function parseInitialView(): PopupView {
   const nextView = new URLSearchParams(window.location.search).get('view');
@@ -148,7 +152,7 @@ function buildAssetCacheKey(state: WalletStateResponse | null): string | null {
     return null;
   }
 
-  return `${state.activeWallet.id}:${state.wallet.selectedNetwork}:${state.activeAccount.publicKey}`;
+  return `${state.wallet.selectedChain}:${state.activeWallet.id}:${state.wallet.selectedNetwork}:${state.activeAccount.publicKey}`;
 }
 
 function formatLamports(lamports: number | null): string {
@@ -1705,6 +1709,7 @@ function PopupPage() {
   const isWatchOnlyWallet = activeWallet?.signerKind === 'watch-only';
   const recentRecipients = state.recentRecipients;
   const privacyMode = wallet.privacyMode;
+  const selectedChain = wallet.selectedChain;
   const selectedNetworkCustomRpc = wallet.customRpcUrls[wallet.selectedNetwork] ?? '';
 
   if (session.locked && !isWatchOnlyWallet) {
@@ -1722,6 +1727,40 @@ function PopupPage() {
     });
     setView('home');
     await refresh();
+  }
+
+  async function handleChainSelect(chain: 'solana' | 'sui') {
+    if (chain === selectedChain || chain !== 'solana') {
+      return;
+    }
+    await sendRuntimeMessage<WalletStateResponse>({
+      type: 'wallet_set_chain',
+      chain
+    });
+    setView('home');
+    await refresh();
+  }
+
+  function renderChainSwitcher(compact = false) {
+    return (
+      <div className={`chain-switcher ${compact ? 'compact' : ''}`.trim()} role="tablist" aria-label="Supported chains">
+        {CHAIN_OPTIONS.map((chain) => (
+          <button
+            key={chain.id}
+            type="button"
+            role="tab"
+            className={`chain-switcher-item ${selectedChain === chain.id ? 'active' : ''}`.trim()}
+            aria-selected={selectedChain === chain.id}
+            onClick={() => void handleChainSelect(chain.id)}
+            disabled={!chain.enabled}
+            title={chain.enabled ? chain.label : `${chain.label} coming soon`}
+          >
+            <span>{chain.label}</span>
+            {!chain.enabled ? <small>Soon</small> : null}
+          </button>
+        ))}
+      </div>
+    );
   }
 
   async function handleWalletRename(walletId: string, currentName: string) {
@@ -2189,13 +2228,11 @@ function PopupPage() {
       <>
         <Card className="wallet-home-card">
           <div className="wallet-home-topbar">
-            <div className="wallet-home-network">
+            <div className="wallet-home-network stack-tight">
+              {renderChainSwitcher(true)}
               <StatusPill tone={wallet.selectedNetwork === 'devnet' ? 'warning' : 'success'}>{wallet.selectedNetwork}</StatusPill>
             </div>
             <div className="wallet-home-controls">
-              <span className={`wallet-session-state ${session.locked ? 'locked' : 'ready'}`.trim()}>
-                {isWatchOnlyWallet ? 'Watch-only' : session.locked ? 'Locked' : 'Ready'}
-              </span>
               {renderWalletMenu()}
             </div>
           </div>
@@ -3074,6 +3111,11 @@ function PopupPage() {
       <>
         <Card title="Wallet">
           <div className="stack">
+            <label className="stack">
+              <span className="muted">Chain</span>
+              {renderChainSwitcher()}
+              <small className="muted">Solana is available now. Sui is reserved in the shell for a later chain integration.</small>
+            </label>
             <label className="stack">
               <span className="muted">Network</span>
               <select

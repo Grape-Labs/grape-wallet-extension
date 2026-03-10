@@ -536,6 +536,7 @@ class WalletController {
     const profile = {
       id: walletId,
       name: `Wallet ${nextWalletNumber}`,
+      chain: 'solana' as const,
       vault: signer.kind === 'watch-only' ? undefined : await createVaultRecord(secret, password ?? ''),
       signer,
       source,
@@ -547,6 +548,11 @@ class WalletController {
       ...current,
       setup: 'ready' as const,
       wallets: [...current.wallets, profile],
+      selectedChain: 'solana' as const,
+      selectedWalletIds: {
+        ...current.selectedWalletIds,
+        solana: walletId
+      },
       selectedWalletId: walletId
     };
     await walletStateStorage.set(nextState);
@@ -671,6 +677,7 @@ class WalletController {
               id: activeWallet.id,
               name: activeWallet.name,
               publicKey: activeAccount.publicKey,
+              chain: activeWallet.chain,
               biometricEnabled: !!activeWallet.biometricUnlock,
               source: activeWallet.source,
               signerKind: activeWallet.signer.kind
@@ -686,6 +693,13 @@ class WalletController {
     const { walletState } = await this.ensureReadyWallet();
     await walletStateStorage.set({
       ...walletState,
+      chainState: {
+        ...walletState.chainState,
+        solana: {
+          ...walletState.chainState.solana,
+          selectedNetwork: network
+        }
+      },
       selectedNetwork: network
     });
     return this.getStateResponse();
@@ -723,6 +737,13 @@ class WalletController {
 
     await walletStateStorage.set({
       ...walletState,
+      chainState: {
+        ...walletState.chainState,
+        solana: {
+          ...walletState.chainState.solana,
+          customRpcUrls: nextCustomRpcUrls
+        }
+      },
       customRpcUrls: nextCustomRpcUrls
     });
     await this.invalidateAssetCache();
@@ -738,7 +759,22 @@ class WalletController {
 
     await walletStateStorage.set({
       ...walletState,
+      selectedChain: selectedWallet.chain,
+      selectedWalletIds: {
+        ...walletState.selectedWalletIds,
+        [selectedWallet.chain]: walletId
+      },
       selectedWalletId: walletId
+    });
+    return this.getStateResponse();
+  }
+
+  async setChain(chain: 'solana' | 'sui') {
+    const walletState = await this.getWalletState();
+    await walletStateStorage.set({
+      ...walletState,
+      selectedChain: chain,
+      selectedWalletId: chain === 'solana' ? walletState.selectedWalletIds.solana ?? walletState.selectedWalletId : walletState.selectedWalletId
     });
     return this.getStateResponse();
   }
@@ -2704,6 +2740,9 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
           break;
         case 'wallet_set_network':
           sendResponse(await controller.setNetwork(message.network));
+          break;
+        case 'wallet_set_chain':
+          sendResponse(await controller.setChain(message.chain));
           break;
         case 'wallet_set_theme':
           sendResponse(await controller.setTheme(message.theme));
