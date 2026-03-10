@@ -700,6 +700,18 @@ function PopupPage() {
   }, [view, state?.wallet.setup, state?.session.locked]);
 
   useEffect(() => {
+    if (!state?.canUseUnlockedSigner) {
+      return;
+    }
+
+    setPassword('');
+    setSwapPassword('');
+    setStakePassword('');
+    setBurnPassword('');
+    setIncidentPassword('');
+  }, [state?.canUseUnlockedSigner]);
+
+  useEffect(() => {
     if (homeTab !== 'staking' || state?.wallet.setup !== 'ready' || view !== 'home') {
       return;
     }
@@ -984,7 +996,7 @@ function PopupPage() {
       const result = await sendRuntimeMessage<WalletSwapExecuteResponse>({
         type: 'wallet_execute_swap',
         quoteResponse: swapQuote.quoteResponse,
-        password: swapPassword || undefined
+        password: canUseUnlockedSigner ? undefined : swapPassword || undefined
       });
       setSwapResult(result);
       setSwapPassword('');
@@ -1006,7 +1018,7 @@ function PopupPage() {
         type: 'wallet_stake_create',
         amount: stakeAmount,
         voteAccount: stakeVoteAccount,
-        password: stakePassword || undefined
+        password: canUseUnlockedSigner ? undefined : stakePassword || undefined
       });
       setStakeResult(result);
       setStakeAmount('');
@@ -1028,7 +1040,7 @@ function PopupPage() {
       const result = await sendRuntimeMessage<WalletStakeActionResponse>({
         type: 'wallet_stake_deactivate',
         stakeAccount: stakeDeactivateAccount,
-        password: stakePassword || undefined
+        password: canUseUnlockedSigner ? undefined : stakePassword || undefined
       });
       setStakeResult(result);
       setStakePassword('');
@@ -1048,7 +1060,7 @@ function PopupPage() {
         type: 'wallet_stake_withdraw',
         stakeAccount: stakeWithdrawAccount,
         amount: stakeWithdrawAmount,
-        password: stakePassword || undefined
+        password: canUseUnlockedSigner ? undefined : stakePassword || undefined
       });
       setStakeResult(result);
       setStakeWithdrawAmount('');
@@ -1288,7 +1300,7 @@ function PopupPage() {
         type: 'wallet_send_transfer',
         recipient,
         amount,
-        password: password || undefined,
+        password: canUseUnlockedSigner ? undefined : password || undefined,
         asset: selectedAsset.asset
       });
       setSendResult(nextResult);
