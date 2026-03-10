@@ -52,50 +52,49 @@
 body[data-theme='comic'] {
   font-family: 'Comic Sans MS', 'Chalkboard SE', 'Trebuchet MS', cursive;
   --theme-background:
-    radial-gradient(circle at 50% 42%, rgba(255, 247, 163, 0.18) 0 11%, transparent 12%),
-    radial-gradient(circle at 50% 42%, rgba(124, 231, 255, 0.1) 0 18%, transparent 19%),
-    linear-gradient(180deg, #19062c 0%, #280941 100%);
+    linear-gradient(180deg, rgba(16, 8, 33, 0.72) 0%, rgba(22, 8, 33, 0.54) 36%, rgba(10, 5, 19, 0.8) 100%),
+    radial-gradient(circle at 50% 36%, rgba(255, 243, 122, 0.18) 0, rgba(255, 243, 122, 0.06) 16%, transparent 34%),
+    url('/icons/bg_comic.png') center / cover no-repeat;
+  --theme-text: #fff9f5;
+  --theme-muted: rgba(255, 249, 245, 0.76);
+  --theme-subtle: rgba(255, 249, 245, 0.52);
+  --theme-card-bg: rgba(39, 19, 70, 0.78);
   --theme-accent: #ffe66d;
   --theme-accent-2: #ff7b00;
   --theme-accent-soft: rgba(255, 230, 109, 0.18);
-  --theme-card-border: rgba(255, 230, 109, 0.3);
+  --theme-card-border: rgba(255, 233, 124, 0.34);
+  --theme-card-shadow: 0 24px 56px rgba(8, 4, 20, 0.42);
   --theme-button-text: #231942;
+  --theme-button-secondary-bg: rgba(255, 255, 255, 0.1);
+  --theme-button-secondary-text: #fff9f5;
+  --theme-input-bg: rgba(32, 14, 58, 0.72);
+  --theme-input-border: rgba(255, 236, 146, 0.22);
+  --theme-surface-strong: rgba(26, 10, 48, 0.9);
+  --theme-surface-soft: rgba(255, 255, 255, 0.08);
+  --theme-surface-soft-hover: rgba(255, 255, 255, 0.12);
+  --theme-divider: rgba(255, 255, 255, 0.1);
   --theme-home-card-bg:
-    radial-gradient(circle at 12% 18%, rgba(255, 230, 109, 0.22), transparent 26%),
-    radial-gradient(circle at 90% 16%, rgba(14, 165, 233, 0.22), transparent 24%),
-    linear-gradient(145deg, rgba(61, 39, 104, 0.98) 0%, rgba(46, 32, 85, 0.96) 55%, rgba(24, 19, 52, 0.98) 100%);
-  --theme-home-card-glow: radial-gradient(circle, rgba(255, 123, 0, 0.16) 0%, rgba(255, 123, 0, 0) 72%);
+    linear-gradient(180deg, rgba(19, 9, 34, 0.28), rgba(19, 9, 34, 0.28)),
+    radial-gradient(circle at 14% 18%, rgba(255, 230, 109, 0.16), transparent 24%),
+    radial-gradient(circle at 88% 14%, rgba(95, 210, 255, 0.14), transparent 24%),
+    linear-gradient(145deg, rgba(63, 24, 98, 0.94) 0%, rgba(42, 18, 74, 0.94) 58%, rgba(26, 12, 48, 0.96) 100%);
+  --theme-home-card-glow: radial-gradient(circle, rgba(255, 123, 0, 0.18) 0%, rgba(255, 123, 0, 0) 72%);
   --theme-ambient-primary:
-    radial-gradient(circle at 50% 42%, rgba(104, 230, 255, 0.18) 0 11%, transparent 12%),
-    radial-gradient(circle at 50% 42%, rgba(255, 255, 255, 0.08) 0 15%, transparent 16%),
-    repeating-conic-gradient(
-      from -18deg at 50% 42%,
-      rgba(255, 214, 10, 0.92) 0deg 8deg,
-      rgba(255, 120, 10, 0.88) 8deg 16deg,
-      rgba(255, 59, 151, 0.88) 16deg 24deg,
-      rgba(71, 196, 255, 0.88) 24deg 32deg,
-      rgba(143, 92, 255, 0.88) 32deg 40deg,
-      rgba(86, 237, 153, 0.86) 40deg 48deg
-    ),
-    radial-gradient(circle at 50% 42%, rgba(0, 0, 0, 0.22) 0 19%, transparent 20%);
+    radial-gradient(circle at 18% 20%, rgba(255, 209, 66, 0.24) 0%, transparent 24%),
+    radial-gradient(circle at 82% 20%, rgba(95, 210, 255, 0.2) 0%, transparent 22%),
+    radial-gradient(circle at 50% 72%, rgba(255, 97, 188, 0.14) 0%, transparent 28%);
   --theme-ambient-secondary:
-    radial-gradient(circle at 16% 24%, rgba(255, 255, 255, 0.24) 0 1.2%, transparent 1.5%),
-    radial-gradient(circle at 84% 22%, rgba(255, 255, 255, 0.18) 0 1%, transparent 1.3%),
-    radial-gradient(circle at 18% 76%, rgba(255, 255, 255, 0.18) 0 1%, transparent 1.35%),
-    radial-gradient(circle at 80% 80%, rgba(255, 255, 255, 0.22) 0 1.1%, transparent 1.4%),
     radial-gradient(circle at 30% 16%, rgba(255, 163, 48, 0.82) 0 2.8%, transparent 3.2%),
     radial-gradient(circle at 72% 18%, rgba(95, 210, 255, 0.82) 0 2.4%, transparent 2.8%),
     radial-gradient(circle at 20% 60%, rgba(255, 93, 168, 0.8) 0 2.2%, transparent 2.6%),
     radial-gradient(circle at 78% 66%, rgba(255, 235, 91, 0.82) 0 2.6%, transparent 3%),
     radial-gradient(circle at 42% 84%, rgba(135, 104, 255, 0.78) 0 2.3%, transparent 2.7%),
     radial-gradient(circle at 60% 78%, rgba(255, 255, 255, 0.34) 0 0.8%, transparent 1.1%),
-    radial-gradient(circle at 24% 86%, rgba(255, 255, 255, 0.3) 0 0.9%, transparent 1.2%),
-    radial-gradient(circle at 50% 42%, rgba(7, 6, 23, 0.36) 0 0.35%, transparent 0.45%),
-    radial-gradient(circle at 50% 42%, rgba(7, 6, 23, 0.34) 0 19.8%, transparent 20.2%);
-  --theme-ambient-opacity: 0.9;
-  --theme-ambient-filter: saturate(160%) contrast(108%);
-  --theme-backdrop-blur: blur(2px);
-  --theme-backdrop-saturate: saturate(118%);
+    radial-gradient(circle at 24% 86%, rgba(255, 255, 255, 0.3) 0 0.9%, transparent 1.2%);
+  --theme-ambient-opacity: 0.54;
+  --theme-ambient-filter: blur(6px) saturate(138%);
+  --theme-backdrop-blur: blur(1px);
+  --theme-backdrop-saturate: saturate(110%);
 }
 
 body[data-theme='grape'] {
@@ -275,9 +274,11 @@ body[data-theme='apple'] {
   color-scheme: light;
   font-family: 'SF Pro Display', 'SF Pro Text', 'Helvetica Neue', Helvetica, Arial, sans-serif;
   --theme-background:
-    radial-gradient(circle at top left, rgba(120, 192, 255, 0.22), transparent 24%),
-    radial-gradient(circle at top right, rgba(255, 255, 255, 0.46), transparent 18%),
-    radial-gradient(circle at bottom, rgba(193, 211, 255, 0.34), transparent 28%),
+    linear-gradient(180deg, rgba(240, 246, 255, 0.56) 0%, rgba(232, 240, 252, 0.48) 40%, rgba(223, 233, 248, 0.62) 100%),
+    radial-gradient(circle at top left, rgba(120, 192, 255, 0.18), transparent 24%),
+    radial-gradient(circle at top right, rgba(255, 255, 255, 0.4), transparent 18%),
+    radial-gradient(circle at bottom, rgba(193, 211, 255, 0.24), transparent 28%),
+    url('/icons/bg_glass.png') center / cover no-repeat,
     linear-gradient(180deg, #e9f1ff 0%, #dfe9fb 48%, #d7e4f8 100%);
   --theme-text: #0f1728;
   --theme-muted: rgba(15, 23, 40, 0.7);
@@ -308,20 +309,21 @@ body[data-theme='apple'] {
   --theme-nav-active-bg: rgba(255, 255, 255, 0.42);
   --theme-nav-active-text: #0f1728;
   --theme-home-card-bg:
-    radial-gradient(circle at 18% 16%, rgba(90, 200, 250, 0.18), transparent 22%),
-    radial-gradient(circle at 88% 12%, rgba(255, 255, 255, 0.52), transparent 18%),
-    linear-gradient(145deg, rgba(255, 255, 255, 0.44) 0%, rgba(247, 250, 255, 0.32) 55%, rgba(235, 243, 255, 0.28) 100%);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.12)),
+    radial-gradient(circle at 18% 16%, rgba(90, 200, 250, 0.14), transparent 22%),
+    radial-gradient(circle at 88% 12%, rgba(255, 255, 255, 0.42), transparent 18%),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.4) 0%, rgba(247, 250, 255, 0.3) 55%, rgba(235, 243, 255, 0.26) 100%);
   --theme-home-card-glow: radial-gradient(circle, rgba(90, 200, 250, 0.16) 0%, rgba(90, 200, 250, 0) 72%);
   --theme-ambient-primary:
-    radial-gradient(circle at 20% 20%, rgba(105, 208, 255, 0.38) 0%, rgba(105, 208, 255, 0.16) 16%, transparent 40%),
-    radial-gradient(circle at 44% 66%, rgba(255, 255, 255, 0.26) 0%, transparent 28%);
+    radial-gradient(circle at 20% 20%, rgba(105, 208, 255, 0.26) 0%, rgba(105, 208, 255, 0.12) 16%, transparent 40%),
+    radial-gradient(circle at 44% 66%, rgba(255, 255, 255, 0.18) 0%, transparent 28%);
   --theme-ambient-secondary:
-    radial-gradient(circle at 82% 16%, rgba(184, 223, 255, 0.44) 0%, rgba(184, 223, 255, 0.18) 18%, transparent 42%),
-    radial-gradient(circle at 78% 72%, rgba(164, 192, 255, 0.24) 0%, transparent 30%);
-  --theme-ambient-opacity: 0.84;
-  --theme-ambient-filter: blur(38px) saturate(150%);
-  --theme-backdrop-blur: blur(22px);
-  --theme-backdrop-saturate: saturate(170%);
+    radial-gradient(circle at 82% 16%, rgba(184, 223, 255, 0.3) 0%, rgba(184, 223, 255, 0.14) 18%, transparent 42%),
+    radial-gradient(circle at 78% 72%, rgba(164, 192, 255, 0.18) 0%, transparent 30%);
+  --theme-ambient-opacity: 0.68;
+  --theme-ambient-filter: blur(52px) saturate(130%);
+  --theme-backdrop-blur: blur(26px);
+  --theme-backdrop-saturate: saturate(150%);
 }
 
 body[data-theme='aurora'] {
