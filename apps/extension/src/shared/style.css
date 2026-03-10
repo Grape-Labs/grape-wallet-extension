@@ -52,9 +52,9 @@
 body[data-theme='comic'] {
   font-family: 'Comic Sans MS', 'Chalkboard SE', 'Trebuchet MS', cursive;
   --theme-background:
-    radial-gradient(circle at top left, rgba(255, 230, 109, 0.28), transparent 26%),
-    radial-gradient(circle at right center, rgba(59, 130, 246, 0.24), transparent 24%),
-    linear-gradient(180deg, #231942 0%, #5e548e 54%, #9f86c0 100%);
+    radial-gradient(circle at 50% 42%, rgba(255, 247, 163, 0.18) 0 11%, transparent 12%),
+    radial-gradient(circle at 50% 42%, rgba(124, 231, 255, 0.1) 0 18%, transparent 19%),
+    linear-gradient(180deg, #19062c 0%, #280941 100%);
   --theme-accent: #ffe66d;
   --theme-accent-2: #ff7b00;
   --theme-accent-soft: rgba(255, 230, 109, 0.18);
@@ -65,6 +65,37 @@ body[data-theme='comic'] {
     radial-gradient(circle at 90% 16%, rgba(14, 165, 233, 0.22), transparent 24%),
     linear-gradient(145deg, rgba(61, 39, 104, 0.98) 0%, rgba(46, 32, 85, 0.96) 55%, rgba(24, 19, 52, 0.98) 100%);
   --theme-home-card-glow: radial-gradient(circle, rgba(255, 123, 0, 0.16) 0%, rgba(255, 123, 0, 0) 72%);
+  --theme-ambient-primary:
+    radial-gradient(circle at 50% 42%, rgba(104, 230, 255, 0.18) 0 11%, transparent 12%),
+    radial-gradient(circle at 50% 42%, rgba(255, 255, 255, 0.08) 0 15%, transparent 16%),
+    repeating-conic-gradient(
+      from -18deg at 50% 42%,
+      rgba(255, 214, 10, 0.92) 0deg 8deg,
+      rgba(255, 120, 10, 0.88) 8deg 16deg,
+      rgba(255, 59, 151, 0.88) 16deg 24deg,
+      rgba(71, 196, 255, 0.88) 24deg 32deg,
+      rgba(143, 92, 255, 0.88) 32deg 40deg,
+      rgba(86, 237, 153, 0.86) 40deg 48deg
+    ),
+    radial-gradient(circle at 50% 42%, rgba(0, 0, 0, 0.22) 0 19%, transparent 20%);
+  --theme-ambient-secondary:
+    radial-gradient(circle at 16% 24%, rgba(255, 255, 255, 0.24) 0 1.2%, transparent 1.5%),
+    radial-gradient(circle at 84% 22%, rgba(255, 255, 255, 0.18) 0 1%, transparent 1.3%),
+    radial-gradient(circle at 18% 76%, rgba(255, 255, 255, 0.18) 0 1%, transparent 1.35%),
+    radial-gradient(circle at 80% 80%, rgba(255, 255, 255, 0.22) 0 1.1%, transparent 1.4%),
+    radial-gradient(circle at 30% 16%, rgba(255, 163, 48, 0.82) 0 2.8%, transparent 3.2%),
+    radial-gradient(circle at 72% 18%, rgba(95, 210, 255, 0.82) 0 2.4%, transparent 2.8%),
+    radial-gradient(circle at 20% 60%, rgba(255, 93, 168, 0.8) 0 2.2%, transparent 2.6%),
+    radial-gradient(circle at 78% 66%, rgba(255, 235, 91, 0.82) 0 2.6%, transparent 3%),
+    radial-gradient(circle at 42% 84%, rgba(135, 104, 255, 0.78) 0 2.3%, transparent 2.7%),
+    radial-gradient(circle at 60% 78%, rgba(255, 255, 255, 0.34) 0 0.8%, transparent 1.1%),
+    radial-gradient(circle at 24% 86%, rgba(255, 255, 255, 0.3) 0 0.9%, transparent 1.2%),
+    radial-gradient(circle at 50% 42%, rgba(7, 6, 23, 0.36) 0 0.35%, transparent 0.45%),
+    radial-gradient(circle at 50% 42%, rgba(7, 6, 23, 0.34) 0 19.8%, transparent 20.2%);
+  --theme-ambient-opacity: 0.9;
+  --theme-ambient-filter: saturate(160%) contrast(108%);
+  --theme-backdrop-blur: blur(2px);
+  --theme-backdrop-saturate: saturate(118%);
 }
 
 body[data-theme='grape'] {
@@ -114,6 +145,7 @@ body[data-theme='grape'] {
   --theme-backdrop-blur: blur(8px);
   --theme-backdrop-saturate: saturate(120%);
 }
+
 
 body[data-theme='sunset'] {
   font-family: 'Palatino Linotype', 'Book Antiqua', Palatino, serif;
@@ -517,6 +549,17 @@ body::after {
   animation: theme-ambient-drift-b 28s ease-in-out infinite alternate;
 }
 
+body[data-theme='comic']::before {
+  animation: theme-comic-burst 18s ease-in-out infinite alternate;
+  transform-origin: 50% 42%;
+  filter: blur(0px) saturate(160%);
+}
+
+body[data-theme='comic']::after {
+  animation: theme-comic-float 24s linear infinite;
+  filter: blur(0px) saturate(145%);
+}
+
 body[data-surface='popup'] {
   width: 344px;
   min-width: 344px;
@@ -561,6 +604,33 @@ select {
   }
   100% {
     transform: translate3d(1%, -1%, 0) scale(1.04);
+  }
+}
+
+@keyframes theme-comic-burst {
+  0% {
+    transform: scale(1) rotate(-2deg);
+  }
+  100% {
+    transform: scale(1.12) rotate(2deg);
+  }
+}
+
+@keyframes theme-comic-float {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  25% {
+    transform: translate3d(-1.5%, -1%, 0);
+  }
+  50% {
+    transform: translate3d(1%, -2%, 0);
+  }
+  75% {
+    transform: translate3d(-1%, -1.2%, 0);
+  }
+  100% {
+    transform: translate3d(0, 0, 0);
   }
 }
 
