@@ -64,7 +64,7 @@ import type {
 import { sendRuntimeMessage } from '../../shared/chrome';
 import { createBiometricUnlock, isBiometricUnlockSupported, unlockWithBiometric } from '../../shared/biometric';
 import { JUPITER_SOL_MINT } from '../../shared/jupiter';
-import { LIFI_NATIVE_SYMBOL } from '../../shared/lifi';
+import { getSupportedBridgeDestinations, LIFI_NATIVE_SYMBOL } from '../../shared/lifi';
 import { applyDocumentTheme, THEMES } from '../../shared/theme';
 import { openExtensionPage, openExtensionSidePanel } from '../../shared/window';
 import { ApprovalView } from '../approval/ApprovalView';
@@ -2091,7 +2091,10 @@ function PopupPage() {
   const bridgeDestinationChainOptions = useMemo(
     () =>
       VISIBLE_CHAIN_OPTIONS.filter(
-        (chain) => chain.id !== selectedChain && wallet.wallets.some((walletEntry) => walletEntry.chain === chain.id)
+        (chain) =>
+          chain.id !== selectedChain &&
+          getSupportedBridgeDestinations(selectedChain).includes(chain.id) &&
+          wallet.wallets.some((walletEntry) => walletEntry.chain === chain.id)
       ),
     [selectedChain, wallet.wallets]
   );
@@ -4713,7 +4716,7 @@ function PopupPage() {
     if (isSuiChain) {
       return (
         <Card title="Bridge">
-          <p className="muted">Bridge source is coming soon for Sui wallets. You can already bridge into your Sui wallets from Solana, Ethereum, or Monad.</p>
+          <p className="muted">Bridge source is coming soon for Sui wallets.</p>
           <Button tone="secondary" onClick={() => setView('home')}>
             Back to wallet
           </Button>
@@ -4724,7 +4727,7 @@ function PopupPage() {
     if (bridgeDestinationChainOptions.length === 0) {
       return (
         <Card title="Bridge">
-          <p className="warning-box">Add a wallet on another chain before bridging assets across chains.</p>
+          <p className="warning-box">No supported bridge destinations are available for this wallet yet. Add an Ethereum or Monad wallet to bridge from Solana, or switch to another source chain.</p>
           <Button tone="secondary" onClick={() => openExtensionPage('onboarding.html')}>
             Add another wallet
           </Button>

@@ -17,6 +17,13 @@ const FALLBACK_CHAIN_IDS: Partial<Record<GrapeChain, string>> = {
   ethereum: '1'
 };
 
+const SUPPORTED_BRIDGE_DESTINATIONS: Record<GrapeChain, GrapeChain[]> = {
+  solana: ['ethereum', 'monad'],
+  sui: [],
+  monad: ['solana', 'ethereum'],
+  ethereum: ['solana', 'monad']
+};
+
 export const LIFI_NATIVE_TOKEN_ADDRESS: Record<GrapeChain, string> = {
   solana: '11111111111111111111111111111111',
   sui: '0x2::sui::SUI',
@@ -37,6 +44,14 @@ export const LIFI_NATIVE_DECIMALS: Record<GrapeChain, number> = {
   monad: 18,
   ethereum: 18
 };
+
+export function getSupportedBridgeDestinations(fromChain: GrapeChain): GrapeChain[] {
+  return SUPPORTED_BRIDGE_DESTINATIONS[fromChain];
+}
+
+export function isBridgeRouteSupported(fromChain: GrapeChain, toChain: GrapeChain): boolean {
+  return SUPPORTED_BRIDGE_DESTINATIONS[fromChain].includes(toChain);
+}
 
 type LifiChainResponse = {
   chains?: Array<{
@@ -124,6 +139,9 @@ async function fetchLifiJson<T>(path: string, params?: URLSearchParams): Promise
 
   if (!response.ok) {
     const message = await response.text().catch(() => response.statusText);
+    if (message.includes('"code":1011') || message.includes('/toChain must be equal to one of the allowed values')) {
+      throw new Error('This bridge route is not supported yet.');
+    }
     throw new Error(message || `LI.FI request failed with ${response.status}.`);
   }
 
@@ -163,6 +181,10 @@ export async function fetchNativeBridgeQuote(input: {
   fromAddress: string;
   toAddress: string;
 }): Promise<BridgeQuoteSummary> {
+  if (!isBridgeRouteSupported(input.fromChain, input.toChain)) {
+    throw new Error(`Bridging from ${input.fromChain} to ${input.toChain} is not supported yet.`);
+  }
+
   const [fromChainId, toChainId] = await Promise.all([
     resolveLifiChainId(input.fromChain),
     resolveLifiChainId(input.toChain)

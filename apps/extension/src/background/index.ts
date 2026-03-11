@@ -118,7 +118,7 @@ import {
   JUPITER_SOL_MINT,
   type JupiterQuoteResponse
 } from '../shared/jupiter';
-import { fetchNativeBridgeQuote, LIFI_NATIVE_DECIMALS, LIFI_NATIVE_SYMBOL } from '../shared/lifi';
+import { fetchNativeBridgeQuote, getSupportedBridgeDestinations, isBridgeRouteSupported, LIFI_NATIVE_DECIMALS, LIFI_NATIVE_SYMBOL } from '../shared/lifi';
 import { getRpcEndpoint } from '../shared/rpc';
 import {
   fetchShyftCollections,
@@ -2639,6 +2639,14 @@ class WalletController {
     if (input.toChain === selectedWallet.chain) {
       throw new RpcError('INVALID_BRIDGE', 'Choose a different destination chain.');
     }
+    if (!isBridgeRouteSupported(selectedWallet.chain, input.toChain)) {
+      const supportedDestinations = getSupportedBridgeDestinations(selectedWallet.chain);
+      const supportedList = supportedDestinations.length > 0 ? supportedDestinations.join(', ') : 'none';
+      throw new RpcError(
+        'UNSUPPORTED_BRIDGE_ROUTE',
+        `Bridging from ${selectedWallet.chain} to ${input.toChain} is not supported yet. Supported destinations: ${supportedList}.`
+      );
+    }
 
     const destination = this.resolveBridgeDestination(walletState, input.toChain, input.destinationWalletId);
     const amountRaw = parseDecimalAmount(input.amount, LIFI_NATIVE_DECIMALS[selectedWallet.chain]).toString();
@@ -2673,6 +2681,14 @@ class WalletController {
     }
     if (selectedWallet.chain === 'sui') {
       throw new RpcError('UNSUPPORTED_CHAIN', 'Bridge source is coming soon for Sui wallets.');
+    }
+    if (!isBridgeRouteSupported(selectedWallet.chain, input.toChain)) {
+      const supportedDestinations = getSupportedBridgeDestinations(selectedWallet.chain);
+      const supportedList = supportedDestinations.length > 0 ? supportedDestinations.join(', ') : 'none';
+      throw new RpcError(
+        'UNSUPPORTED_BRIDGE_ROUTE',
+        `Bridging from ${selectedWallet.chain} to ${input.toChain} is not supported yet. Supported destinations: ${supportedList}.`
+      );
     }
     if (selectedWallet.signer.kind === 'ledger') {
       throw new RpcError('LEDGER_UNSUPPORTED', 'Bridge execution is not available for Ledger wallets yet.');
