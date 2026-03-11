@@ -51,24 +51,24 @@ export async function requestMonadLedgerAccounts(input: {
       transport: http(resolveMonadLedgerRpcUrl(input.network, input.customRpcUrl))
     });
 
-    const discovered = await Promise.all(
-      Array.from({ length: count }, (_, offset) => startIndex + offset).map(async (index) => {
-        const derivationPath = toMonadLedgerDerivationPath(index);
-        const account = await eth.getAddress(derivationPath, false, false, String(chain.id));
-        const balanceWei = await client.getBalance({
-          address: account.address as Address
-        });
+    const discovered: MonadLedgerDiscoveredAccount[] = [];
+    for (let offset = 0; offset < count; offset += 1) {
+      const index = startIndex + offset;
+      const derivationPath = toMonadLedgerDerivationPath(index);
+      const account = await eth.getAddress(derivationPath, false, false, String(chain.id));
+      const balanceWei = await client.getBalance({
+        address: account.address as Address
+      });
 
-        return {
-          index,
-          publicKey: account.address,
-          derivationPath,
-          balanceWei,
-          balanceLabel: `${formatEther(balanceWei)} MON`,
-          label: `Ledger account ${index + 1}`
-        } satisfies MonadLedgerDiscoveredAccount;
-      })
-    );
+      discovered.push({
+        index,
+        publicKey: account.address,
+        derivationPath,
+        balanceWei,
+        balanceLabel: `${formatEther(balanceWei)} MON`,
+        label: `Ledger account ${index + 1}`
+      });
+    }
 
     return discovered.sort((left, right) => {
       if (left.balanceWei === right.balanceWei) {

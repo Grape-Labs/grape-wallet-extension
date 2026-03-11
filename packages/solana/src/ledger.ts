@@ -84,16 +84,33 @@ export async function requestLedgerAccounts(input: {
     }
 
     const connection = new Connection(input.rpcEndpoint, 'confirmed');
+    const publicKeys = discovered.map((entry) => new PublicKey(entry.publicKey));
     const lamports = await connection.getMultipleAccountsInfo(
-      discovered.map((entry) => new PublicKey(entry.publicKey)),
+      publicKeys,
       'confirmed'
     );
+    let resolvedLamports = lamports.map((entry) => entry?.lamports ?? 0);
+
+    // Some RPCs return null account infos for externally-owned addresses during
+    // batch lookup even when the address has SOL. Fall back to direct balance
+    // checks when the batch path appears to have failed wholesale.
+    if (resolvedLamports.every((value) => value === 0) && publicKeys.length > 0) {
+      resolvedLamports = await Promise.all(
+        publicKeys.map(async (publicKey) => {
+          try {
+            return await connection.getBalance(publicKey, 'confirmed');
+          } catch {
+            return 0;
+          }
+        })
+      );
+    }
 
     const deduped = new Map<string, LedgerDiscoveredAccount>();
     for (const entry of discovered
       .map((entry, idx) => ({
         ...entry,
-        lamports: lamports[idx]?.lamports ?? 0
+        lamports: resolvedLamports[idx] ?? 0
       }))
       .sort((left, right) => right.lamports - left.lamports || left.index - right.index)) {
       const existing = deduped.get(entry.publicKey);
