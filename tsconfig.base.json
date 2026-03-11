@@ -18,6 +18,12 @@
       "@grape/core/*": ["packages/core/src/*"],
       "@grape/solana": ["packages/solana/src/index.ts"],
       "@grape/solana/*": ["packages/solana/src/*"],
+      "@grape/sui": ["packages/sui/src/index.ts"],
+      "@grape/sui/*": ["packages/sui/src/*"],
+      "@grape/monad": ["packages/monad/src/index.ts"],
+      "@grape/monad/*": ["packages/monad/src/*"],
+      "@grape/ethereum": ["packages/ethereum/src/index.ts"],
+      "@grape/ethereum/*": ["packages/ethereum/src/*"],
       "@grape/wallet-adapter": ["packages/wallet-adapter/src/index.ts"],
       "@grape/wallet-adapter/*": ["packages/wallet-adapter/src/*"],
       "@grape/ui": ["packages/ui/src/index.ts"],
@@ -25,4 +31,3 @@
     }
   }
 }
-

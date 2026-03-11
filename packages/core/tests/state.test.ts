@@ -132,7 +132,15 @@ describe('wallet state', () => {
             selectedNetwork: 'devnet',
             customRpcUrls: {}
           },
-          sui: {}
+          sui: {
+            selectedNetwork: 'mainnet-beta'
+          },
+          monad: {
+            selectedNetwork: 'mainnet-beta'
+          },
+          ethereum: {
+            selectedNetwork: 'mainnet-beta'
+          }
         },
         selectedWalletId: 'wallet-1',
         selectedNetwork: 'devnet',
@@ -182,7 +190,15 @@ describe('wallet state', () => {
             selectedNetwork: 'devnet',
             customRpcUrls: {}
           },
-          sui: {}
+          sui: {
+            selectedNetwork: 'mainnet-beta'
+          },
+          monad: {
+            selectedNetwork: 'mainnet-beta'
+          },
+          ethereum: {
+            selectedNetwork: 'mainnet-beta'
+          }
         },
         selectedWalletId: 'wallet-1',
         selectedNetwork: 'devnet',

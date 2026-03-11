@@ -1,3 +1,5 @@
+import './runtime-polyfills';
+
 import { base64ToBytes, bytesToBase64 } from '@grape/core';
 import { Connection, Keypair, Transaction, VersionedTransaction } from '@solana/web3.js';
 import nacl from 'tweetnacl';

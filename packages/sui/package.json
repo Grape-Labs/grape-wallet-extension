@@ -1,5 +1,5 @@
 {
-  "name": "@grape/core",
+  "name": "@grape/sui",
   "version": "0.2.0",
   "private": true,
   "type": "module",
@@ -16,6 +16,10 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "zod": "^3.24.2"
+    "@grape/core": "workspace:*",
+    "@ledgerhq/hw-transport-webhid": "^6.31.0",
+    "@mysten/ledgerjs-hw-app-sui": "^0.7.1",
+    "@mysten/sui": "latest",
+    "buffer": "^6.0.3"
   }
 }

@@ -1,6 +1,6 @@
 {
   "name": "@grape/wallet-adapter",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Dedicated Solana wallet-adapter package for Grape Wallet.",
   "keywords": [
     "solana",
@@ -45,4 +45,3 @@
     "@solana/wallet-adapter-base": "^0.9.27"
   }
 }
-

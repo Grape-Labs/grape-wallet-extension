@@ -2,21 +2,20 @@ import { useEffect, useMemo, useState } from 'react';
 import { PublicKey } from '@solana/web3.js';
 
 import { Button, Card, Input, MnemonicGrid, PageShell, TextArea } from '@grape/ui';
+import { importEthereumPrivateKey, validateEthereumAddress, validateEthereumPrivateKey } from '@grape/ethereum';
+import { importMonadPrivateKey, validateMonadAddress, validateMonadPrivateKey } from '@grape/monad';
+import { importSuiPrivateKey, validateSuiAddress, validateSuiPrivateKey } from '@grape/sui';
 import {
   deriveSolanaAccount0,
   generateWalletMnemonic,
   importSolanaPrivateKey,
-  LEDGER_ACCOUNT_SCAN_BATCH_SIZE,
   normalizeMnemonic,
-  requestLedgerAccounts,
   validateSolanaPrivateKey,
   validateWalletMnemonic
 } from '@grape/solana';
-
-import type { WalletStateResponse } from '../../shared/models';
-
-import { sendRuntimeMessage } from '../../shared/chrome';
-import { getRpcEndpoint } from '../../shared/rpc';
+import { requestLedgerAccounts } from '../../../../../packages/solana/src/ledger';
+import { requestEthereumLedgerAccounts } from '../../../../../packages/ethereum/src/ledger';
+import { requestMonadLedgerAccounts } from '../../../../../packages/monad/src/ledger';
 
 type OnboardingViewProps = {
   compact?: boolean;
@@ -25,24 +24,21 @@ type OnboardingViewProps = {
 
 type SetupMode = 'create' | 'import';
 type ImportMethod = 'mnemonic' | 'private-key' | 'watch-only' | 'ledger';
+type ImportChain = 'solana' | 'sui' | 'monad' | 'ethereum';
+type LedgerImportChain = 'solana' | 'monad' | 'ethereum';
 type SetupStep = 1 | 2 | 3;
 type LedgerCandidate = {
   index: number;
   publicKey: string;
   derivationPath: string;
-  lamports: number;
+  balanceLabel: string;
   label?: string;
 };
 
+const LEDGER_ACCOUNT_SCAN_BATCH_SIZE = 16;
+
 function getLedgerCandidateKey(account: Pick<LedgerCandidate, 'publicKey' | 'derivationPath'>) {
   return `${account.publicKey}:${account.derivationPath}`;
-}
-
-function formatLamports(lamports: number) {
-  return `${(lamports / 1_000_000_000).toLocaleString(undefined, {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 4
-  })} SOL`;
 }
 
 function formatAddress(address: string) {
@@ -55,6 +51,58 @@ function validatePublicKey(value: string) {
     return true;
   } catch {
     return false;
+  }
+}
+
+function validateImportedPrivateKey(chain: ImportChain, value: string) {
+  switch (chain) {
+    case 'solana':
+      return validateSolanaPrivateKey(value);
+    case 'sui':
+      return validateSuiPrivateKey(value);
+    case 'monad':
+      return validateMonadPrivateKey(value);
+    case 'ethereum':
+      return validateEthereumPrivateKey(value);
+  }
+}
+
+function importPrivateKeyForChain(chain: ImportChain, value: string) {
+  switch (chain) {
+    case 'solana':
+      return importSolanaPrivateKey(value).publicKey;
+    case 'sui':
+      return importSuiPrivateKey(value).address;
+    case 'monad':
+      return importMonadPrivateKey(value).address;
+    case 'ethereum':
+      return importEthereumPrivateKey(value).address;
+  }
+}
+
+function validateWatchOnlyAddress(chain: ImportChain, value: string) {
+  switch (chain) {
+    case 'solana':
+      return validatePublicKey(value);
+    case 'sui':
+      return validateSuiAddress(value.trim());
+    case 'monad':
+      return validateMonadAddress(value.trim());
+    case 'ethereum':
+      return validateEthereumAddress(value.trim());
+  }
+}
+
+function getChainLabel(chain: ImportChain) {
+  switch (chain) {
+    case 'solana':
+      return 'Solana';
+    case 'sui':
+      return 'Sui';
+    case 'monad':
+      return 'Monad';
+    case 'ethereum':
+      return 'Ethereum';
   }
 }
 
@@ -74,6 +122,9 @@ export function OnboardingView(props: OnboardingViewProps) {
   const [network, setNetwork] = useState<'mainnet-beta' | 'devnet'>('devnet');
   const [scanningLedger, setScanningLedger] = useState(false);
   const [importMethod, setImportMethod] = useState<ImportMethod>('mnemonic');
+  const [ledgerChain, setLedgerChain] = useState<LedgerImportChain>('solana');
+  const [privateKeyChain, setPrivateKeyChain] = useState<ImportChain>('solana');
+  const [watchOnlyChain, setWatchOnlyChain] = useState<ImportChain>('solana');
   const [confirmBackup, setConfirmBackup] = useState(false);
   const [password, setPassword] = useState('');
   const [passwordConfirm, setPasswordConfirm] = useState('');
@@ -112,21 +163,21 @@ export function OnboardingView(props: OnboardingViewProps) {
       : importMethod === 'mnemonic'
         ? validateWalletMnemonic(mnemonic)
         : importMethod === 'private-key'
-          ? validateSolanaPrivateKey(importPrivateKey)
+          ? validateImportedPrivateKey(privateKeyChain, importPrivateKey)
           : importMethod === 'watch-only'
-            ? validatePublicKey(watchOnlyPublicKey)
-          : ledgerSelectedAccounts.length > 0;
+            ? validateWatchOnlyAddress(watchOnlyChain, watchOnlyPublicKey)
+            : ledgerSelectedAccounts.length > 0;
 
   const requiresPassword = mode === 'create' || importMethod === 'mnemonic' || importMethod === 'private-key' || importMethod === 'ledger';
   const isPasswordStepValid = !requiresPassword || (!submitting && password.length >= 8 && password === passwordConfirm);
 
-  async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
+async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
     try {
       setScanningLedger(true);
       setError(null);
-      const accounts = await requestLedgerAccounts({
-        rpcEndpoint: getRpcEndpoint(network),
-        startIndex: 0,
+      const accounts = await requestLedgerCandidates({
+        chain: ledgerChain,
+        network,
         count: nextScanCount
       });
       setLedgerScanCount(nextScanCount);
@@ -190,22 +241,24 @@ export function OnboardingView(props: OnboardingViewProps) {
         });
       } else {
         if (importMethod === 'private-key') {
-          if (!validateSolanaPrivateKey(importPrivateKey)) {
-            throw new Error('Enter a valid Solana private key.');
+          if (!validateImportedPrivateKey(privateKeyChain, importPrivateKey)) {
+            throw new Error(`Enter a valid ${getChainLabel(privateKeyChain)} private key.`);
           }
-          const account = importSolanaPrivateKey(importPrivateKey);
+          const importedPublicKey = importPrivateKeyForChain(privateKeyChain, importPrivateKey);
           await sendRuntimeMessage<WalletStateResponse>({
             type: 'wallet_import_private_key',
+            chain: privateKeyChain,
             privateKey: importPrivateKey.trim(),
             password,
-            publicKey: account.publicKey
+            publicKey: importedPublicKey
           });
         } else if (importMethod === 'watch-only') {
-          if (!validatePublicKey(watchOnlyPublicKey)) {
-            throw new Error('Enter a valid Solana wallet address.');
+          if (!validateWatchOnlyAddress(watchOnlyChain, watchOnlyPublicKey)) {
+            throw new Error(`Enter a valid ${getChainLabel(watchOnlyChain)} wallet address.`);
           }
           await sendRuntimeMessage<WalletStateResponse>({
             type: 'wallet_import_watch_only',
+            chain: watchOnlyChain,
             publicKey: watchOnlyPublicKey.trim()
           });
         } else {
@@ -215,6 +268,7 @@ export function OnboardingView(props: OnboardingViewProps) {
           if (ledgerSelectedAccounts.length === 1) {
             await sendRuntimeMessage<WalletStateResponse>({
               type: 'wallet_import_ledger',
+              chain: ledgerChain,
               derivationPath: ledgerSelectedAccounts[0].derivationPath,
               password,
               publicKey: ledgerSelectedAccounts[0].publicKey
@@ -222,6 +276,7 @@ export function OnboardingView(props: OnboardingViewProps) {
           } else {
             await sendRuntimeMessage<WalletStateResponse>({
               type: 'wallet_import_ledger_batch',
+              chain: ledgerChain,
               password,
               accounts: ledgerSelectedAccounts
             });
@@ -257,7 +312,7 @@ export function OnboardingView(props: OnboardingViewProps) {
                 }}
               >
                 <strong>Create new wallet</strong>
-                <span className="muted">Generate a fresh 12-word recovery phrase.</span>
+                <span className="muted">Generate a fresh 12-word recovery phrase for supported chains.</span>
               </button>
               <button
                 type="button"
@@ -269,7 +324,7 @@ export function OnboardingView(props: OnboardingViewProps) {
                 }}
               >
                 <strong>Import existing wallet</strong>
-                <span className="muted">Restore from a recovery phrase or a private key.</span>
+                <span className="muted">Restore from a recovery phrase, private key, watch-only address, or Ledger.</span>
               </button>
             </div>
           </div>
@@ -318,11 +373,12 @@ export function OnboardingView(props: OnboardingViewProps) {
                   onClick={() => {
                     setImportMethod('private-key');
                     setLedgerSelectedAccounts([]);
+                    setPrivateKeyChain('solana');
                     setError(null);
                   }}
                 >
                   <strong>Private key</strong>
-                  <span className="muted">Import from a Solana private key in base58, base64, or JSON array format.</span>
+                  <span className="muted">Import from a Solana, Sui, Monad, or Ethereum private key.</span>
                 </button>
                 <button
                   type="button"
@@ -330,6 +386,7 @@ export function OnboardingView(props: OnboardingViewProps) {
                   onClick={() => {
                     setImportMethod('watch-only');
                     setLedgerSelectedAccounts([]);
+                    setWatchOnlyChain('solana');
                     setError(null);
                   }}
                 >
@@ -341,11 +398,14 @@ export function OnboardingView(props: OnboardingViewProps) {
                   className={`choice-card ${importMethod === 'ledger' ? 'active' : ''}`.trim()}
                   onClick={() => {
                     setImportMethod('ledger');
+                    setLedgerChain('solana');
+                    setLedgerAccounts([]);
+                    setLedgerSelectedAccounts([]);
                     setError(null);
                   }}
                 >
                   <strong>Ledger</strong>
-                  <span className="muted">Connect a Ledger over WebHID and use it as a hardware signer.</span>
+                  <span className="muted">Connect a Ledger over WebHID and import supported hardware accounts.</span>
                 </button>
               </div>
 
@@ -362,33 +422,129 @@ export function OnboardingView(props: OnboardingViewProps) {
                   ) : null}
                 </label>
               ) : importMethod === 'private-key' ? (
-                <label className="stack">
-                  <span className="muted">Private key</span>
-                  <TextArea
-                    placeholder="Paste a base58 string, base64 string, or JSON byte array"
-                    value={importPrivateKey}
-                    onChange={(event) => setImportPrivateKey(event.target.value)}
-                  />
-                  {importPrivateKey.trim().length > 0 && !validateSolanaPrivateKey(importPrivateKey) ? (
-                    <p className="danger-box">That private key is not valid.</p>
-                  ) : null}
-                </label>
+                <div className="stack">
+                  <label className="stack">
+                    <span className="muted">Chain</span>
+                    <div className="inline wrap-actions">
+                      <Button tone={privateKeyChain === 'solana' ? 'primary' : 'secondary'} onClick={() => setPrivateKeyChain('solana')}>
+                        Solana
+                      </Button>
+                      <Button tone={privateKeyChain === 'sui' ? 'primary' : 'secondary'} onClick={() => setPrivateKeyChain('sui')}>
+                        Sui
+                      </Button>
+                      <Button tone={privateKeyChain === 'monad' ? 'primary' : 'secondary'} onClick={() => setPrivateKeyChain('monad')}>
+                        Monad
+                      </Button>
+                      <Button tone={privateKeyChain === 'ethereum' ? 'primary' : 'secondary'} onClick={() => setPrivateKeyChain('ethereum')}>
+                        Ethereum
+                      </Button>
+                    </div>
+                  </label>
+                  <label className="stack">
+                    <span className="muted">Private key</span>
+                    <TextArea
+                      placeholder={
+                        privateKeyChain === 'solana'
+                          ? 'Paste a base58 string, base64 string, or JSON byte array'
+                          : privateKeyChain === 'sui'
+                            ? 'Paste a suiprivkey string, base64 string, hex string, or JSON byte array'
+                            : privateKeyChain === 'monad'
+                              ? 'Paste a 32-byte hex private key'
+                              : 'Paste a 32-byte hex private key'
+                      }
+                      value={importPrivateKey}
+                      onChange={(event) => setImportPrivateKey(event.target.value)}
+                    />
+                    {importPrivateKey.trim().length > 0 && !validateImportedPrivateKey(privateKeyChain, importPrivateKey) ? (
+                      <p className="danger-box">That {getChainLabel(privateKeyChain)} private key is not valid.</p>
+                    ) : null}
+                  </label>
+                </div>
               ) : importMethod === 'watch-only' ? (
-                <label className="stack">
-                  <span className="muted">Public wallet address</span>
-                  <TextArea
-                    placeholder="Paste a Solana public key"
-                    value={watchOnlyPublicKey}
-                    onChange={(event) => setWatchOnlyPublicKey(event.target.value)}
-                  />
-                  <p className="warning-box">Watch-only wallets can view balances and connect to dApps, but they cannot sign messages or transactions.</p>
-                  {watchOnlyPublicKey.trim().length > 0 && !validatePublicKey(watchOnlyPublicKey) ? (
-                    <p className="danger-box">That wallet address is not valid.</p>
-                  ) : null}
-                </label>
+                <div className="stack">
+                  <label className="stack">
+                    <span className="muted">Chain</span>
+                    <div className="inline wrap-actions">
+                      <Button tone={watchOnlyChain === 'solana' ? 'primary' : 'secondary'} onClick={() => setWatchOnlyChain('solana')}>
+                        Solana
+                      </Button>
+                      <Button tone={watchOnlyChain === 'sui' ? 'primary' : 'secondary'} onClick={() => setWatchOnlyChain('sui')}>
+                        Sui
+                      </Button>
+                      <Button tone={watchOnlyChain === 'monad' ? 'primary' : 'secondary'} onClick={() => setWatchOnlyChain('monad')}>
+                        Monad
+                      </Button>
+                      <Button tone={watchOnlyChain === 'ethereum' ? 'primary' : 'secondary'} onClick={() => setWatchOnlyChain('ethereum')}>
+                        Ethereum
+                      </Button>
+                    </div>
+                  </label>
+                  <label className="stack">
+                    <span className="muted">Public wallet address</span>
+                    <TextArea
+                      placeholder={
+                        watchOnlyChain === 'solana'
+                          ? 'Paste a Solana public key'
+                          : watchOnlyChain === 'sui'
+                            ? 'Paste a Sui wallet address'
+                            : watchOnlyChain === 'monad'
+                              ? 'Paste a Monad wallet address'
+                              : 'Paste an Ethereum wallet address'
+                      }
+                      value={watchOnlyPublicKey}
+                      onChange={(event) => setWatchOnlyPublicKey(event.target.value)}
+                    />
+                    <p className="warning-box">Watch-only wallets can view balances and connect to dApps, but they cannot sign messages or transactions.</p>
+                    {watchOnlyPublicKey.trim().length > 0 && !validateWatchOnlyAddress(watchOnlyChain, watchOnlyPublicKey) ? (
+                      <p className="danger-box">That {getChainLabel(watchOnlyChain)} wallet address is not valid.</p>
+                    ) : null}
+                  </label>
+                </div>
               ) : (
                 <div className="stack">
-                  <p className="muted">Connect your Ledger, unlock it, open the Solana app, then scan derived accounts on {network}. Grape checks both current and legacy Solana Ledger derivation paths.</p>
+                  <label className="stack">
+                    <span className="muted">Chain</span>
+                    <div className="inline wrap-actions">
+                      <Button
+                        tone={ledgerChain === 'solana' ? 'primary' : 'secondary'}
+                        onClick={() => {
+                          setLedgerChain('solana');
+                          setLedgerAccounts([]);
+                          setLedgerSelectedAccounts([]);
+                          setLedgerScanCount(LEDGER_ACCOUNT_SCAN_BATCH_SIZE);
+                        }}
+                      >
+                        Solana
+                      </Button>
+                      <Button
+                        tone={ledgerChain === 'monad' ? 'primary' : 'secondary'}
+                        onClick={() => {
+                          setLedgerChain('monad');
+                          setLedgerAccounts([]);
+                          setLedgerSelectedAccounts([]);
+                          setLedgerScanCount(LEDGER_ACCOUNT_SCAN_BATCH_SIZE);
+                        }}
+                      >
+                        Monad
+                      </Button>
+                      <Button
+                        tone={ledgerChain === 'ethereum' ? 'primary' : 'secondary'}
+                        onClick={() => {
+                          setLedgerChain('ethereum');
+                          setLedgerAccounts([]);
+                          setLedgerSelectedAccounts([]);
+                          setLedgerScanCount(LEDGER_ACCOUNT_SCAN_BATCH_SIZE);
+                        }}
+                      >
+                        Ethereum
+                      </Button>
+                    </div>
+                  </label>
+                  <p className="muted">
+                    Connect your Ledger, unlock it, open the {getChainLabel(ledgerChain)} app, then scan derived accounts on{' '}
+                    {ledgerChain === 'solana' ? network : network === 'devnet' ? 'testnet' : 'mainnet'}. Sui Ledger support is
+                    coming separately.
+                  </p>
                   <div className="inline wrap-actions">
                     <Button tone="secondary" onClick={() => void scanLedgerAccounts()} disabled={scanningLedger}>
                       {scanningLedger ? 'Scanning...' : ledgerAccounts.length > 0 ? 'Rescan Ledger' : 'Scan Ledger accounts'}
@@ -407,7 +563,7 @@ export function OnboardingView(props: OnboardingViewProps) {
                     <div className="stack">
                       <div className="space-between">
                         <span className="muted">Detected accounts</span>
-                        <span className="muted">Select one or more, sorted by SOL balance</span>
+                        <span className="muted">Select one or more, sorted by balance</span>
                       </div>
                       <div className="stack">
                         {ledgerAccounts.map((account) => {
@@ -431,7 +587,7 @@ export function OnboardingView(props: OnboardingViewProps) {
                                 <strong>{account.label ?? `Ledger account ${account.index}`}</strong>
                                 <div className="inline" style={{ gap: '8px', alignItems: 'center' }}>
                                   {isActive ? <span className="section-label">Selected</span> : null}
-                                  <span>{formatLamports(account.lamports)}</span>
+                                  <span>{account.balanceLabel}</span>
                                 </div>
                               </div>
                               <span className="muted mono">{formatAddress(account.publicKey)}</span>
@@ -504,10 +660,10 @@ export function OnboardingView(props: OnboardingViewProps) {
                     : importMethod === 'mnemonic'
                       ? 'Enter a valid mnemonic.'
                       : importMethod === 'private-key'
-                        ? 'Enter a valid Solana private key.'
+                        ? `Enter a valid ${getChainLabel(privateKeyChain)} private key.`
                         : importMethod === 'watch-only'
-                          ? 'Enter a valid Solana wallet address.'
-                        : 'Connect your Ledger and choose at least one account.'
+                          ? `Enter a valid ${getChainLabel(watchOnlyChain)} wallet address.`
+                          : 'Connect your Ledger and choose at least one account.'
                 );
                 return;
               }
@@ -556,9 +712,9 @@ export function OnboardingView(props: OnboardingViewProps) {
                   : importMethod === 'mnemonic'
                     ? 'Enter your recovery phrase'
                     : importMethod === 'private-key'
-                      ? 'Enter your private key'
+                      ? `Enter your ${getChainLabel(privateKeyChain)} private key`
                       : importMethod === 'watch-only'
-                        ? 'Add a public wallet'
+                        ? `Add a ${getChainLabel(watchOnlyChain)} wallet`
                         : 'Connect your Ledger'
                 : requiresPassword
                   ? 'Set your password'
@@ -585,14 +741,96 @@ export function OnboardingView(props: OnboardingViewProps) {
       subtitle={
         isAppendFlow
           ? mode === 'create'
-            ? 'Create another wallet and add it to Grape.'
+            ? 'Create another wallet set and add it to Grape.'
             : 'Import another wallet into Grape.'
           : mode === 'create'
-            ? 'Create a new wallet in a few clear steps.'
-            : 'Import your wallet with a recovery phrase or private key.'
+            ? 'Create a new wallet for Grape-supported chains in a few clear steps.'
+            : 'Import your wallet with a recovery phrase, private key, watch-only address, or Ledger.'
       }
     >
       {content}
     </PageShell>
   );
+}
+
+async function requestLedgerCandidates(input: {
+  chain: LedgerImportChain;
+  network: 'mainnet-beta' | 'devnet';
+  count: number;
+}): Promise<LedgerCandidate[]> {
+  switch (input.chain) {
+    case 'solana': {
+      const candidateRpcEndpoints =
+        input.network === 'devnet'
+          ? ['https://api.devnet.solana.com']
+          : ['https://api.mainnet-beta.solana.com', 'https://rpc.shyft.to?api_key=cb-RCXQBMM7kY7K6'];
+
+      let accounts;
+      let lastError: unknown = null;
+      for (const rpcEndpoint of candidateRpcEndpoints) {
+        try {
+          accounts = await requestLedgerAccounts({
+            rpcEndpoint,
+            count: input.count
+          });
+          break;
+        } catch (error) {
+          lastError = error;
+          if (!isForbiddenRpcError(error) || rpcEndpoint === candidateRpcEndpoints[candidateRpcEndpoints.length - 1]) {
+            continue;
+          }
+        }
+      }
+
+      if (!accounts) {
+        throw lastError ?? new Error('Ledger scan failed.');
+      }
+
+      return accounts.map((account: { index: number; publicKey: string; derivationPath: string; lamports: number; label?: string }) => ({
+        index: account.index,
+        publicKey: account.publicKey,
+        derivationPath: account.derivationPath,
+        balanceLabel: `${(account.lamports / 1_000_000_000).toLocaleString(undefined, {
+          maximumFractionDigits: 6
+        })} SOL`,
+        label: account.label
+      }));
+    }
+    case 'ethereum': {
+      const network = input.network === 'devnet' ? 'sepolia' : 'mainnet';
+      const accounts = await requestEthereumLedgerAccounts({
+        network,
+        count: input.count
+      });
+
+      return accounts.map((account: { index: number; publicKey: string; derivationPath: string; balanceLabel: string; label: string }) => ({
+        index: account.index,
+        publicKey: account.publicKey,
+        derivationPath: account.derivationPath,
+        balanceLabel: account.balanceLabel,
+        label: account.label
+      }));
+    }
+    case 'monad': {
+      const network = input.network === 'devnet' ? 'testnet' : 'mainnet';
+      const accounts = await requestMonadLedgerAccounts({
+        network,
+        count: input.count
+      });
+
+      return accounts.map((account: { index: number; publicKey: string; derivationPath: string; balanceLabel: string; label: string }) => ({
+        index: account.index,
+        publicKey: account.publicKey,
+        derivationPath: account.derivationPath,
+        balanceLabel: account.balanceLabel,
+        label: account.label
+      }));
+    }
+  }
+}
+
+function isForbiddenRpcError(error: unknown) {
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  const normalized = message.toLowerCase();
+  return normalized.includes('403') || normalized.includes('forbidden') || normalized.includes('access forbidden');
 }

@@ -40,7 +40,10 @@ function buildCreationOptions(walletId: string) {
       name: `grape-${walletId}`,
       displayName: 'Grape unlock'
     },
-    pubKeyCredParams: [{ type: 'public-key' as const, alg: -7 }],
+    pubKeyCredParams: [
+      { type: 'public-key' as const, alg: -7 },
+      { type: 'public-key' as const, alg: -257 }
+    ],
     timeout: 60_000,
     authenticatorSelection: {
       authenticatorAttachment: 'platform' as const,

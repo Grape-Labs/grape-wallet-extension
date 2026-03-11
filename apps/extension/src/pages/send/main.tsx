@@ -8,7 +8,10 @@ import { sendRuntimeMessage } from '../../shared/chrome';
 import { mountPage } from '../lib';
 
 type AssetOption =
-  | { id: 'sol'; label: 'SOL'; balance: string; asset: { kind: 'sol' } }
+  | { id: string; label: string; balance: string; asset: { kind: 'sol' } }
+  | { id: string; label: string; balance: string; asset: { kind: 'sui' } }
+  | { id: string; label: string; balance: string; asset: { kind: 'mon' } }
+  | { id: string; label: string; balance: string; asset: { kind: 'eth' } }
   | {
       id: string;
       label: string;
@@ -16,14 +19,14 @@ type AssetOption =
       asset: { kind: 'spl-token'; mint: string; decimals: number; programId: string };
     };
 
-function formatLamports(lamports: number | null): string {
-  if (lamports === null) {
+function formatNativeBalance(amount: number | null, decimals: number, symbol: string): string {
+  if (amount === null) {
     return 'Unavailable';
   }
-  return `${(lamports / 1_000_000_000).toLocaleString(undefined, {
+  return `${(amount / 10 ** decimals).toLocaleString(undefined, {
     minimumFractionDigits: 0,
     maximumFractionDigits: 6
-  })} SOL`;
+  })} ${symbol}`;
 }
 
 function formatTokenAmount(token: TokenHolding): string {
@@ -71,6 +74,38 @@ function SendPage() {
   }, []);
 
   const assetOptions = useMemo<AssetOption[]>(() => {
+    const selectedChain = state?.wallet.selectedChain ?? 'solana';
+    const nativeSymbol =
+      assets.nativeSymbol ?? (selectedChain === 'sui' ? 'SUI' : selectedChain === 'monad' ? 'MON' : selectedChain === 'ethereum' ? 'ETH' : 'SOL');
+    const nativeDecimals = assets.nativeDecimals ?? (selectedChain === 'monad' || selectedChain === 'ethereum' ? 18 : 9);
+    const nativeOption: AssetOption =
+      selectedChain === 'sui'
+        ? {
+            id: 'sui',
+            label: nativeSymbol,
+            balance: formatNativeBalance(assets.lamports, nativeDecimals, nativeSymbol),
+            asset: { kind: 'sui' }
+          }
+        : selectedChain === 'monad'
+          ? {
+              id: 'mon',
+              label: nativeSymbol,
+              balance: formatNativeBalance(assets.lamports, nativeDecimals, nativeSymbol),
+              asset: { kind: 'mon' }
+            }
+          : selectedChain === 'ethereum'
+            ? {
+                id: 'eth',
+                label: nativeSymbol,
+                balance: formatNativeBalance(assets.lamports, nativeDecimals, nativeSymbol),
+                asset: { kind: 'eth' }
+              }
+          : {
+              id: 'sol',
+              label: nativeSymbol,
+              balance: formatNativeBalance(assets.lamports, nativeDecimals, nativeSymbol),
+              asset: { kind: 'sol' }
+            };
     const tokenOptions = assets.tokens.map((token) => ({
       id: `${token.mint}:${token.programId}`,
       label: token.symbol ? `${token.symbol} token` : `${formatAddress(token.mint)} token`,
@@ -84,15 +119,10 @@ function SendPage() {
     }));
 
     return [
-      {
-        id: 'sol',
-        label: 'SOL',
-        balance: formatLamports(assets.lamports),
-        asset: { kind: 'sol' as const }
-      },
+      nativeOption,
       ...tokenOptions
     ];
-  }, [assets]);
+  }, [assets, state?.wallet.selectedChain]);
 
   const selectedAsset = assetOptions.find((option) => option.id === assetId) ?? assetOptions[0];
 
@@ -101,8 +131,8 @@ function SendPage() {
     const requestedMint = searchParams.get('mint');
     const requestedProgramId = searchParams.get('programId');
 
-    if (requestedAsset === 'sol') {
-      setAssetId('sol');
+    if (requestedAsset === 'sol' || requestedAsset === 'sui' || requestedAsset === 'mon' || requestedAsset === 'eth') {
+      setAssetId(requestedAsset);
       return;
     }
 
@@ -188,7 +218,21 @@ function SendPage() {
           <KeyValueRow label="Recipient" value={<span className="mono">{formatAddress(result.recipient)}</span>} />
           <KeyValueRow
             label="Amount"
-            value={`${result.amount} ${result.asset.kind === 'sol' ? 'SOL' : formatAddress(result.asset.mint)}`}
+            value={`${result.amount} ${
+              result.asset.kind === 'sol'
+                ? 'SOL'
+                : result.asset.kind === 'sui'
+                  ? 'SUI'
+                  : result.asset.kind === 'mon'
+                    ? 'MON'
+                    : result.asset.kind === 'eth'
+                      ? 'ETH'
+                      : result.asset.kind === 'sui-coin'
+                        ? 'SUI TOKEN'
+                        : result.asset.kind === 'evm-token'
+                          ? result.asset.symbol ?? 'TOKEN'
+                          : formatAddress(result.asset.mint)
+            }`}
           />
         </Card>
       ) : null}

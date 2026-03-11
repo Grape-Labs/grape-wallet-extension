@@ -1,6 +1,6 @@
 {
   "name": "@grape/ui",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
@@ -19,4 +19,3 @@
     "react": "^19.0.0"
   }
 }
-

@@ -1,3 +1,5 @@
+import './runtime-polyfills';
+
 import { base64ToBytes, bytesToBase64, type PageOrigin, type ProviderRequest } from '@grape/core';
 import { PublicKey, Transaction, VersionedTransaction } from '@solana/web3.js';
 

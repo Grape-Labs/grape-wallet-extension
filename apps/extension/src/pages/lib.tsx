@@ -1,3 +1,4 @@
+import '../shared/page-polyfills';
 import { createRoot } from 'react-dom/client';
 
 import '../shared/style.css';

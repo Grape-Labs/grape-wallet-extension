@@ -33,8 +33,8 @@ function createManifestPlugin(mainnetRpcUrl: string): Plugin {
       const manifest = {
         manifest_version: 3,
         name: 'Grape',
-        version: '0.1.1',
-        description: 'Modern Solana wallet for tokens, collectibles, swaps, and secure dApp connections.',
+        version: '0.2.0',
+        description: 'Modern multi-chain wallet for assets, collectibles, swaps, and secure dApp connections.',
         icons: {
           '16': 'icons/grape_logo_white-16.png',
           '32': 'icons/grape_logo_white-32.png',
@@ -60,7 +60,12 @@ function createManifestPlugin(mainnetRpcUrl: string): Plugin {
         permissions: ['storage', 'sidePanel'],
         host_permissions: [
           toHostPermission(mainnetRpcUrl),
+          'https://api.mainnet-beta.solana.com/*',
           'https://api.devnet.solana.com/*',
+          'https://ethereum-rpc.publicnode.com/*',
+          'https://ethereum-sepolia-rpc.publicnode.com/*',
+          'https://rpc.monad.xyz/*',
+          'https://testnet-rpc.monad.xyz/*',
           'https://lite-api.jup.ag/*',
           'https://api.jup.ag/*',
           'https://api.shyft.to/*'
@@ -104,7 +109,15 @@ export default defineConfig(({ mode }) => {
     resolve: {
       alias: {
         '@grape/core': resolve(extensionRoot, '../../packages/core/src/index.ts'),
+        '@grape/core/': `${resolve(extensionRoot, '../../packages/core/src')}/`,
+        '@grape/ethereum': resolve(extensionRoot, '../../packages/ethereum/src/index.ts'),
+        '@grape/ethereum/': `${resolve(extensionRoot, '../../packages/ethereum/src')}/`,
+        '@grape/monad': resolve(extensionRoot, '../../packages/monad/src/index.ts'),
+        '@grape/monad/': `${resolve(extensionRoot, '../../packages/monad/src')}/`,
         '@grape/solana': resolve(extensionRoot, '../../packages/solana/src/index.ts'),
+        '@grape/solana/': `${resolve(extensionRoot, '../../packages/solana/src')}/`,
+        '@grape/sui': resolve(extensionRoot, '../../packages/sui/src/index.ts'),
+        '@grape/sui/': `${resolve(extensionRoot, '../../packages/sui/src')}/`,
         '@grape/ui': resolve(extensionRoot, '../../packages/ui/src/index.ts')
       }
     },
@@ -123,7 +136,7 @@ export default defineConfig(({ mode }) => {
           approval: resolve(extensionRoot, 'approval.html'),
           options: resolve(extensionRoot, 'options.html'),
           send: resolve(extensionRoot, 'send.html'),
-          background: resolve(extensionRoot, 'src/background/index.ts'),
+          background: resolve(extensionRoot, 'src/background/bootstrap.ts'),
           'content-script': resolve(extensionRoot, 'src/content-script/index.ts'),
           inpage: resolve(extensionRoot, 'src/inpage/index.ts')
         },

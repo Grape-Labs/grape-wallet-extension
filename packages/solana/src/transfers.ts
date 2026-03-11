@@ -1,3 +1,5 @@
+import './runtime-polyfills';
+
 import { Buffer } from 'buffer';
 
 import { RpcError } from '@grape/core';

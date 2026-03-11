@@ -39,6 +39,7 @@ import { STORAGE_KEYS } from '@grape/core';
 
 import type {
   ApprovalRecord,
+  ChainTokenPreviewResponse,
   WalletActivityItem,
   WalletActivityResponse,
   CollectibleItem,
@@ -71,13 +72,19 @@ type PopupView = 'home' | 'send' | 'receive' | 'swap' | 'settings' | 'asset' | '
 type HomeTab = 'tokens' | 'collectibles' | 'activity' | 'staking';
 type AssetOption =
   | {
-      id: 'sol';
-      label: 'SOL';
-      name: 'Solana';
-      symbol: 'SOL';
+      id: string;
+      label: string;
+      name: string;
+      symbol: string;
       balance: string;
       logoUri?: string;
-      asset: { kind: 'sol' };
+      asset:
+        | { kind: 'sol' }
+        | { kind: 'sui' }
+        | { kind: 'mon' }
+        | { kind: 'eth' }
+        | { kind: 'sui-coin'; coinType: string; decimals: number }
+        | { kind: 'evm-token'; tokenAddress: string; decimals: number; symbol?: string };
     }
   | {
       id: string;
@@ -115,9 +122,12 @@ const SOLANA_LOGO_URL =
 const GRAPE_LOGO_URL = chrome.runtime.getURL('icons/grape_logo_white.png');
 const ASSET_CACHE_STORAGE_KEY = 'grape:asset-cache';
 const CHAIN_OPTIONS = [
-  { id: 'solana', label: 'Solana', enabled: true },
-  { id: 'sui', label: 'Sui', enabled: false }
+  { id: 'solana', label: 'Solana', shortLabel: 'SOL', glyph: 'S', enabled: true },
+  { id: 'sui', label: 'Sui', shortLabel: 'SUI', glyph: 'S', enabled: true },
+  { id: 'monad', label: 'Monad', shortLabel: 'MON', glyph: 'M', enabled: true },
+  { id: 'ethereum', label: 'Ethereum', shortLabel: 'ETH', glyph: 'E', enabled: true }
 ] as const;
+const VISIBLE_CHAIN_OPTIONS = CHAIN_OPTIONS.filter((chain) => chain.enabled);
 
 function parseInitialView(): PopupView {
   const nextView = new URLSearchParams(window.location.search).get('view');
@@ -263,6 +273,25 @@ function getWalletSourceBadge(
   };
 }
 
+function getWalletGroupKey(
+  source: WalletStateResponse['activeWallet'] extends { source?: infer T } ? T : string,
+  signerKind?: 'software' | 'watch-only' | 'ledger'
+): 'hardware' | 'imported' | 'created' | 'watch' {
+  if (signerKind === 'ledger' || source === 'ledger') {
+    return 'hardware';
+  }
+
+  if (signerKind === 'watch-only' || source === 'watch-only') {
+    return 'watch';
+  }
+
+  if (source === 'imported-mnemonic' || source === 'imported-private-key') {
+    return 'imported';
+  }
+
+  return 'created';
+}
+
 function buildExplorerUrl(address: string, network: 'mainnet-beta' | 'devnet'): string {
   const cluster = network === 'devnet' ? '?cluster=devnet' : '';
   return `https://explorer.solana.com/address/${address}${cluster}`;
@@ -317,6 +346,34 @@ function formatSolAmountFromLamports(lamports: number): string {
     minimumFractionDigits: 0,
     maximumFractionDigits: 6
   });
+}
+
+function formatBaseUnitAmount(amount: number | null, decimals = 9, symbol?: string): string {
+  if (amount === null || !Number.isFinite(amount)) {
+    return 'Unavailable';
+  }
+
+  const divisor = 10 ** decimals;
+  const normalized = amount / divisor;
+  const formatted = normalized.toLocaleString(undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 4
+  });
+  return symbol ? `${formatted} ${symbol}` : formatted;
+}
+
+function formatNetworkLabel(chain: 'solana' | 'sui' | 'monad' | 'ethereum', network: 'mainnet-beta' | 'devnet'): string {
+  if (chain === 'sui') {
+    return network === 'devnet' ? 'devnet' : 'mainnet';
+  }
+  if (chain === 'monad') {
+    return network === 'devnet' ? 'testnet' : 'mainnet';
+  }
+  if (chain === 'ethereum') {
+    return network === 'devnet' ? 'sepolia' : 'mainnet';
+  }
+
+  return network;
 }
 
 function formatActivityType(value: string): string {
@@ -464,7 +521,7 @@ function TokenAvatar(props: { token: Pick<TokenHolding, 'symbol' | 'logoUri'>; f
   return <div className="token-avatar">{props.fallbackLabel ?? props.token.symbol?.slice(0, 1) ?? 'T'}</div>;
 }
 
-function TokenRow(props: { token: TokenHolding; onSelect: () => void; privacyMode?: boolean }) {
+function TokenRow(props: { token: TokenHolding; onSelect?: () => void; privacyMode?: boolean }) {
   const changeLabel = formatPercent(props.token.priceChange24h);
   const valueLabel = formatUsd(props.token.valueUsd);
   const quantityLabel = `${formatTokenAmount(props.token)}${props.token.symbol ? ` ${props.token.symbol}` : ''}`;
@@ -474,30 +531,38 @@ function TokenRow(props: { token: TokenHolding; onSelect: () => void; privacyMod
   const addressLabel = formatAddress(props.token.mint);
   const shouldShowAddressFallback = !changeLabel && !unitPriceLabel && secondaryLabel !== addressLabel;
 
-  return (
-    <button type="button" className="token-row-button" onClick={props.onSelect}>
-      <div className="token-item token-item-interactive">
-        <div className="token-leading">
-          <TokenAvatar token={props.token} fallbackLabel={props.token.symbol?.slice(0, 1) ?? 'T'} />
-          <div className="token-copy">
-            <strong className="token-name" title={props.token.name ?? props.token.symbol ?? props.token.mint}>
-              {primaryLabel}
-            </strong>
-            <div className="token-subline">
-              <span className={`token-subtitle ${unitPriceLabel ? '' : 'mono'}`.trim()}>{secondaryLabel}</span>
-              {changeLabel ? (
-                <span className={`token-change ${props.token.priceChange24h && props.token.priceChange24h < 0 ? 'negative' : 'positive'}`.trim()}>
-                  {changeLabel}
-                </span>
-              ) : shouldShowAddressFallback ? <span className="token-subtitle mono">{addressLabel}</span> : null}
-            </div>
+  const content = (
+    <div className="token-item token-item-interactive">
+      <div className="token-leading">
+        <TokenAvatar token={props.token} fallbackLabel={props.token.symbol?.slice(0, 1) ?? 'T'} />
+        <div className="token-copy">
+          <strong className="token-name" title={props.token.name ?? props.token.symbol ?? props.token.mint}>
+            {primaryLabel}
+          </strong>
+          <div className="token-subline">
+            <span className={`token-subtitle ${unitPriceLabel ? '' : 'mono'}`.trim()}>{secondaryLabel}</span>
+            {changeLabel ? (
+              <span className={`token-change ${props.token.priceChange24h && props.token.priceChange24h < 0 ? 'negative' : 'positive'}`.trim()}>
+                {changeLabel}
+              </span>
+            ) : shouldShowAddressFallback ? <span className="token-subtitle mono">{addressLabel}</span> : null}
           </div>
         </div>
-          <div className="token-amount-group">
-          <div className="token-amount">{maskSensitiveValue(valueLabel ?? quantityLabel, !!props.privacyMode)}</div>
-          {valueLabel ? <div className="token-subtitle token-amount-subtitle">{maskSensitiveValue(quantityLabel, !!props.privacyMode)}</div> : null}
-        </div>
       </div>
+      <div className="token-amount-group">
+        <div className="token-amount">{maskSensitiveValue(valueLabel ?? quantityLabel, !!props.privacyMode)}</div>
+        {valueLabel ? <div className="token-subtitle token-amount-subtitle">{maskSensitiveValue(quantityLabel, !!props.privacyMode)}</div> : null}
+      </div>
+    </div>
+  );
+
+  if (!props.onSelect) {
+    return <div className="token-row-static">{content}</div>;
+  }
+
+  return (
+    <button type="button" className="token-row-button" onClick={props.onSelect}>
+      {content}
     </button>
   );
 }
@@ -746,6 +811,10 @@ function PopupPage() {
   const [receiveQr, setReceiveQr] = useState('');
   const [assetId, setAssetId] = useState(() => parseInitialAssetId());
   const [sendAssetPickerOpen, setSendAssetPickerOpen] = useState(false);
+  const [customEvmTokenAddress, setCustomEvmTokenAddress] = useState('');
+  const [customEvmTokenPreview, setCustomEvmTokenPreview] = useState<ChainTokenPreviewResponse | null>(null);
+  const [customEvmTokenLoading, setCustomEvmTokenLoading] = useState(false);
+  const [customEvmTokenError, setCustomEvmTokenError] = useState<string | null>(null);
   const [recipient, setRecipient] = useState('');
   const [amount, setAmount] = useState('');
   const [password, setPassword] = useState('');
@@ -826,6 +895,7 @@ function PopupPage() {
   const [incidentResult, setIncidentResult] = useState<IncidentResponseResponse | null>(null);
   const [incidentError, setIncidentError] = useState<string | null>(null);
   const [unlockWelcomeMenuOpen, setUnlockWelcomeMenuOpen] = useState(false);
+  const [walletSwitcherOpen, setWalletSwitcherOpen] = useState(false);
   const [walletMenuOpen, setWalletMenuOpen] = useState(false);
   const [copiedWalletId, setCopiedWalletId] = useState<string | null>(null);
   const [incidentOptions, setIncidentOptions] = useState({
@@ -841,6 +911,7 @@ function PopupPage() {
   const surface = document.body.dataset.surface ?? 'page';
   const surfaceId = document.body.dataset.surfaceId ?? '';
   const isPopupSurface = surface === 'popup';
+  const selectedChainValue = state?.wallet.selectedChain ?? 'solana';
 
   const refresh = async () => {
     const nextState = await sendRuntimeMessage<WalletStateResponse>({ type: 'wallet_get_state' });
@@ -960,11 +1031,82 @@ function PopupPage() {
       return;
     }
 
-    const nextCustomRpc = state.wallet.customRpcUrls[state.wallet.selectedNetwork] ?? '';
+    const nextCustomRpc =
+      state.wallet.selectedChain === 'sui'
+        ? state.wallet.chainState.sui.customRpcUrl ?? ''
+        : state.wallet.selectedChain === 'monad'
+          ? state.wallet.chainState.monad.customRpcUrl ?? ''
+        : state.wallet.selectedChain === 'ethereum'
+          ? state.wallet.chainState.ethereum.customRpcUrl ?? ''
+        : state.wallet.customRpcUrls[state.wallet.selectedNetwork] ?? '';
     setCustomRpcEnabled(!!nextCustomRpc);
     setCustomRpcInput(nextCustomRpc);
     setCustomRpcError(null);
-  }, [state?.wallet.customRpcUrls, state?.wallet.selectedNetwork]);
+  }, [state?.wallet.chainState.ethereum.customRpcUrl, state?.wallet.chainState.monad.customRpcUrl, state?.wallet.chainState.sui.customRpcUrl, state?.wallet.customRpcUrls, state?.wallet.selectedChain, state?.wallet.selectedNetwork]);
+
+  useEffect(() => {
+    if ((selectedChainValue === 'sui' || selectedChainValue === 'monad' || selectedChainValue === 'ethereum') && (homeTab === 'collectibles' || homeTab === 'staking')) {
+      setHomeTab('tokens');
+    }
+  }, [homeTab, selectedChainValue]);
+
+  useEffect(() => {
+    if ((selectedChainValue === 'sui' || selectedChainValue === 'monad' || selectedChainValue === 'ethereum') && (view === 'swap' || view === 'security' || view === 'asset')) {
+      setView('home');
+    }
+  }, [selectedChainValue, view]);
+
+  useEffect(() => {
+    if (selectedChainValue !== 'ethereum' && selectedChainValue !== 'monad') {
+      setCustomEvmTokenAddress('');
+      setCustomEvmTokenPreview(null);
+      setCustomEvmTokenLoading(false);
+      setCustomEvmTokenError(null);
+      return;
+    }
+
+    if (assetId !== 'custom-evm-token') {
+      setCustomEvmTokenPreview(null);
+      setCustomEvmTokenLoading(false);
+      setCustomEvmTokenError(null);
+    }
+  }, [assetId, selectedChainValue]);
+
+  useEffect(() => {
+    if ((selectedChainValue !== 'ethereum' && selectedChainValue !== 'monad') || assetId !== 'custom-evm-token') {
+      return;
+    }
+
+    const trimmedAddress = customEvmTokenAddress.trim();
+    if (!trimmedAddress) {
+      setCustomEvmTokenPreview(null);
+      setCustomEvmTokenLoading(false);
+      setCustomEvmTokenError(null);
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setCustomEvmTokenLoading(true);
+      setCustomEvmTokenError(null);
+      void sendRuntimeMessage<ChainTokenPreviewResponse>({
+        type: 'wallet_preview_chain_token',
+        tokenAddress: trimmedAddress
+      })
+        .then((preview) => {
+          setCustomEvmTokenPreview(preview);
+          setCustomEvmTokenError(null);
+        })
+        .catch((error) => {
+          setCustomEvmTokenPreview(null);
+          setCustomEvmTokenError(error instanceof Error ? error.message : 'Unable to load token contract.');
+        })
+        .finally(() => {
+          setCustomEvmTokenLoading(false);
+        });
+    }, 350);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [assetId, customEvmTokenAddress, selectedChainValue]);
 
   useEffect(() => {
     if (homeTab !== 'staking' || state?.wallet.setup !== 'ready' || view !== 'home') {
@@ -1128,11 +1270,14 @@ function PopupPage() {
     }).then(setReceiveQr);
   }, [activePublicKey]);
 
-  const homeBalance = useMemo(() => formatLamports(assets.lamports), [assets.lamports]);
+  const homeBalance = useMemo(
+    () => formatBaseUnitAmount(assets.lamports, assets.nativeDecimals ?? 9, assets.nativeSymbol),
+    [assets.lamports, assets.nativeDecimals, assets.nativeSymbol]
+  );
   const portfolioValue = useMemo(() => formatUsd(assets.totalUsdValue) ?? homeBalance, [assets.totalUsdValue, homeBalance]);
-  const solValue = useMemo(() => formatUsd(assets.nativeValueUsd), [assets.nativeValueUsd]);
-  const solChange = useMemo(() => formatPercent(assets.nativePriceChange24h), [assets.nativePriceChange24h]);
-  const solUnitPrice = useMemo(() => formatUnitPrice(assets.nativePriceUsd), [assets.nativePriceUsd]);
+  const nativeAssetValue = useMemo(() => formatUsd(assets.nativeValueUsd), [assets.nativeValueUsd]);
+  const nativeAssetChange = useMemo(() => formatPercent(assets.nativePriceChange24h), [assets.nativePriceChange24h]);
+  const nativeAssetUnitPrice = useMemo(() => formatUnitPrice(assets.nativePriceUsd), [assets.nativePriceUsd]);
   const collectibleItems = useMemo(
     () =>
       (assets.collections ?? []).flatMap((collection) =>
@@ -1147,12 +1292,79 @@ function PopupPage() {
     [assets.collections]
   );
   const assetOptions = useMemo<AssetOption[]>(() => {
+    if (selectedChainValue === 'sui' || selectedChainValue === 'monad' || selectedChainValue === 'ethereum') {
+      const isMonad = selectedChainValue === 'monad';
+      const isEthereum = selectedChainValue === 'ethereum';
+      const nativeOption: AssetOption = {
+        id: selectedChainValue,
+        label: assets.nativeSymbol ?? (isEthereum ? 'ETH' : isMonad ? 'MON' : 'SUI'),
+        name: assets.nativeName ?? (isEthereum ? 'Ethereum' : isMonad ? 'Monad' : 'Sui'),
+        symbol: assets.nativeSymbol ?? (isEthereum ? 'ETH' : isMonad ? 'MON' : 'SUI'),
+        balance: privacyModeEnabled ? '***' : homeBalance,
+        logoUri: assets.nativeLogoUri,
+        asset: {
+          kind: isEthereum ? ('eth' as const) : isMonad ? ('mon' as const) : ('sui' as const)
+        }
+      };
+
+      const chainTokenOptions: AssetOption[] = assets.tokens.map((token) => ({
+        id: `${token.mint}:${token.programId}`,
+        label: token.symbol ? `${token.symbol} token` : `${formatAddress(token.mint)} token`,
+        name: token.name ?? token.symbol ?? formatAddress(token.mint),
+        symbol: token.symbol ?? formatAddress(token.mint),
+        balance: privacyModeEnabled ? '***' : formatTokenAmount(token),
+        logoUri: token.logoUri,
+        asset:
+          selectedChainValue === 'sui'
+            ? {
+                kind: 'sui-coin' as const,
+                coinType: token.mint,
+                decimals: token.decimals
+              }
+            : {
+                kind: 'evm-token' as const,
+                tokenAddress: token.mint,
+                decimals: token.decimals,
+                symbol: token.symbol ?? undefined
+              }
+      }));
+
+      const customTokenOption: AssetOption[] =
+        isEthereum || isMonad
+          ? [
+              {
+                id: 'custom-evm-token',
+                label: 'Custom token',
+                name: customEvmTokenPreview?.name ?? 'Custom token',
+                symbol: customEvmTokenPreview?.symbol ?? 'TOKEN',
+                balance: customEvmTokenPreview
+                  ? privacyModeEnabled
+                    ? '***'
+                    : customEvmTokenPreview.amount
+                  : customEvmTokenLoading
+                    ? 'Loading...'
+                    : customEvmTokenAddress.trim()
+                      ? 'Preview token'
+                      : 'Enter contract',
+                asset: {
+                  kind: 'evm-token',
+                  tokenAddress: customEvmTokenPreview?.tokenAddress ?? customEvmTokenAddress.trim(),
+                  decimals: customEvmTokenPreview?.decimals ?? 18,
+                  symbol: customEvmTokenPreview?.symbol
+                }
+              }
+            ]
+          : [];
+
+      return [nativeOption, ...chainTokenOptions, ...customTokenOption];
+    }
+
     const tokenOptions = assets.tokens.map((token) => ({
       id: `${token.mint}:${token.programId}`,
       label: token.symbol ? `${token.symbol} token` : `${formatAddress(token.mint)} token`,
       name: token.name ?? token.symbol ?? formatAddress(token.mint),
       symbol: token.symbol ?? formatAddress(token.mint),
-        balance: privacyModeEnabled ? '***' : formatTokenAmount(token),
+      balance: privacyModeEnabled ? '***' : formatTokenAmount(token),
       logoUri: token.logoUri,
       asset: {
         kind: 'spl-token' as const,
@@ -1171,13 +1383,24 @@ function PopupPage() {
         symbol: 'SOL',
         balance: privacyModeEnabled ? '***' : homeBalance,
         logoUri: SOLANA_LOGO_URL,
-        sol: true,
         asset: { kind: 'sol' as const }
       },
       ...tokenOptions
     ];
-  }, [assets, homeBalance, privacyModeEnabled]);
+  }, [
+    assets,
+    customEvmTokenAddress,
+    customEvmTokenLoading,
+    customEvmTokenPreview,
+    homeBalance,
+    privacyModeEnabled,
+    selectedChainValue
+  ]);
   const sendAssetOptions = useMemo<AssetOption[]>(() => {
+    if (selectedChainValue === 'sui' || selectedChainValue === 'monad' || selectedChainValue === 'ethereum') {
+      return assetOptions;
+    }
+
     const collectibleOptions = collectibleItems
       .filter((item) => item.accountAddress && item.programId)
       .map((item) => ({
@@ -1197,11 +1420,15 @@ function PopupPage() {
       }));
 
     return [...assetOptions, ...collectibleOptions];
-  }, [assetOptions, collectibleItems]);
+  }, [assetOptions, collectibleItems, selectedChainValue]);
 
   const selectedAsset = sendAssetOptions.find((option) => option.id === assetId) ?? sendAssetOptions[0];
   const selectedTokenHolding =
-    assetId === 'sol' ? null : assets.tokens.find((token) => `${token.mint}:${token.programId}` === assetId) ?? null;
+    selectedAsset?.asset.kind === 'spl-token' ||
+    selectedAsset?.asset.kind === 'sui-coin' ||
+    selectedAsset?.asset.kind === 'evm-token'
+      ? assets.tokens.find((token) => `${token.mint}:${token.programId}` === assetId) ?? null
+      : null;
   const selectedSendCollectible =
     assetId === 'sol'
       ? null
@@ -1214,6 +1441,10 @@ function PopupPage() {
       ? null
       : assets.tokens.find((token) => `${token.mint}:${token.programId}` === swapInputAssetId) ?? null;
   const swapOutputOptions = useMemo<SwapOutputOption[]>(() => {
+    if (selectedChainValue !== 'solana') {
+      return [];
+    }
+
     const ownedTokens: SwapOutputOption[] = assets.tokens.map((token) => ({
       mint: token.mint,
       symbol: token.symbol ?? formatAddress(token.mint)
@@ -1221,7 +1452,7 @@ function PopupPage() {
     return [...COMMON_SWAP_TOKENS, ...ownedTokens].filter(
       (token, index, allTokens) => allTokens.findIndex((candidate) => candidate.mint === token.mint) === index
     );
-  }, [assets.tokens]);
+  }, [assets.tokens, selectedChainValue]);
   const effectiveSwapOutputMint = swapUseCustomOutputMint ? swapCustomOutputMint.trim() : swapOutputMint;
   const selectedSwapOutputToken = assets.tokens.find((token) => token.mint === effectiveSwapOutputMint) ?? null;
   const selectedSwapOutputOption = swapOutputOptions.find((option) => option.mint === effectiveSwapOutputMint) ?? null;
@@ -1548,7 +1779,7 @@ function PopupPage() {
       return;
     }
 
-    const inputMint = nextAsset.asset.kind === 'sol' ? JUPITER_SOL_MINT : nextAsset.asset.mint;
+    const inputMint = nextAsset.asset.kind === 'spl-token' ? nextAsset.asset.mint : JUPITER_SOL_MINT;
     const defaultOutputMint =
       inputMint === COMMON_SWAP_TOKENS[1].mint
         ? JUPITER_SOL_MINT
@@ -1672,12 +1903,28 @@ function PopupPage() {
     try {
       setSubmitting(true);
       setSendError(null);
+      const sendAsset =
+        selectedAsset.asset.kind === 'evm-token' && assetId === 'custom-evm-token'
+          ? customEvmTokenPreview
+            ? {
+                kind: 'evm-token' as const,
+                tokenAddress: customEvmTokenPreview.tokenAddress,
+                decimals: customEvmTokenPreview.decimals,
+                symbol: customEvmTokenPreview.symbol
+              }
+            : null
+          : selectedAsset.asset;
+
+      if (!sendAsset) {
+        throw new Error('Enter a valid token contract before sending.');
+      }
+
       const nextResult = await sendRuntimeMessage<SendTransferResponse>({
         type: 'wallet_send_transfer',
         recipient,
         amount,
         password: canUseUnlockedSigner ? undefined : password || undefined,
-        asset: selectedAsset.asset
+        asset: sendAsset
       });
       setSendResult(nextResult);
       setSendError(null);
@@ -1701,7 +1948,7 @@ function PopupPage() {
 
   if (state.wallet.setup !== 'ready') {
     return (
-      <PageShell title="Set up wallet" subtitle="Create or import your Solana wallet directly in the popup.">
+      <PageShell title="Set up wallet" subtitle="Create or import your wallet for Grape-supported chains directly in the popup.">
         <Card title="First run">
           <p className="muted">The setup flow is available here. Open the full page only if you want more room.</p>
           <Button tone="secondary" className="button-block" onClick={() => openExtensionPage('onboarding.html')}>
@@ -1722,7 +1969,19 @@ function PopupPage() {
   const recentRecipients = state.recentRecipients;
   const privacyMode = wallet.privacyMode;
   const selectedChain = wallet.selectedChain;
-  const selectedNetworkCustomRpc = wallet.customRpcUrls[wallet.selectedNetwork] ?? '';
+  const isSolanaChain = selectedChain === 'solana';
+  const isSuiChain = selectedChain === 'sui';
+  const isMonadChain = selectedChain === 'monad';
+  const isEthereumChain = selectedChain === 'ethereum';
+  const selectedNetworkLabel = formatNetworkLabel(selectedChain, wallet.selectedNetwork);
+  const selectedNetworkCustomRpc =
+    selectedChain === 'sui'
+      ? wallet.chainState.sui.customRpcUrl ?? ''
+      : selectedChain === 'monad'
+        ? wallet.chainState.monad.customRpcUrl ?? ''
+      : selectedChain === 'ethereum'
+        ? wallet.chainState.ethereum.customRpcUrl ?? ''
+      : wallet.customRpcUrls[wallet.selectedNetwork] ?? '';
 
   if (session.locked && !isWatchOnlyWallet) {
     return (
@@ -1741,8 +2000,8 @@ function PopupPage() {
     await refresh();
   }
 
-  async function handleChainSelect(chain: 'solana' | 'sui') {
-    if (chain === selectedChain || chain !== 'solana') {
+  async function handleChainSelect(chain: 'solana' | 'sui' | 'monad' | 'ethereum') {
+    if (chain === selectedChain || !wallet.wallets.some((walletEntry) => walletEntry.chain === chain)) {
       return;
     }
     await sendRuntimeMessage<WalletStateResponse>({
@@ -1754,24 +2013,52 @@ function PopupPage() {
   }
 
   function renderChainSwitcher(compact = false) {
+    const availableChains = VISIBLE_CHAIN_OPTIONS.filter((chain) =>
+      wallet.wallets.some((walletEntry) => walletEntry.chain === chain.id)
+    );
+    const selectedChainOption = VISIBLE_CHAIN_OPTIONS.find((chain) => chain.id === selectedChain) ?? availableChains[0];
+
     return (
-      <div className={`chain-switcher ${compact ? 'compact' : ''}`.trim()} role="tablist" aria-label="Supported chains">
-        {CHAIN_OPTIONS.map((chain) => (
+      <DropdownMenu.Root>
+        <DropdownMenu.Trigger asChild>
           <button
-            key={chain.id}
             type="button"
-            role="tab"
-            className={`chain-switcher-item ${selectedChain === chain.id ? 'active' : ''}`.trim()}
-            aria-selected={selectedChain === chain.id}
-            onClick={() => void handleChainSelect(chain.id)}
-            disabled={!chain.enabled}
-            title={chain.enabled ? chain.label : `${chain.label} coming soon`}
+            className={`chain-selector-trigger ${compact ? 'compact' : ''}`.trim()}
+            aria-label="Switch chain"
+            title={selectedChainOption?.label ?? 'Switch chain'}
           >
-            <span>{chain.label}</span>
-            {!chain.enabled ? <small>Soon</small> : null}
+            <span className="chain-switcher-badge" aria-hidden="true">
+              {compact ? selectedChainOption?.glyph : selectedChainOption?.shortLabel}
+            </span>
+            <span className="chain-switcher-label">
+              {compact ? selectedChainOption?.shortLabel : selectedChainOption?.label}
+            </span>
+            <ChevronDown size={14} />
           </button>
-        ))}
-      </div>
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content sideOffset={8} align="start" className="popup-menu-content chain-selector-menu">
+            <div className="popup-menu-section">Chains</div>
+            {availableChains.map((chain) => (
+              <DropdownMenu.Item
+                key={chain.id}
+                className={`wallet-menu-action ${selectedChain === chain.id ? 'active' : ''}`.trim()}
+                onSelect={() => {
+                  void handleChainSelect(chain.id);
+                }}
+              >
+                <span className="wallet-menu-action-copy">
+                  <span className="chain-switcher-badge" aria-hidden="true">
+                    {chain.shortLabel}
+                  </span>
+                  <span>{chain.label}</span>
+                </span>
+                {selectedChain === chain.id ? <Check size={14} /> : null}
+              </DropdownMenu.Item>
+            ))}
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
     );
   }
 
@@ -1824,11 +2111,28 @@ function PopupPage() {
     try {
       setCustomRpcBusy(true);
       setCustomRpcError(null);
-      await sendRuntimeMessage<WalletStateResponse>({
-        type: 'wallet_set_custom_rpc',
-        network: wallet.selectedNetwork,
-        rpcUrl: customRpcEnabled ? customRpcInput.trim() || null : null
-      });
+      await sendRuntimeMessage<WalletStateResponse>(
+        selectedChain === 'sui'
+          ? {
+              type: 'wallet_set_sui_custom_rpc',
+              rpcUrl: customRpcEnabled ? customRpcInput.trim() || null : null
+            }
+          : selectedChain === 'monad'
+            ? {
+                type: 'wallet_set_monad_custom_rpc',
+                rpcUrl: customRpcEnabled ? customRpcInput.trim() || null : null
+              }
+            : selectedChain === 'ethereum'
+              ? {
+                  type: 'wallet_set_ethereum_custom_rpc',
+                  rpcUrl: customRpcEnabled ? customRpcInput.trim() || null : null
+                }
+          : {
+              type: 'wallet_set_custom_rpc',
+              network: wallet.selectedNetwork,
+              rpcUrl: customRpcEnabled ? customRpcInput.trim() || null : null
+            }
+      );
       await refresh();
     } catch (error) {
       setCustomRpcError(error instanceof Error ? error.message : 'Unable to update custom RPC.');
@@ -2049,82 +2353,6 @@ function PopupPage() {
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
           <DropdownMenu.Content sideOffset={8} align="end" className="popup-menu-content">
-            <div className="popup-menu-section">Wallets</div>
-            <div className="wallet-menu-list">
-              {wallet.wallets.map((walletEntry) => {
-                const walletPublicKey =
-                  walletEntry.accounts.find((account) => account.id === walletEntry.selectedAccountId)?.publicKey ??
-                  walletEntry.accounts[0]?.publicKey;
-                const isActiveWallet = wallet.selectedWalletId === walletEntry.id;
-                const sourceBadge = getWalletSourceBadge(walletEntry.source, walletEntry.signer.kind);
-
-                return (
-                  <div key={walletEntry.id} className="wallet-menu-row">
-                    <DropdownMenu.Item
-                      className={`wallet-menu-item ${isActiveWallet ? 'active' : ''}`.trim()}
-                      onSelect={() => {
-                        void handleWalletSelect(walletEntry.id);
-                      }}
-                    >
-                      <div>
-                        <div className="wallet-menu-heading">
-                          <strong>{walletEntry.name}</strong>
-                          <span
-                            className={`wallet-source-badge ${sourceBadge.tone}`.trim()}
-                            title={sourceBadge.label}
-                            aria-label={sourceBadge.label}
-                          >
-                            {sourceBadge.icon}
-                          </span>
-                          <button
-                            type="button"
-                            className="wallet-menu-copy-button"
-                            aria-label={`Copy address for ${walletEntry.name}`}
-                            title={`Copy ${formatAddress(walletPublicKey)}`}
-                            onClick={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              void handleCopyWalletAddress(walletEntry.id, walletPublicKey);
-                            }}
-                          >
-                            {copiedWalletId === walletEntry.id ? <Check size={12} /> : <Copy size={12} />}
-                          </button>
-                        </div>
-                        <div className="muted mono">{formatAddress(walletPublicKey)}</div>
-                      </div>
-                      {isActiveWallet ? <StatusPill tone="success">Active</StatusPill> : null}
-                    </DropdownMenu.Item>
-                    <button
-                      type="button"
-                      className="wallet-menu-edit-button"
-                      aria-label={`Rename ${walletEntry.name}`}
-                      title={`Rename ${walletEntry.name}`}
-                      onClick={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        void handleWalletRename(walletEntry.id, walletEntry.name);
-                      }}
-                    >
-                      <Pencil size={13} />
-                    </button>
-                    <button
-                      type="button"
-                      className="wallet-menu-remove-button"
-                      aria-label={`Remove ${walletEntry.name}`}
-                      title={`Remove ${walletEntry.name}`}
-                      onClick={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        void handleWalletRemove(walletEntry.id, walletEntry.name);
-                      }}
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-            <DropdownMenu.Separator className="menu-separator" />
             <DropdownMenu.Item
               className="wallet-menu-action"
               onSelect={() => {
@@ -2182,6 +2410,124 @@ function PopupPage() {
                 <span>Import wallet</span>
               </span>
             </DropdownMenu.Item>
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
+    );
+  }
+
+  function renderWalletSwitcher() {
+    const groupedWallets = [
+      { key: 'hardware', label: 'Hardware Wallets' },
+      { key: 'imported', label: 'Imported Wallets' },
+      { key: 'created', label: 'Created Wallets' },
+      { key: 'watch', label: 'Viewer Wallets' }
+    ]
+      .map((group) => ({
+        ...group,
+        wallets: wallet.wallets.filter(
+          (walletEntry) => getWalletGroupKey(walletEntry.source, walletEntry.signer.kind) === group.key
+        )
+      }))
+      .filter((group) => group.wallets.length > 0);
+
+    return (
+      <DropdownMenu.Root open={walletSwitcherOpen} onOpenChange={setWalletSwitcherOpen}>
+        <DropdownMenu.Trigger asChild>
+          <button
+            type="button"
+            className={`menu-button wallet-switcher-button ${walletSwitcherOpen ? 'open' : ''}`.trim()}
+            aria-label={walletSwitcherOpen ? 'Close wallet switcher' : 'Switch wallet'}
+            title="Switch wallet"
+          >
+            {walletSwitcherOpen ? <X size={18} /> : <Landmark size={16} />}
+          </button>
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content sideOffset={8} align="end" className="popup-menu-content">
+            <div className="popup-menu-section">Wallets</div>
+            {groupedWallets.map((group) => (
+              <div key={group.key} className="wallet-menu-group">
+                <div className="wallet-menu-group-label">{group.label}</div>
+                <div className="wallet-menu-list">
+                  {group.wallets.map((walletEntry) => {
+                    const walletPublicKey =
+                      walletEntry.accounts.find((account) => account.id === walletEntry.selectedAccountId)?.publicKey ??
+                      walletEntry.accounts[0]?.publicKey;
+                    const isActiveWallet = wallet.selectedWalletId === walletEntry.id;
+                    const sourceBadge = getWalletSourceBadge(walletEntry.source, walletEntry.signer.kind);
+
+                    return (
+                      <div key={walletEntry.id} className="wallet-menu-row">
+                        <DropdownMenu.Item
+                          className={`wallet-menu-item ${isActiveWallet ? 'active' : ''}`.trim()}
+                          onSelect={() => {
+                            void handleWalletSelect(walletEntry.id);
+                          }}
+                        >
+                          <div className="wallet-menu-copy">
+                            <div className="wallet-menu-heading">
+                              <strong>{walletEntry.name}</strong>
+                              <span className="wallet-chain-badge" title={`${walletEntry.chain} wallet`}>
+                                {walletEntry.chain === 'sui' ? 'SUI' : walletEntry.chain === 'monad' ? 'MON' : walletEntry.chain === 'ethereum' ? 'ETH' : 'SOL'}
+                              </span>
+                              <span
+                                className={`wallet-source-badge ${sourceBadge.tone}`.trim()}
+                                title={sourceBadge.label}
+                                aria-label={sourceBadge.label}
+                              >
+                                {sourceBadge.icon}
+                              </span>
+                              <button
+                                type="button"
+                                className="wallet-menu-copy-button"
+                                aria-label={`Copy address for ${walletEntry.name}`}
+                                title={`Copy ${formatAddress(walletPublicKey)}`}
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  void handleCopyWalletAddress(walletEntry.id, walletPublicKey);
+                                }}
+                              >
+                                {copiedWalletId === walletEntry.id ? <Check size={12} /> : <Copy size={12} />}
+                              </button>
+                              <button
+                                type="button"
+                                className="wallet-menu-edit-button"
+                                aria-label={`Rename ${walletEntry.name}`}
+                                title={`Rename ${walletEntry.name}`}
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  void handleWalletRename(walletEntry.id, walletEntry.name);
+                                }}
+                              >
+                                <Pencil size={12} />
+                              </button>
+                              <button
+                                type="button"
+                                className="wallet-menu-remove-button"
+                                aria-label={`Remove ${walletEntry.name}`}
+                                title={`Remove ${walletEntry.name}`}
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  void handleWalletRemove(walletEntry.id, walletEntry.name);
+                                }}
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            </div>
+                            <div className="muted mono">{formatAddress(walletPublicKey)}</div>
+                          </div>
+                          {isActiveWallet ? <StatusPill tone="success">Active</StatusPill> : null}
+                        </DropdownMenu.Item>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </DropdownMenu.Content>
         </DropdownMenu.Portal>
       </DropdownMenu.Root>
@@ -2249,15 +2595,21 @@ function PopupPage() {
   }
 
   function renderHome() {
+    const nativeAssetName = assets.nativeName ?? (isEthereumChain ? 'Ethereum' : isSuiChain ? 'Sui' : isMonadChain ? 'Monad' : 'Solana');
+    const nativeAssetSymbol = assets.nativeSymbol ?? (isEthereumChain ? 'ETH' : isSuiChain ? 'SUI' : isMonadChain ? 'MON' : 'SOL');
+    const activeHomeTab = (isSuiChain || isMonadChain || isEthereumChain) && (homeTab === 'collectibles' || homeTab === 'staking') ? 'tokens' : homeTab;
+    const nativeAssetId = isEthereumChain ? 'ethereum' : isMonadChain ? 'monad' : isSuiChain ? 'sui' : 'sol';
+
     return (
       <>
         <Card className="wallet-home-card">
           <div className="wallet-home-topbar">
             <div className="wallet-home-network stack-tight">
               {renderChainSwitcher(true)}
-              <StatusPill tone={wallet.selectedNetwork === 'devnet' ? 'warning' : 'success'}>{wallet.selectedNetwork}</StatusPill>
+              <StatusPill tone={wallet.selectedNetwork === 'devnet' ? 'warning' : 'success'}>{selectedNetworkLabel}</StatusPill>
             </div>
             <div className="wallet-home-controls">
+              {renderWalletSwitcher()}
               {renderWalletMenu()}
             </div>
           </div>
@@ -2297,21 +2649,24 @@ function PopupPage() {
           </div>
 
           <div className="quick-actions compact">
-            <button type="button" className="quick-action-card" onClick={() => openSend('sol')} aria-label="Send" title="Send" disabled={isWatchOnlyWallet}>
+            <button type="button" className="quick-action-card" onClick={() => openSend(nativeAssetId)} aria-label="Send" title="Send" disabled={isWatchOnlyWallet}>
               <span className="quick-action-icon"><SendHorizontal size={18} /></span>
             </button>
             <button
               type="button"
               className="quick-action-card"
               onClick={() => {
+                if (!isSolanaChain) {
+                  return;
+                }
                 setSwapQuote(null);
                 setSwapResult(null);
                 setSwapError(null);
                 setView('swap');
               }}
               aria-label="Swap"
-              title="Swap"
-              disabled={isWatchOnlyWallet}
+              title={isSolanaChain ? 'Swap' : `Swap coming soon on ${nativeAssetName}`}
+              disabled={isWatchOnlyWallet || !isSolanaChain}
             >
               <span className="quick-action-icon"><ArrowLeftRight size={18} /></span>
             </button>
@@ -2325,20 +2680,24 @@ function PopupPage() {
           <p className="warning-box">This is a watch-only wallet. You can view assets, receive funds, and connect to dApps, but signing is disabled.</p>
         ) : null}
 
-        <Tabs.Root value={homeTab} onValueChange={(value) => setHomeTab(value as HomeTab)}>
+        <Tabs.Root value={activeHomeTab} onValueChange={(value) => setHomeTab(value as HomeTab)}>
           <Tabs.List className="content-tabs" aria-label="Wallet content">
             <Tabs.Trigger className="content-tab" value="tokens">
               <span className="content-tab-copy">Tokens</span>
             </Tabs.Trigger>
-            <Tabs.Trigger className="content-tab" value="collectibles">
-              <span className="content-tab-copy">Collectibles</span>
-            </Tabs.Trigger>
             <Tabs.Trigger className="content-tab" value="activity">
               <span className="content-tab-copy">Activity</span>
             </Tabs.Trigger>
-            <Tabs.Trigger className="content-tab" value="staking">
-              <span className="content-tab-copy">Staking</span>
-            </Tabs.Trigger>
+            {isSolanaChain ? (
+              <>
+                <Tabs.Trigger className="content-tab" value="collectibles">
+                  <span className="content-tab-copy">Collectibles</span>
+                </Tabs.Trigger>
+                <Tabs.Trigger className="content-tab" value="staking">
+                  <span className="content-tab-copy">Staking</span>
+                </Tabs.Trigger>
+              </>
+            ) : null}
           </Tabs.List>
 
           <Tabs.Content value="tokens">
@@ -2351,31 +2710,43 @@ function PopupPage() {
                 </div>
               ) : (
                 <>
-                  <button type="button" className="token-row-button" onClick={() => openSend('sol')}>
+                  <button type="button" className="token-row-button" onClick={() => openSend(nativeAssetId)}>
                     <div className="token-item token-item-interactive">
                       <div className="token-leading">
-                        <TokenAvatar token={{ symbol: 'SOL' }} fallbackLabel="S" sol />
+                        <TokenAvatar
+                          token={{ symbol: nativeAssetSymbol, logoUri: assets.nativeLogoUri }}
+                          fallbackLabel={nativeAssetSymbol.slice(0, 1)}
+                          sol={isSolanaChain}
+                        />
                         <div className="token-copy">
-                          <strong className="token-name">Solana</strong>
+                          <strong className="token-name">{nativeAssetName}</strong>
                           <div className="token-subline">
-                            <span className="token-subtitle">{solUnitPrice ?? 'SOL'}</span>
-                            {solChange ? (
+                            <span className="token-subtitle">{nativeAssetUnitPrice ?? nativeAssetSymbol}</span>
+                            {nativeAssetChange ? (
                               <span className={`token-change ${assets.nativePriceChange24h && assets.nativePriceChange24h < 0 ? 'negative' : 'positive'}`.trim()}>
-                                {solChange}
+                                {nativeAssetChange}
                               </span>
                             ) : null}
                           </div>
                         </div>
                       </div>
                       <div className="token-amount-group">
-                        <div className="token-amount">{maskSensitiveValue(solValue ?? homeBalance, privacyMode)}</div>
-                        {solValue ? <div className="token-subtitle token-amount-subtitle">{maskSensitiveValue(homeBalance, privacyMode)}</div> : null}
+                        <div className="token-amount">{maskSensitiveValue(nativeAssetValue ?? homeBalance, privacyMode)}</div>
+                        {nativeAssetValue ? <div className="token-subtitle token-amount-subtitle">{maskSensitiveValue(homeBalance, privacyMode)}</div> : null}
                       </div>
                     </div>
                   </button>
 
                   {assets.tokens.length === 0 ? (
-                <p className="muted">No SPL token balances found yet.</p>
+                    <p className="muted">
+                      {isSolanaChain
+                        ? 'No SPL token balances found yet.'
+                        : isSuiChain
+                          ? 'No additional Sui coin balances found yet.'
+                          : isMonadChain
+                            ? 'No additional Monad token balances found yet.'
+                            : 'No additional Ethereum token balances found yet.'}
+                    </p>
               ) : (
                     <div className="token-list">
                       {assets.tokens.map((token) => (
@@ -2383,7 +2754,7 @@ function PopupPage() {
                           key={`${token.mint}:${token.programId}`}
                           token={token}
                           privacyMode={privacyMode}
-                          onSelect={() => openAssetDetails(token)}
+                          onSelect={isSolanaChain ? () => openAssetDetails(token) : undefined}
                         />
                       ))}
                     </div>
@@ -2393,6 +2764,7 @@ function PopupPage() {
             </Card>
           </Tabs.Content>
 
+          {isSolanaChain ? (
           <Tabs.Content value="collectibles">
             <Card className="asset-panel-card">
               {collectibleItems.length > 0 ? (
@@ -2410,12 +2782,22 @@ function PopupPage() {
               )}
             </Card>
           </Tabs.Content>
+          ) : null}
 
           <Tabs.Content value="activity">
             <Card className="asset-panel-card activity-panel-card">
+              {!isSolanaChain && !activityError && !activityLoading ? (
+                <p className="muted">
+                  {isSuiChain
+                    ? 'Sui activity is coming soon. For now, Grape supports holdings and native SUI send.'
+                    : isMonadChain
+                      ? 'Monad activity is coming soon. For now, Grape supports holdings and native MON send.'
+                      : 'Ethereum activity is coming soon. For now, Grape supports holdings and native ETH send.'}
+                </p>
+              ) : null}
               {activityError ? <p className="danger-box">{activityError}</p> : null}
               {!activityError && activityLoading ? <p className="muted">Loading recent activity...</p> : null}
-              {!activityError && !activityLoading && activity.length === 0 ? (
+              {isSolanaChain && !activityError && !activityLoading && activity.length === 0 ? (
                 <p className="muted">
                   {state?.wallet.setup === 'ready'
                     ? 'No recent activity found for the past few days.'
@@ -2449,6 +2831,7 @@ function PopupPage() {
             </Card>
           </Tabs.Content>
 
+          {isSolanaChain ? (
           <Tabs.Content value="staking">
             <Card className="asset-panel-card staking-panel-card">
               {isWatchOnlyWallet ? (
@@ -2587,6 +2970,7 @@ function PopupPage() {
               ) : null}
             </Card>
           </Tabs.Content>
+          ) : null}
         </Tabs.Root>
       </>
     );
@@ -2605,23 +2989,50 @@ function PopupPage() {
     }
 
     const isCollectibleSend = !!selectedSendCollectible;
+    const isNativeSend =
+      selectedAsset?.asset.kind === 'sol' ||
+      selectedAsset?.asset.kind === 'sui' ||
+      selectedAsset?.asset.kind === 'mon' ||
+      selectedAsset?.asset.kind === 'eth';
+    const isCustomEvmToken = selectedAsset?.asset.kind === 'evm-token' && assetId === 'custom-evm-token';
+    const nativeSendLabel = assets.nativeName ?? (isEthereumChain ? 'Ethereum' : isSuiChain ? 'Sui' : isMonadChain ? 'Monad' : 'Solana');
+    const nativeSendSymbol = assets.nativeSymbol ?? (isEthereumChain ? 'ETH' : isSuiChain ? 'SUI' : isMonadChain ? 'MON' : 'SOL');
     const selectedAssetName =
-      assetId === 'sol'
-        ? 'Solana'
-        : selectedSendCollectible?.name ?? selectedTokenHolding?.name ?? selectedTokenHolding?.symbol ?? selectedAsset?.label ?? 'Token';
+      isNativeSend
+        ? nativeSendLabel
+        : selectedSendCollectible?.name ??
+          selectedTokenHolding?.name ??
+          (isCustomEvmToken ? customEvmTokenPreview?.name : null) ??
+          selectedTokenHolding?.symbol ??
+          selectedAsset?.label ??
+          'Token';
     const selectedAssetSymbol =
-      assetId === 'sol'
-        ? 'SOL'
-        : selectedSendCollectible?.symbol ?? selectedTokenHolding?.symbol ?? selectedAsset?.label.replace(/ token$/i, '') ?? 'Token';
+      isNativeSend
+        ? nativeSendSymbol
+        : selectedSendCollectible?.symbol ??
+          selectedTokenHolding?.symbol ??
+          (isCustomEvmToken ? customEvmTokenPreview?.symbol : null) ??
+          selectedAsset?.label.replace(/ token$/i, '') ??
+          'Token';
     const selectedAmountNumber = Number(amount || '0');
-    const selectedUnitPrice = assetId === 'sol' ? assets.nativePriceUsd ?? null : selectedTokenHolding?.priceUsd ?? null;
+    const selectedUnitPrice = isNativeSend ? assets.nativePriceUsd ?? null : selectedTokenHolding?.priceUsd ?? null;
     const selectedFiatValue =
       isCollectibleSend
         ? null
         : Number.isFinite(selectedAmountNumber) && typeof selectedUnitPrice === 'number'
           ? formatUsd(selectedAmountNumber * selectedUnitPrice)
-          : '$0.00';
-    const availableBalanceLabel = isCollectibleSend ? '1 NFT available' : selectedAsset?.balance ?? 'Unavailable';
+          : null;
+    const availableBalanceLabel = isCollectibleSend
+      ? '1 NFT available'
+      : isCustomEvmToken
+        ? customEvmTokenPreview
+          ? privacyMode ? '***' : customEvmTokenPreview.amount
+          : customEvmTokenLoading
+            ? 'Loading token...'
+            : customEvmTokenError
+              ? 'Token unavailable'
+              : 'Enter contract'
+        : selectedAsset?.balance ?? 'Unavailable';
 
     function handleMaxAmount() {
       if (isCollectibleSend) {
@@ -2629,16 +3040,24 @@ function PopupPage() {
         return;
       }
 
-      if (assetId === 'sol') {
-        const lamports = typeof assets.lamports === 'number' ? assets.lamports : 0;
-        const reservedLamports = 10_000;
-        const sendableLamports = Math.max(lamports - reservedLamports, 0);
-        setAmount((sendableLamports / 1_000_000_000).toFixed(9).replace(/\.?0+$/, ''));
+      if (isNativeSend) {
+        const baseUnits = typeof assets.lamports === 'number' ? assets.lamports : 0;
+        const nativeDecimals = assets.nativeDecimals ?? 9;
+        const reservedBaseUnits = isEthereumChain ? 10_000_000_000_000n : isMonadChain ? 1_000_000_000_000_000 : isSuiChain ? 1_000_000 : 10_000;
+        const normalizedReservedBaseUnits =
+          typeof reservedBaseUnits === 'bigint' ? Number(reservedBaseUnits) : reservedBaseUnits;
+        const sendableBaseUnits = Math.max(baseUnits - normalizedReservedBaseUnits, 0);
+        setAmount((sendableBaseUnits / 10 ** nativeDecimals).toFixed(Math.min(nativeDecimals, 9)).replace(/\.?0+$/, ''));
         return;
       }
 
       if (selectedTokenHolding) {
         setAmount(selectedTokenHolding.amount);
+        return;
+      }
+
+      if (isCustomEvmToken && customEvmTokenPreview) {
+        setAmount(customEvmTokenPreview.amount);
       }
     }
 
@@ -2704,7 +3123,7 @@ function PopupPage() {
               </button>
             </div>
             <div className="send-flow-amount-meta">
-              <span>{selectedFiatValue ?? 'Collectible transfer'}</span>
+              <span>{selectedFiatValue ?? (isCollectibleSend ? 'Collectible transfer' : `Send ${selectedAssetSymbol}`)}</span>
               <span>{availableBalanceLabel}</span>
             </div>
           </div>
@@ -2718,12 +3137,13 @@ function PopupPage() {
                   className={`send-select-shell send-select-button ${sendAssetPickerOpen ? 'open' : ''}`.trim()}
                   aria-label="Select token"
                   aria-expanded={sendAssetPickerOpen}
+                  disabled={sendAssetOptions.length <= 1}
                   onClick={() => setSendAssetPickerOpen((value) => !value)}
                 >
                   <AssetPickerOptionRow option={selectedAsset} privacyMode={privacyMode} />
                   <ChevronDown className="send-select-chevron" size={18} />
                 </button>
-                {sendAssetPickerOpen ? (
+                {sendAssetPickerOpen && sendAssetOptions.length > 1 ? (
                   <div className="send-asset-menu">
                     <div className="popup-menu-section">Assets</div>
                     <div className="send-asset-menu-list">
@@ -2747,6 +3167,21 @@ function PopupPage() {
                 ) : null}
               </div>
             </div>
+
+            {isCustomEvmToken ? (
+              <div className="send-field-group">
+                <label className="send-field-label">Token contract</label>
+                <div className="send-input-shell">
+                  <Input
+                    value={customEvmTokenAddress}
+                    onChange={(event) => setCustomEvmTokenAddress(event.target.value)}
+                    placeholder="Paste ERC-20 / Monad token contract"
+                    className="send-recipient-input"
+                  />
+                </div>
+                {customEvmTokenError ? <p className="danger-box">{customEvmTokenError}</p> : null}
+              </div>
+            ) : null}
 
             <div className="send-field-group">
               <label className="send-field-label">Recipient</label>
@@ -2814,7 +3249,16 @@ function PopupPage() {
         {surfaceError ? <p className="danger-box">{surfaceError}</p> : null}
 
         <div className="inline wrap-actions send-flow-actions">
-          <Button className="button-block" disabled={!selectedAsset || !recipient.trim() || !amount.trim()} onClick={handleSend}>
+          <Button
+            className="button-block"
+            disabled={
+              !selectedAsset ||
+              !recipient.trim() ||
+              !amount.trim() ||
+              (isCustomEvmToken && (customEvmTokenLoading || !customEvmTokenPreview))
+            }
+            onClick={handleSend}
+          >
             Send now
           </Button>
         </div>
@@ -3139,7 +3583,6 @@ function PopupPage() {
             <label className="stack">
               <span className="muted">Chain</span>
               {renderChainSwitcher()}
-              <small className="muted">Solana is available now. Sui is reserved in the shell for a later chain integration.</small>
             </label>
             <label className="stack">
               <span className="muted">Network</span>
@@ -3153,8 +3596,17 @@ function PopupPage() {
                   await refresh();
                 }}
               >
-                <option value="devnet">Devnet</option>
-                <option value="mainnet-beta">Mainnet Beta</option>
+                {isMonadChain || isEthereumChain ? (
+                  <>
+                    <option value="mainnet-beta">Mainnet</option>
+                    <option value="devnet">{isEthereumChain ? 'Sepolia' : 'Testnet'}</option>
+                  </>
+                ) : (
+                  <>
+                    <option value="devnet">Devnet</option>
+                    <option value="mainnet-beta">{isSuiChain ? 'Mainnet' : 'Mainnet Beta'}</option>
+                  </>
+                )}
               </select>
             </label>
             <div className="stack">
@@ -3171,7 +3623,9 @@ function PopupPage() {
                 />
                 <span>
                   <strong>Custom RPC</strong>
-                  <small className="muted">Use a custom endpoint for {wallet.selectedNetwork}.</small>
+                  <small className="muted">
+                    Use a custom endpoint for {isSuiChain || isMonadChain || isEthereumChain ? selectedNetworkLabel : wallet.selectedNetwork}.
+                  </small>
                 </span>
               </label>
               {customRpcEnabled ? (
@@ -3180,7 +3634,15 @@ function PopupPage() {
                     type="url"
                     value={customRpcInput}
                     onChange={(event) => setCustomRpcInput(event.target.value)}
-                    placeholder={`Custom ${wallet.selectedNetwork} RPC URL`}
+                    placeholder={
+                      isSuiChain
+                        ? 'Custom Sui RPC URL'
+                        : isMonadChain
+                          ? 'Custom Monad RPC URL'
+                          : isEthereumChain
+                            ? 'Custom Ethereum RPC URL'
+                            : `Custom ${wallet.selectedNetwork} RPC URL`
+                    }
                   />
                   <div className="inline wrap-actions">
                     <Button onClick={() => void handleSaveCustomRpc()} disabled={customRpcBusy || !customRpcInput.trim()}>
@@ -3193,11 +3655,28 @@ function PopupPage() {
                           setCustomRpcBusy(true);
                           setCustomRpcError(null);
                           try {
-                            await sendRuntimeMessage({
-                              type: 'wallet_set_custom_rpc',
-                              network: wallet.selectedNetwork,
-                              rpcUrl: null
-                            });
+                            await sendRuntimeMessage(
+                              isSuiChain
+                                ? {
+                                    type: 'wallet_set_sui_custom_rpc',
+                                    rpcUrl: null
+                                  }
+                                : isMonadChain
+                                  ? {
+                                      type: 'wallet_set_monad_custom_rpc',
+                                      rpcUrl: null
+                                    }
+                                  : isEthereumChain
+                                    ? {
+                                        type: 'wallet_set_ethereum_custom_rpc',
+                                        rpcUrl: null
+                                      }
+                                : {
+                                    type: 'wallet_set_custom_rpc',
+                                    network: wallet.selectedNetwork,
+                                    rpcUrl: null
+                                  }
+                            );
                             await refresh();
                           } catch (error) {
                             setCustomRpcError(error instanceof Error ? error.message : 'Unable to update custom RPC.');
@@ -3219,11 +3698,28 @@ function PopupPage() {
                   <Button
                     tone="secondary"
                     onClick={async () => {
-                      await sendRuntimeMessage({
-                        type: 'wallet_set_custom_rpc',
-                        network: wallet.selectedNetwork,
-                        rpcUrl: null
-                      });
+                      await sendRuntimeMessage(
+                        isSuiChain
+                          ? {
+                              type: 'wallet_set_sui_custom_rpc',
+                              rpcUrl: null
+                            }
+                          : isMonadChain
+                            ? {
+                                type: 'wallet_set_monad_custom_rpc',
+                                rpcUrl: null
+                              }
+                            : isEthereumChain
+                              ? {
+                                  type: 'wallet_set_ethereum_custom_rpc',
+                                  rpcUrl: null
+                                }
+                          : {
+                              type: 'wallet_set_custom_rpc',
+                              network: wallet.selectedNetwork,
+                              rpcUrl: null
+                            }
+                      );
                       await refresh();
                     }}
                     disabled={customRpcBusy}
@@ -3358,6 +3854,14 @@ function PopupPage() {
   }
 
   function renderSecurity() {
+    if (!isSolanaChain) {
+      return (
+        <Card title="Security">
+          <p className="muted">Security scans and incident response are currently available for Solana wallets only.</p>
+        </Card>
+      );
+    }
+
     return (
       <>
         <Card title="Delegation & authority scan">
@@ -3558,6 +4062,23 @@ function PopupPage() {
   }
 
   function renderSwap() {
+    if (!isSolanaChain) {
+      return (
+        <Card title="Swap">
+          <p className="muted">
+            {isSuiChain
+              ? 'Swaps are coming soon for Sui wallets. Grape currently supports native SUI send and holdings only.'
+              : isMonadChain
+                ? 'Swaps are coming soon for Monad wallets. Grape currently supports native MON send and holdings only.'
+                : 'Swaps are coming soon for Ethereum wallets. Grape currently supports native ETH send and holdings only.'}
+          </p>
+          <Button tone="secondary" onClick={() => setView('home')}>
+            Back to wallet
+          </Button>
+        </Card>
+      );
+    }
+
     if (isWatchOnlyWallet) {
       return (
         <Card title="Watch-only wallet">

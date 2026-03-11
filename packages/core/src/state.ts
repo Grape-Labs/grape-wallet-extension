@@ -8,7 +8,7 @@ export const STORAGE_KEYS = {
 } as const;
 
 export type WalletSetupState = 'empty' | 'ready';
-export type GrapeChain = 'solana' | 'sui';
+export type GrapeChain = 'solana' | 'sui' | 'monad' | 'ethereum';
 export type GrapeNetwork = 'mainnet-beta' | 'devnet';
 export type GrapeTheme =
   | 'grape'
@@ -35,7 +35,7 @@ export const SUPPORTED_THEMES = [
   'obsidian'
 ] as const satisfies readonly GrapeTheme[];
 
-export const SUPPORTED_CHAINS = ['solana', 'sui'] as const satisfies readonly GrapeChain[];
+export const SUPPORTED_CHAINS = ['solana', 'sui', 'monad', 'ethereum'] as const satisfies readonly GrapeChain[];
 
 export type VaultRecord = {
   version: 1;
@@ -96,6 +96,12 @@ export type SolanaChainState = {
 };
 
 export type SuiChainState = {
+  selectedNetwork: GrapeNetwork;
+  customRpcUrl?: string;
+};
+
+export type MonadChainState = {
+  selectedNetwork: GrapeNetwork;
   customRpcUrl?: string;
 };
 
@@ -107,6 +113,8 @@ export type WalletState = {
   chainState: {
     solana: SolanaChainState;
     sui: SuiChainState;
+    monad: MonadChainState;
+    ethereum: MonadChainState;
   };
   selectedWalletId?: string;
   selectedNetwork: GrapeNetwork;
@@ -178,7 +186,15 @@ export function createEmptyWalletState(): WalletState {
         selectedNetwork: 'devnet',
         customRpcUrls: {}
       },
-      sui: {}
+      sui: {
+        selectedNetwork: 'mainnet-beta'
+      },
+      monad: {
+        selectedNetwork: 'mainnet-beta'
+      },
+      ethereum: {
+        selectedNetwork: 'mainnet-beta'
+      }
     },
     selectedNetwork: 'devnet',
     selectedTheme: DEFAULT_THEME,
@@ -334,7 +350,15 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
           selectedNetwork: input.selectedNetwork ?? 'devnet',
           customRpcUrls: normalizeCustomRpcUrls(input.customRpcUrls)
         },
-        sui: {}
+        sui: {
+          selectedNetwork: 'mainnet-beta'
+        },
+      monad: {
+        selectedNetwork: 'mainnet-beta'
+      },
+      ethereum: {
+        selectedNetwork: 'mainnet-beta'
+      }
       },
       selectedWalletId: 'wallet-1',
       selectedNetwork: input.selectedNetwork ?? 'devnet',
@@ -415,7 +439,16 @@ function normalizeChainState(
       customRpcUrls: normalizedSolanaCustomRpc
     },
     sui: {
+      selectedNetwork: chainState?.sui?.selectedNetwork ?? 'mainnet-beta',
       customRpcUrl: chainState?.sui?.customRpcUrl?.trim() || undefined
+    },
+    monad: {
+      selectedNetwork: chainState?.monad?.selectedNetwork ?? 'mainnet-beta',
+      customRpcUrl: chainState?.monad?.customRpcUrl?.trim() || undefined
+    },
+    ethereum: {
+      selectedNetwork: chainState?.ethereum?.selectedNetwork ?? 'mainnet-beta',
+      customRpcUrl: chainState?.ethereum?.customRpcUrl?.trim() || undefined
     }
   };
 }
@@ -438,6 +471,14 @@ function normalizeSelectedWalletIds(
 
   if (!next.sui) {
     next.sui = wallets.find((wallet) => wallet.chain === 'sui')?.id;
+  }
+
+  if (!next.monad) {
+    next.monad = wallets.find((wallet) => wallet.chain === 'monad')?.id;
+  }
+
+  if (!next.ethereum) {
+    next.ethereum = wallets.find((wallet) => wallet.chain === 'ethereum')?.id;
   }
 
   return next;

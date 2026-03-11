@@ -1,6 +1,6 @@
 {
   "name": "@grape/extension",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,7 +10,10 @@
   },
   "dependencies": {
     "@grape/core": "workspace:*",
+    "@grape/ethereum": "workspace:*",
+    "@grape/monad": "workspace:*",
     "@grape/solana": "workspace:*",
+    "@grape/sui": "workspace:*",
     "@grape/ui": "workspace:*",
     "@radix-ui/react-dropdown-menu": "^2.1.16",
     "@radix-ui/react-tabs": "^1.1.13",

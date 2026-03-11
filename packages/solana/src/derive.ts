@@ -1,3 +1,5 @@
+import './runtime-polyfills';
+
 import { base64ToBytes, type VaultSecret } from '@grape/core';
 import { Keypair } from '@solana/web3.js';
 import bs58 from 'bs58';

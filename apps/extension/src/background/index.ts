@@ -35,14 +35,11 @@ import {
   estimateLegacyTransactionFee,
   exportSolanaSoftwareWalletSecret,
   getAssociatedTokenAddress,
+  deriveSolanaAccount0,
   resolveSolanaVaultSecret,
   parseDecimalAmount,
   TOKEN_AUTHORITY_TYPES,
-  signAndSendLedgerTransaction,
-  signAndSendLedgerSerializedTransaction,
   signAndSendSerializedTransaction,
-  signLedgerSerializedTransaction,
-  signLedgerSerializedTransactions,
   signAndSendTransaction,
   signMessageBytes,
   inspectTransaction,
@@ -64,6 +61,7 @@ import {
 
 import type {
   ApprovalRecord,
+  ChainTokenPreviewResponse,
   WalletActivityResponse,
   CollectionHolding,
   CollectibleItem,
@@ -89,6 +87,29 @@ import {
   fetchShyftWalletTokens,
   hasShyftApiKey
 } from '../shared/shyft';
+
+import type { SuiNetwork } from '@grape/sui';
+import type { MonadNetwork } from '@grape/monad';
+import type { EthereumNetwork } from '@grape/ethereum';
+
+let suiModulePromise: Promise<typeof import('@grape/sui')> | null = null;
+let monadModulePromise: Promise<typeof import('@grape/monad')> | null = null;
+let ethereumModulePromise: Promise<typeof import('@grape/ethereum')> | null = null;
+
+function getSuiModule() {
+  suiModulePromise ??= import('@grape/sui');
+  return suiModulePromise;
+}
+
+function getMonadModule() {
+  monadModulePromise ??= import('@grape/monad');
+  return monadModulePromise;
+}
+
+function getEthereumModule() {
+  ethereumModulePromise ??= import('@grape/ethereum');
+  return ethereumModulePromise;
+}
 
 const approvalsStorage = new ChromeStorageArea<Record<string, ApprovalRecord>>(chrome.storage.local, STORAGE_KEYS.approvals, {});
 const assetCacheStorage = new ChromeStorageArea<Record<string, { cachedAt: number; data: WalletAssetsResponse }>>(
@@ -200,6 +221,10 @@ function isLikelyRetryableRpcError(error: unknown) {
   );
 }
 
+function throwLedgerUnsupported(): never {
+  throw new RpcError('LEDGER_UNSUPPORTED', 'Ledger signing is temporarily unavailable in this build.');
+}
+
 class WalletController {
   private readonly pendingApprovals = new Map<string, PendingResolver>();
   private unlockedSecrets: UnlockedSecretCache = {};
@@ -238,6 +263,204 @@ class WalletController {
     return new Connection(this.resolveRpcEndpoint(network, walletState), 'confirmed');
   }
 
+  private resolveSuiNetwork(network: 'mainnet-beta' | 'devnet'): SuiNetwork {
+    return network === 'devnet' ? 'devnet' : 'mainnet';
+  }
+
+  private async createSuiClient(
+    network: 'mainnet-beta' | 'devnet',
+    walletState: Awaited<ReturnType<WalletController['getWalletState']>>
+  ) {
+    const { createSuiClient } = await getSuiModule();
+    return createSuiClient(this.resolveSuiNetwork(network), walletState.chainState.sui.customRpcUrl);
+  }
+
+  private resolveMonadNetwork(_network: 'mainnet-beta' | 'devnet'): MonadNetwork {
+    return _network === 'devnet' ? 'testnet' : 'mainnet';
+  }
+
+  private async createMonadClient(
+    network: 'mainnet-beta' | 'devnet',
+    walletState: Awaited<ReturnType<WalletController['getWalletState']>>
+  ) {
+    const { createMonadPublicClient } = await getMonadModule();
+    return createMonadPublicClient(this.resolveMonadNetwork(network), walletState.chainState.monad.customRpcUrl);
+  }
+
+  private resolveEthereumNetwork(network: 'mainnet-beta' | 'devnet'): EthereumNetwork {
+    return network === 'devnet' ? 'sepolia' : 'mainnet';
+  }
+
+  private async createEthereumClient(
+    network: 'mainnet-beta' | 'devnet',
+    walletState: Awaited<ReturnType<WalletController['getWalletState']>>
+  ) {
+    const { createEthereumPublicClient } = await getEthereumModule();
+    return createEthereumPublicClient(this.resolveEthereumNetwork(network), walletState.chainState.ethereum.customRpcUrl);
+  }
+
+  private getNextWalletNumber(walletState: Awaited<ReturnType<WalletController['getWalletState']>>) {
+    return (
+      walletState.wallets.reduce((max, wallet) => {
+        const match = wallet.name.match(/^Wallet (\d+)$/);
+        const value = match ? Number(match[1]) : 0;
+        return Math.max(max, Number.isFinite(value) ? value : 0);
+      }, 0) + 1
+    );
+  }
+
+  private async buildWalletProfile(input: {
+    name: string;
+    chain: 'solana' | 'sui' | 'monad' | 'ethereum';
+    secret: VaultSecret;
+    password?: string;
+    publicKey: string;
+    signer: import('@grape/core').WalletSigner;
+    source: import('@grape/core').WalletProfile['source'];
+    derivationPath: string;
+  }) {
+    const walletId = `wallet-${crypto.randomUUID()}`;
+    const account = {
+      id: 'account-0',
+      index: 0,
+      publicKey: input.publicKey,
+      derivationPath: input.derivationPath
+    };
+
+    return {
+      id: walletId,
+      name: input.name,
+      chain: input.chain,
+      vault: input.signer.kind === 'watch-only' ? undefined : await createVaultRecord(input.secret, input.password ?? ''),
+      signer: input.signer,
+      source: input.source,
+      accounts: [account],
+      selectedAccountId: account.id,
+      recentRecipients: []
+    };
+  }
+
+  private async refreshSuiAssetsOnly(
+    walletId: string,
+    network: 'mainnet-beta' | 'devnet',
+    publicKey: string,
+    walletState: Awaited<ReturnType<WalletController['getWalletState']>>
+  ): Promise<WalletAssetsResponse> {
+    const [{ getSuiHoldings }, client] = await Promise.all([
+      getSuiModule(),
+      this.createSuiClient(network, walletState)
+    ]);
+    const holdings = await getSuiHoldings(client, publicKey);
+    const totalMist = BigInt(holdings.totalMist);
+    const safeLamports = totalMist > BigInt(Number.MAX_SAFE_INTEGER) ? null : Number(totalMist);
+    const result: WalletAssetsResponse = {
+      lamports: safeLamports,
+      tokens: holdings.coins.map((coin) => ({
+        mint: coin.coinType,
+        amount: coin.amount,
+        decimals: coin.decimals,
+        programId: 'sui-coin',
+        accountAddress: publicKey,
+        name: coin.name,
+        symbol: coin.symbol,
+        logoUri: coin.logoUri,
+        priceUsd: null,
+        valueUsd: null,
+        priceChange24h: null,
+        delegate: null,
+        delegatedAmount: null,
+        closeAuthority: null
+      })),
+      collections: [],
+      nativeName: 'Sui',
+      nativeSymbol: 'SUI',
+      nativeDecimals: 9,
+      totalUsdValue: null,
+      nativePriceUsd: null,
+      nativeValueUsd: null,
+      nativePriceChange24h: null
+    };
+
+    const cache = await assetCacheStorage.get();
+    cache[this.getAssetCacheKey(walletId, network, publicKey)] = {
+      cachedAt: Date.now(),
+      data: result
+    };
+    await assetCacheStorage.set(cache);
+
+    return result;
+  }
+
+  private async refreshMonadAssetsOnly(
+    walletId: string,
+    network: 'mainnet-beta' | 'devnet',
+    publicKey: string,
+    walletState: Awaited<ReturnType<WalletController['getWalletState']>>
+  ): Promise<WalletAssetsResponse> {
+    const [{ getMonadHoldings }, client] = await Promise.all([
+      getMonadModule(),
+      this.createMonadClient(network, walletState)
+    ]);
+    const holdings = await getMonadHoldings(client, publicKey);
+    const safeBaseUnits = holdings.totalWei > BigInt(Number.MAX_SAFE_INTEGER) ? null : Number(holdings.totalWei);
+    const result: WalletAssetsResponse = {
+      lamports: safeBaseUnits,
+      tokens: [],
+      collections: [],
+      nativeName: 'Monad',
+      nativeSymbol: 'MON',
+      nativeDecimals: 18,
+      totalUsdValue: null,
+      nativePriceUsd: null,
+      nativeValueUsd: null,
+      nativePriceChange24h: null
+    };
+
+    const cache = await assetCacheStorage.get();
+    cache[this.getAssetCacheKey(walletId, network, publicKey)] = {
+      cachedAt: Date.now(),
+      data: result
+    };
+    await assetCacheStorage.set(cache);
+
+    return result;
+  }
+
+  private async refreshEthereumAssetsOnly(
+    walletId: string,
+    network: 'mainnet-beta' | 'devnet',
+    publicKey: string,
+    walletState: Awaited<ReturnType<WalletController['getWalletState']>>
+  ): Promise<WalletAssetsResponse> {
+    const [{ getEthereumHoldings }, client] = await Promise.all([
+      getEthereumModule(),
+      this.createEthereumClient(network, walletState)
+    ]);
+    const holdings = await getEthereumHoldings(client, publicKey);
+    const safeBaseUnits = holdings.totalWei > BigInt(Number.MAX_SAFE_INTEGER) ? null : Number(holdings.totalWei);
+    const result: WalletAssetsResponse = {
+      lamports: safeBaseUnits,
+      tokens: [],
+      collections: [],
+      nativeName: 'Ethereum',
+      nativeSymbol: 'ETH',
+      nativeDecimals: 18,
+      totalUsdValue: null,
+      nativePriceUsd: null,
+      nativeValueUsd: null,
+      nativePriceChange24h: null
+    };
+
+    const cache = await assetCacheStorage.get();
+    cache[this.getAssetCacheKey(walletId, network, publicKey)] = {
+      cachedAt: Date.now(),
+      data: result
+    };
+    await assetCacheStorage.set(cache);
+
+    return result;
+  }
+
   private async refreshAssetsCache(
     walletId: string,
     network: 'mainnet-beta' | 'devnet',
@@ -251,6 +474,21 @@ class WalletController {
 
     const refreshPromise = (async () => {
       const walletState = await this.getWalletState();
+      const targetWallet = walletState.wallets.find((wallet) => wallet.id === walletId);
+      if (!targetWallet) {
+        throw new RpcError('WALLET_NOT_FOUND', 'Wallet could not be found.');
+      }
+
+      if (targetWallet.chain === 'sui') {
+        return this.refreshSuiAssetsOnly(walletId, network, publicKey, walletState);
+      }
+      if (targetWallet.chain === 'monad') {
+        return this.refreshMonadAssetsOnly(walletId, network, publicKey, walletState);
+      }
+      if (targetWallet.chain === 'ethereum') {
+        return this.refreshEthereumAssetsOnly(walletId, network, publicKey, walletState);
+      }
+
       const owner = new PublicKey(publicKey);
       const connection = this.createConnection(network, walletState);
       const [lamports, shyftMetadataResult, shyftCollectionsResult] = await Promise.all([
@@ -405,6 +643,9 @@ class WalletController {
         lamports,
         tokens: sortedTokens,
         collections: finalCollections,
+        nativeName: 'Solana',
+        nativeSymbol: 'SOL',
+        nativeDecimals: 9,
         totalUsdValue: Number.isFinite(totalUsdValue) ? totalUsdValue : null,
         nativePriceUsd: nativeUsdPrice,
         nativeValueUsd,
@@ -425,6 +666,32 @@ class WalletController {
 
     this.assetRefreshes.set(cacheKey, refreshPromise);
     return refreshPromise;
+  }
+
+  async previewChainToken(tokenAddress: string): Promise<ChainTokenPreviewResponse> {
+    const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
+    if (!activeAccount) {
+      throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
+    }
+
+    if (selectedWallet.chain === 'ethereum') {
+      const [{ getEthereumTokenPreview }, client] = await Promise.all([
+        getEthereumModule(),
+        this.createEthereumClient(walletState.selectedNetwork, walletState)
+      ]);
+      return getEthereumTokenPreview(client, activeAccount.publicKey, tokenAddress);
+    }
+
+    if (selectedWallet.chain === 'monad') {
+      const [{ getMonadTokenPreview }, client] = await Promise.all([
+        getMonadModule(),
+        this.createMonadClient(walletState.selectedNetwork, walletState)
+      ]);
+      return getMonadTokenPreview(client, activeAccount.publicKey, tokenAddress);
+    }
+
+    throw new RpcError('UNSUPPORTED_CHAIN', 'Token contract preview is currently available for Ethereum and Monad only.');
   }
 
   async getWalletState() {
@@ -491,6 +758,7 @@ class WalletController {
     secret: VaultSecret,
     password: string | undefined,
     publicKey: string,
+    chain: 'solana' | 'sui' | 'monad' | 'ethereum' = 'solana',
     signer: import('@grape/core').WalletSigner = { kind: 'software' },
     source: import('@grape/core').WalletProfile['source'] = signer.kind === 'ledger'
       ? 'ledger'
@@ -501,24 +769,7 @@ class WalletController {
         : 'created'
   ) {
     const current = await this.getWalletState();
-    const nextWalletNumber = current.wallets.reduce((max, wallet) => {
-      const match = wallet.name.match(/^Wallet (\d+)$/);
-      const value = match ? Number(match[1]) : 0;
-      return Math.max(max, Number.isFinite(value) ? value : 0);
-    }, 0) + 1;
-    const account = {
-      id: 'account-0',
-      index: 0,
-      publicKey,
-      derivationPath:
-        signer.kind === 'ledger'
-          ? signer.derivationPath
-          : signer.kind === 'watch-only'
-            ? 'watch-only'
-          : secret.kind === 'mnemonic'
-            ? `m/44'/501'/0'/0'`
-            : 'imported-private-key'
-    };
+    const nextWalletNumber = this.getNextWalletNumber(current);
     if (current.setup === 'ready' && signer.kind !== 'watch-only') {
       const passwordProtectedWallet = current.wallets.find((wallet) => !!wallet.vault);
       if (passwordProtectedWallet) {
@@ -532,36 +783,162 @@ class WalletController {
       }
     }
 
-    const walletId = `wallet-${crypto.randomUUID()}`;
-    const profile = {
-      id: walletId,
+    const derivationPath =
+      signer.kind === 'ledger'
+        ? signer.derivationPath
+        : signer.kind === 'watch-only'
+          ? 'watch-only'
+          : secret.kind === 'mnemonic'
+            ? chain === 'solana'
+              ? `m/44'/501'/0'/0'`
+              : chain === 'sui'
+                ? `m/44'/784'/0'/0'/0'`
+                : `m/44'/60'/0'/0/0`
+            : 'imported-private-key';
+
+    const profile = await this.buildWalletProfile({
       name: `Wallet ${nextWalletNumber}`,
-      chain: 'solana' as const,
-      vault: signer.kind === 'watch-only' ? undefined : await createVaultRecord(secret, password ?? ''),
+      chain,
+      secret,
+      password,
+      publicKey,
       signer,
       source,
-      accounts: [account],
-      selectedAccountId: account.id,
-      recentRecipients: []
-    };
+      derivationPath
+    });
     const nextState = {
       ...current,
       setup: 'ready' as const,
       wallets: [...current.wallets, profile],
-      selectedChain: 'solana' as const,
+      selectedChain: chain,
+      selectedNetwork:
+        chain === 'solana'
+          ? current.chainState.solana.selectedNetwork
+          : chain === 'sui'
+            ? current.chainState.sui.selectedNetwork
+            : chain === 'monad'
+              ? current.chainState.monad.selectedNetwork
+              : current.chainState.ethereum.selectedNetwork,
       selectedWalletIds: {
         ...current.selectedWalletIds,
-        solana: walletId
+        [chain]: profile.id
       },
-      selectedWalletId: walletId
+      selectedWalletId: chain === 'solana' || !current.selectedWalletId ? profile.id : current.selectedWalletId
     };
     await walletStateStorage.set(nextState);
     if (signer.kind !== 'watch-only') {
-      this.unlockedSecrets[walletId] = {
+      this.unlockedSecrets[profile.id] = {
         secret,
         unlockedAt: Date.now()
       };
     }
+    await this.setSessionState({ locked: false, lastActivityAt: Date.now() });
+    return nextState;
+  }
+
+  async createMnemonicWalletSet(
+    mnemonic: string,
+    password: string,
+    source: 'created' | 'imported-mnemonic'
+  ) {
+    const current = await this.getWalletState();
+    const nextWalletNumber = this.getNextWalletNumber(current);
+    if (current.setup === 'ready') {
+      const passwordProtectedWallet = current.wallets.find((wallet) => !!wallet.vault);
+      if (passwordProtectedWallet) {
+        const valid = await verifyVaultPassword(passwordProtectedWallet.vault!, password);
+        if (!valid) {
+          throw new RpcError('INVALID_PASSWORD', 'Use your existing wallet password to add another wallet.');
+        }
+      }
+    }
+
+    const solanaAccount = deriveSolanaAccount0(mnemonic);
+    const [{ deriveSuiAccount0 }, { deriveMonadAccount0 }, { deriveEthereumAccount0 }] = await Promise.all([
+      getSuiModule(),
+      getMonadModule(),
+      getEthereumModule()
+    ]);
+    const suiAccount = deriveSuiAccount0(mnemonic);
+    const monadAccount = deriveMonadAccount0(mnemonic);
+    const ethereumAccount = deriveEthereumAccount0(mnemonic);
+    const signer: import('@grape/core').WalletSigner = { kind: 'software' };
+
+    const [solanaProfile, suiProfile, monadProfile, ethereumProfile] = await Promise.all([
+      this.buildWalletProfile({
+        name: `Wallet ${nextWalletNumber}`,
+        chain: 'solana',
+        secret: { kind: 'mnemonic', mnemonic },
+        password,
+        publicKey: solanaAccount.publicKey,
+        signer,
+        source,
+        derivationPath: solanaAccount.derivationPath
+      }),
+      this.buildWalletProfile({
+        name: `Wallet ${nextWalletNumber}`,
+        chain: 'sui',
+        secret: { kind: 'mnemonic', mnemonic },
+        password,
+        publicKey: suiAccount.address,
+        signer,
+        source,
+        derivationPath: suiAccount.derivationPath
+      }),
+      this.buildWalletProfile({
+        name: `Wallet ${nextWalletNumber}`,
+        chain: 'monad',
+        secret: { kind: 'mnemonic', mnemonic },
+        password,
+        publicKey: monadAccount.address,
+        signer,
+        source,
+        derivationPath: monadAccount.derivationPath
+      }),
+      this.buildWalletProfile({
+        name: `Wallet ${nextWalletNumber}`,
+        chain: 'ethereum',
+        secret: { kind: 'mnemonic', mnemonic },
+        password,
+        publicKey: ethereumAccount.address,
+        signer,
+        source,
+        derivationPath: ethereumAccount.derivationPath
+      })
+    ]);
+
+    const nextState = {
+      ...current,
+      setup: 'ready' as const,
+      wallets: [...current.wallets, solanaProfile, suiProfile, monadProfile, ethereumProfile],
+      selectedChain: 'solana' as const,
+      selectedWalletIds: {
+        ...current.selectedWalletIds,
+        solana: solanaProfile.id,
+        sui: suiProfile.id,
+        monad: monadProfile.id,
+        ethereum: ethereumProfile.id
+      },
+      selectedWalletId: solanaProfile.id
+    };
+
+    await walletStateStorage.set(nextState);
+    this.unlockedSecrets[solanaProfile.id] = {
+      secret: { kind: 'mnemonic', mnemonic },
+      unlockedAt: Date.now()
+    };
+    this.unlockedSecrets[suiProfile.id] = {
+      secret: { kind: 'mnemonic', mnemonic },
+      unlockedAt: Date.now()
+    };
+    this.unlockedSecrets[monadProfile.id] = {
+      secret: { kind: 'mnemonic', mnemonic },
+      unlockedAt: Date.now()
+    };
+    this.unlockedSecrets[ethereumProfile.id] = {
+      secret: { kind: 'mnemonic', mnemonic },
+      unlockedAt: Date.now()
+    };
     await this.setSessionState({ locked: false, lastActivityAt: Date.now() });
     return nextState;
   }
@@ -691,13 +1068,26 @@ class WalletController {
 
   async setNetwork(network: 'mainnet-beta' | 'devnet') {
     const { walletState } = await this.ensureReadyWallet();
+    const selectedChain = walletState.selectedChain;
     await walletStateStorage.set({
       ...walletState,
       chainState: {
         ...walletState.chainState,
         solana: {
           ...walletState.chainState.solana,
-          selectedNetwork: network
+          selectedNetwork: selectedChain === 'solana' ? network : walletState.chainState.solana.selectedNetwork
+        },
+        sui: {
+          ...walletState.chainState.sui,
+          selectedNetwork: selectedChain === 'sui' ? network : walletState.chainState.sui.selectedNetwork
+        },
+        monad: {
+          ...walletState.chainState.monad,
+          selectedNetwork: selectedChain === 'monad' ? network : walletState.chainState.monad.selectedNetwork
+        },
+        ethereum: {
+          ...walletState.chainState.ethereum,
+          selectedNetwork: selectedChain === 'ethereum' ? network : walletState.chainState.ethereum.selectedNetwork
         }
       },
       selectedNetwork: network
@@ -750,6 +1140,54 @@ class WalletController {
     return this.getStateResponse();
   }
 
+  async setSuiCustomRpc(rpcUrl: string | null) {
+    const walletState = await this.getWalletState();
+    await walletStateStorage.set({
+      ...walletState,
+      chainState: {
+        ...walletState.chainState,
+        sui: {
+          ...walletState.chainState.sui,
+          customRpcUrl: rpcUrl?.trim() || undefined
+        }
+      }
+    });
+    await this.invalidateAssetCache();
+    return this.getStateResponse();
+  }
+
+  async setMonadCustomRpc(rpcUrl: string | null) {
+    const walletState = await this.getWalletState();
+    await walletStateStorage.set({
+      ...walletState,
+      chainState: {
+        ...walletState.chainState,
+        monad: {
+          ...walletState.chainState.monad,
+          customRpcUrl: rpcUrl?.trim() || undefined
+        }
+      }
+    });
+    await this.invalidateAssetCache();
+    return this.getStateResponse();
+  }
+
+  async setEthereumCustomRpc(rpcUrl: string | null) {
+    const walletState = await this.getWalletState();
+    await walletStateStorage.set({
+      ...walletState,
+      chainState: {
+        ...walletState.chainState,
+        ethereum: {
+          ...walletState.chainState.ethereum,
+          customRpcUrl: rpcUrl?.trim() || undefined
+        }
+      }
+    });
+    await this.invalidateAssetCache();
+    return this.getStateResponse();
+  }
+
   async selectWallet(walletId: string) {
     const walletState = await this.getWalletState();
     const selectedWallet = walletState.wallets.find((wallet) => wallet.id === walletId);
@@ -769,12 +1207,22 @@ class WalletController {
     return this.getStateResponse();
   }
 
-  async setChain(chain: 'solana' | 'sui') {
+  async setChain(chain: 'solana' | 'sui' | 'monad' | 'ethereum') {
     const walletState = await this.getWalletState();
+    const nextSelectedWalletId =
+      walletState.selectedWalletIds[chain] ?? walletState.wallets.find((wallet) => wallet.chain === chain)?.id;
     await walletStateStorage.set({
       ...walletState,
       selectedChain: chain,
-      selectedWalletId: chain === 'solana' ? walletState.selectedWalletIds.solana ?? walletState.selectedWalletId : walletState.selectedWalletId
+      selectedNetwork:
+        chain === 'solana'
+          ? walletState.chainState.solana.selectedNetwork
+          : chain === 'sui'
+            ? walletState.chainState.sui.selectedNetwork
+            : chain === 'monad'
+              ? walletState.chainState.monad.selectedNetwork
+              : walletState.chainState.ethereum.selectedNetwork,
+      selectedWalletId: nextSelectedWalletId ?? walletState.selectedWalletId
     });
     return this.getStateResponse();
   }
@@ -838,6 +1286,28 @@ class WalletController {
     const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
     if (!activeAccount) {
       return null;
+    }
+    if (selectedWallet.chain === 'sui') {
+      const client = await this.createSuiClient(walletState.selectedNetwork, walletState);
+      const balance = await client.getBalance({ owner: activeAccount.publicKey, coinType: '0x2::sui::SUI' });
+      const total = BigInt(balance.totalBalance);
+      return total > BigInt(Number.MAX_SAFE_INTEGER) ? null : Number(total);
+    }
+    if (selectedWallet.chain === 'monad') {
+      const [{ getMonadHoldings }, client] = await Promise.all([
+        getMonadModule(),
+        this.createMonadClient(walletState.selectedNetwork, walletState)
+      ]);
+      const balance = await getMonadHoldings(client, activeAccount.publicKey);
+      return balance.totalWei > BigInt(Number.MAX_SAFE_INTEGER) ? null : Number(balance.totalWei);
+    }
+    if (selectedWallet.chain === 'ethereum') {
+      const [{ getEthereumHoldings }, client] = await Promise.all([
+        getEthereumModule(),
+        this.createEthereumClient(walletState.selectedNetwork, walletState)
+      ]);
+      const balance = await getEthereumHoldings(client, activeAccount.publicKey);
+      return balance.totalWei > BigInt(Number.MAX_SAFE_INTEGER) ? null : Number(balance.totalWei);
     }
     const connection = this.createConnection(walletState.selectedNetwork, walletState);
     return connection.getBalance(new PublicKey(activeAccount.publicKey));
@@ -953,7 +1423,7 @@ class WalletController {
   ) {
     try {
       return selectedWallet.signer.kind === 'ledger'
-        ? await signAndSendLedgerTransaction(transaction, activePublicKey, selectedWallet.signer.derivationPath, connection)
+        ? throwLedgerUnsupported()
         : await signAndSendTransaction(transaction, resolveSolanaVaultSecret(secret), connection);
     } catch (error) {
       throw normalizeSigningError(error);
@@ -1034,6 +1504,15 @@ class WalletController {
     const { walletState, selectedWallet } = await this.ensureReadyWallet();
     const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
     if (!activeAccount) {
+      return {
+        accounts: [],
+        source: 'none' as const,
+        network: walletState.selectedNetwork,
+        refreshedAt: Date.now()
+      };
+    }
+
+    if (selectedWallet.chain !== 'solana') {
       return {
         accounts: [],
         source: 'none' as const,
@@ -1182,7 +1661,7 @@ class WalletController {
   async getActivity(limit = 30): Promise<WalletActivityResponse> {
     const { walletState, selectedWallet } = await this.ensureReadyWallet();
     const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
-    if (!activeAccount || !hasShyftApiKey()) {
+    if (!activeAccount || selectedWallet.chain !== 'solana' || !hasShyftApiKey()) {
       return {
         items: [],
         source: 'none',
@@ -1205,6 +1684,9 @@ class WalletController {
     const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
     if (!activeAccount) {
       throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
+    }
+    if (selectedWallet.chain !== 'solana') {
+      throw new RpcError('UNSUPPORTED_CHAIN', 'Detailed token inspection is currently available for Solana only.');
     }
 
     const connection = this.createConnection(walletState.selectedNetwork, walletState);
@@ -1373,7 +1855,7 @@ class WalletController {
     let signature: string;
     try {
       if (selectedWallet.signer.kind === 'ledger') {
-        signature = await signAndSendLedgerTransaction(transaction, activeAccount.publicKey, selectedWallet.signer.derivationPath, connection);
+        throwLedgerUnsupported();
       } else {
         transaction.partialSign(resolveSolanaVaultSecret(secret));
         signature = await connection.sendRawTransaction(transaction.serialize());
@@ -1474,51 +1956,146 @@ class WalletController {
     }
 
     const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
-    const connection = this.createConnection(walletState.selectedNetwork, walletState);
-    const owner = new PublicKey(activeAccount.publicKey);
+    let signature: string;
 
-    const transaction =
-      input.asset.kind === 'sol'
-        ? await buildSolTransferTransaction(connection, owner, {
+    if (selectedWallet.chain === 'sui') {
+      const { resolveSuiVaultSecret, sendSui, sendSuiCoin, validateSuiAddress } = await getSuiModule();
+      if (!validateSuiAddress(input.recipient)) {
+        throw new RpcError('INVALID_RECIPIENT', 'Enter a valid Sui wallet address.');
+      }
+
+      try {
+        const client = await this.createSuiClient(walletState.selectedNetwork, walletState);
+        if (selectedWallet.signer.kind === 'ledger') {
+          throw new RpcError('LEDGER_UNSUPPORTED', 'Sui Ledger support is not available in this build yet.');
+        } else {
+          const signer = resolveSuiVaultSecret(secret);
+          if (input.asset.kind === 'sui') {
+            signature = await sendSui(client, signer, {
+              recipient: input.recipient,
+              amountMist: parseDecimalAmount(input.amount, 9)
+            });
+          } else if (input.asset.kind === 'sui-coin') {
+            signature = await sendSuiCoin(client, signer, {
+              recipient: input.recipient,
+              amountBaseUnits: parseDecimalAmount(input.amount, input.asset.decimals),
+              coinType: input.asset.coinType
+            });
+          } else {
+            throw new RpcError('UNSUPPORTED_ASSET', 'Use the matching chain wallet to send this asset.');
+          }
+        }
+      } catch (error) {
+        throw normalizeSigningError(error);
+      }
+    } else if (selectedWallet.chain === 'monad') {
+      const { sendMonad, sendMonadToken, validateMonadAddress } = await getMonadModule();
+      if (!validateMonadAddress(input.recipient)) {
+        throw new RpcError('INVALID_RECIPIENT', 'Enter a valid Monad wallet address.');
+      }
+
+      try {
+        if (selectedWallet.signer.kind === 'ledger') {
+          throwLedgerUnsupported();
+        } else if (input.asset.kind === 'mon') {
+          signature = await sendMonad(this.resolveMonadNetwork(walletState.selectedNetwork), secret, {
             recipient: input.recipient,
-            amount: input.amount
-          })
-        : await buildSplTokenTransferTransaction(connection, owner, {
+            amountEther: input.amount,
+            customRpcUrl: walletState.chainState.monad.customRpcUrl
+          });
+        } else if (input.asset.kind === 'evm-token') {
+          signature = await sendMonadToken(this.resolveMonadNetwork(walletState.selectedNetwork), secret, {
             recipient: input.recipient,
             amount: input.amount,
-            mint: input.asset.mint,
+            tokenAddress: input.asset.tokenAddress,
             decimals: input.asset.decimals,
-            programId: input.asset.programId
+            customRpcUrl: walletState.chainState.monad.customRpcUrl
           });
-
-    if (input.asset.kind === 'sol') {
-      const [balanceLamports, feeLamports] = await Promise.all([
-        connection.getBalance(owner, 'confirmed'),
-        estimateLegacyTransactionFee(connection, transaction)
-      ]);
-      const transferLamports = parseDecimalAmount(input.amount, 9);
-      const requiredLamports = transferLamports + BigInt(feeLamports);
-      if (BigInt(balanceLamports) < requiredLamports) {
-        throw new RpcError(
-          'INSUFFICIENT_FUNDS',
-          `Not enough SOL. You need ${(Number(requiredLamports) / 1_000_000_000).toFixed(9)} SOL including network fee, but only ${(balanceLamports / 1_000_000_000).toFixed(9)} SOL is available.`
-        );
+        } else {
+          throw new RpcError('UNSUPPORTED_ASSET', 'Use the matching chain wallet to send this asset.');
+        }
+      } catch (error) {
+        throw normalizeSigningError(error);
       }
-    }
+    } else if (selectedWallet.chain === 'ethereum') {
+      const { sendEthereum, sendEthereumToken, validateEthereumAddress } = await getEthereumModule();
+      if (!validateEthereumAddress(input.recipient)) {
+        throw new RpcError('INVALID_RECIPIENT', 'Enter a valid Ethereum wallet address.');
+      }
 
-    let signature: string;
-    try {
-      signature =
-        selectedWallet.signer.kind === 'ledger'
-          ? await signAndSendLedgerTransaction(
-              transaction,
-              activeAccount.publicKey,
-              selectedWallet.signer.derivationPath,
-              connection
-            )
-          : await signAndSendTransaction(transaction, resolveSolanaVaultSecret(secret), connection);
-    } catch (error) {
-      throw normalizeSigningError(error);
+      try {
+        if (selectedWallet.signer.kind === 'ledger') {
+          throwLedgerUnsupported();
+        } else if (input.asset.kind === 'eth') {
+          signature = await sendEthereum(this.resolveEthereumNetwork(walletState.selectedNetwork), secret, {
+            recipient: input.recipient,
+            amountEther: input.amount,
+            customRpcUrl: walletState.chainState.ethereum.customRpcUrl
+          });
+        } else if (input.asset.kind === 'evm-token') {
+          signature = await sendEthereumToken(this.resolveEthereumNetwork(walletState.selectedNetwork), secret, {
+            recipient: input.recipient,
+            amount: input.amount,
+            tokenAddress: input.asset.tokenAddress,
+            decimals: input.asset.decimals,
+            customRpcUrl: walletState.chainState.ethereum.customRpcUrl
+          });
+        } else {
+          throw new RpcError('UNSUPPORTED_ASSET', 'Use the matching chain wallet to send this asset.');
+        }
+      } catch (error) {
+        throw normalizeSigningError(error);
+      }
+    } else {
+      if (
+        input.asset.kind === 'sui' ||
+        input.asset.kind === 'mon' ||
+        input.asset.kind === 'eth' ||
+        input.asset.kind === 'sui-coin' ||
+        input.asset.kind === 'evm-token'
+      ) {
+        throw new RpcError('UNSUPPORTED_ASSET', 'Use the matching chain wallet to send native assets.');
+      }
+
+      const connection = this.createConnection(walletState.selectedNetwork, walletState);
+      const owner = new PublicKey(activeAccount.publicKey);
+      const transaction =
+        input.asset.kind === 'sol'
+          ? await buildSolTransferTransaction(connection, owner, {
+              recipient: input.recipient,
+              amount: input.amount
+            })
+          : await buildSplTokenTransferTransaction(connection, owner, {
+              recipient: input.recipient,
+              amount: input.amount,
+              mint: input.asset.mint,
+              decimals: input.asset.decimals,
+              programId: input.asset.programId
+            });
+
+      if (input.asset.kind === 'sol') {
+        const [balanceLamports, feeLamports] = await Promise.all([
+          connection.getBalance(owner, 'confirmed'),
+          estimateLegacyTransactionFee(connection, transaction)
+        ]);
+        const transferLamports = parseDecimalAmount(input.amount, 9);
+        const requiredLamports = transferLamports + BigInt(feeLamports);
+        if (BigInt(balanceLamports) < requiredLamports) {
+          throw new RpcError(
+            'INSUFFICIENT_FUNDS',
+            `Not enough SOL. You need ${(Number(requiredLamports) / 1_000_000_000).toFixed(9)} SOL including network fee, but only ${(balanceLamports / 1_000_000_000).toFixed(9)} SOL is available.`
+          );
+        }
+      }
+
+      try {
+        signature =
+          selectedWallet.signer.kind === 'ledger'
+            ? throwLedgerUnsupported()
+            : await signAndSendTransaction(transaction, resolveSolanaVaultSecret(secret), connection);
+      } catch (error) {
+        throw normalizeSigningError(error);
+      }
     }
 
     await walletStateStorage.set({
@@ -1615,6 +2192,9 @@ class WalletController {
 
   async getSecurityReport() {
     const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    if (selectedWallet.chain !== 'solana') {
+      throw new RpcError('UNSUPPORTED_CHAIN', 'Security scanning is currently available for Solana only.');
+    }
     const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
     if (!activeAccount) {
       throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
@@ -1687,6 +2267,9 @@ class WalletController {
   }) {
     const { walletState, selectedWallet } = await this.ensureReadyWallet();
     this.assertInteractiveWallet(selectedWallet);
+    if (selectedWallet.chain !== 'solana') {
+      throw new RpcError('UNSUPPORTED_CHAIN', 'Incident response is currently available for Solana only.');
+    }
     const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
     if (!activeAccount) {
       throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
@@ -1918,18 +2501,21 @@ class WalletController {
   }
 
   async getSwapQuote(input: { amount: string; slippageBps: number; inputAsset: SendAsset; outputMint: string }) {
-    const { walletState } = await this.ensureReadyWallet();
+    const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    if (selectedWallet.chain !== 'solana') {
+      throw new RpcError('UNSUPPORTED_CHAIN', 'Swaps are currently available for Solana only.');
+    }
     if (walletState.selectedNetwork !== 'mainnet-beta') {
       throw new RpcError('SWAP_UNAVAILABLE', 'Native swaps are currently available only on mainnet-beta.');
     }
 
     const connection = this.createConnection(walletState.selectedNetwork, walletState);
-    const inputMint = input.inputAsset.kind === 'sol' ? JUPITER_SOL_MINT : input.inputAsset.mint;
+    const inputMint = input.inputAsset.kind === 'spl-token' ? input.inputAsset.mint : JUPITER_SOL_MINT;
     if (inputMint === input.outputMint) {
       throw new RpcError('INVALID_SWAP', 'Choose a different output token.');
     }
 
-    const inputDecimals = input.inputAsset.kind === 'sol' ? 9 : input.inputAsset.decimals;
+    const inputDecimals = input.inputAsset.kind === 'spl-token' ? input.inputAsset.decimals : 9;
     const quoteResponse = await fetchJupiterQuote({
       inputMint,
       outputMint: input.outputMint,
@@ -1957,6 +2543,9 @@ class WalletController {
   async executeSwap(input: { quoteResponse: JupiterQuoteResponse; password?: string }) {
     const { walletState, selectedWallet } = await this.ensureReadyWallet();
     this.assertInteractiveWallet(selectedWallet);
+    if (selectedWallet.chain !== 'solana') {
+      throw new RpcError('UNSUPPORTED_CHAIN', 'Swaps are currently available for Solana only.');
+    }
     if (walletState.selectedNetwork !== 'mainnet-beta') {
       throw new RpcError('SWAP_UNAVAILABLE', 'Native swaps are currently available only on mainnet-beta.');
     }
@@ -1977,12 +2566,7 @@ class WalletController {
     try {
       signature =
         selectedWallet.signer.kind === 'ledger'
-          ? await signAndSendLedgerSerializedTransaction(
-              swap.swapTransaction,
-              activeAccount.publicKey,
-              selectedWallet.signer.derivationPath,
-              this.resolveRpcEndpoint(walletState.selectedNetwork, walletState)
-            )
+          ? throwLedgerUnsupported()
           : await signAndSendSerializedTransaction(
               swap.swapTransaction,
               resolveSolanaVaultSecret(secret),
@@ -2231,11 +2815,7 @@ class WalletController {
         return {
           transaction:
             selectedWallet.signer.kind === 'ledger'
-              ? await signLedgerSerializedTransaction(
-                  transactionRequest.params.transaction,
-                  approval.publicKey ?? '',
-                  selectedWallet.signer.derivationPath
-                )
+              ? throwLedgerUnsupported()
               : signSerializedTransaction(transactionRequest.params.transaction, resolveSolanaVaultSecret(secret))
         };
       }
@@ -2244,11 +2824,7 @@ class WalletController {
         return {
           transactions:
             selectedWallet.signer.kind === 'ledger'
-              ? await signLedgerSerializedTransactions(
-                  transactionsRequest.params.transactions,
-                  approval.publicKey ?? '',
-                  selectedWallet.signer.derivationPath
-                )
+              ? throwLedgerUnsupported()
               : signSerializedTransactions(transactionsRequest.params.transactions, resolveSolanaVaultSecret(secret))
         };
       }
@@ -2261,12 +2837,7 @@ class WalletController {
           return {
             signature:
               selectedWallet.signer.kind === 'ledger'
-                ? await signAndSendLedgerSerializedTransaction(
-                    transactionRequest.params.transaction,
-                    approval.publicKey ?? '',
-                    selectedWallet.signer.derivationPath,
-                    this.resolveRpcEndpoint(approval.network, walletState)
-                  )
+                ? throwLedgerUnsupported()
                 : await signAndSendSerializedTransaction(
                     transactionRequest.params.transaction,
                     resolveSolanaVaultSecret(secret),
@@ -2664,17 +3235,11 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
           sendResponse(await controller.getStateResponse());
           break;
         case 'wallet_create':
-          await controller.createWallet({ kind: 'mnemonic', mnemonic: message.mnemonic }, message.password, message.publicKey, { kind: 'software' }, 'created');
+          await controller.createMnemonicWalletSet(message.mnemonic, message.password, 'created');
           sendResponse(await controller.getStateResponse());
           break;
         case 'wallet_import':
-          await controller.createWallet(
-            { kind: 'mnemonic', mnemonic: message.mnemonic },
-            message.password,
-            message.publicKey,
-            { kind: 'software' },
-            'imported-mnemonic'
-          );
+          await controller.createMnemonicWalletSet(message.mnemonic, message.password, 'imported-mnemonic');
           sendResponse(await controller.getStateResponse());
           break;
         case 'wallet_import_private_key':
@@ -2682,6 +3247,7 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
             { kind: 'private-key', secretKey: message.privateKey },
             message.password,
             message.publicKey,
+            message.chain,
             { kind: 'software' },
             'imported-private-key'
           );
@@ -2692,6 +3258,7 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
             { kind: 'auth-token', token: crypto.randomUUID() },
             message.password,
             message.publicKey,
+            message.chain,
             {
               kind: 'ledger',
               transport: 'webhid',
@@ -2707,6 +3274,7 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
               { kind: 'auth-token', token: crypto.randomUUID() },
               message.password,
               account.publicKey,
+              message.chain,
               {
                 kind: 'ledger',
                 transport: 'webhid',
@@ -2722,11 +3290,16 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
             { kind: 'auth-token', token: crypto.randomUUID() },
             undefined,
             message.publicKey,
+            message.chain,
             { kind: 'watch-only' },
             'watch-only'
           );
           sendResponse(await controller.getStateResponse());
           break;
+        case 'wallet_scan_ledger_accounts': {
+          throwLedgerUnsupported();
+          break;
+        }
         case 'wallet_unlock':
           await controller.unlockWallet(message.password);
           sendResponse(await controller.getStateResponse());
@@ -2753,6 +3326,15 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
         case 'wallet_set_custom_rpc':
           sendResponse(await controller.setCustomRpc(message.network, message.rpcUrl));
           break;
+        case 'wallet_set_sui_custom_rpc':
+          sendResponse(await controller.setSuiCustomRpc(message.rpcUrl));
+          break;
+        case 'wallet_set_monad_custom_rpc':
+          sendResponse(await controller.setMonadCustomRpc(message.rpcUrl));
+          break;
+        case 'wallet_set_ethereum_custom_rpc':
+          sendResponse(await controller.setEthereumCustomRpc(message.rpcUrl));
+          break;
         case 'wallet_select':
           sendResponse(await controller.selectWallet(message.walletId));
           break;
@@ -2776,6 +3358,9 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
           break;
         case 'wallet_get_activity':
           sendResponse(await controller.getActivity(message.limit));
+          break;
+        case 'wallet_preview_chain_token':
+          sendResponse(await controller.previewChainToken(message.tokenAddress));
           break;
         case 'wallet_get_stake_accounts':
           sendResponse(await controller.getStakeAccounts());

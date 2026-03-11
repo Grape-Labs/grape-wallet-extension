@@ -88,6 +88,10 @@ export type WalletAssetsResponse = {
   lamports: number | null;
   tokens: TokenHolding[];
   collections?: CollectionHolding[];
+  nativeName?: string;
+  nativeSymbol?: string;
+  nativeDecimals?: number;
+  nativeLogoUri?: string;
   totalUsdValue?: number | null;
   nativePriceUsd?: number | null;
   nativeValueUsd?: number | null;
@@ -95,6 +99,15 @@ export type WalletAssetsResponse = {
   cachedAt?: number;
   fromCache?: boolean;
   stale?: boolean;
+};
+
+export type ChainTokenPreviewResponse = {
+  tokenAddress: string;
+  name: string;
+  symbol: string;
+  decimals: number;
+  amount: string;
+  rawAmount: string;
 };
 
 export type TokenDetailsResponse = {
