@@ -58,6 +58,8 @@ import {
   Transaction,
   TransactionInstruction
 } from '@solana/web3.js';
+import { sendEthereumTokenWithLedger, sendEthereumWithLedger } from '../../../../packages/ethereum/src/ledger';
+import { sendMonadTokenWithLedger, sendMonadWithLedger } from '../../../../packages/monad/src/ledger';
 
 import type {
   ApprovalRecord,
@@ -1954,8 +1956,6 @@ class WalletController {
     if (!activeAccount) {
       throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
     }
-
-    const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
     let signature: string;
 
     if (selectedWallet.chain === 'sui') {
@@ -1969,6 +1969,7 @@ class WalletController {
         if (selectedWallet.signer.kind === 'ledger') {
           throw new RpcError('LEDGER_UNSUPPORTED', 'Sui Ledger support is not available in this build yet.');
         } else {
+          const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
           const signer = resolveSuiVaultSecret(secret);
           if (input.asset.kind === 'sui') {
             signature = await sendSui(client, signer, {
@@ -1996,14 +1997,36 @@ class WalletController {
 
       try {
         if (selectedWallet.signer.kind === 'ledger') {
-          throwLedgerUnsupported();
+          if (input.asset.kind === 'mon') {
+            signature = await sendMonadWithLedger(this.resolveMonadNetwork(walletState.selectedNetwork), selectedWallet.signer.derivationPath, {
+              recipient: input.recipient,
+              amountEther: input.amount,
+              customRpcUrl: walletState.chainState.monad.customRpcUrl
+            });
+          } else if (input.asset.kind === 'evm-token') {
+            signature = await sendMonadTokenWithLedger(
+              this.resolveMonadNetwork(walletState.selectedNetwork),
+              selectedWallet.signer.derivationPath,
+              {
+                recipient: input.recipient,
+                amount: input.amount,
+                tokenAddress: input.asset.tokenAddress,
+                decimals: input.asset.decimals,
+                customRpcUrl: walletState.chainState.monad.customRpcUrl
+              }
+            );
+          } else {
+            throw new RpcError('UNSUPPORTED_ASSET', 'Use the matching chain wallet to send this asset.');
+          }
         } else if (input.asset.kind === 'mon') {
+          const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
           signature = await sendMonad(this.resolveMonadNetwork(walletState.selectedNetwork), secret, {
             recipient: input.recipient,
             amountEther: input.amount,
             customRpcUrl: walletState.chainState.monad.customRpcUrl
           });
         } else if (input.asset.kind === 'evm-token') {
+          const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
           signature = await sendMonadToken(this.resolveMonadNetwork(walletState.selectedNetwork), secret, {
             recipient: input.recipient,
             amount: input.amount,
@@ -2025,14 +2048,36 @@ class WalletController {
 
       try {
         if (selectedWallet.signer.kind === 'ledger') {
-          throwLedgerUnsupported();
+          if (input.asset.kind === 'eth') {
+            signature = await sendEthereumWithLedger(this.resolveEthereumNetwork(walletState.selectedNetwork), selectedWallet.signer.derivationPath, {
+              recipient: input.recipient,
+              amountEther: input.amount,
+              customRpcUrl: walletState.chainState.ethereum.customRpcUrl
+            });
+          } else if (input.asset.kind === 'evm-token') {
+            signature = await sendEthereumTokenWithLedger(
+              this.resolveEthereumNetwork(walletState.selectedNetwork),
+              selectedWallet.signer.derivationPath,
+              {
+                recipient: input.recipient,
+                amount: input.amount,
+                tokenAddress: input.asset.tokenAddress,
+                decimals: input.asset.decimals,
+                customRpcUrl: walletState.chainState.ethereum.customRpcUrl
+              }
+            );
+          } else {
+            throw new RpcError('UNSUPPORTED_ASSET', 'Use the matching chain wallet to send this asset.');
+          }
         } else if (input.asset.kind === 'eth') {
+          const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
           signature = await sendEthereum(this.resolveEthereumNetwork(walletState.selectedNetwork), secret, {
             recipient: input.recipient,
             amountEther: input.amount,
             customRpcUrl: walletState.chainState.ethereum.customRpcUrl
           });
         } else if (input.asset.kind === 'evm-token') {
+          const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
           signature = await sendEthereumToken(this.resolveEthereumNetwork(walletState.selectedNetwork), secret, {
             recipient: input.recipient,
             amount: input.amount,

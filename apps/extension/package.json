@@ -9,6 +9,7 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "buffer": "^6.0.3",
     "@grape/core": "workspace:*",
     "@grape/ethereum": "workspace:*",
     "@grape/monad": "workspace:*",
