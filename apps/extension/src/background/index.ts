@@ -2694,10 +2694,7 @@ class WalletController {
       throw new RpcError('LEDGER_UNSUPPORTED', 'Bridge execution is not available for Ledger wallets yet.');
     }
 
-    const transactionRequest =
-      typeof input.quoteResponse.transactionRequest === 'object' && input.quoteResponse.transactionRequest
-        ? (input.quoteResponse.transactionRequest as { to?: string; data?: string; value?: string })
-        : null;
+    const transactionRequest = this.extractBridgeTransactionRequest(input.quoteResponse);
 
     if (!transactionRequest?.to || !transactionRequest.data) {
       throw new RpcError(
@@ -2766,6 +2763,42 @@ class WalletController {
     }
 
     return { wallet, account };
+  }
+
+  private extractBridgeTransactionRequest(quoteResponse: Record<string, unknown>) {
+    const directTransactionRequest =
+      typeof quoteResponse.transactionRequest === 'object' && quoteResponse.transactionRequest
+        ? (quoteResponse.transactionRequest as { to?: string; data?: string; value?: string })
+        : null;
+
+    if (directTransactionRequest?.to && directTransactionRequest.data) {
+      return directTransactionRequest;
+    }
+
+    const candidateCollections = [quoteResponse.includedSteps, quoteResponse.steps];
+    for (const collection of candidateCollections) {
+      if (!Array.isArray(collection)) {
+        continue;
+      }
+
+      for (const step of collection) {
+        if (typeof step !== 'object' || !step) {
+          continue;
+        }
+
+        const transactionRequest =
+          typeof (step as { transactionRequest?: unknown }).transactionRequest === 'object' &&
+          (step as { transactionRequest?: unknown }).transactionRequest
+            ? ((step as { transactionRequest: { to?: string; data?: string; value?: string } }).transactionRequest)
+            : null;
+
+        if (transactionRequest?.to && transactionRequest.data) {
+          return transactionRequest;
+        }
+      }
+    }
+
+    return null;
   }
 
   private getBridgeAmountUi(

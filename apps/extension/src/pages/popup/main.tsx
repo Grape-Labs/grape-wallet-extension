@@ -249,6 +249,45 @@ function formatWalletSourceLabel(
   }
 }
 
+function hasExecutableBridgeTransaction(quoteResponse: Record<string, unknown> | undefined): boolean {
+  if (!quoteResponse || typeof quoteResponse !== 'object') {
+    return false;
+  }
+
+  const directTransactionRequest =
+    typeof quoteResponse.transactionRequest === 'object' && quoteResponse.transactionRequest
+      ? (quoteResponse.transactionRequest as { to?: string; data?: string })
+      : null;
+  if (directTransactionRequest?.to && directTransactionRequest.data) {
+    return true;
+  }
+
+  const candidateCollections = [quoteResponse.includedSteps, quoteResponse.steps];
+  for (const collection of candidateCollections) {
+    if (!Array.isArray(collection)) {
+      continue;
+    }
+
+    for (const step of collection) {
+      if (typeof step !== 'object' || !step) {
+        continue;
+      }
+
+      const transactionRequest =
+        typeof (step as { transactionRequest?: unknown }).transactionRequest === 'object' &&
+        (step as { transactionRequest?: unknown }).transactionRequest
+          ? ((step as { transactionRequest: { to?: string; data?: string } }).transactionRequest)
+          : null;
+
+      if (transactionRequest?.to && transactionRequest.data) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 function getWalletSourceBadge(
   source: WalletStateResponse['activeWallet'] extends { source?: infer T } ? T : string,
   signerKind?: 'software' | 'watch-only' | 'ledger'
@@ -4701,6 +4740,7 @@ function PopupPage() {
     const sourceSymbol = assets.nativeSymbol ?? LIFI_NATIVE_SYMBOL[selectedChain];
     const sourceName = assets.nativeName ?? sourceChainOption?.label ?? sourceSymbol;
     const bridgeDestinationAddress = selectedBridgeDestinationAccount?.publicKey ?? null;
+    const bridgeCanExecute = bridgeQuote ? hasExecutableBridgeTransaction(bridgeQuote.quoteResponse) : false;
 
     if (isWatchOnlyWallet) {
       return (
@@ -4940,6 +4980,7 @@ function PopupPage() {
         </Card>
 
         <Card title="Quote">
+          {bridgeError ? <p className="danger-box">{bridgeError}</p> : null}
           {quotingBridge ? (
             <p className="muted">Fetching the best route…</p>
           ) : bridgeQuote ? (
@@ -4952,6 +4993,7 @@ function PopupPage() {
               </div>
               <KeyValueRow label="Destination" value={`${destinationChainOption?.label ?? bridgeDestinationChain} · ${selectedBridgeDestinationWallet?.name ?? 'Wallet'}`} />
               <KeyValueRow label="Route" value={bridgeQuote.routeLabels.length > 0 ? bridgeQuote.routeLabels.join(' → ') : 'Bridge route'} />
+              {!bridgeCanExecute ? <p className="warning-box">This quoted route is not directly executable in Grape yet. Try a different destination or amount.</p> : null}
             </div>
           ) : (
             <p className="muted">
@@ -4994,6 +5036,7 @@ function PopupPage() {
               onClick={() => void handleExecuteBridge()}
               disabled={
                 !bridgeQuote ||
+                !bridgeCanExecute ||
                 submittingBridge ||
                 quotingBridge ||
                 (!canUseUnlockedSigner && !bridgePassword.trim())
@@ -5003,8 +5046,6 @@ function PopupPage() {
             </Button>
           </div>
         </Card>
-
-        {bridgeError ? <p className="danger-box">{bridgeError}</p> : null}
       </>
     );
   }
