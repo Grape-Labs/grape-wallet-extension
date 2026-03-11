@@ -183,6 +183,30 @@ export type WalletSwapExecuteResponse = {
   outputAmountUi: string;
 };
 
+export type WalletBridgeQuoteResponse = {
+  quoteResponse: Record<string, unknown>;
+  fromChain: WalletState['selectedChain'];
+  toChain: WalletState['selectedChain'];
+  fromAmountUi: string;
+  toAmountUi: string;
+  fromSymbol: string;
+  toSymbol: string;
+  minimumReceivedUi?: string | null;
+  feeUsd?: string | null;
+  routeLabels: string[];
+};
+
+export type WalletBridgeExecuteResponse = {
+  signature: string;
+  fromChain: WalletState['selectedChain'];
+  toChain: WalletState['selectedChain'];
+  fromAmountUi: string;
+  toAmountUi: string;
+  fromSymbol: string;
+  toSymbol: string;
+  destinationAddress: string;
+};
+
 export type StakeAccountRow = {
   address: string;
   lamports: number;

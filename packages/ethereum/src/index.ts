@@ -229,6 +229,37 @@ export async function sendEthereumToken(
   });
 }
 
+export async function sendEthereumTransactionRequest(
+  network: EthereumNetwork,
+  secret: VaultSecret,
+  input: {
+    to: string;
+    data?: string;
+    value?: string;
+    customRpcUrl?: string | null;
+  }
+): Promise<Hex> {
+  if (!isAddress(input.to.trim())) {
+    throw new Error('Bridge transaction target is invalid.');
+  }
+
+  const account = resolveEthereumVaultSecret(secret);
+  const chain = network === 'sepolia' ? sepolia : mainnet;
+  const walletClient = createWalletClient({
+    account,
+    chain,
+    transport: http(getEthereumRpcUrl(network, input.customRpcUrl))
+  });
+
+  return walletClient.sendTransaction({
+    account,
+    chain,
+    to: input.to.trim() as Address,
+    data: input.data?.trim() ? (input.data.trim() as Hex) : undefined,
+    value: normalizeBigIntValue(input.value)
+  });
+}
+
 function normalizeHexPrivateKey(privateKey: string): Hex {
   const normalized = privateKey.trim();
   const withPrefix = normalized.startsWith('0x') ? normalized : `0x${normalized}`;
@@ -236,4 +267,13 @@ function normalizeHexPrivateKey(privateKey: string): Hex {
     throw new Error('Ethereum private key must be a 32-byte hex string.');
   }
   return withPrefix.toLowerCase() as Hex;
+}
+
+function normalizeBigIntValue(value?: string | null) {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  return BigInt(trimmed);
 }

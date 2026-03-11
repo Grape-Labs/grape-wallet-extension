@@ -49,6 +49,31 @@
   color: var(--theme-text);
 }
 
+.page-fallback-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.page-fallback-card {
+  width: min(420px, 100%);
+  padding: 20px;
+  border-radius: 20px;
+  border: 1px solid var(--theme-card-border);
+  background: var(--theme-card-bg);
+  box-shadow: var(--theme-card-shadow);
+}
+
+.page-fallback-card h2 {
+  margin: 0 0 8px;
+}
+
+.page-fallback-card p {
+  margin: 0;
+  color: var(--theme-muted);
+}
+
 body[data-theme='comic'] {
   font-family: 'Comic Sans MS', 'Chalkboard SE', 'Trebuchet MS', cursive;
   --theme-background:
@@ -1542,9 +1567,17 @@ body[data-theme='grape'] .wallet-home-card::after {
   padding: 9px 8px;
 }
 
+.home-quick-actions {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 body[data-surface='popup'] .quick-actions.compact {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 6px;
+}
+
+body[data-surface='popup'] .home-quick-actions.quick-actions.compact {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 body[data-surface='popup'] .quick-actions.compact .quick-action-card {
@@ -3675,6 +3708,89 @@ body[data-surface='popup'] .swap-leg-quote {
 
 body[data-surface='popup'] .swap-settings-row {
   justify-content: stretch;
+}
+
+.bridge-flow-shell {
+  gap: 16px;
+}
+
+.bridge-source-shell {
+  cursor: default;
+}
+
+.bridge-center-pill {
+  cursor: default;
+}
+
+.bridge-center-pill:disabled {
+  opacity: 1;
+}
+
+.bridge-destination-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.bridge-select-shell {
+  min-height: 72px;
+}
+
+.bridge-select-copy {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1 1 auto;
+}
+
+.bridge-select-text {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  text-align: left;
+}
+
+.bridge-select-text strong,
+.bridge-select-text .muted {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bridge-destination-preview {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--theme-surface-soft) 64%, transparent);
+}
+
+.bridge-destination-preview .mono {
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.bridge-quote-stack {
+  gap: 12px;
+}
+
+.bridge-quote-grid {
+  display: grid;
+  gap: 10px;
+}
+
+body[data-surface='popup'] .bridge-select-shell {
+  min-height: 68px;
+}
+
+body[data-surface='popup'] .bridge-select-copy {
+  gap: 10px;
+}
+
+body[data-surface='popup'] .bridge-destination-preview {
+  padding: 10px 12px;
 }
 
 body[data-surface='popup'] .swap-slippage-chip {

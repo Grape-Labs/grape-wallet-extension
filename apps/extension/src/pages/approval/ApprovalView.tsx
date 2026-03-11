@@ -70,8 +70,13 @@ export function ApprovalView(props: {
   const [showSimulationLogs, setShowSimulationLogs] = useState(false);
   const [expandedInstructionAccounts, setExpandedInstructionAccounts] = useState<Record<string, boolean>>({});
   const requiresPassword = approval.kind !== 'connect' && (approval.requiresPassword ?? true);
+  const selectedWalletId =
+    walletState?.wallet.selectedWalletIds[walletState.wallet.selectedChain] ??
+    (walletState?.wallet.selectedChain === 'solana' ? walletState?.wallet.selectedWalletId : undefined);
   const selectedWallet =
-    walletState?.wallet.wallets.find((entry) => entry.id === walletState.wallet.selectedWalletId) ?? walletState?.wallet.wallets[0];
+    walletState?.wallet.wallets.find((entry) => entry.id === selectedWalletId) ??
+    walletState?.wallet.wallets.find((entry) => entry.chain === walletState?.wallet.selectedChain) ??
+    walletState?.wallet.wallets[0];
   const biometricEnabled = biometricSupported && !!selectedWallet?.biometricUnlock && !!walletState?.activeWallet?.biometricEnabled;
   const successCopy = useMemo(() => {
     switch (approval.kind) {

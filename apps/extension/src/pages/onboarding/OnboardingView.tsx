@@ -13,6 +13,8 @@ import {
   validateSolanaPrivateKey,
   validateWalletMnemonic
 } from '@grape/solana';
+import { sendRuntimeMessage } from '../../shared/chrome';
+import type { WalletStateResponse } from '../../shared/models';
 import { requestLedgerAccounts } from '../../../../../packages/solana/src/ledger';
 import { requestEthereumLedgerAccounts } from '../../../../../packages/ethereum/src/ledger';
 import { requestMonadLedgerAccounts } from '../../../../../packages/monad/src/ledger';

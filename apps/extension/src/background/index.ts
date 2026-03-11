@@ -4,6 +4,7 @@ import {
   createVaultRecord,
   createPendingApproval,
   getSelectedWallet,
+  type GrapeChain,
   grantPermissions,
   hasPermission,
   isSessionExpired,
@@ -60,16 +61,52 @@ import {
 } from '@solana/web3.js';
 import { sendEthereumTokenWithLedger, sendEthereumWithLedger } from '../../../../packages/ethereum/src/ledger';
 import { sendMonadTokenWithLedger, sendMonadWithLedger } from '../../../../packages/monad/src/ledger';
+import {
+  createSuiClient,
+  deriveSuiAccount0,
+  getSuiHoldings,
+  resolveSuiVaultSecret,
+  sendSui,
+  sendSuiCoin,
+  validateSuiAddress,
+  type SuiNetwork
+} from '@grape/sui';
+import {
+  createMonadPublicClient,
+  deriveMonadAccount0,
+  getMonadHoldings,
+  getMonadTokenPreview,
+  resolveMonadVaultSecret,
+  sendMonad,
+  sendMonadToken,
+  sendMonadTransactionRequest,
+  validateMonadAddress,
+  type MonadNetwork
+} from '@grape/monad';
+import {
+  createEthereumPublicClient,
+  deriveEthereumAccount0,
+  getEthereumHoldings,
+  getEthereumTokenPreview,
+  resolveEthereumVaultSecret,
+  sendEthereum,
+  sendEthereumToken,
+  sendEthereumTransactionRequest,
+  validateEthereumAddress,
+  type EthereumNetwork
+} from '@grape/ethereum';
 
 import type {
   ApprovalRecord,
   ChainTokenPreviewResponse,
   WalletActivityResponse,
+  WalletBridgeExecuteResponse,
   CollectionHolding,
   CollectibleItem,
   StakeAccountRow,
   TokenHolding,
-  WalletAssetsResponse
+  WalletAssetsResponse,
+  WalletBridgeQuoteResponse
 } from '../shared/models';
 
 import { filterCollectibleTokens, inferCollectibleMints, sortWalletTokens } from '../shared/assets';
@@ -81,6 +118,7 @@ import {
   JUPITER_SOL_MINT,
   type JupiterQuoteResponse
 } from '../shared/jupiter';
+import { fetchNativeBridgeQuote, LIFI_NATIVE_DECIMALS, LIFI_NATIVE_SYMBOL } from '../shared/lifi';
 import { getRpcEndpoint } from '../shared/rpc';
 import {
   fetchShyftCollections,
@@ -89,29 +127,6 @@ import {
   fetchShyftWalletTokens,
   hasShyftApiKey
 } from '../shared/shyft';
-
-import type { SuiNetwork } from '@grape/sui';
-import type { MonadNetwork } from '@grape/monad';
-import type { EthereumNetwork } from '@grape/ethereum';
-
-let suiModulePromise: Promise<typeof import('@grape/sui')> | null = null;
-let monadModulePromise: Promise<typeof import('@grape/monad')> | null = null;
-let ethereumModulePromise: Promise<typeof import('@grape/ethereum')> | null = null;
-
-function getSuiModule() {
-  suiModulePromise ??= import('@grape/sui');
-  return suiModulePromise;
-}
-
-function getMonadModule() {
-  monadModulePromise ??= import('@grape/monad');
-  return monadModulePromise;
-}
-
-function getEthereumModule() {
-  ethereumModulePromise ??= import('@grape/ethereum');
-  return ethereumModulePromise;
-}
 
 const approvalsStorage = new ChromeStorageArea<Record<string, ApprovalRecord>>(chrome.storage.local, STORAGE_KEYS.approvals, {});
 const assetCacheStorage = new ChromeStorageArea<Record<string, { cachedAt: number; data: WalletAssetsResponse }>>(
@@ -273,7 +288,6 @@ class WalletController {
     network: 'mainnet-beta' | 'devnet',
     walletState: Awaited<ReturnType<WalletController['getWalletState']>>
   ) {
-    const { createSuiClient } = await getSuiModule();
     return createSuiClient(this.resolveSuiNetwork(network), walletState.chainState.sui.customRpcUrl);
   }
 
@@ -285,7 +299,6 @@ class WalletController {
     network: 'mainnet-beta' | 'devnet',
     walletState: Awaited<ReturnType<WalletController['getWalletState']>>
   ) {
-    const { createMonadPublicClient } = await getMonadModule();
     return createMonadPublicClient(this.resolveMonadNetwork(network), walletState.chainState.monad.customRpcUrl);
   }
 
@@ -297,7 +310,6 @@ class WalletController {
     network: 'mainnet-beta' | 'devnet',
     walletState: Awaited<ReturnType<WalletController['getWalletState']>>
   ) {
-    const { createEthereumPublicClient } = await getEthereumModule();
     return createEthereumPublicClient(this.resolveEthereumNetwork(network), walletState.chainState.ethereum.customRpcUrl);
   }
 
@@ -348,10 +360,7 @@ class WalletController {
     publicKey: string,
     walletState: Awaited<ReturnType<WalletController['getWalletState']>>
   ): Promise<WalletAssetsResponse> {
-    const [{ getSuiHoldings }, client] = await Promise.all([
-      getSuiModule(),
-      this.createSuiClient(network, walletState)
-    ]);
+    const client = await this.createSuiClient(network, walletState);
     const holdings = await getSuiHoldings(client, publicKey);
     const totalMist = BigInt(holdings.totalMist);
     const safeLamports = totalMist > BigInt(Number.MAX_SAFE_INTEGER) ? null : Number(totalMist);
@@ -399,10 +408,7 @@ class WalletController {
     publicKey: string,
     walletState: Awaited<ReturnType<WalletController['getWalletState']>>
   ): Promise<WalletAssetsResponse> {
-    const [{ getMonadHoldings }, client] = await Promise.all([
-      getMonadModule(),
-      this.createMonadClient(network, walletState)
-    ]);
+    const client = await this.createMonadClient(network, walletState);
     const holdings = await getMonadHoldings(client, publicKey);
     const safeBaseUnits = holdings.totalWei > BigInt(Number.MAX_SAFE_INTEGER) ? null : Number(holdings.totalWei);
     const result: WalletAssetsResponse = {
@@ -434,10 +440,7 @@ class WalletController {
     publicKey: string,
     walletState: Awaited<ReturnType<WalletController['getWalletState']>>
   ): Promise<WalletAssetsResponse> {
-    const [{ getEthereumHoldings }, client] = await Promise.all([
-      getEthereumModule(),
-      this.createEthereumClient(network, walletState)
-    ]);
+    const client = await this.createEthereumClient(network, walletState);
     const holdings = await getEthereumHoldings(client, publicKey);
     const safeBaseUnits = holdings.totalWei > BigInt(Number.MAX_SAFE_INTEGER) ? null : Number(holdings.totalWei);
     const result: WalletAssetsResponse = {
@@ -678,18 +681,12 @@ class WalletController {
     }
 
     if (selectedWallet.chain === 'ethereum') {
-      const [{ getEthereumTokenPreview }, client] = await Promise.all([
-        getEthereumModule(),
-        this.createEthereumClient(walletState.selectedNetwork, walletState)
-      ]);
+      const client = await this.createEthereumClient(walletState.selectedNetwork, walletState);
       return getEthereumTokenPreview(client, activeAccount.publicKey, tokenAddress);
     }
 
     if (selectedWallet.chain === 'monad') {
-      const [{ getMonadTokenPreview }, client] = await Promise.all([
-        getMonadModule(),
-        this.createMonadClient(walletState.selectedNetwork, walletState)
-      ]);
+      const client = await this.createMonadClient(walletState.selectedNetwork, walletState);
       return getMonadTokenPreview(client, activeAccount.publicKey, tokenAddress);
     }
 
@@ -817,10 +814,10 @@ class WalletController {
         chain === 'solana'
           ? current.chainState.solana.selectedNetwork
           : chain === 'sui'
-            ? current.chainState.sui.selectedNetwork
+            ? current.chainState.selectedNetwork
             : chain === 'monad'
-              ? current.chainState.monad.selectedNetwork
-              : current.chainState.ethereum.selectedNetwork,
+              ? current.chainState.selectedNetwork
+              : current.chainState.selectedNetwork,
       selectedWalletIds: {
         ...current.selectedWalletIds,
         [chain]: profile.id
@@ -856,11 +853,6 @@ class WalletController {
     }
 
     const solanaAccount = deriveSolanaAccount0(mnemonic);
-    const [{ deriveSuiAccount0 }, { deriveMonadAccount0 }, { deriveEthereumAccount0 }] = await Promise.all([
-      getSuiModule(),
-      getMonadModule(),
-      getEthereumModule()
-    ]);
     const suiAccount = deriveSuiAccount0(mnemonic);
     const monadAccount = deriveMonadAccount0(mnemonic);
     const ethereumAccount = deriveEthereumAccount0(mnemonic);
@@ -1081,15 +1073,15 @@ class WalletController {
         },
         sui: {
           ...walletState.chainState.sui,
-          selectedNetwork: selectedChain === 'sui' ? network : walletState.chainState.sui.selectedNetwork
+          selectedNetwork: selectedChain === 'sui' ? network : walletState.chainState.selectedNetwork
         },
         monad: {
           ...walletState.chainState.monad,
-          selectedNetwork: selectedChain === 'monad' ? network : walletState.chainState.monad.selectedNetwork
+          selectedNetwork: selectedChain === 'monad' ? network : walletState.chainState.selectedNetwork
         },
         ethereum: {
           ...walletState.chainState.ethereum,
-          selectedNetwork: selectedChain === 'ethereum' ? network : walletState.chainState.ethereum.selectedNetwork
+          selectedNetwork: selectedChain === 'ethereum' ? network : walletState.chainState.selectedNetwork
         }
       },
       selectedNetwork: network
@@ -1216,14 +1208,20 @@ class WalletController {
     await walletStateStorage.set({
       ...walletState,
       selectedChain: chain,
+      selectedWalletIds: nextSelectedWalletId
+        ? {
+            ...walletState.selectedWalletIds,
+            [chain]: nextSelectedWalletId
+          }
+        : walletState.selectedWalletIds,
       selectedNetwork:
         chain === 'solana'
           ? walletState.chainState.solana.selectedNetwork
           : chain === 'sui'
-            ? walletState.chainState.sui.selectedNetwork
+            ? walletState.chainState.selectedNetwork
             : chain === 'monad'
-              ? walletState.chainState.monad.selectedNetwork
-              : walletState.chainState.ethereum.selectedNetwork,
+              ? walletState.chainState.selectedNetwork
+              : walletState.chainState.selectedNetwork,
       selectedWalletId: nextSelectedWalletId ?? walletState.selectedWalletId
     });
     return this.getStateResponse();
@@ -1296,18 +1294,12 @@ class WalletController {
       return total > BigInt(Number.MAX_SAFE_INTEGER) ? null : Number(total);
     }
     if (selectedWallet.chain === 'monad') {
-      const [{ getMonadHoldings }, client] = await Promise.all([
-        getMonadModule(),
-        this.createMonadClient(walletState.selectedNetwork, walletState)
-      ]);
+      const client = await this.createMonadClient(walletState.selectedNetwork, walletState);
       const balance = await getMonadHoldings(client, activeAccount.publicKey);
       return balance.totalWei > BigInt(Number.MAX_SAFE_INTEGER) ? null : Number(balance.totalWei);
     }
     if (selectedWallet.chain === 'ethereum') {
-      const [{ getEthereumHoldings }, client] = await Promise.all([
-        getEthereumModule(),
-        this.createEthereumClient(walletState.selectedNetwork, walletState)
-      ]);
+      const client = await this.createEthereumClient(walletState.selectedNetwork, walletState);
       const balance = await getEthereumHoldings(client, activeAccount.publicKey);
       return balance.totalWei > BigInt(Number.MAX_SAFE_INTEGER) ? null : Number(balance.totalWei);
     }
@@ -1959,7 +1951,6 @@ class WalletController {
     let signature: string;
 
     if (selectedWallet.chain === 'sui') {
-      const { resolveSuiVaultSecret, sendSui, sendSuiCoin, validateSuiAddress } = await getSuiModule();
       if (!validateSuiAddress(input.recipient)) {
         throw new RpcError('INVALID_RECIPIENT', 'Enter a valid Sui wallet address.');
       }
@@ -1990,7 +1981,6 @@ class WalletController {
         throw normalizeSigningError(error);
       }
     } else if (selectedWallet.chain === 'monad') {
-      const { sendMonad, sendMonadToken, validateMonadAddress } = await getMonadModule();
       if (!validateMonadAddress(input.recipient)) {
         throw new RpcError('INVALID_RECIPIENT', 'Enter a valid Monad wallet address.');
       }
@@ -2041,7 +2031,6 @@ class WalletController {
         throw normalizeSigningError(error);
       }
     } else if (selectedWallet.chain === 'ethereum') {
-      const { sendEthereum, sendEthereumToken, validateEthereumAddress } = await getEthereumModule();
       if (!validateEthereumAddress(input.recipient)) {
         throw new RpcError('INVALID_RECIPIENT', 'Enter a valid Ethereum wallet address.');
       }
@@ -2102,6 +2091,7 @@ class WalletController {
         throw new RpcError('UNSUPPORTED_ASSET', 'Use the matching chain wallet to send native assets.');
       }
 
+      const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
       const connection = this.createConnection(walletState.selectedNetwork, walletState);
       const owner = new PublicKey(activeAccount.publicKey);
       const transaction =
@@ -2631,6 +2621,170 @@ class WalletController {
       inputAmountUi: formatUiAmount(input.quoteResponse.inAmount, await getMintDecimals(connection, input.quoteResponse.inputMint)),
       outputAmountUi: formatUiAmount(input.quoteResponse.outAmount, await getMintDecimals(connection, input.quoteResponse.outputMint))
     };
+  }
+
+  async getBridgeQuote(input: {
+    amount: string;
+    toChain: GrapeChain;
+    destinationWalletId?: string;
+  }): Promise<WalletBridgeQuoteResponse> {
+    const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
+    if (!activeAccount) {
+      throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
+    }
+    if (selectedWallet.chain === 'sui') {
+      throw new RpcError('UNSUPPORTED_CHAIN', 'Bridge source is coming soon for Sui wallets.');
+    }
+    if (input.toChain === selectedWallet.chain) {
+      throw new RpcError('INVALID_BRIDGE', 'Choose a different destination chain.');
+    }
+
+    const destination = this.resolveBridgeDestination(walletState, input.toChain, input.destinationWalletId);
+    const amountRaw = parseDecimalAmount(input.amount, LIFI_NATIVE_DECIMALS[selectedWallet.chain]).toString();
+
+    try {
+      return await fetchNativeBridgeQuote({
+        fromChain: selectedWallet.chain,
+        toChain: destination.wallet.chain,
+        amountRaw,
+        fromAddress: activeAccount.publicKey,
+        toAddress: destination.account.publicKey
+      });
+    } catch (error) {
+      throw new RpcError(
+        'BRIDGE_QUOTE_FAILED',
+        error instanceof Error ? error.message : 'Unable to fetch a bridge quote right now.'
+      );
+    }
+  }
+
+  async executeBridge(input: {
+    quoteResponse: Record<string, unknown>;
+    toChain: GrapeChain;
+    destinationWalletId?: string;
+    password?: string;
+  }): Promise<WalletBridgeExecuteResponse> {
+    const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    this.assertInteractiveWallet(selectedWallet);
+    const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
+    if (!activeAccount) {
+      throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
+    }
+    if (selectedWallet.chain === 'sui') {
+      throw new RpcError('UNSUPPORTED_CHAIN', 'Bridge source is coming soon for Sui wallets.');
+    }
+    if (selectedWallet.signer.kind === 'ledger') {
+      throw new RpcError('LEDGER_UNSUPPORTED', 'Bridge execution is not available for Ledger wallets yet.');
+    }
+
+    const transactionRequest =
+      typeof input.quoteResponse.transactionRequest === 'object' && input.quoteResponse.transactionRequest
+        ? (input.quoteResponse.transactionRequest as { to?: string; data?: string; value?: string })
+        : null;
+
+    if (!transactionRequest?.to || !transactionRequest.data) {
+      throw new RpcError(
+        'BRIDGE_UNSUPPORTED',
+        'This bridge route requires an unsupported transaction format. Try a different route or amount.'
+      );
+    }
+
+    const destination = this.resolveBridgeDestination(walletState, input.toChain, input.destinationWalletId);
+    const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
+
+    let signature: string;
+    try {
+      if (selectedWallet.chain === 'solana') {
+        signature = await signAndSendSerializedTransaction(
+          transactionRequest.data,
+          resolveSolanaVaultSecret(secret),
+          this.resolveRpcEndpoint(walletState.selectedNetwork, walletState)
+        );
+      } else if (selectedWallet.chain === 'ethereum') {
+        signature = await sendEthereumTransactionRequest(this.resolveEthereumNetwork(walletState.selectedNetwork), secret, {
+          to: transactionRequest.to,
+          data: transactionRequest.data,
+          value: transactionRequest.value,
+          customRpcUrl: walletState.chainState.ethereum.customRpcUrl
+        });
+      } else if (selectedWallet.chain === 'monad') {
+        signature = await sendMonadTransactionRequest(this.resolveMonadNetwork(walletState.selectedNetwork), secret, {
+          to: transactionRequest.to,
+          data: transactionRequest.data,
+          value: transactionRequest.value,
+          customRpcUrl: walletState.chainState.monad.customRpcUrl
+        });
+      } else {
+        throw new RpcError('UNSUPPORTED_CHAIN', 'Bridge source is not supported for this chain yet.');
+      }
+    } catch (error) {
+      throw normalizeSigningError(error);
+    }
+
+    await this.setSessionState({ locked: false, lastActivityAt: Date.now() });
+    await this.invalidateAssetCache(this.getAssetCacheKey(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey));
+
+    return {
+      signature,
+      fromChain: selectedWallet.chain,
+      toChain: destination.wallet.chain,
+      fromAmountUi: this.getBridgeAmountUi(input.quoteResponse, 'from', selectedWallet.chain),
+      toAmountUi: this.getBridgeAmountUi(input.quoteResponse, 'to', destination.wallet.chain),
+      fromSymbol: this.getBridgeSymbol(input.quoteResponse, 'from', selectedWallet.chain),
+      toSymbol: this.getBridgeSymbol(input.quoteResponse, 'to', destination.wallet.chain),
+      destinationAddress: destination.account.publicKey
+    };
+  }
+
+  private resolveBridgeDestination(walletState: Awaited<ReturnType<typeof walletStateStorage.get>>, chain: GrapeChain, walletId?: string) {
+    const chainWallets = walletState.wallets.filter((candidate) => candidate.chain === chain);
+    const wallet = chainWallets.find((candidate) => candidate.id === walletId) ?? chainWallets[0];
+    if (!wallet) {
+      throw new RpcError('BRIDGE_DESTINATION_MISSING', `Add a ${chain} wallet before bridging to that chain.`);
+    }
+
+    const account = wallet.accounts.find((candidate) => candidate.id === wallet.selectedAccountId) ?? wallet.accounts[0];
+    if (!account) {
+      throw new RpcError('ACCOUNT_MISSING', 'The selected destination wallet does not have an active account.');
+    }
+
+    return { wallet, account };
+  }
+
+  private getBridgeAmountUi(
+    quoteResponse: Record<string, unknown>,
+    side: 'from' | 'to',
+    chain: GrapeChain
+  ) {
+    const estimate =
+      typeof quoteResponse.estimate === 'object' && quoteResponse.estimate
+        ? (quoteResponse.estimate as { fromAmount?: string; toAmount?: string })
+        : null;
+    const rawAmount = side === 'from' ? estimate?.fromAmount : estimate?.toAmount;
+    if (!rawAmount) {
+      return '0';
+    }
+
+    return formatUiAmount(rawAmount, LIFI_NATIVE_DECIMALS[chain]);
+  }
+
+  private getBridgeSymbol(
+    quoteResponse: Record<string, unknown>,
+    side: 'from' | 'to',
+    chain: GrapeChain
+  ) {
+    const estimate =
+      typeof quoteResponse.estimate === 'object' && quoteResponse.estimate
+        ? (quoteResponse.estimate as {
+            fromToken?: { symbol?: string };
+            toToken?: { symbol?: string };
+          })
+        : null;
+
+    return side === 'from'
+      ? estimate?.fromToken?.symbol ?? LIFI_NATIVE_SYMBOL[chain]
+      : estimate?.toToken?.symbol ?? LIFI_NATIVE_SYMBOL[chain];
   }
 
   async handleProviderRequest(request: ProviderRequest, debug?: (payload: ProviderDebugPayload) => void): Promise<unknown> {
@@ -3491,6 +3645,25 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
           sendResponse(
             await controller.executeSwap({
               quoteResponse: message.quoteResponse,
+              password: message.password
+            })
+          );
+          break;
+        case 'wallet_get_bridge_quote':
+          sendResponse(
+            await controller.getBridgeQuote({
+              amount: message.amount,
+              toChain: message.toChain,
+              destinationWalletId: message.destinationWalletId
+            })
+          );
+          break;
+        case 'wallet_execute_bridge':
+          sendResponse(
+            await controller.executeBridge({
+              quoteResponse: message.quoteResponse,
+              toChain: message.toChain,
+              destinationWalletId: message.destinationWalletId,
               password: message.password
             })
           );

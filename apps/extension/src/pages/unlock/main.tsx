@@ -46,7 +46,13 @@ function UnlockPage() {
   }, [state]);
 
   async function handleBiometricUnlock() {
-    const selectedWallet = state?.wallet.wallets.find((entry) => entry.id === state.wallet.selectedWalletId) ?? state?.wallet.wallets[0];
+    const selectedWalletId =
+      state?.wallet.selectedWalletIds[state.wallet.selectedChain] ??
+      (state?.wallet.selectedChain === 'solana' ? state?.wallet.selectedWalletId : undefined);
+    const selectedWallet =
+      state?.wallet.wallets.find((entry) => entry.id === selectedWalletId) ??
+      state?.wallet.wallets.find((entry) => entry.chain === state?.wallet.selectedChain) ??
+      state?.wallet.wallets[0];
     if (!selectedWallet?.biometricUnlock) {
       return;
     }

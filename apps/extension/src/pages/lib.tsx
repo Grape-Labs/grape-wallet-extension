@@ -1,4 +1,6 @@
 import '../shared/page-polyfills';
+import type { ReactNode } from 'react';
+import { Component } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import '../shared/style.css';
@@ -28,6 +30,31 @@ function resolveSurface() {
 
 let surfacePort: chrome.runtime.Port | null = null;
 let surfaceId: string | null = null;
+
+class PageErrorBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
+  override state = { error: null as string | null };
+
+  static override getDerivedStateFromError(error: unknown) {
+    return {
+      error: error instanceof Error ? error.message : 'A page error occurred.'
+    };
+  }
+
+  override render() {
+    if (this.state.error) {
+      return (
+        <div className="page-fallback-shell">
+          <div className="page-fallback-card">
+            <h2>Unable to load Grape</h2>
+            <p>{this.state.error}</p>
+          </div>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
 
 export function mountPage(element: React.ReactNode) {
   const container = document.getElementById('root');
@@ -72,5 +99,5 @@ export function mountPage(element: React.ReactNode) {
   void loadPersistedTheme().then((theme) => {
     applyDocumentTheme(theme);
   });
-  createRoot(container).render(element);
+  createRoot(container).render(<PageErrorBoundary>{element}</PageErrorBoundary>);
 }

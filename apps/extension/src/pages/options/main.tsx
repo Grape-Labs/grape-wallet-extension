@@ -143,7 +143,13 @@ function OptionsPage() {
     );
   }
 
-  const selectedWallet = state.wallet.wallets.find((wallet) => wallet.id === state.wallet.selectedWalletId) ?? state.wallet.wallets[0];
+  const selectedWalletId =
+    state.wallet.selectedWalletIds[state.wallet.selectedChain] ??
+    (state.wallet.selectedChain === 'solana' ? state.wallet.selectedWalletId : undefined);
+  const selectedWallet =
+    state.wallet.wallets.find((wallet) => wallet.id === selectedWalletId) ??
+    state.wallet.wallets.find((wallet) => wallet.chain === state.wallet.selectedChain) ??
+    state.wallet.wallets[0];
   const exportIsAvailable = selectedWallet?.signer?.kind === 'software';
   const exportPayload = exportedWallet
     ? JSON.stringify(

@@ -66,6 +66,7 @@ function createManifestPlugin(mainnetRpcUrl: string): Plugin {
           'https://ethereum-sepolia-rpc.publicnode.com/*',
           'https://rpc.monad.xyz/*',
           'https://testnet-rpc.monad.xyz/*',
+          'https://li.quest/*',
           'https://lite-api.jup.ag/*',
           'https://api.jup.ag/*',
           'https://api.shyft.to/*'

@@ -46,6 +46,40 @@ const jupiterQuoteResponseSchema = z
   })
   .passthrough();
 
+const bridgeQuoteResponseSchema = z
+  .object({
+    transactionRequest: z
+      .object({
+        to: z.string().optional(),
+        data: z.string().optional(),
+        value: z.string().optional()
+      })
+      .optional(),
+    estimate: z
+      .object({
+        fromAmount: z.string().optional(),
+        toAmount: z.string().optional(),
+        toAmountMin: z.string().optional(),
+        fromToken: z
+          .object({
+            symbol: z.string().optional(),
+            decimals: z.number().optional()
+          })
+          .passthrough()
+          .optional(),
+        toToken: z
+          .object({
+            symbol: z.string().optional(),
+            decimals: z.number().optional()
+          })
+          .passthrough()
+          .optional()
+      })
+      .passthrough()
+      .optional()
+  })
+  .passthrough();
+
 export const pageOriginSchema = z.object({
   origin: z.string().url(),
   href: z.string().url(),
@@ -338,6 +372,19 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('wallet_execute_swap'),
     quoteResponse: jupiterQuoteResponseSchema,
+    password: z.string().min(1).optional()
+  }),
+  z.object({
+    type: z.literal('wallet_get_bridge_quote'),
+    amount: decimalAmountSchema,
+    toChain: z.enum(['solana', 'sui', 'monad', 'ethereum']),
+    destinationWalletId: z.string().min(1).optional()
+  }),
+  z.object({
+    type: z.literal('wallet_execute_bridge'),
+    quoteResponse: bridgeQuoteResponseSchema,
+    toChain: z.enum(['solana', 'sui', 'monad', 'ethereum']),
+    destinationWalletId: z.string().min(1).optional(),
     password: z.string().min(1).optional()
   }),
   z.object({

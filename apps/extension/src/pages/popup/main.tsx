@@ -52,6 +52,8 @@ import type {
   TokenHolding,
   WalletSecurityReportResponse,
   WalletAssetsResponse,
+  WalletBridgeExecuteResponse,
+  WalletBridgeQuoteResponse,
   WalletStakeAccountsResponse,
   WalletStakeActionResponse,
   WalletStateResponse,
@@ -62,13 +64,14 @@ import type {
 import { sendRuntimeMessage } from '../../shared/chrome';
 import { createBiometricUnlock, isBiometricUnlockSupported, unlockWithBiometric } from '../../shared/biometric';
 import { JUPITER_SOL_MINT } from '../../shared/jupiter';
+import { LIFI_NATIVE_SYMBOL } from '../../shared/lifi';
 import { applyDocumentTheme, THEMES } from '../../shared/theme';
 import { openExtensionPage, openExtensionSidePanel } from '../../shared/window';
 import { ApprovalView } from '../approval/ApprovalView';
 import { mountPage } from '../lib';
 import { OnboardingView } from '../onboarding/OnboardingView';
 
-type PopupView = 'home' | 'send' | 'receive' | 'swap' | 'settings' | 'asset' | 'security' | 'approval';
+type PopupView = 'home' | 'send' | 'receive' | 'swap' | 'bridge' | 'settings' | 'asset' | 'security' | 'approval';
 type HomeTab = 'tokens' | 'collectibles' | 'activity' | 'staking';
 type AssetOption =
   | {
@@ -129,12 +132,19 @@ const CHAIN_OPTIONS = [
 ] as const;
 const VISIBLE_CHAIN_OPTIONS = CHAIN_OPTIONS.filter((chain) => chain.enabled);
 
+function getSelectedWalletIdForChain(
+  wallet: WalletStateResponse['wallet'],
+  chain: WalletStateResponse['wallet']['selectedChain']
+): string | undefined {
+  return wallet.selectedWalletIds[chain] ?? (chain === 'solana' ? wallet.selectedWalletId : undefined);
+}
+
 function parseInitialView(): PopupView {
   const nextView = new URLSearchParams(window.location.search).get('view');
   if (nextView === 'send' || nextView === 'receive' || nextView === 'settings' || nextView === 'security') {
     return nextView;
   }
-  if (nextView === 'swap') {
+  if (nextView === 'swap' || nextView === 'bridge') {
     return nextView;
   }
   return 'home';
@@ -850,6 +860,18 @@ function PopupPage() {
   const [quotingSwap, setQuotingSwap] = useState(false);
   const [submittingSwap, setSubmittingSwap] = useState(false);
   const swapQuoteRequestRef = useRef(0);
+  const [bridgeDestinationChain, setBridgeDestinationChain] = useState<WalletStateResponse['wallet']['selectedChain'] | null>(null);
+  const [bridgeDestinationWalletId, setBridgeDestinationWalletId] = useState('');
+  const [bridgeAmount, setBridgeAmount] = useState('');
+  const [bridgePassword, setBridgePassword] = useState('');
+  const [bridgeQuote, setBridgeQuote] = useState<WalletBridgeQuoteResponse | null>(null);
+  const [bridgeResult, setBridgeResult] = useState<WalletBridgeExecuteResponse | null>(null);
+  const [bridgeError, setBridgeError] = useState<string | null>(null);
+  const [quotingBridge, setQuotingBridge] = useState(false);
+  const [submittingBridge, setSubmittingBridge] = useState(false);
+  const [bridgeChainPickerOpen, setBridgeChainPickerOpen] = useState(false);
+  const [bridgeWalletPickerOpen, setBridgeWalletPickerOpen] = useState(false);
+  const bridgeQuoteRequestRef = useRef(0);
   const [assetsLoading, setAssetsLoading] = useState(false);
   const [activity, setActivity] = useState<WalletActivityItem[]>([]);
   const [activityLoading, setActivityLoading] = useState(false);
@@ -914,26 +936,32 @@ function PopupPage() {
   const selectedChainValue = state?.wallet.selectedChain ?? 'solana';
 
   const refresh = async () => {
-    const nextState = await sendRuntimeMessage<WalletStateResponse>({ type: 'wallet_get_state' });
-    setState(nextState);
-    if (nextState.wallet.setup === 'ready' && !nextState.session.locked) {
-      setAssetsLoading(true);
-      try {
-        const nextAssets = await sendRuntimeMessage<WalletAssetsResponse>({
-          type: 'wallet_get_assets',
-          staleWhileRevalidate: true
+    try {
+      setSurfaceError(null);
+      const nextState = await sendRuntimeMessage<WalletStateResponse>({ type: 'wallet_get_state' });
+      setState(nextState);
+      if (nextState.wallet.setup === 'ready' && !nextState.session.locked) {
+        setAssetsLoading(true);
+        try {
+          const nextAssets = await sendRuntimeMessage<WalletAssetsResponse>({
+            type: 'wallet_get_assets',
+            staleWhileRevalidate: true
+          });
+          setAssets(nextAssets);
+        } finally {
+          setAssetsLoading(false);
+        }
+      } else {
+        setAssets({
+          lamports: null,
+          tokens: [],
+          collections: []
         });
-        setAssets(nextAssets);
-      } finally {
         setAssetsLoading(false);
       }
-    } else {
-      setAssets({
-        lamports: null,
-        tokens: [],
-        collections: []
-      });
+    } catch (error) {
       setAssetsLoading(false);
+      setSurfaceError(error instanceof Error ? error.message : 'Unable to load wallet state.');
     }
   };
 
@@ -1018,6 +1046,7 @@ function PopupPage() {
 
     setPassword('');
     setSwapPassword('');
+    setBridgePassword('');
     setStakePassword('');
     setBurnPassword('');
     setIncidentPassword('');
@@ -1548,6 +1577,62 @@ function PopupPage() {
     }
   }
 
+  async function handleGetBridgeQuote(requestId = Date.now()) {
+    if (!bridgeDestinationChain || !selectedBridgeDestinationWallet || !bridgeAmount.trim()) {
+      return;
+    }
+
+    try {
+      bridgeQuoteRequestRef.current = requestId;
+      setQuotingBridge(true);
+      setBridgeError(null);
+      setBridgeResult(null);
+      const quote = await sendRuntimeMessage<WalletBridgeQuoteResponse>({
+        type: 'wallet_get_bridge_quote',
+        amount: bridgeAmount,
+        toChain: bridgeDestinationChain,
+        destinationWalletId: selectedBridgeDestinationWallet.id
+      });
+      if (bridgeQuoteRequestRef.current === requestId) {
+        setBridgeQuote(quote);
+      }
+    } catch (error) {
+      if (bridgeQuoteRequestRef.current === requestId) {
+        setBridgeQuote(null);
+        setBridgeError(error instanceof Error ? error.message : 'Unable to fetch a bridge quote.');
+      }
+    } finally {
+      if (bridgeQuoteRequestRef.current === requestId) {
+        setQuotingBridge(false);
+      }
+    }
+  }
+
+  async function handleExecuteBridge() {
+    if (!bridgeQuote || !bridgeDestinationChain || !selectedBridgeDestinationWallet) {
+      return;
+    }
+
+    try {
+      setSubmittingBridge(true);
+      setBridgeError(null);
+      const result = await sendRuntimeMessage<WalletBridgeExecuteResponse>({
+        type: 'wallet_execute_bridge',
+        quoteResponse: bridgeQuote.quoteResponse,
+        toChain: bridgeDestinationChain,
+        destinationWalletId: selectedBridgeDestinationWallet.id,
+        password: canUseUnlockedSigner ? undefined : bridgePassword || undefined
+      });
+      setBridgeResult(result);
+      setBridgePassword('');
+      void refresh().catch(() => undefined);
+    } catch (error) {
+      setBridgeError(error instanceof Error ? error.message : 'Unable to execute bridge.');
+    } finally {
+      setSubmittingBridge(false);
+    }
+  }
+
   useEffect(() => {
     if (view !== 'swap' || submittingSwap || Boolean(swapResult)) {
       return;
@@ -1942,33 +2027,32 @@ function PopupPage() {
     });
   }
 
-  if (!state) {
-    return null;
-  }
-
-  if (state.wallet.setup !== 'ready') {
-    return (
-      <PageShell title="Set up wallet" subtitle="Create or import your wallet for Grape-supported chains directly in the popup.">
-        <Card title="First run">
-          <p className="muted">The setup flow is available here. Open the full page only if you want more room.</p>
-          <Button tone="secondary" className="button-block" onClick={() => openExtensionPage('onboarding.html')}>
-            Open full-page setup
-          </Button>
-        </Card>
-        <OnboardingView compact onComplete={refresh} />
-      </PageShell>
-    );
-  }
-
-  const wallet = state.wallet;
-  const session = state.session;
-  const permissions = state.permissions;
-  const canUseUnlockedSigner = state.canUseUnlockedSigner;
-  const activeWallet = state.activeWallet;
+  const wallet =
+    state?.wallet ??
+    ({
+      setup: 'idle',
+      wallets: [],
+      privacyMode: false,
+      selectedChain: 'solana',
+      selectedNetwork: 'mainnet-beta',
+      customRpcUrls: {},
+      selectedWalletIds: {},
+      chainState: {
+        solana: { selectedWalletId: undefined, selectedNetwork: 'mainnet-beta', customRpcUrl: null },
+        sui: { selectedWalletId: undefined, selectedNetwork: 'mainnet-beta', customRpcUrl: null },
+        monad: { selectedWalletId: undefined, selectedNetwork: 'devnet', customRpcUrl: null },
+        ethereum: { selectedWalletId: undefined, selectedNetwork: 'devnet', customRpcUrl: null }
+      }
+    } as WalletStateResponse['wallet']);
+  const session = state?.session ?? ({ locked: true } as WalletStateResponse['session']);
+  const permissions = state?.permissions ?? [];
+  const canUseUnlockedSigner = state?.canUseUnlockedSigner ?? false;
+  const activeWallet = state?.activeWallet;
   const isWatchOnlyWallet = activeWallet?.signerKind === 'watch-only';
-  const recentRecipients = state.recentRecipients;
+  const recentRecipients = state?.recentRecipients ?? [];
   const privacyMode = wallet.privacyMode;
   const selectedChain = wallet.selectedChain;
+  const selectedWalletIdForChain = getSelectedWalletIdForChain(wallet, selectedChain);
   const isSolanaChain = selectedChain === 'solana';
   const isSuiChain = selectedChain === 'sui';
   const isMonadChain = selectedChain === 'monad';
@@ -1982,14 +2066,6 @@ function PopupPage() {
       : selectedChain === 'ethereum'
         ? wallet.chainState.ethereum.customRpcUrl ?? ''
       : wallet.customRpcUrls[wallet.selectedNetwork] ?? '';
-
-  if (session.locked && !isWatchOnlyWallet) {
-    return (
-      <PageShell eyebrow={null} title="" subtitle="">
-        {renderLockedWelcome()}
-      </PageShell>
-    );
-  }
 
   async function handleWalletSelect(walletId: string) {
     await sendRuntimeMessage<WalletStateResponse>({
@@ -2010,6 +2086,124 @@ function PopupPage() {
     });
     setView('home');
     await refresh();
+  }
+
+  const bridgeDestinationChainOptions = useMemo(
+    () =>
+      VISIBLE_CHAIN_OPTIONS.filter(
+        (chain) => chain.id !== selectedChain && wallet.wallets.some((walletEntry) => walletEntry.chain === chain.id)
+      ),
+    [selectedChain, wallet.wallets]
+  );
+
+  const bridgeDestinationWallets = useMemo(
+    () =>
+      bridgeDestinationChain
+        ? wallet.wallets.filter((walletEntry) => walletEntry.chain === bridgeDestinationChain)
+        : [],
+    [bridgeDestinationChain, wallet.wallets]
+  );
+
+  const selectedBridgeDestinationWallet =
+    bridgeDestinationWallets.find((walletEntry) => walletEntry.id === bridgeDestinationWalletId) ?? bridgeDestinationWallets[0];
+  const selectedBridgeDestinationAccount =
+    selectedBridgeDestinationWallet?.accounts.find((account) => account.id === selectedBridgeDestinationWallet.selectedAccountId) ??
+    selectedBridgeDestinationWallet?.accounts[0] ??
+    null;
+
+  useEffect(() => {
+    if (bridgeDestinationChainOptions.length === 0) {
+      setBridgeDestinationChain(null);
+      setBridgeDestinationWalletId('');
+      return;
+    }
+
+    if (
+      !bridgeDestinationChain ||
+      !bridgeDestinationChainOptions.some((option) => option.id === bridgeDestinationChain)
+    ) {
+      setBridgeDestinationChain(bridgeDestinationChainOptions[0].id);
+    }
+  }, [bridgeDestinationChain, bridgeDestinationChainOptions]);
+
+  useEffect(() => {
+    if (!bridgeDestinationChain) {
+      setBridgeDestinationWalletId('');
+      return;
+    }
+
+    const nextWallets = wallet.wallets.filter((walletEntry) => walletEntry.chain === bridgeDestinationChain);
+    if (nextWallets.length === 0) {
+      setBridgeDestinationWalletId('');
+      return;
+    }
+
+    if (!nextWallets.some((walletEntry) => walletEntry.id === bridgeDestinationWalletId)) {
+      setBridgeDestinationWalletId(nextWallets[0].id);
+    }
+  }, [bridgeDestinationChain, bridgeDestinationWalletId, wallet.wallets]);
+
+  useEffect(() => {
+    if (view !== 'bridge' || submittingBridge || Boolean(bridgeResult)) {
+      return;
+    }
+
+    if (!bridgeDestinationChain || !selectedBridgeDestinationWallet || !bridgeAmount.trim() || selectedChainValue === 'sui') {
+      bridgeQuoteRequestRef.current = 0;
+      setQuotingBridge(false);
+      return;
+    }
+
+    const requestId = Date.now();
+    bridgeQuoteRequestRef.current = requestId;
+    const timeoutId = window.setTimeout(() => {
+      void handleGetBridgeQuote(requestId);
+    }, 350);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [
+    bridgeAmount,
+    bridgeDestinationChain,
+    bridgeDestinationWalletId,
+    bridgeResult,
+    selectedBridgeDestinationWallet,
+    selectedChainValue,
+    submittingBridge,
+    view
+  ]);
+
+  if (!state) {
+    return (
+      <PageShell title="Loading wallet" subtitle="Grape is starting up.">
+        <Card title="Wallet unavailable">
+          <p className="muted">{surfaceError ?? 'Loading wallet state...'}</p>
+        </Card>
+      </PageShell>
+    );
+  }
+
+  if (state.wallet.setup !== 'ready') {
+    return (
+      <PageShell title="Set up wallet" subtitle="Create or import your wallet for Grape-supported chains directly in the popup.">
+        <Card title="First run">
+          <p className="muted">The setup flow is available here. Open the full page only if you want more room.</p>
+          <Button tone="secondary" className="button-block" onClick={() => openExtensionPage('onboarding.html')}>
+            Open full-page setup
+          </Button>
+        </Card>
+        <OnboardingView compact onComplete={refresh} />
+      </PageShell>
+    );
+  }
+
+  if (session.locked && !isWatchOnlyWallet) {
+    return (
+      <PageShell eyebrow={null} title="" subtitle="">
+        {renderLockedWelcome()}
+      </PageShell>
+    );
   }
 
   function renderChainSwitcher(compact = false) {
@@ -2163,7 +2357,10 @@ function PopupPage() {
       return;
     }
 
-    const selectedWallet = wallet.wallets.find((entry) => entry.id === wallet.selectedWalletId) ?? wallet.wallets[0];
+    const selectedWallet =
+      wallet.wallets.find((entry) => entry.id === selectedWalletIdForChain) ??
+      wallet.wallets.find((entry) => entry.chain === wallet.selectedChain) ??
+      wallet.wallets[0];
     if (!selectedWallet?.biometricUnlock) {
       return;
     }
@@ -2190,7 +2387,10 @@ function PopupPage() {
       return;
     }
 
-    const selectedWallet = wallet.wallets.find((entry) => entry.id === wallet.selectedWalletId) ?? wallet.wallets[0];
+    const selectedWallet =
+      wallet.wallets.find((entry) => entry.id === selectedWalletIdForChain) ??
+      wallet.wallets.find((entry) => entry.chain === wallet.selectedChain) ??
+      wallet.wallets[0];
     if (!selectedWallet?.biometricUnlock) {
       return;
     }
@@ -2454,7 +2654,7 @@ function PopupPage() {
                     const walletPublicKey =
                       walletEntry.accounts.find((account) => account.id === walletEntry.selectedAccountId)?.publicKey ??
                       walletEntry.accounts[0]?.publicKey;
-                    const isActiveWallet = wallet.selectedWalletId === walletEntry.id;
+                    const isActiveWallet = selectedWalletIdForChain === walletEntry.id;
                     const sourceBadge = getWalletSourceBadge(walletEntry.source, walletEntry.signer.kind);
 
                     return (
@@ -2648,7 +2848,7 @@ function PopupPage() {
             </div>
           </div>
 
-          <div className="quick-actions compact">
+          <div className="quick-actions compact home-quick-actions">
             <button type="button" className="quick-action-card" onClick={() => openSend(nativeAssetId)} aria-label="Send" title="Send" disabled={isWatchOnlyWallet}>
               <span className="quick-action-icon"><SendHorizontal size={18} /></span>
             </button>
@@ -2669,6 +2869,21 @@ function PopupPage() {
               disabled={isWatchOnlyWallet || !isSolanaChain}
             >
               <span className="quick-action-icon"><ArrowLeftRight size={18} /></span>
+            </button>
+            <button
+              type="button"
+              className="quick-action-card"
+              onClick={() => {
+                setBridgeQuote(null);
+                setBridgeResult(null);
+                setBridgeError(null);
+                setView('bridge');
+              }}
+              aria-label="Bridge"
+              title={isSuiChain ? 'Bridge source coming soon on Sui' : 'Bridge'}
+              disabled={isWatchOnlyWallet || isSuiChain}
+            >
+              <span className="quick-action-icon"><ArrowUpRight size={18} /></span>
             </button>
             <button type="button" className="quick-action-card" onClick={() => setView('receive')} aria-label="Receive" title="Receive">
               <span className="quick-action-icon"><QrCode size={18} /></span>
@@ -4476,6 +4691,321 @@ function PopupPage() {
     );
   }
 
+  function renderBridge() {
+    const sourceChainOption = VISIBLE_CHAIN_OPTIONS.find((option) => option.id === selectedChain) ?? VISIBLE_CHAIN_OPTIONS[0];
+    const destinationChainOption =
+      VISIBLE_CHAIN_OPTIONS.find((option) => option.id === bridgeDestinationChain) ?? bridgeDestinationChainOptions[0] ?? null;
+    const sourceSymbol = assets.nativeSymbol ?? LIFI_NATIVE_SYMBOL[selectedChain];
+    const sourceName = assets.nativeName ?? sourceChainOption?.label ?? sourceSymbol;
+    const bridgeDestinationAddress = selectedBridgeDestinationAccount?.publicKey ?? null;
+
+    if (isWatchOnlyWallet) {
+      return (
+        <Card title="Watch-only wallet">
+          <p className="warning-box">This wallet can view assets and connect to dApps, but it cannot bridge or sign transactions.</p>
+          <Button tone="secondary" onClick={() => setView('home')}>
+            Back to wallet
+          </Button>
+        </Card>
+      );
+    }
+
+    if (isSuiChain) {
+      return (
+        <Card title="Bridge">
+          <p className="muted">Bridge source is coming soon for Sui wallets. You can already bridge into your Sui wallets from Solana, Ethereum, or Monad.</p>
+          <Button tone="secondary" onClick={() => setView('home')}>
+            Back to wallet
+          </Button>
+        </Card>
+      );
+    }
+
+    if (bridgeDestinationChainOptions.length === 0) {
+      return (
+        <Card title="Bridge">
+          <p className="warning-box">Add a wallet on another chain before bridging assets across chains.</p>
+          <Button tone="secondary" onClick={() => openExtensionPage('onboarding.html')}>
+            Add another wallet
+          </Button>
+        </Card>
+      );
+    }
+
+    if (submittingBridge) {
+      return (
+        <>
+          <ActionStatusCard
+            tone="warning"
+            title="Submitting bridge"
+            message="Grape is signing the source-chain transaction and handing it off to the bridge route. Keep this window open until it completes."
+          />
+          {bridgeError ? <p className="danger-box">{bridgeError}</p> : null}
+        </>
+      );
+    }
+
+    if (bridgeResult) {
+      return (
+        <>
+          <ActionStatusCard tone="success" title="Bridge started" message="Your bridge transaction was submitted successfully. Final settlement can take a little longer across chains.">
+            <div className="action-status-details">
+              <KeyValueRow label="Signature" value={<span className="mono transfer-signature">{bridgeResult.signature}</span>} />
+              <KeyValueRow label="From" value={`${bridgeResult.fromAmountUi} ${bridgeResult.fromSymbol}`} />
+              <KeyValueRow label="To" value={`${bridgeResult.toAmountUi} ${bridgeResult.toSymbol}`} />
+              <KeyValueRow label="Destination" value={<span className="mono">{formatAddress(bridgeResult.destinationAddress)}</span>} />
+            </div>
+            <div className="inline wrap-actions action-status-actions">
+              <Button
+                tone="secondary"
+                onClick={() => {
+                  setBridgeResult(null);
+                  setBridgeQuote(null);
+                  setBridgeAmount('');
+                }}
+              >
+                Bridge again
+              </Button>
+              <Button onClick={() => setView('home')}>Done</Button>
+            </div>
+          </ActionStatusCard>
+          {bridgeError ? <p className="danger-box">{bridgeError}</p> : null}
+        </>
+      );
+    }
+
+    return (
+      <>
+        <Card className="swap-flow-card bridge-flow-card">
+          <div className="send-flow-header">
+            <button type="button" className="send-back-button" onClick={() => setView('home')} aria-label="Back to wallet">
+              <ArrowLeft size={20} />
+            </button>
+            <h2>Bridge</h2>
+          </div>
+
+          <div className="swap-flow-shell bridge-flow-shell">
+            <section className="swap-leg">
+              <div className="swap-leg-header">
+                <span className="send-field-label">From</span>
+              </div>
+              <div className="swap-leg-main">
+                <div className="send-select-shell swap-select-shell bridge-source-shell">
+                  <AssetPickerOptionRow
+                    option={{
+                      id: selectedChain,
+                      name: sourceName,
+                      symbol: sourceSymbol,
+                      balance: privacyMode ? '***' : homeBalance,
+                      logoUri: assets.nativeLogoUri,
+                      sol: isSolanaChain
+                    }}
+                    privacyMode={privacyMode}
+                  />
+                </div>
+                <div className="swap-leg-value-row">
+                  <input
+                    className="swap-leg-amount"
+                    value={bridgeAmount}
+                    onChange={(event) => {
+                      setBridgeAmount(event.target.value);
+                      setBridgeQuote(null);
+                      setBridgeResult(null);
+                    }}
+                    placeholder="0"
+                    inputMode="decimal"
+                    aria-label="Bridge amount"
+                  />
+                </div>
+              </div>
+            </section>
+
+            <button type="button" className="swap-flip-button bridge-center-pill" aria-label="Bridge direction" disabled>
+              <ArrowUpRight size={18} />
+            </button>
+
+            <section className="swap-leg">
+              <div className="swap-leg-header">
+                <span className="send-field-label">To</span>
+              </div>
+
+              <div className="bridge-destination-grid">
+                <DropdownMenu.Root open={bridgeChainPickerOpen} onOpenChange={setBridgeChainPickerOpen}>
+                  <DropdownMenu.Trigger asChild>
+                    <button
+                      type="button"
+                      className={`send-select-shell send-select-button bridge-select-shell ${bridgeChainPickerOpen ? 'open' : ''}`.trim()}
+                      aria-label="Select destination chain"
+                    >
+                      <div className="bridge-select-copy">
+                        <span className="chain-switcher-badge">{destinationChainOption?.shortLabel ?? '--'}</span>
+                        <div className="bridge-select-text">
+                          <strong>{destinationChainOption?.label ?? 'Select chain'}</strong>
+                          <span className="muted">Destination chain</span>
+                        </div>
+                      </div>
+                      <ChevronDown className="send-select-chevron" size={18} />
+                    </button>
+                  </DropdownMenu.Trigger>
+                  <DropdownMenu.Portal>
+                    <DropdownMenu.Content className="popup-menu-content chain-selector-menu" sideOffset={8} align="start">
+                      <div className="popup-menu-section">Bridge destination</div>
+                      {bridgeDestinationChainOptions.map((option) => (
+                        <DropdownMenu.Item
+                          key={option.id}
+                          className={`wallet-menu-action ${bridgeDestinationChain === option.id ? 'active' : ''}`.trim()}
+                          onSelect={() => {
+                            setBridgeDestinationChain(option.id);
+                            setBridgeDestinationWalletId('');
+                            setBridgeQuote(null);
+                            setBridgeResult(null);
+                          }}
+                        >
+                          <span className="wallet-menu-action-copy">
+                            <span className="chain-switcher-badge">{option.shortLabel}</span>
+                            <span>{option.label}</span>
+                          </span>
+                        </DropdownMenu.Item>
+                      ))}
+                    </DropdownMenu.Content>
+                  </DropdownMenu.Portal>
+                </DropdownMenu.Root>
+
+                <DropdownMenu.Root open={bridgeWalletPickerOpen} onOpenChange={setBridgeWalletPickerOpen}>
+                  <DropdownMenu.Trigger asChild>
+                    <button
+                      type="button"
+                      className={`send-select-shell send-select-button bridge-select-shell ${bridgeWalletPickerOpen ? 'open' : ''}`.trim()}
+                      aria-label="Select destination wallet"
+                    >
+                      <div className="bridge-select-copy">
+                        <span className="wallet-source-badge created" aria-hidden="true">
+                          {selectedBridgeDestinationWallet ? selectedBridgeDestinationWallet.name.slice(0, 1).toUpperCase() : '?'}
+                        </span>
+                        <div className="bridge-select-text">
+                          <strong>{selectedBridgeDestinationWallet?.name ?? 'Select wallet'}</strong>
+                          <span className="mono muted">{formatAddress(bridgeDestinationAddress ?? undefined)}</span>
+                        </div>
+                      </div>
+                      <ChevronDown className="send-select-chevron" size={18} />
+                    </button>
+                  </DropdownMenu.Trigger>
+                  <DropdownMenu.Portal>
+                    <DropdownMenu.Content className="popup-menu-content" sideOffset={8} align="start">
+                      <div className="popup-menu-section">Destination wallet</div>
+                      <div className="wallet-menu-list">
+                        {bridgeDestinationWallets.map((walletEntry) => {
+                          const account =
+                            walletEntry.accounts.find((candidate) => candidate.id === walletEntry.selectedAccountId) ??
+                            walletEntry.accounts[0];
+                          return (
+                            <button
+                              key={walletEntry.id}
+                              type="button"
+                              className={`wallet-menu-item ${selectedBridgeDestinationWallet?.id === walletEntry.id ? 'active' : ''}`.trim()}
+                              onClick={() => {
+                                setBridgeDestinationWalletId(walletEntry.id);
+                                setBridgeWalletPickerOpen(false);
+                                setBridgeQuote(null);
+                                setBridgeResult(null);
+                              }}
+                            >
+                              <div className="wallet-menu-copy">
+                                <div className="wallet-menu-heading">
+                                  <strong>{walletEntry.name}</strong>
+                                  <span className="wallet-chain-badge">{destinationChainOption?.shortLabel ?? '--'}</span>
+                                </div>
+                                <div className="mono muted">{formatAddress(account?.publicKey)}</div>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </DropdownMenu.Content>
+                  </DropdownMenu.Portal>
+                </DropdownMenu.Root>
+              </div>
+
+              {bridgeDestinationAddress ? (
+                <div className="bridge-destination-preview">
+                  <span className="muted">Destination address</span>
+                  <span className="mono">{bridgeDestinationAddress}</span>
+                </div>
+              ) : null}
+            </section>
+          </div>
+        </Card>
+
+        <Card title="Quote">
+          {quotingBridge ? (
+            <p className="muted">Fetching the best route…</p>
+          ) : bridgeQuote ? (
+            <div className="stack bridge-quote-stack">
+              <div className="bridge-quote-grid">
+                <KeyValueRow label="You send" value={`${bridgeQuote.fromAmountUi} ${bridgeQuote.fromSymbol}`} />
+                <KeyValueRow label="You receive" value={`${bridgeQuote.toAmountUi} ${bridgeQuote.toSymbol}`} />
+                <KeyValueRow label="Minimum received" value={bridgeQuote.minimumReceivedUi ? `${bridgeQuote.minimumReceivedUi} ${bridgeQuote.toSymbol}` : 'Unavailable'} />
+                <KeyValueRow label="Estimated fees" value={bridgeQuote.feeUsd ? `$${bridgeQuote.feeUsd}` : 'Unavailable'} />
+              </div>
+              <KeyValueRow label="Destination" value={`${destinationChainOption?.label ?? bridgeDestinationChain} · ${selectedBridgeDestinationWallet?.name ?? 'Wallet'}`} />
+              <KeyValueRow label="Route" value={bridgeQuote.routeLabels.length > 0 ? bridgeQuote.routeLabels.join(' → ') : 'Bridge route'} />
+            </div>
+          ) : (
+            <p className="muted">
+              Enter an amount and choose a destination wallet. Grape will fetch a route automatically.
+            </p>
+          )}
+
+          {!canUseUnlockedSigner ? (
+            <label className="stack">
+              <span className="muted">Password</span>
+              <div className="send-input-shell send-input-shell-sign">
+                <Input
+                  type="password"
+                  value={bridgePassword}
+                  onChange={(event) => setBridgePassword(event.target.value)}
+                  placeholder="Password required to sign"
+                  className="send-sign-input"
+                />
+                {biometricSupported && activeWallet?.biometricEnabled ? (
+                  <button
+                    type="button"
+                    className="biometric-inline-button"
+                    aria-label="Unlock with device"
+                    title="Unlock with device"
+                    onClick={() => void handleBiometricUnlockInline()}
+                    disabled={biometricUnlocking}
+                  >
+                    <Fingerprint size={16} />
+                  </button>
+                ) : null}
+              </div>
+            </label>
+          ) : null}
+
+          <div className="inline wrap-actions action-status-actions">
+            <Button tone="secondary" onClick={() => void handleGetBridgeQuote()} disabled={quotingBridge || !bridgeAmount.trim() || !bridgeDestinationChain}>
+              {quotingBridge ? 'Quoting...' : 'Refresh quote'}
+            </Button>
+            <Button
+              onClick={() => void handleExecuteBridge()}
+              disabled={
+                !bridgeQuote ||
+                submittingBridge ||
+                quotingBridge ||
+                (!canUseUnlockedSigner && !bridgePassword.trim())
+              }
+            >
+              Bridge now
+            </Button>
+          </div>
+        </Card>
+
+        {bridgeError ? <p className="danger-box">{bridgeError}</p> : null}
+      </>
+    );
+  }
+
   return (
     <PageShell
       eyebrow={view === 'home' ? null : undefined}
@@ -4488,6 +5018,8 @@ function PopupPage() {
               ? 'Receive'
               : view === 'swap'
                 ? 'Swap'
+                : view === 'bridge'
+                  ? 'Bridge'
                 : view === 'asset'
                   ? 'Token'
                   : view === 'approval'
@@ -4505,6 +5037,8 @@ function PopupPage() {
               ? 'Share your wallet address safely.'
               : view === 'swap'
                 ? 'Get a Jupiter quote and swap from your wallet.'
+                : view === 'bridge'
+                  ? 'Bridge native assets across the wallets you already manage in Grape.'
                 : view === 'asset'
                   ? 'Burn or close token accounts safely.'
                   : view === 'approval'
@@ -4522,6 +5056,7 @@ function PopupPage() {
       {view === 'approval' ? renderApproval() : null}
       {view === 'security' ? renderSecurity() : null}
       {view === 'swap' ? renderSwap() : null}
+      {view === 'bridge' ? renderBridge() : null}
       {view === 'settings' ? renderSettings() : null}
       {surfaceError && view !== 'send' ? <p className="danger-box">{surfaceError}</p> : null}
 
