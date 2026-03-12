@@ -1,0 +1,421 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Crypto from 'expo-crypto';
+import * as SecureStore from 'expo-secure-store';
+
+import type { GrapeChain, WalletSetupState } from '@grape/core';
+import { generateWalletMnemonic, validateWalletMnemonic } from '../../../packages/solana/src/mnemonic';
+import {
+  deriveMobileSuiAccount0,
+  formatMobileSuiAmount,
+  getMobileSuiHoldings,
+  getMobileSuiSendUnsupportedMessage
+} from './sui';
+
+export type MobileWalletSource = 'created' | 'imported-mnemonic';
+
+export type MobileWallet = {
+  id: string;
+  name: string;
+  chain: GrapeChain;
+  address: string;
+  derivationPath: string;
+  source: MobileWalletSource;
+  secretRef: string;
+};
+
+export type MobileActivity = {
+  id: string;
+  chain: GrapeChain;
+  walletId: string;
+  type: 'send';
+  title: string;
+  subtitle: string;
+  amountLabel: string;
+  timestamp: number;
+  signature: string;
+  status: 'success';
+};
+
+export type MobileWalletState = {
+  setup: WalletSetupState;
+  selectedChain: GrapeChain;
+  selectedWalletIds: Partial<Record<GrapeChain, string>>;
+  wallets: MobileWallet[];
+  passwordSalt: string;
+  passwordHash: string;
+  privacyMode: boolean;
+  activities: MobileActivity[];
+};
+
+export type MobileAsset = {
+  id: string;
+  name: string;
+  symbol: string;
+  amountLabel: string;
+  valueLabel: string;
+};
+
+type StoredSecretPayload = {
+  mnemonic: string;
+};
+
+const STORAGE_KEY = 'grape:mobile:state';
+const SECRET_PREFIX = 'grapemobilesecret';
+const DEFAULT_CHAIN: GrapeChain = 'solana';
+const DEFAULT_SOLANA_NETWORK = 'mainnet-beta';
+const DEFAULT_SUI_NETWORK = 'mainnet';
+const DEFAULT_EVM_NETWORK = 'mainnet';
+
+export function createEmptyMobileWalletState(): MobileWalletState {
+  return {
+    setup: 'empty',
+    selectedChain: DEFAULT_CHAIN,
+    selectedWalletIds: {},
+    wallets: [],
+    passwordSalt: '',
+    passwordHash: '',
+    privacyMode: false,
+    activities: []
+  };
+}
+
+export function createWalletMnemonic(): string {
+  return generateWalletMnemonic();
+}
+
+export function isValidMnemonic(value: string) {
+  return validateWalletMnemonic(value.trim());
+}
+
+export async function loadMobileWalletState(): Promise<MobileWalletState> {
+  const raw = await AsyncStorage.getItem(STORAGE_KEY);
+  if (!raw) {
+    return createEmptyMobileWalletState();
+  }
+
+  const parsed = JSON.parse(raw) as Partial<MobileWalletState>;
+  return {
+    ...createEmptyMobileWalletState(),
+    ...parsed,
+    wallets: Array.isArray(parsed.wallets) ? parsed.wallets : [],
+    selectedWalletIds: parsed.selectedWalletIds ?? {},
+    activities: Array.isArray(parsed.activities) ? parsed.activities : []
+  };
+}
+
+export async function persistMobileWalletState(state: MobileWalletState) {
+  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+
+export async function createWalletSet(input: {
+  mnemonic: string;
+  password: string;
+  source: MobileWalletSource;
+}): Promise<MobileWalletState> {
+  const mnemonic = input.mnemonic.trim();
+  if (!validateWalletMnemonic(mnemonic)) {
+    throw new Error('Recovery phrase is invalid.');
+  }
+
+  const secretRef = createSecretRef();
+  const payload: StoredSecretPayload = { mnemonic };
+  await SecureStore.setItemAsync(toSecureStoreKey(secretRef), JSON.stringify(payload));
+
+  const passwordSalt = createSecretRef();
+  const passwordHash = await createPasswordHash(input.password, passwordSalt);
+  const wallets = await createDerivedWallets(secretRef, mnemonic, input.source);
+
+  const state: MobileWalletState = {
+    setup: 'ready',
+    selectedChain: DEFAULT_CHAIN,
+    selectedWalletIds: Object.fromEntries(wallets.map((wallet) => [wallet.chain, wallet.id])),
+    wallets,
+    passwordSalt,
+    passwordHash,
+    privacyMode: false,
+    activities: []
+  };
+
+  await persistMobileWalletState(state);
+  return state;
+}
+
+export async function unlockMobileWalletState(state: MobileWalletState, password: string): Promise<boolean> {
+  const passwordHash = await createPasswordHash(password, state.passwordSalt);
+  return passwordHash === state.passwordHash;
+}
+
+export function getSelectedWallet(state: MobileWalletState, chain = state.selectedChain): MobileWallet | undefined {
+  const selectedWalletId = state.selectedWalletIds[chain];
+  return state.wallets.find((wallet) => wallet.chain === chain && wallet.id === selectedWalletId) ??
+    state.wallets.find((wallet) => wallet.chain === chain);
+}
+
+export async function loadWalletAssets(wallet: MobileWallet): Promise<MobileAsset[]> {
+  switch (wallet.chain) {
+    case 'solana':
+      return loadSolanaAssets(wallet.address);
+    case 'sui':
+      return loadSuiAssets(wallet.address);
+    case 'ethereum':
+      return loadEthereumAssets(wallet.address);
+    case 'monad':
+      return loadMonadAssets(wallet.address);
+    default:
+      return [];
+  }
+}
+
+export async function sendNativeAsset(input: {
+  wallet: MobileWallet;
+  recipient: string;
+  amount: string;
+}): Promise<string> {
+  const secret = await loadWalletSecret(input.wallet.secretRef);
+
+  switch (input.wallet.chain) {
+    case 'solana': {
+      const [{ resolveSolanaVaultSecret }, { SOLANA_RPC_ENDPOINTS }, { signAndSendTransaction }, { buildSolTransferTransaction }, web3] =
+        await Promise.all([
+          import('../../../packages/solana/src/derive'),
+          import('../../../packages/solana/src/networks'),
+          import('../../../packages/solana/src/signing'),
+          import('../../../packages/solana/src/transfers'),
+          import('@solana/web3.js')
+        ]);
+      const { Connection, PublicKey } = web3;
+      const connection = new Connection(SOLANA_RPC_ENDPOINTS[DEFAULT_SOLANA_NETWORK], 'confirmed');
+      const keypair = resolveSolanaVaultSecret({ kind: 'mnemonic', mnemonic: secret.mnemonic });
+      const transaction = await buildSolTransferTransaction(connection, new PublicKey(input.wallet.address), {
+        recipient: input.recipient,
+        amount: input.amount
+      });
+      return signAndSendTransaction(transaction, keypair, connection);
+    }
+    case 'sui': {
+      throw new Error(getMobileSuiSendUnsupportedMessage());
+    }
+    case 'ethereum': {
+      const [{ sendEthereum }] = await Promise.all([import('@grape/ethereum')]);
+      return sendEthereum(DEFAULT_EVM_NETWORK, { kind: 'mnemonic', mnemonic: secret.mnemonic }, {
+        recipient: input.recipient,
+        amountEther: input.amount
+      });
+    }
+    case 'monad': {
+      const [{ sendMonad }] = await Promise.all([import('@grape/monad')]);
+      return sendMonad(DEFAULT_EVM_NETWORK, { kind: 'mnemonic', mnemonic: secret.mnemonic }, {
+        recipient: input.recipient,
+        amountEther: input.amount
+      });
+    }
+    default:
+      throw new Error('Unsupported chain.');
+  }
+}
+
+export function createSendActivity(input: {
+  wallet: MobileWallet;
+  recipient: string;
+  amountLabel: string;
+  signature: string;
+}): MobileActivity {
+  return {
+    id: `activity-${createSecretRef()}`,
+    chain: input.wallet.chain,
+    walletId: input.wallet.id,
+    type: 'send',
+    title: `Sent ${input.wallet.chain === 'solana' ? 'asset' : input.wallet.chain === 'sui' ? 'SUI' : input.wallet.chain === 'ethereum' ? 'ETH' : 'MON'}`,
+    subtitle: shortenAddress(input.recipient),
+    amountLabel: input.amountLabel,
+    timestamp: Date.now(),
+    signature: input.signature,
+    status: 'success'
+  };
+}
+
+async function createDerivedWallets(secretRef: string, mnemonic: string, source: MobileWalletSource): Promise<MobileWallet[]> {
+  const wallets: MobileWallet[] = [];
+  const { deriveSolanaAccount0 } = await import('../../../packages/solana/src/derive');
+  const solana = deriveSolanaAccount0(mnemonic);
+  wallets.push(createWallet('Solana', 'solana', solana.publicKey, solana.derivationPath, source, secretRef));
+
+  await tryAddDerivedWallet(wallets, async () => {
+    const sui = deriveMobileSuiAccount0(mnemonic);
+    return createWallet('Sui', 'sui', sui.address, sui.derivationPath, source, secretRef);
+  }, 'sui');
+
+  await tryAddDerivedWallet(wallets, async () => {
+    const { deriveEthereumAccount0 } = await import('@grape/ethereum');
+    const ethereum = deriveEthereumAccount0(mnemonic);
+    return createWallet('Ethereum', 'ethereum', ethereum.address, ethereum.derivationPath, source, secretRef);
+  }, 'ethereum');
+
+  await tryAddDerivedWallet(wallets, async () => {
+    const { deriveMonadAccount0 } = await import('@grape/monad');
+    const monad = deriveMonadAccount0(mnemonic);
+    return createWallet('Monad', 'monad', monad.address, monad.derivationPath, source, secretRef);
+  }, 'monad');
+
+  return wallets;
+}
+
+function createWallet(
+  name: string,
+  chain: GrapeChain,
+  address: string,
+  derivationPath: string,
+  source: MobileWalletSource,
+  secretRef: string
+): MobileWallet {
+  return {
+    id: `${chain}-${createSecretRef()}`,
+    name,
+    chain,
+    address,
+    derivationPath,
+    source,
+    secretRef
+  };
+}
+
+function shortenAddress(address: string) {
+  if (address.length <= 12) {
+    return address;
+  }
+
+  return `${address.slice(0, 6)}...${address.slice(-4)}`;
+}
+
+async function loadWalletSecret(secretRef: string): Promise<StoredSecretPayload> {
+  const raw = await SecureStore.getItemAsync(toSecureStoreKey(secretRef));
+  if (!raw) {
+    throw new Error('Wallet secret could not be found on this device.');
+  }
+
+  return JSON.parse(raw) as StoredSecretPayload;
+}
+
+async function createPasswordHash(password: string, salt: string) {
+  return Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, `${salt}:${password}`);
+}
+
+async function loadSolanaAssets(address: string): Promise<MobileAsset[]> {
+  const [{ SOLANA_RPC_ENDPOINTS }, web3] = await Promise.all([
+    import('../../../packages/solana/src/networks'),
+    import('@solana/web3.js')
+  ]);
+  const { Connection, PublicKey } = web3;
+  const connection = new Connection(SOLANA_RPC_ENDPOINTS[DEFAULT_SOLANA_NETWORK], 'confirmed');
+  const owner = new PublicKey(address);
+  const [lamports, tokenAccounts] = await Promise.all([
+    connection.getBalance(owner, 'confirmed'),
+    connection.getParsedTokenAccountsByOwner(owner, {
+      programId: new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA')
+    })
+  ]);
+
+  const assets: MobileAsset[] = [
+    {
+      id: 'sol',
+      name: 'Solana',
+      symbol: 'SOL',
+      amountLabel: `${(lamports / 1_000_000_000).toFixed(4).replace(/\.?0+$/, '')} SOL`,
+      valueLabel: ''
+    }
+  ];
+
+  tokenAccounts.value.forEach((account) => {
+    const parsed = account.account.data.parsed.info;
+    const tokenAmount = parsed.tokenAmount as { uiAmountString?: string; amount: string };
+    const amount = tokenAmount.uiAmountString ?? tokenAmount.amount;
+    if (amount === '0') {
+      return;
+    }
+
+    const mint = parsed.mint as string;
+    assets.push({
+      id: mint,
+      name: shortenAddress(mint),
+      symbol: shortenAddress(mint),
+      amountLabel: amount,
+      valueLabel: ''
+    });
+  });
+
+  return assets;
+}
+
+async function loadSuiAssets(address: string): Promise<MobileAsset[]> {
+  const holdings = await getMobileSuiHoldings(address);
+  return [
+    {
+      id: 'sui',
+      name: 'Sui',
+      symbol: 'SUI',
+      amountLabel: `${formatMobileSuiAmount(holdings.totalMist, 9)} SUI`,
+      valueLabel: ''
+    },
+    ...holdings.coins.map((coin) => ({
+      id: coin.coinType,
+      name: coin.name,
+      symbol: coin.symbol,
+      amountLabel: `${coin.amount} ${coin.symbol}`,
+      valueLabel: ''
+    }))
+  ];
+}
+
+async function loadEthereumAssets(address: string): Promise<MobileAsset[]> {
+  const [{ createEthereumPublicClient, getEthereumHoldings }] = await Promise.all([import('@grape/ethereum')]);
+  const client = createEthereumPublicClient(DEFAULT_EVM_NETWORK);
+  const holdings = await getEthereumHoldings(client, address);
+  return [
+    {
+      id: 'eth',
+      name: 'Ethereum',
+      symbol: 'ETH',
+      amountLabel: `${holdings.formatted} ETH`,
+      valueLabel: ''
+    }
+  ];
+}
+
+async function loadMonadAssets(address: string): Promise<MobileAsset[]> {
+  const [{ createMonadPublicClient, getMonadHoldings }] = await Promise.all([import('@grape/monad')]);
+  const client = createMonadPublicClient(DEFAULT_EVM_NETWORK);
+  const holdings = await getMonadHoldings(client, address);
+  return [
+    {
+      id: 'mon',
+      name: 'Monad',
+      symbol: 'MON',
+      amountLabel: `${holdings.formatted} MON`,
+      valueLabel: ''
+    }
+  ];
+}
+
+function createSecretRef() {
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID().replace(/[^a-zA-Z0-9]/g, '');
+  }
+
+  return `${Date.now()}${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function toSecureStoreKey(secretRef: string) {
+  return `${SECRET_PREFIX}${secretRef}`.replace(/[^a-zA-Z0-9]/g, '');
+}
+
+async function tryAddDerivedWallet(
+  wallets: MobileWallet[],
+  factory: () => Promise<MobileWallet>,
+  chain: GrapeChain
+) {
+  try {
+    wallets.push(await factory());
+  } catch (error) {
+    console.warn(`[Grape mobile] Skipping ${chain} wallet derivation`, error);
+  }
+}

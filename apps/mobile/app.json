@@ -1,0 +1,22 @@
+{
+  "expo": {
+    "name": "Grape",
+    "slug": "grape-wallet-mobile",
+    "version": "0.2.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "android": {
+      "package": "xyz.grape.wallet",
+      "adaptiveIcon": {
+        "foregroundImage": "../extension/public/icons/grape_logo_white.png",
+        "backgroundColor": "#100312"
+      }
+    },
+    "ios": {
+      "bundleIdentifier": "xyz.grape.wallet"
+    }
+  }
+}

@@ -6,6 +6,8 @@
   "scripts": {
     "build": "pnpm --filter @grape/core build && pnpm --filter @grape/solana build && pnpm --filter @grape/sui build && pnpm --filter @grape/monad build && pnpm --filter @grape/ethereum build && pnpm --filter @grape/ui build && pnpm --filter @grape/wallet-adapter build && pnpm --filter @grape/extension build",
     "dev": "pnpm --filter @grape/extension dev",
+    "mobile:start": "pnpm --filter @grape/mobile start",
+    "mobile:android": "pnpm --filter @grape/mobile android",
     "lint": "eslint . --ext .ts,.tsx",
     "typecheck": "pnpm -r typecheck",
     "test": "vitest run"
