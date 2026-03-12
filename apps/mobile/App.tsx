@@ -22,6 +22,7 @@ import {
   View
 } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
+import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Stop, Text as SvgText } from 'react-native-svg';
 import {
   Button as PaperButton,
@@ -1190,7 +1191,7 @@ export default function App() {
             </View>
             <Pressable style={styles.refreshChip} onPress={() => void handleRefreshAssets()}>
               <Animated.View style={[styles.refreshGlyphWrap, { transform: [{ rotate: refreshRotation }] }]}>
-                <Text style={styles.refreshChipText}>↻</Text>
+                <MaterialCommunityIcons name="refresh" size={22} color={activeTheme.text} />
               </Animated.View>
             </Pressable>
           </View>
@@ -1205,19 +1206,19 @@ export default function App() {
 
           <View style={styles.quickActionsRow}>
             <Pressable style={styles.quickActionButton} onPress={() => setShowSendComposer((value) => !value)}>
-              <Text style={styles.quickActionGlyph}>↑</Text>
+              <MaterialCommunityIcons name="send-outline" size={24} color={activeTheme.text} />
               <Text style={styles.quickActionLabel}>Send</Text>
             </Pressable>
             <Pressable style={styles.quickActionButton} onPress={() => setMainTab('receive')}>
-              <Text style={styles.quickActionGlyph}>↓</Text>
+              <MaterialCommunityIcons name="qrcode" size={24} color={activeTheme.text} />
               <Text style={styles.quickActionLabel}>Receive</Text>
             </Pressable>
             <Pressable style={styles.quickActionButtonDisabled}>
-              <Text style={styles.quickActionGlyph}>⇄</Text>
+              <MaterialCommunityIcons name="swap-horizontal" size={24} color={activeTheme.muted} />
               <Text style={styles.quickActionLabelMuted}>Swap</Text>
             </Pressable>
             <Pressable style={styles.quickActionButtonDisabled}>
-              <Text style={styles.quickActionGlyph}>⟷</Text>
+              <MaterialCommunityIcons name="transit-connection-variant" size={24} color={activeTheme.muted} />
               <Text style={styles.quickActionLabelMuted}>Bridge</Text>
             </Pressable>
           </View>
@@ -1346,7 +1347,7 @@ export default function App() {
                           <Text style={styles.assetValueMeta}>{maskValue(asset.valueLabel, walletState.privacyMode)}</Text>
                         ) : null}
                       </View>
-                      <Text style={styles.rowChevron}>›</Text>
+                      <Feather name="chevron-right" size={20} color={activeTheme.muted} style={styles.rowChevronIcon} />
                     </View>
                   );
                 })()
@@ -1394,7 +1395,7 @@ export default function App() {
     return (
       <View key={activity.id} style={styles.activityRow}>
         <View style={styles.activityGlyph}>
-          <Text style={styles.activityGlyphText}>↑</Text>
+          <MaterialCommunityIcons name="arrow-top-right" size={20} color={activeTheme.text} />
         </View>
         <View style={styles.activityCopy}>
           <Text style={styles.activityName}>{activity.title}</Text>
@@ -1740,28 +1741,28 @@ export default function App() {
             style={[styles.footerButton, mainTab === 'home' ? styles.footerButtonActive : null]}
             onPress={() => setMainTab('home')}
           >
-            <Text style={styles.footerGlyph}>⌂</Text>
+            <MaterialCommunityIcons name="home-variant-outline" size={24} color={mainTab === 'home' ? activeTheme.text : activeTheme.muted} />
             <Text style={[styles.footerLabel, mainTab === 'home' ? styles.footerLabelActive : null]}>Home</Text>
           </Pressable>
           <Pressable
             style={[styles.footerButton, mainTab === 'receive' ? styles.footerButtonActive : null]}
             onPress={() => setMainTab('receive')}
           >
-            <Text style={styles.footerGlyph}>⌁</Text>
+            <MaterialCommunityIcons name="qrcode-scan" size={24} color={mainTab === 'receive' ? activeTheme.text : activeTheme.muted} />
             <Text style={[styles.footerLabel, mainTab === 'receive' ? styles.footerLabelActive : null]}>Receive</Text>
           </Pressable>
           <Pressable
             style={[styles.footerButton, mainTab === 'activity' ? styles.footerButtonActive : null]}
             onPress={() => setMainTab('activity')}
           >
-            <Text style={styles.footerGlyph}>◷</Text>
+            <MaterialCommunityIcons name="history" size={24} color={mainTab === 'activity' ? activeTheme.text : activeTheme.muted} />
             <Text style={[styles.footerLabel, mainTab === 'activity' ? styles.footerLabelActive : null]}>Activity</Text>
           </Pressable>
           <Pressable
             style={[styles.footerButton, mainTab === 'settings' ? styles.footerButtonActive : null]}
             onPress={() => setMainTab('settings')}
           >
-            <Text style={styles.footerGlyph}>⚙</Text>
+            <MaterialCommunityIcons name="cog-outline" size={24} color={mainTab === 'settings' ? activeTheme.text : activeTheme.muted} />
             <Text style={[styles.footerLabel, mainTab === 'settings' ? styles.footerLabelActive : null]}>Settings</Text>
           </Pressable>
         </View>
@@ -1870,7 +1871,7 @@ function createStyles(palette: MobileThemePalette) {
     paddingHorizontal: 24,
     paddingVertical: 34,
     borderRadius: 32,
-    backgroundColor: 'rgba(19, 12, 30, 0.82)',
+    backgroundColor: palette.id === 'apple' ? 'rgba(28, 36, 46, 0.48)' : 'rgba(19, 12, 30, 0.82)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.08)',
     overflow: 'hidden',
@@ -2000,10 +2001,10 @@ function createStyles(palette: MobileThemePalette) {
     padding: 20,
     gap: 14,
     shadowColor: '#000',
-    shadowOpacity: 0.24,
-    shadowRadius: 26,
+    shadowOpacity: palette.id === 'apple' || palette.id === 'champagne' ? 0 : 0.24,
+    shadowRadius: palette.id === 'apple' || palette.id === 'champagne' ? 0 : 26,
     shadowOffset: { width: 0, height: 16 },
-    elevation: 10
+    elevation: palette.id === 'apple' || palette.id === 'champagne' ? 0 : 10
   },
   formCard: {
     padding: 18,
@@ -2162,7 +2163,7 @@ function createStyles(palette: MobileThemePalette) {
     borderRadius: 18,
     borderWidth: 1,
     borderColor: palette.panelBorder,
-    backgroundColor: 'rgba(255,255,255,0.05)'
+    backgroundColor: palette.id === 'apple' ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.05)'
   },
   secondaryButtonText: {
     color: palette.text,
@@ -2192,12 +2193,11 @@ function createStyles(palette: MobileThemePalette) {
     paddingBottom: 24,
     paddingLeft: 24,
     gap: 12,
-    overflow: 'hidden',
     shadowColor: '#000',
-    shadowOpacity: 0.28,
-    shadowRadius: 28,
+    shadowOpacity: palette.id === 'apple' || palette.id === 'champagne' ? 0 : 0.28,
+    shadowRadius: palette.id === 'apple' || palette.id === 'champagne' ? 0 : 28,
     shadowOffset: { width: 0, height: 18 },
-    elevation: 12
+    elevation: palette.id === 'apple' || palette.id === 'champagne' ? 0 : 12
   },
   lockLogoCluster: {
     position: 'relative',
@@ -2249,10 +2249,10 @@ function createStyles(palette: MobileThemePalette) {
     padding: 24,
     gap: 18,
     shadowColor: '#000',
-    shadowOpacity: 0.26,
-    shadowRadius: 28,
+    shadowOpacity: palette.id === 'apple' || palette.id === 'champagne' ? 0 : 0.26,
+    shadowRadius: palette.id === 'apple' || palette.id === 'champagne' ? 0 : 28,
     shadowOffset: { width: 0, height: 18 },
-    elevation: 12
+    elevation: palette.id === 'apple' || palette.id === 'champagne' ? 0 : 12
   },
   walletIdentity: {
     flexDirection: 'row',
@@ -2285,12 +2285,16 @@ function createStyles(palette: MobileThemePalette) {
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: palette.id === 'apple' ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.08)',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
+    borderColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.14)'
+        : palette.id === 'champagne'
+          ? 'rgba(128,93,36,0.08)'
+          : 'rgba(255,255,255,0.08)',
     alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden'
+    justifyContent: 'center'
   },
   refreshGlyphWrap: {
     width: 24,
@@ -2349,9 +2353,19 @@ function createStyles(palette: MobileThemePalette) {
     gap: 6,
     borderRadius: 22,
     paddingVertical: 15,
-    backgroundColor: 'rgba(255,255,255,0.08)',
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.09)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.68)'
+          : 'rgba(255,255,255,0.08)',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.06)'
+    borderColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.14)'
+        : palette.id === 'champagne'
+          ? 'rgba(128,93,36,0.08)'
+          : 'rgba(255,255,255,0.06)'
   },
   quickActionButtonDisabled: {
     flex: 1,
@@ -2360,7 +2374,12 @@ function createStyles(palette: MobileThemePalette) {
     gap: 6,
     borderRadius: 22,
     paddingVertical: 15,
-    backgroundColor: 'rgba(255,255,255,0.03)'
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.06)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.52)'
+          : 'rgba(255,255,255,0.03)'
   },
   quickActionGlyph: {
     color: palette.text,
@@ -2444,10 +2463,20 @@ function createStyles(palette: MobileThemePalette) {
     borderRadius: 22,
     borderWidth: 1,
     borderColor: palette.panelBorder,
-    backgroundColor: 'rgba(255,255,255,0.05)'
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.09)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.72)'
+          : 'rgba(255,255,255,0.05)'
   },
   walletRowActive: {
-    backgroundColor: 'rgba(255,255,255,0.1)'
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.12)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.84)'
+          : 'rgba(255,255,255,0.1)'
   },
   walletGroupSection: {
     gap: 10
@@ -2504,7 +2533,12 @@ function createStyles(palette: MobileThemePalette) {
     borderRadius: 22,
     borderWidth: 1,
     borderColor: palette.panelBorder,
-    backgroundColor: 'rgba(255,255,255,0.05)'
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.09)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.72)'
+          : 'rgba(255,255,255,0.05)'
   },
   assetGlyph: {
     width: 44,
@@ -2557,7 +2591,12 @@ function createStyles(palette: MobileThemePalette) {
   receiveAddressCard: {
     padding: 18,
     borderRadius: 22,
-    backgroundColor: 'rgba(255,255,255,0.05)',
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.09)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.72)'
+          : 'rgba(255,255,255,0.05)',
     borderWidth: 1,
     borderColor: palette.panelBorder,
     gap: 8
@@ -2567,7 +2606,12 @@ function createStyles(palette: MobileThemePalette) {
     justifyContent: 'center',
     padding: 18,
     borderRadius: 28,
-    backgroundColor: 'rgba(255,255,255,0.05)',
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.09)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.72)'
+          : 'rgba(255,255,255,0.05)',
     borderWidth: 1,
     borderColor: palette.panelBorder
   },
@@ -2616,7 +2660,12 @@ function createStyles(palette: MobileThemePalette) {
     borderRadius: 22,
     borderWidth: 1,
     borderColor: palette.panelBorder,
-    backgroundColor: 'rgba(255,255,255,0.05)'
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.09)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.72)'
+          : 'rgba(255,255,255,0.05)'
   },
   activityGlyph: {
     width: 44,
@@ -2775,7 +2824,8 @@ function createStyles(palette: MobileThemePalette) {
     elevation: 8
   },
   paperSecondaryButton: {
-    borderRadius: 18
+    borderRadius: 18,
+    backgroundColor: palette.id === 'apple' ? 'rgba(255,255,255,0.11)' : 'transparent'
   }
   });
 }
