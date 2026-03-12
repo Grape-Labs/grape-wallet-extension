@@ -157,6 +157,14 @@ const INCIDENT_BATCH_SIZE = 6;
 const ASSET_CACHE_TTL_MS = 45_000;
 const STAKE_RETRY_ATTEMPTS = 3;
 
+function tryParseSolanaPublicKey(value: string): PublicKey | null {
+  try {
+    return new PublicKey(value);
+  } catch {
+    return null;
+  }
+}
+
 type ParsedWalletTokenAccount = TokenHolding & {
   rawAmount: string;
 };
@@ -494,7 +502,31 @@ class WalletController {
         return this.refreshEthereumAssetsOnly(walletId, network, publicKey, walletState);
       }
 
-      const owner = new PublicKey(publicKey);
+      const owner = tryParseSolanaPublicKey(publicKey);
+      if (!owner) {
+        const fallback: WalletAssetsResponse = {
+          lamports: 0,
+          tokens: [],
+          collections: [],
+          nativeName: 'Solana',
+          nativeSymbol: 'SOL',
+          nativeDecimals: 9,
+          totalUsdValue: null,
+          nativePriceUsd: null,
+          nativeValueUsd: null,
+          nativePriceChange24h: null
+        };
+
+        const cache = await assetCacheStorage.get();
+        cache[this.getAssetCacheKey(walletId, network, publicKey)] = {
+          cachedAt: Date.now(),
+          data: fallback
+        };
+        await assetCacheStorage.set(cache);
+
+        return fallback;
+      }
+
       const connection = this.createConnection(network, walletState);
       const [lamports, shyftMetadataResult, shyftCollectionsResult] = await Promise.all([
         connection.getBalance(owner),
@@ -505,11 +537,16 @@ class WalletController {
       const shyftMetadata = shyftMetadataResult as Record<string, { name?: string; symbol?: string; logoUri?: string }>;
       const collections = shyftCollectionsResult as CollectionHolding[];
       const tokens = (await this.scanWalletTokenAccounts(connection, owner, shyftMetadata)).filter((token) => Number(token.amount) > 0);
-      const zeroDecimalTokens = tokens.filter((token) => token.decimals === 0);
+      const zeroDecimalTokens = tokens.filter((token) => token.decimals === 0 && !!tryParseSolanaPublicKey(token.mint));
       const mintSupplyEntries = await Promise.all(
         zeroDecimalTokens.map(async (token) => {
           try {
-            const mintAccountInfo = await connection.getParsedAccountInfo(new PublicKey(token.mint), 'confirmed');
+            const mintPublicKey = tryParseSolanaPublicKey(token.mint);
+            if (!mintPublicKey) {
+              return [token.mint, null] as const;
+            }
+
+            const mintAccountInfo = await connection.getParsedAccountInfo(mintPublicKey, 'confirmed');
             const mintAccountData = mintAccountInfo.value?.data;
             if (!mintAccountData || typeof mintAccountData !== 'object' || !('parsed' in mintAccountData)) {
               return [token.mint, null] as const;
@@ -531,8 +568,13 @@ class WalletController {
       const metadataExistenceEntries = await Promise.all(
         zeroDecimalTokens.map(async (token) => {
           try {
+            const mintPublicKey = tryParseSolanaPublicKey(token.mint);
+            if (!mintPublicKey) {
+              return [token.mint, false] as const;
+            }
+
             const metadataPda = PublicKey.findProgramAddressSync(
-              [new TextEncoder().encode('metadata'), METADATA_PROGRAM_ID.toBytes(), new PublicKey(token.mint).toBytes()],
+              [new TextEncoder().encode('metadata'), METADATA_PROGRAM_ID.toBytes(), mintPublicKey.toBytes()],
               METADATA_PROGRAM_ID
             )[0];
             const metadataAccountInfo = await connection.getAccountInfo(metadataPda, 'confirmed');
@@ -1303,8 +1345,12 @@ class WalletController {
       const balance = await getEthereumHoldings(client, activeAccount.publicKey);
       return balance.totalWei > BigInt(Number.MAX_SAFE_INTEGER) ? null : Number(balance.totalWei);
     }
+    const publicKey = tryParseSolanaPublicKey(activeAccount.publicKey);
+    if (!publicKey) {
+      return 0;
+    }
     const connection = this.createConnection(walletState.selectedNetwork, walletState);
-    return connection.getBalance(new PublicKey(activeAccount.publicKey));
+    return connection.getBalance(publicKey);
   }
 
   private assertInteractiveWallet(selectedWallet: NonNullable<ReturnType<typeof getSelectedWallet>>) {
@@ -1372,7 +1418,11 @@ class WalletController {
 
     const mintAccounts = await Promise.all(
       mintAddresses.map(async (mint) => {
-        const accountInfo = await connection.getParsedAccountInfo(new PublicKey(mint), 'confirmed');
+        const mintPublicKey = tryParseSolanaPublicKey(mint);
+        if (!mintPublicKey) {
+          return null;
+        }
+        const accountInfo = await connection.getParsedAccountInfo(mintPublicKey, 'confirmed');
         const parsedData = accountInfo.value?.data;
         if (!parsedData || typeof parsedData !== 'object' || !('parsed' in parsedData)) {
           return null;
@@ -1532,7 +1582,15 @@ class WalletController {
     }
 
     const connection = this.createConnection(walletState.selectedNetwork, walletState);
-    const authority = new PublicKey(activeAccount.publicKey);
+    const authority = tryParseSolanaPublicKey(activeAccount.publicKey);
+    if (!authority) {
+      return {
+        accounts: [],
+        source: 'none' as const,
+        network: walletState.selectedNetwork,
+        refreshedAt: Date.now()
+      };
+    }
     const getProgramAccountsByAuthority = async (offset: number) => {
       let lastError: unknown = null;
 
@@ -1684,12 +1742,17 @@ class WalletController {
     }
 
     const connection = this.createConnection(walletState.selectedNetwork, walletState);
+    const accountAddress = tryParseSolanaPublicKey(input.accountAddress);
+    const mintAddress = tryParseSolanaPublicKey(input.mint);
+    if (!accountAddress || !mintAddress) {
+      throw new RpcError('TOKEN_NOT_FOUND', 'Token details could not be loaded for an invalid Solana address.');
+    }
     const [shyftMetadataResult, tokenAccountInfo, mintAccountInfo] = await Promise.all([
       hasShyftApiKey()
         ? fetchShyftWalletTokens(walletState.selectedNetwork, activeAccount.publicKey).catch(() => ({}))
         : Promise.resolve({}),
-      connection.getParsedAccountInfo(new PublicKey(input.accountAddress), 'confirmed'),
-      connection.getParsedAccountInfo(new PublicKey(input.mint), 'confirmed')
+      connection.getParsedAccountInfo(accountAddress, 'confirmed'),
+      connection.getParsedAccountInfo(mintAddress, 'confirmed')
     ]);
 
     const shyftMetadata = shyftMetadataResult as Record<string, { name?: string; symbol?: string; logoUri?: string }>;
@@ -1731,7 +1794,7 @@ class WalletController {
     }
 
     const metadataPda = PublicKey.findProgramAddressSync(
-      [new TextEncoder().encode('metadata'), METADATA_PROGRAM_ID.toBytes(), new PublicKey(input.mint).toBytes()],
+      [new TextEncoder().encode('metadata'), METADATA_PROGRAM_ID.toBytes(), mintAddress.toBytes()],
       METADATA_PROGRAM_ID
     )[0].toBase58();
     const metadataAccountInfo = await connection.getAccountInfo(new PublicKey(metadataPda), 'confirmed');
@@ -3395,8 +3458,12 @@ async function fetchCollectibleMetadataHints(
   const entries = await Promise.all(
     uniqueMintsNeedingHints.map(async (mint) => {
       try {
+        const mintPublicKey = tryParseSolanaPublicKey(mint);
+        if (!mintPublicKey) {
+          return [mint, {}] as const;
+        }
         const metadataPda = PublicKey.findProgramAddressSync(
-          [new TextEncoder().encode('metadata'), METADATA_PROGRAM_ID.toBytes(), new PublicKey(mint).toBytes()],
+          [new TextEncoder().encode('metadata'), METADATA_PROGRAM_ID.toBytes(), mintPublicKey.toBytes()],
           METADATA_PROGRAM_ID
         )[0];
         const metadataAccountInfo = await connection.getAccountInfo(metadataPda, 'confirmed');
@@ -3441,7 +3508,12 @@ async function getMintDecimals(connection: Connection, mint: string): Promise<nu
     return 9;
   }
 
-  const accountInfo = await connection.getParsedAccountInfo(new PublicKey(mint), 'confirmed');
+  const mintPublicKey = tryParseSolanaPublicKey(mint);
+  if (!mintPublicKey) {
+    return 9;
+  }
+
+  const accountInfo = await connection.getParsedAccountInfo(mintPublicKey, 'confirmed');
   const parsedData = accountInfo.value?.data;
   if (!parsedData || typeof parsedData !== 'object' || !('parsed' in parsedData)) {
     return 9;

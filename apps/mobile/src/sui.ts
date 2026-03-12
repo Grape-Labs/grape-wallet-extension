@@ -1,5 +1,6 @@
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { MIST_PER_SUI, SUI_TYPE_ARG, normalizeSuiAddress } from '@mysten/sui/utils';
+import { getMobileSuiRpcUrl } from './config';
 
 const DEFAULT_SUI_NETWORK = 'mainnet';
 const SUI_DERIVATION_PATH = `m/44'/784'/0'/0'/0'`;
@@ -56,9 +57,9 @@ export function validateMobileSuiPrivateKey(privateKey: string) {
   }
 }
 
-export async function getMobileSuiHoldings(owner: string) {
+export async function getMobileSuiHoldings(owner: string, network: 'mainnet' | 'devnet' = DEFAULT_SUI_NETWORK) {
   const normalizedOwner = normalizeSuiAddress(owner);
-  const balances = await callSuiRpc<SuiBalanceResponse[]>('suix_getAllBalances', [normalizedOwner]);
+  const balances = await callSuiRpc<SuiBalanceResponse[]>('suix_getAllBalances', [normalizedOwner], network);
   const coins: MobileSuiHolding[] = [];
   let totalMist = '0';
 
@@ -68,7 +69,7 @@ export async function getMobileSuiHoldings(owner: string) {
       continue;
     }
 
-    const metadata = await callSuiRpc<SuiCoinMetadataResponse | null>('suix_getCoinMetadata', [balance.coinType]).catch(
+    const metadata = await callSuiRpc<SuiCoinMetadataResponse | null>('suix_getCoinMetadata', [balance.coinType], network).catch(
       () => null
     );
     const decimals = metadata?.decimals ?? 0;
@@ -104,8 +105,8 @@ export function getMobileSuiSendUnsupportedMessage() {
   return 'Sui send is not available on mobile yet.';
 }
 
-async function callSuiRpc<T>(method: string, params: unknown[]): Promise<T> {
-  const response = await fetch(getSuiRpcUrl(DEFAULT_SUI_NETWORK), {
+async function callSuiRpc<T>(method: string, params: unknown[], network: 'mainnet' | 'devnet' = DEFAULT_SUI_NETWORK): Promise<T> {
+  const response = await fetch(getSuiRpcUrl(network), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
@@ -136,8 +137,8 @@ async function callSuiRpc<T>(method: string, params: unknown[]): Promise<T> {
   return payload.result as T;
 }
 
-function getSuiRpcUrl(network: string) {
-  return network === 'devnet' ? 'https://fullnode.devnet.sui.io:443' : 'https://fullnode.mainnet.sui.io:443';
+function getSuiRpcUrl(network: 'mainnet' | 'devnet') {
+  return getMobileSuiRpcUrl(network);
 }
 
 function formatSuiAmount(rawAmount: string, decimals: number): string {

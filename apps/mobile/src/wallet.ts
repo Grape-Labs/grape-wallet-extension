@@ -5,6 +5,14 @@ import { getItemAsync, setItemAsync } from 'expo-secure-store';
 import { DEFAULT_THEME, type GrapeChain, type GrapeTheme, type WalletSetupState } from '@grape/core';
 import { generateWalletMnemonic, type WalletMnemonicLength, validateWalletMnemonic } from '../../../packages/solana/src/mnemonic';
 import {
+  fetchMobileJupiterPrices,
+  fetchMobileShyftTokenMetadata,
+  formatUsdValue,
+  getMobileEthereumRpcUrl,
+  getMobileMonadRpcUrl,
+  getMobileSolanaRpcUrl
+} from './config';
+import {
   deriveMobileSuiAccount0,
   formatMobileSuiAmount,
   getMobileSuiHoldings,
@@ -74,6 +82,9 @@ const DEFAULT_CHAIN: GrapeChain = 'solana';
 const DEFAULT_SOLANA_NETWORK = 'mainnet-beta';
 const DEFAULT_SUI_NETWORK = 'mainnet';
 const DEFAULT_EVM_NETWORK = 'mainnet';
+const SOLANA_LEGACY_TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+const SOLANA_TOKEN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
+const JUPITER_SOL_MINT = 'So11111111111111111111111111111111111111112';
 
 function loadSolanaDeriveModule() {
   return require('../../../packages/solana/src/derive') as typeof import('../../../packages/solana/src/derive');
@@ -133,13 +144,15 @@ export async function loadMobileWalletState(): Promise<MobileWalletState> {
   }
 
   const parsed = JSON.parse(raw) as Partial<MobileWalletState>;
-  return {
+  const baseState: MobileWalletState = {
     ...createEmptyMobileWalletState(),
     ...parsed,
     wallets: Array.isArray(parsed.wallets) ? parsed.wallets : [],
     selectedWalletIds: parsed.selectedWalletIds ?? {},
     activities: Array.isArray(parsed.activities) ? parsed.activities : []
   };
+
+  return normalizeMobileWalletState(baseState);
 }
 
 export async function persistMobileWalletState(state: MobileWalletState) {
@@ -309,12 +322,11 @@ export async function sendNativeAsset(input: {
   switch (input.wallet.chain) {
     case 'solana': {
       const { resolveSolanaVaultSecret } = loadSolanaDeriveModule();
-      const { SOLANA_RPC_ENDPOINTS } = loadSolanaNetworksModule();
       const { signAndSendTransaction } = loadSolanaSigningModule();
       const { buildSolTransferTransaction } = loadSolanaTransfersModule();
       const web3 = loadSolanaWeb3Module();
       const { Connection, PublicKey } = web3;
-      const connection = new Connection(SOLANA_RPC_ENDPOINTS[DEFAULT_SOLANA_NETWORK], 'confirmed');
+      const connection = new Connection(getMobileSolanaRpcUrl(DEFAULT_SOLANA_NETWORK), 'confirmed');
       const keypair = secret.kind === 'mnemonic'
         ? resolveSolanaVaultSecret({ kind: 'mnemonic', mnemonic: secret.mnemonic })
         : resolveSolanaVaultSecret({ kind: 'private-key', secretKey: secret.secretKey });
@@ -334,7 +346,8 @@ export async function sendNativeAsset(input: {
         : { kind: 'private-key' as const, secretKey: secret.secretKey };
       return sendEthereum(DEFAULT_EVM_NETWORK, vaultSecret, {
         recipient: input.recipient,
-        amountEther: input.amount
+        amountEther: input.amount,
+        customRpcUrl: getMobileEthereumRpcUrl(DEFAULT_EVM_NETWORK)
       });
     }
     case 'monad': {
@@ -344,7 +357,8 @@ export async function sendNativeAsset(input: {
         : { kind: 'private-key' as const, secretKey: secret.secretKey };
       return sendMonad(DEFAULT_EVM_NETWORK, vaultSecret, {
         recipient: input.recipient,
-        amountEther: input.amount
+        amountEther: input.amount,
+        customRpcUrl: getMobileMonadRpcUrl(DEFAULT_EVM_NETWORK)
       });
     }
     default:
@@ -483,51 +497,119 @@ async function createPasswordHash(password: string, salt: string) {
 }
 
 async function loadSolanaAssets(address: string): Promise<MobileAsset[]> {
-  const { SOLANA_RPC_ENDPOINTS } = loadSolanaNetworksModule();
   const web3 = loadSolanaWeb3Module();
   const { Connection, PublicKey } = web3;
-  const connection = new Connection(SOLANA_RPC_ENDPOINTS[DEFAULT_SOLANA_NETWORK], 'confirmed');
+  if (!isValidSolanaPublicKey(address)) {
+    console.warn('[Grape mobile] Skipping Solana asset load for invalid address', address);
+    return [];
+  }
+  const connection = new Connection(getMobileSolanaRpcUrl(DEFAULT_SOLANA_NETWORK), 'confirmed');
   const owner = new PublicKey(address);
-  const [lamports, tokenAccounts] = await Promise.all([
+  const [lamports, legacyTokenAccounts, token2022Accounts, shyftMetadata] = await Promise.all([
     connection.getBalance(owner, 'confirmed'),
     connection.getParsedTokenAccountsByOwner(owner, {
-      programId: new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA')
-    })
+      programId: new PublicKey(SOLANA_LEGACY_TOKEN_PROGRAM)
+    }),
+    connection.getParsedTokenAccountsByOwner(owner, {
+      programId: new PublicKey(SOLANA_TOKEN_2022_PROGRAM)
+    }),
+    fetchMobileShyftTokenMetadata(address, DEFAULT_SOLANA_NETWORK).catch(() => ({}))
   ]);
 
+  const tokenEntries = [...legacyTokenAccounts.value, ...token2022Accounts.value]
+    .map((account) => {
+      const parsed = account.account.data.parsed.info as {
+        mint: string;
+        tokenAmount: { uiAmountString?: string; amount: string; uiAmount?: number };
+      };
+      const amount = parsed.tokenAmount.uiAmountString ?? parsed.tokenAmount.amount;
+      const numericAmount = Number(parsed.tokenAmount.uiAmount ?? amount);
+      if (!amount || amount === '0' || numericAmount <= 0) {
+        return null;
+      }
+
+      return {
+        mint: parsed.mint,
+        amountLabel: amount,
+        numericAmount
+      };
+    })
+    .filter((entry): entry is { mint: string; amountLabel: string; numericAmount: number } => !!entry);
+
+  const jupiterPrices = await fetchMobileJupiterPrices([JUPITER_SOL_MINT, ...tokenEntries.map((entry) => entry.mint)]).catch(() => ({}));
+  const solUsdPrice = jupiterPrices[JUPITER_SOL_MINT]?.usdPrice ?? null;
+  const solAmount = lamports / 1_000_000_000;
   const assets: MobileAsset[] = [
     {
       id: 'sol',
       name: 'Solana',
       symbol: 'SOL',
-      amountLabel: `${(lamports / 1_000_000_000).toFixed(4).replace(/\.?0+$/, '')} SOL`,
-      valueLabel: ''
+      amountLabel: `${solAmount.toFixed(4).replace(/\.?0+$/, '')} SOL`,
+      valueLabel: formatUsdValue(solUsdPrice ? solAmount * solUsdPrice : null)
     }
   ];
 
-  tokenAccounts.value.forEach((account) => {
-    const parsed = account.account.data.parsed.info;
-    const tokenAmount = parsed.tokenAmount as { uiAmountString?: string; amount: string };
-    const amount = tokenAmount.uiAmountString ?? tokenAmount.amount;
-    if (amount === '0') {
-      return;
-    }
-
-    const mint = parsed.mint as string;
+  tokenEntries.forEach((entry) => {
+    const metadata = shyftMetadata[entry.mint];
+    const tokenUsdPrice = jupiterPrices[entry.mint]?.usdPrice ?? null;
     assets.push({
-      id: mint,
-      name: shortenAddress(mint),
-      symbol: shortenAddress(mint),
-      amountLabel: amount,
-      valueLabel: ''
+      id: entry.mint,
+      name: metadata?.name || shortenAddress(entry.mint),
+      symbol: metadata?.symbol || shortenAddress(entry.mint),
+      amountLabel: `${entry.amountLabel} ${metadata?.symbol || ''}`.trim(),
+      valueLabel: formatUsdValue(tokenUsdPrice ? entry.numericAmount * tokenUsdPrice : null)
     });
   });
 
   return assets;
 }
 
+function normalizeMobileWalletState(state: MobileWalletState): MobileWalletState {
+  const validChains = new Set<GrapeChain>(['solana', 'sui', 'ethereum', 'monad']);
+  const wallets = state.wallets.filter(
+    (wallet): wallet is MobileWallet =>
+      Boolean(wallet) &&
+      typeof wallet.id === 'string' &&
+      typeof wallet.name === 'string' &&
+      typeof wallet.address === 'string' &&
+      typeof wallet.chain === 'string' &&
+      validChains.has(wallet.chain as GrapeChain)
+  );
+
+  const selectedWalletIds = Object.fromEntries(
+    Object.entries(state.selectedWalletIds).filter(([chain, walletId]) =>
+      wallets.some((wallet) => wallet.chain === chain && wallet.id === walletId)
+    )
+  ) as Partial<Record<GrapeChain, string>>;
+
+  const preferredChain =
+    validChains.has(state.selectedChain)
+      ? state.selectedChain
+      : wallets[0]?.chain ?? DEFAULT_CHAIN;
+  const selectedChain = wallets.some((wallet) => wallet.chain === preferredChain)
+    ? preferredChain
+    : wallets[0]?.chain ?? DEFAULT_CHAIN;
+
+  return {
+    ...state,
+    wallets,
+    selectedChain,
+    selectedWalletIds
+  };
+}
+
+function isValidSolanaPublicKey(value: string) {
+  try {
+    const { PublicKey } = loadSolanaWeb3Module();
+    void new PublicKey(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function loadSuiAssets(address: string): Promise<MobileAsset[]> {
-  const holdings = await getMobileSuiHoldings(address);
+  const holdings = await getMobileSuiHoldings(address, DEFAULT_SUI_NETWORK);
   return [
     {
       id: 'sui',
@@ -548,7 +630,7 @@ async function loadSuiAssets(address: string): Promise<MobileAsset[]> {
 
 async function loadEthereumAssets(address: string): Promise<MobileAsset[]> {
   const { createEthereumPublicClient, getEthereumHoldings } = loadEthereumModule();
-  const client = createEthereumPublicClient(DEFAULT_EVM_NETWORK);
+  const client = createEthereumPublicClient(DEFAULT_EVM_NETWORK, getMobileEthereumRpcUrl(DEFAULT_EVM_NETWORK));
   const holdings = await getEthereumHoldings(client, address);
   return [
     {
@@ -563,7 +645,7 @@ async function loadEthereumAssets(address: string): Promise<MobileAsset[]> {
 
 async function loadMonadAssets(address: string): Promise<MobileAsset[]> {
   const { createMonadPublicClient, getMonadHoldings } = loadMonadModule();
-  const client = createMonadPublicClient(DEFAULT_EVM_NETWORK);
+  const client = createMonadPublicClient(DEFAULT_EVM_NETWORK, getMobileMonadRpcUrl(DEFAULT_EVM_NETWORK));
   const holdings = await getMonadHoldings(client, address);
   return [
     {

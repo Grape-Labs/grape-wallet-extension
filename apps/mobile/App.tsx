@@ -193,6 +193,9 @@ export default function App() {
   const screenEnterOpacity = useRef(new Animated.Value(0)).current;
   const screenEnterLift = useRef(new Animated.Value(12)).current;
   const screenEnterScale = useRef(new Animated.Value(0.98)).current;
+  const refreshSpin = useRef(new Animated.Value(0)).current;
+  const lockBreathScale = useRef(new Animated.Value(1)).current;
+  const lockHaloPulse = useRef(new Animated.Value(0.18)).current;
   const chainWallets = useMemo(
     () => walletState.wallets.filter((wallet) => wallet.chain === walletState.selectedChain),
     [walletState.selectedChain, walletState.wallets]
@@ -352,6 +355,111 @@ export default function App() {
       })
     ]).start();
   }, [screen, screenEnterLift, screenEnterOpacity, screenEnterScale]);
+
+  useEffect(() => {
+    if (!assetsLoading) {
+      refreshSpin.stopAnimation();
+      Animated.timing(refreshSpin, {
+        toValue: 0,
+        duration: 180,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true
+      }).start();
+      return;
+    }
+
+    refreshSpin.setValue(0);
+    const spinner = Animated.loop(
+      Animated.timing(refreshSpin, {
+        toValue: 1,
+        duration: 880,
+        easing: Easing.linear,
+        useNativeDriver: true
+      })
+    );
+
+    spinner.start();
+
+    return () => {
+      spinner.stop();
+    };
+  }, [assetsLoading, refreshSpin]);
+
+  useEffect(() => {
+    if (screen !== 'locked') {
+      lockBreathScale.stopAnimation();
+      lockHaloPulse.stopAnimation();
+      lockBreathScale.setValue(1);
+      lockHaloPulse.setValue(0.08);
+      return;
+    }
+
+    const breathLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(lockBreathScale, {
+          toValue: 1.012,
+          duration: 900,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: true
+        }),
+        Animated.timing(lockBreathScale, {
+          toValue: 1.018,
+          duration: 180,
+          easing: Easing.out(Easing.quad),
+          useNativeDriver: true
+        }),
+        Animated.timing(lockBreathScale, {
+          toValue: 1.008,
+          duration: 170,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true
+        }),
+        Animated.timing(lockBreathScale, {
+          toValue: 1,
+          duration: 1750,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: true
+        })
+      ])
+    );
+
+    const pulseLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(lockHaloPulse, {
+          toValue: 0.065,
+          duration: 900,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: true
+        }),
+        Animated.timing(lockHaloPulse, {
+          toValue: 0.085,
+          duration: 180,
+          easing: Easing.out(Easing.quad),
+          useNativeDriver: true
+        }),
+        Animated.timing(lockHaloPulse, {
+          toValue: 0.055,
+          duration: 170,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true
+        }),
+        Animated.timing(lockHaloPulse, {
+          toValue: 0.04,
+          duration: 1750,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: true
+        })
+      ])
+    );
+
+    breathLoop.start();
+    pulseLoop.start();
+
+    return () => {
+      breathLoop.stop();
+      pulseLoop.stop();
+    };
+  }, [lockBreathScale, lockHaloPulse, screen]);
 
   useEffect(() => {
     setGeneratedMnemonic(createWalletMnemonic(mnemonicLength));
@@ -959,6 +1067,15 @@ export default function App() {
   }
 
   function renderLockedScreen() {
+    const lockHaloScale = lockHaloPulse.interpolate({
+      inputRange: [0.08, 0.14],
+      outputRange: [1, 1.06]
+    });
+    const lockLogoOpacity = lockHaloPulse.interpolate({
+      inputRange: [0.08, 0.14],
+      outputRange: [0.94, 0.98]
+    });
+
     return (
       <KeyboardAvoidingView
         style={styles.screenFlex}
@@ -986,9 +1103,32 @@ export default function App() {
               }
             ]}
           >
-            <View style={styles.logoOrb}>
-              {renderBrandLogo(40)}
-            </View>
+            <Animated.View
+              style={[
+                styles.lockLogoCluster,
+                {
+                  opacity: lockLogoOpacity,
+                  transform: [{ scale: lockBreathScale }]
+                }
+              ]}
+            >
+              <Animated.View
+                pointerEvents="none"
+                style={[
+                  styles.lockLogoHalo,
+                  {
+                    opacity: lockHaloPulse.interpolate({
+                      inputRange: [0.04, 0.085],
+                      outputRange: [0.03, 0.08]
+                    }),
+                    transform: [{ scale: lockHaloScale }]
+                  }
+                ]}
+              />
+              <View style={styles.logoOrb}>
+                {renderBrandLogo(40)}
+              </View>
+            </Animated.View>
             <Text style={styles.brand}>GRAPE</Text>
             <Text style={[styles.lockedTitle, isCompact ? styles.lockedTitleCompact : null]}>Unlock your wallet</Text>
             <Text style={styles.sectionHint}>Unlock once per session to use your multi-chain wallet on mobile.</Text>
@@ -1031,6 +1171,11 @@ export default function App() {
   }
 
   function renderHomeTab() {
+    const refreshRotation = refreshSpin.interpolate({
+      inputRange: [0, 1],
+      outputRange: ['0deg', '360deg']
+    });
+
     return (
       <>
         <View style={styles.heroCard}>
@@ -1044,7 +1189,9 @@ export default function App() {
               </View>
             </View>
             <Pressable style={styles.refreshChip} onPress={() => void handleRefreshAssets()}>
-              <Text style={styles.refreshChipText}>{assetsLoading ? '…' : '↻'}</Text>
+              <Animated.View style={[styles.refreshGlyphWrap, { transform: [{ rotate: refreshRotation }] }]}>
+                <Text style={styles.refreshChipText}>↻</Text>
+              </Animated.View>
             </Pressable>
           </View>
 
@@ -1193,7 +1340,12 @@ export default function App() {
                         <Text style={styles.assetName}>{asset.name}</Text>
                         {assetSubtitle ? <Text style={styles.assetMeta}>{assetSubtitle}</Text> : null}
                       </View>
-                      <Text style={styles.assetValue}>{maskValue(asset.amountLabel, walletState.privacyMode)}</Text>
+                      <View style={styles.assetValueStack}>
+                        <Text style={styles.assetValue}>{maskValue(asset.amountLabel, walletState.privacyMode)}</Text>
+                        {asset.valueLabel ? (
+                          <Text style={styles.assetValueMeta}>{maskValue(asset.valueLabel, walletState.privacyMode)}</Text>
+                        ) : null}
+                      </View>
                       <Text style={styles.rowChevron}>›</Text>
                     </View>
                   );
@@ -1334,6 +1486,13 @@ export default function App() {
           <Text style={styles.sectionTitle}>Current wallet</Text>
           <Text style={styles.sectionHint}>{selectedWallet?.name ?? '--'} · {selectedChainMeta.label}</Text>
           <Text style={styles.settingsMono}>{selectedWallet?.address ?? '--'}</Text>
+        </View>
+
+        <View style={styles.sectionCard}>
+          <Text style={styles.sectionTitle}>Network services</Text>
+          <Text style={styles.sectionHint}>
+            RPC, Shyft metadata, and Jupiter pricing can be supplied with EXPO_PUBLIC environment values.
+          </Text>
         </View>
 
         <View style={styles.sectionCard}>
@@ -1802,7 +1961,10 @@ function createStyles(palette: MobileThemePalette) {
     color: palette.grape,
     fontSize: 14,
     fontWeight: '700',
-    letterSpacing: 4
+    letterSpacing: 4,
+    alignSelf: 'flex-start',
+    textAlign: 'left',
+    marginTop: -4
   },
   heroTitle: {
     color: palette.text,
@@ -1895,7 +2057,8 @@ function createStyles(palette: MobileThemePalette) {
   sectionHint: {
     color: palette.muted,
     fontSize: 14,
-    lineHeight: 20
+    lineHeight: 20,
+    textAlign: 'left'
   },
   walletToolsRow: {
     flexDirection: 'row',
@@ -2024,18 +2187,43 @@ function createStyles(palette: MobileThemePalette) {
     borderColor: palette.panelBorder,
     borderWidth: 1,
     borderRadius: 32,
-    padding: 24,
-    gap: 15,
+    paddingTop: 18,
+    paddingRight: 24,
+    paddingBottom: 24,
+    paddingLeft: 24,
+    gap: 12,
+    overflow: 'hidden',
     shadowColor: '#000',
     shadowOpacity: 0.28,
     shadowRadius: 28,
     shadowOffset: { width: 0, height: 18 },
     elevation: 12
   },
+  lockLogoCluster: {
+    position: 'relative',
+    alignSelf: 'flex-start',
+    marginTop: -2,
+    marginBottom: -2,
+    marginLeft: -2,
+    width: 82,
+    height: 82,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  lockLogoHalo: {
+    position: 'absolute',
+    width: 104,
+    height: 104,
+    borderRadius: 52,
+    backgroundColor: palette.grape,
+    opacity: 0.08
+  },
   lockedTitle: {
     color: palette.text,
     fontSize: 34,
-    fontWeight: '800'
+    fontWeight: '800',
+    alignSelf: 'flex-start',
+    textAlign: 'left'
   },
   lockedTitleCompact: {
     fontSize: 30
@@ -2081,7 +2269,7 @@ function createStyles(palette: MobileThemePalette) {
     borderWidth: 1
   },
   walletAvatarText: {
-    fontSize: 15,
+    fontSize: 17,
     fontWeight: '900'
   },
   walletIdentityCopy: {
@@ -2094,19 +2282,29 @@ function createStyles(palette: MobileThemePalette) {
     alignItems: 'center'
   },
   refreshChip: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: 'rgba(255,255,255,0.08)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden'
+  },
+  refreshGlyphWrap: {
+    width: 24,
+    height: 24,
     alignItems: 'center',
     justifyContent: 'center'
   },
   refreshChipText: {
     color: palette.text,
-    fontSize: 17,
-    fontWeight: '700'
+    fontSize: 22,
+    fontWeight: '800',
+    lineHeight: 22,
+    textAlign: 'center',
+    includeFontPadding: false
   },
   cardLabel: {
     color: palette.muted,
@@ -2166,17 +2364,17 @@ function createStyles(palette: MobileThemePalette) {
   },
   quickActionGlyph: {
     color: palette.text,
-    fontSize: 20,
+    fontSize: 24,
     fontWeight: '800'
   },
   quickActionLabel: {
     color: palette.text,
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '700'
   },
   quickActionLabelMuted: {
     color: palette.muted,
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '700'
   },
   pillRow: {
@@ -2336,10 +2534,20 @@ function createStyles(palette: MobileThemePalette) {
     color: palette.muted,
     fontSize: 14
   },
+  assetValueStack: {
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    gap: 4
+  },
   assetValue: {
     color: palette.text,
     fontSize: 15,
     fontWeight: '800'
+  },
+  assetValueMeta: {
+    color: palette.muted,
+    fontSize: 12,
+    fontWeight: '600'
   },
   rowChevron: {
     color: palette.muted,
@@ -2522,11 +2730,14 @@ function createStyles(palette: MobileThemePalette) {
   },
   footerGlyph: {
     color: palette.text,
-    fontSize: 19
+    fontSize: 23,
+    lineHeight: 24,
+    includeFontPadding: false,
+    textAlign: 'center'
   },
   footerLabel: {
     color: palette.muted,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '700'
   },
   footerLabelActive: {

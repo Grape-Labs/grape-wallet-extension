@@ -30,6 +30,26 @@ For Android:
 pnpm --filter @grape/mobile android
 ```
 
+## Environment
+
+Create [apps/mobile/.env](/Users/kirk/Development/grape-wallet-extension/apps/mobile/.env) from
+[apps/mobile/.env.example](/Users/kirk/Development/grape-wallet-extension/apps/mobile/.env.example)
+and use Expo public vars for mobile-safe configuration:
+
+```bash
+EXPO_PUBLIC_SOLANA_RPC_URL=
+EXPO_PUBLIC_SUI_RPC_URL=
+EXPO_PUBLIC_ETHEREUM_RPC_URL=
+EXPO_PUBLIC_MONAD_RPC_URL=
+EXPO_PUBLIC_SHYFT_API_KEY=
+EXPO_PUBLIC_JUP_API_KEY=
+```
+
+Notes:
+- `EXPO_PUBLIC_*` values are bundled into the app and visible to the client.
+- Solana holdings use Shyft token metadata and Jupiter pricing when those env vars are set.
+- Chain RPC URLs fall back to public defaults when the env vars are empty.
+
 ## Android builds
 
 For a tester-installable APK:
