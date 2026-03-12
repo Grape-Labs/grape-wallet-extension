@@ -34,6 +34,28 @@ export function deriveMobileSuiAccount0(mnemonic: string) {
   };
 }
 
+export function importMobileSuiPrivateKey(privateKey: string) {
+  const normalizedPrivateKey = privateKey.trim();
+  const keypair = normalizedPrivateKey.startsWith('suiprivkey')
+    ? Ed25519Keypair.fromSecretKey(normalizedPrivateKey)
+    : Ed25519Keypair.fromSecretKey(decodeSuiRawPrivateKey(normalizedPrivateKey));
+
+  return {
+    secretKey: keypair.getSecretKey(),
+    derivationPath: 'imported-private-key' as const,
+    address: keypair.toSuiAddress()
+  };
+}
+
+export function validateMobileSuiPrivateKey(privateKey: string) {
+  try {
+    importMobileSuiPrivateKey(privateKey);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function getMobileSuiHoldings(owner: string) {
   const normalizedOwner = normalizeSuiAddress(owner);
   const balances = await callSuiRpc<SuiBalanceResponse[]>('suix_getAllBalances', [normalizedOwner]);
@@ -148,4 +170,50 @@ function normalizeSuiCoinType(coinType: string): string {
   }
 
   return `${normalizeSuiAddress(parts[0])}::${parts[1].toLowerCase()}::${parts[2].toUpperCase()}`;
+}
+
+function decodeSuiRawPrivateKey(privateKey: string): Uint8Array {
+  const trimmed = privateKey.trim();
+  if (!trimmed) {
+    throw new Error('Sui private key is required.');
+  }
+
+  if (trimmed.startsWith('[')) {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (!Array.isArray(parsed) || parsed.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) {
+      throw new Error('Sui private key array is invalid.');
+    }
+
+    const bytes = Uint8Array.from(parsed);
+    if (bytes.length !== 32) {
+      throw new Error('Sui private key must decode to 32 bytes.');
+    }
+    return bytes;
+  }
+
+  if (/^[0-9a-fA-F]+$/.test(trimmed)) {
+    if (trimmed.length % 2 !== 0) {
+      throw new Error('Hex private key must have an even number of characters.');
+    }
+
+    if (trimmed.length !== 64) {
+      throw new Error('Sui private key must decode to 32 bytes.');
+    }
+
+    const bytes = new Uint8Array(trimmed.length / 2);
+    for (let index = 0; index < trimmed.length; index += 2) {
+      bytes[index / 2] = Number.parseInt(trimmed.slice(index, index + 2), 16);
+    }
+    return bytes;
+  }
+
+  try {
+    const decoded = Uint8Array.from(Buffer.from(trimmed, 'base64'));
+    if (decoded.length !== 32) {
+      throw new Error('Sui private key must decode to 32 bytes.');
+    }
+    return decoded;
+  } catch {
+    throw new Error('Sui private key must be suiprivkey, base64, 64-char hex, or JSON byte array.');
+  }
 }

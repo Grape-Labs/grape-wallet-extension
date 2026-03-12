@@ -10,6 +10,7 @@ import {
   generateWalletMnemonic,
   importSolanaPrivateKey,
   normalizeMnemonic,
+  type WalletMnemonicLength,
   validateSolanaPrivateKey,
   validateWalletMnemonic
 } from '@grape/solana';
@@ -114,6 +115,7 @@ export function OnboardingView(props: OnboardingViewProps) {
   const requestedMode = searchParams.get('mode');
   const [mode, setMode] = useState<SetupMode>('create');
   const [step, setStep] = useState<SetupStep>(1);
+  const [mnemonicLength, setMnemonicLength] = useState<WalletMnemonicLength>(12);
   const [generatedMnemonic, setGeneratedMnemonic] = useState('');
   const [importMnemonic, setImportMnemonic] = useState('');
   const [importPrivateKey, setImportPrivateKey] = useState('');
@@ -134,8 +136,8 @@ export function OnboardingView(props: OnboardingViewProps) {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    setGeneratedMnemonic(generateWalletMnemonic());
-  }, []);
+    setGeneratedMnemonic(generateWalletMnemonic(mnemonicLength));
+  }, [mnemonicLength]);
 
   useEffect(() => {
     if (requestedMode === 'create' || requestedMode === 'import') {
@@ -207,7 +209,7 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
       setError(null);
 
       if (mode === 'create' && !validateWalletMnemonic(mnemonic)) {
-        throw new Error('Enter a valid 12-word mnemonic.');
+        throw new Error('Enter a valid 12-word or 24-word recovery phrase.');
       }
 
       if (mode === 'create' && !confirmBackup) {
@@ -232,7 +234,7 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
         });
       } else if (importMethod === 'mnemonic') {
         if (!validateWalletMnemonic(mnemonic)) {
-          throw new Error('Enter a valid 12-word mnemonic.');
+          throw new Error('Enter a valid 12-word or 24-word recovery phrase.');
         }
         const account = deriveSolanaAccount0(mnemonic);
         await sendRuntimeMessage<WalletStateResponse>({
@@ -314,7 +316,7 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
                 }}
               >
                 <strong>Create new wallet</strong>
-                <span className="muted">Generate a fresh 12-word recovery phrase for supported chains.</span>
+                <span className="muted">Generate a fresh 12-word or 24-word recovery phrase for supported chains.</span>
               </button>
               <button
                 type="button"
@@ -339,6 +341,29 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
         <Card title={mode === 'create' ? 'Back up recovery phrase' : 'Import wallet'}>
           {mode === 'create' ? (
             <div className="stack">
+              <label className="stack">
+                <span className="muted">Recovery phrase length</span>
+                <div className="inline wrap-actions">
+                  <Button
+                    tone={mnemonicLength === 12 ? 'primary' : 'secondary'}
+                    onClick={() => {
+                      setMnemonicLength(12);
+                      setConfirmBackup(false);
+                    }}
+                  >
+                    12 words
+                  </Button>
+                  <Button
+                    tone={mnemonicLength === 24 ? 'primary' : 'secondary'}
+                    onClick={() => {
+                      setMnemonicLength(24);
+                      setConfirmBackup(false);
+                    }}
+                  >
+                    24 words
+                  </Button>
+                </div>
+              </label>
               <p className="warning-box">This phrase is shown once. Save it somewhere offline before you continue.</p>
               <MnemonicGrid words={generatedMnemonic.split(' ')} />
               <label className="inline checkbox-row">
@@ -348,7 +373,7 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
               <Button
                 tone="secondary"
                 onClick={() => {
-                  setGeneratedMnemonic(generateWalletMnemonic());
+                  setGeneratedMnemonic(generateWalletMnemonic(mnemonicLength));
                   setConfirmBackup(false);
                 }}
               >
@@ -367,7 +392,7 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
                   }}
                 >
                   <strong>Recovery phrase</strong>
-                  <span className="muted">Import from a 12-word mnemonic.</span>
+                  <span className="muted">Import from a valid 12-word or 24-word recovery phrase.</span>
                 </button>
                 <button
                   type="button"
@@ -415,7 +440,7 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
                 <label className="stack">
                   <span className="muted">Recovery phrase</span>
                   <TextArea
-                    placeholder="Enter your 12-word mnemonic"
+                    placeholder="Enter your 12-word or 24-word recovery phrase"
                     value={importMnemonic}
                     onChange={(event) => setImportMnemonic(event.target.value)}
                   />

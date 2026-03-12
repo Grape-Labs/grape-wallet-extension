@@ -13,6 +13,12 @@ describe('mnemonic and derivation', () => {
     expect(validateWalletMnemonic(mnemonic)).toBe(true);
   });
 
+  it('generates valid 24-word mnemonics', () => {
+    const mnemonic = generateWalletMnemonic(24);
+    expect(mnemonic.split(' ')).toHaveLength(24);
+    expect(validateWalletMnemonic(mnemonic)).toBe(true);
+  });
+
   it('derives deterministic account 0', () => {
     const mnemonic = 'pill tomorrow foster begin walnut borrow virtual kick shift mutual shoe scatter';
     const account = deriveSolanaAccount0(mnemonic);

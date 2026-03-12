@@ -8,6 +8,9 @@
     "dev": "pnpm --filter @grape/extension dev",
     "mobile:start": "pnpm --filter @grape/mobile start",
     "mobile:android": "pnpm --filter @grape/mobile android",
+    "mobile:apk": "pnpm --filter @grape/mobile exec eas build -p android --profile preview",
+    "mobile:aab": "pnpm --filter @grape/mobile exec eas build -p android --profile production",
+    "postinstall": "pnpm --filter @grape/core build && pnpm --filter @grape/solana build && pnpm --filter @grape/sui build && pnpm --filter @grape/monad build && pnpm --filter @grape/ethereum build",
     "lint": "eslint . --ext .ts,.tsx",
     "typecheck": "pnpm -r typecheck",
     "test": "vitest run"
@@ -22,6 +25,7 @@
     "@typescript-eslint/eslint-plugin": "^8.26.1",
     "@typescript-eslint/parser": "^8.26.1",
     "@vitejs/plugin-react": "^4.4.1",
+    "eas-cli": "^18.3.0",
     "eslint": "^9.22.0",
     "eslint-plugin-react-hooks": "^5.2.0",
     "jsdom": "^26.0.0",

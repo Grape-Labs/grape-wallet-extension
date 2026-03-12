@@ -30,4 +30,25 @@ For Android:
 pnpm --filter @grape/mobile android
 ```
 
+## Android builds
+
+For a tester-installable APK:
+
+```bash
+pnpm mobile:apk
+```
+
+For a Play Store `.aab`:
+
+```bash
+pnpm mobile:aab
+```
+
+This uses the repo-root [eas.json](/Users/kirk/Development/grape-wallet-extension/eas.json) with:
+
+- `preview`: internal distribution APK
+- `production`: Android App Bundle
+
+You will need an Expo account and EAS login before the cloud build can start.
+
 This scaffold is intentionally not included in the root build pipeline yet.
