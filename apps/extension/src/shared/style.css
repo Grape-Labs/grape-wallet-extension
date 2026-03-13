@@ -2173,6 +2173,25 @@ body[data-surface='popup'] .asset-panel-card {
   gap: 12px;
 }
 
+.grape-tools-panel-card {
+  margin-top: 14px;
+}
+
+.grape-tools-copy {
+  display: grid;
+  gap: 8px;
+}
+
+.grape-tools-copy strong {
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.grape-tools-copy .muted {
+  margin: 0;
+  line-height: 1.55;
+}
+
 .staking-header {
   display: flex;
   align-items: flex-start;

@@ -122,6 +122,10 @@ function getAssetSubtitle(asset: MobileAsset, selectedChainLabel: string, select
     return null;
   }
 
+  if (asset.chain === 'solana' && asset.address && asset.metadataSource !== 'native') {
+    return `${asset.symbol}  ${shortenAddress(asset.address)}`;
+  }
+
   return asset.symbol;
 }
 
@@ -143,6 +147,7 @@ export default function App() {
   const [confirmBackedUp, setConfirmBackedUp] = useState(false);
   const [unlockPassword, setUnlockPassword] = useState('');
   const [assets, setAssets] = useState<MobileAsset[]>([]);
+  const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const [assetsLoading, setAssetsLoading] = useState(false);
   const [submitLoading, setSubmitLoading] = useState(false);
   const [sendRecipient, setSendRecipient] = useState('');
@@ -220,6 +225,10 @@ export default function App() {
   );
   const headlineAsset = assets[0];
   const holdingsSummary = assets.length === 0 ? '--' : headlineAsset?.amountLabel ?? '--';
+  const selectedAsset = useMemo(
+    () => assets.find((asset) => asset.id === selectedAssetId) ?? null,
+    [assets, selectedAssetId]
+  );
 
   useEffect(() => {
     let mounted = true;
@@ -501,6 +510,10 @@ export default function App() {
       mounted = false;
     };
   }, [selectedWallet, unlocked]);
+
+  useEffect(() => {
+    setSelectedAssetId(null);
+  }, [selectedWallet?.id, walletState.selectedChain]);
 
   async function saveState(nextState: MobileWalletState) {
     setWalletState(nextState);
@@ -1177,6 +1190,106 @@ export default function App() {
       outputRange: ['0deg', '360deg']
     });
 
+    if (selectedAsset) {
+      const assetSubtitle = getAssetSubtitle(selectedAsset, selectedChainMeta.label, selectedChainMeta.short);
+      return (
+        <View style={styles.stack}>
+          <View style={styles.sectionCard}>
+            <Pressable style={styles.detailBackRow} onPress={() => setSelectedAssetId(null)}>
+              <Feather name="chevron-left" size={18} color={activeTheme.text} />
+              <Text style={styles.detailBackText}>Back to holdings</Text>
+            </Pressable>
+
+            <View style={styles.assetDetailHeader}>
+              <View style={styles.assetDetailGlyph}>
+                {selectedAsset.logoUri ? (
+                  <Image source={{ uri: selectedAsset.logoUri }} style={styles.assetDetailGlyphImage} resizeMode="cover" />
+                ) : (
+                  <Text style={styles.assetDetailGlyphText}>{selectedAsset.symbol.slice(0, 1)}</Text>
+                )}
+              </View>
+              <View style={styles.assetDetailCopy}>
+                <Text style={styles.assetDetailName}>{selectedAsset.name}</Text>
+                <Text style={styles.assetDetailSymbol}>{selectedAsset.symbol}</Text>
+              </View>
+            </View>
+
+            <View style={styles.assetDetailStats}>
+              <View style={styles.assetDetailStat}>
+                <Text style={styles.assetDetailLabel}>Holdings</Text>
+                <Text style={styles.assetDetailValue}>{maskValue(selectedAsset.amountLabel, walletState.privacyMode)}</Text>
+              </View>
+              {selectedAsset.valueLabel ? (
+                <View style={styles.assetDetailStat}>
+                  <Text style={styles.assetDetailLabel}>Estimated value</Text>
+                  <Text style={styles.assetDetailValue}>{maskValue(selectedAsset.valueLabel, walletState.privacyMode)}</Text>
+                </View>
+              ) : null}
+              <View style={styles.assetDetailStat}>
+                <Text style={styles.assetDetailLabel}>Chain</Text>
+                <Text style={styles.assetDetailMeta}>{selectedChainMeta.label}</Text>
+              </View>
+              {assetSubtitle ? (
+                <View style={styles.assetDetailStat}>
+                  <Text style={styles.assetDetailLabel}>Symbol</Text>
+                  <Text style={styles.assetDetailMeta}>{assetSubtitle}</Text>
+                </View>
+              ) : null}
+              <View style={styles.assetDetailStat}>
+                <Text style={styles.assetDetailLabel}>Wallet</Text>
+                <Text style={styles.assetDetailMeta}>{selectedWallet?.name ?? '--'}</Text>
+              </View>
+              <View style={styles.assetDetailStat}>
+                <Text style={styles.assetDetailLabel}>Asset address</Text>
+                <Text style={styles.assetDetailMeta}>
+                  {selectedAsset.address ? shortenAddress(selectedAsset.address) : '--'}
+                </Text>
+              </View>
+              <View style={styles.assetDetailStat}>
+                <Text style={styles.assetDetailLabel}>Metadata source</Text>
+                <Text style={styles.assetDetailMeta}>
+                  {selectedAsset.metadataSource === 'shyft'
+                    ? 'Shyft'
+                    : selectedAsset.metadataSource === 'rpc'
+                      ? 'RPC'
+                      : 'Native'}
+                </Text>
+              </View>
+              {typeof selectedAsset.decimals === 'number' ? (
+                <View style={styles.assetDetailStat}>
+                  <Text style={styles.assetDetailLabel}>Decimals</Text>
+                  <Text style={styles.assetDetailMeta}>{selectedAsset.decimals}</Text>
+                </View>
+              ) : null}
+              {selectedAsset.description ? (
+                <View style={styles.assetDetailStat}>
+                  <Text style={styles.assetDetailLabel}>Details</Text>
+                  <Text style={styles.assetDetailMeta}>{selectedAsset.description}</Text>
+                </View>
+              ) : null}
+            </View>
+
+            <Pressable
+              style={styles.primaryButton}
+              onPress={() => {
+                setShowSendComposer(true);
+                setSelectedAssetId(null);
+              }}
+            >
+              <Text style={styles.primaryButtonText}>Send asset</Text>
+            </Pressable>
+          </View>
+
+          <View style={styles.sectionCard}>
+            <Text style={styles.sectionTitle}>Grape Tools</Text>
+            <Text style={styles.sectionHint}>
+              The wallet will connect directly to Grape identity, reputation, access, claims, and governance tooling so users can move from holding assets to participating in communities and DAOs.
+            </Text>
+          </View>
+        </View>
+      );
+    }
+
     return (
       <>
         <View style={styles.heroCard}>
@@ -1333,9 +1446,17 @@ export default function App() {
                 (() => {
                   const assetSubtitle = getAssetSubtitle(asset, selectedChainMeta.label, selectedChainMeta.short);
                   return (
-                    <View key={asset.id} style={styles.assetRow}>
+                    <Pressable key={asset.id} style={styles.assetRow} onPress={() => setSelectedAssetId(asset.id)}>
                       <View style={styles.assetGlyph}>
-                        <Text style={styles.assetGlyphText}>{asset.symbol.slice(0, 1)}</Text>
+                        {asset.logoUri ? (
+                          <Image
+                            source={{ uri: asset.logoUri }}
+                            style={styles.assetGlyphImage}
+                            resizeMode="cover"
+                          />
+                        ) : (
+                          <Text style={styles.assetGlyphText}>{asset.symbol.slice(0, 1)}</Text>
+                        )}
                       </View>
                       <View style={styles.assetCopy}>
                         <Text style={styles.assetName}>{asset.name}</Text>
@@ -1348,12 +1469,19 @@ export default function App() {
                         ) : null}
                       </View>
                       <Feather name="chevron-right" size={20} color={activeTheme.muted} style={styles.rowChevronIcon} />
-                    </View>
+                    </Pressable>
                   );
                 })()
               ))
             )}
           </View>
+        </View>
+
+        <View style={styles.sectionCard}>
+          <Text style={styles.sectionTitle}>Grape Tools</Text>
+          <Text style={styles.sectionHint}>
+            The wallet will connect directly to Grape identity, reputation, access, claims, and governance tooling so users can move from holding assets to participating in communities and DAOs.
+          </Text>
         </View>
       </>
     );
@@ -2550,6 +2678,11 @@ function createStyles(palette: MobileThemePalette) {
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.08)'
   },
+  assetGlyphImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 22
+  },
   assetGlyphText: {
     color: palette.text,
     fontSize: 18,
@@ -2703,6 +2836,49 @@ function createStyles(palette: MobileThemePalette) {
     color: palette.mint,
     fontSize: 12,
     fontWeight: '800'
+  },
+  assetDetailHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14
+  },
+  assetDetailCopy: {
+    flex: 1,
+    gap: 4
+  },
+  assetDetailName: {
+    color: palette.text,
+    fontSize: 22,
+    fontWeight: '800'
+  },
+  assetDetailSymbol: {
+    color: palette.muted,
+    fontSize: 15,
+    fontWeight: '700'
+  },
+  assetDetailStats: {
+    gap: 12
+  },
+  assetDetailStat: {
+    gap: 4
+  },
+  assetDetailLabel: {
+    color: palette.muted,
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase'
+  },
+  assetDetailValue: {
+    color: palette.text,
+    fontSize: 17,
+    fontWeight: '800'
+  },
+  assetDetailMeta: {
+    color: palette.text,
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: '600'
   },
   settingsRow: {
     flexDirection: 'row',

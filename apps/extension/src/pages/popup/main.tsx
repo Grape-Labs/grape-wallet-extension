@@ -3229,6 +3229,16 @@ function PopupPage() {
           </Tabs.Content>
           ) : null}
         </Tabs.Root>
+
+        <Card className="asset-panel-card grape-tools-panel-card">
+          <div className="grape-tools-copy">
+            <strong>Grape Tools</strong>
+            <p className="muted">
+              The wallet will connect directly to Grape identity, reputation, access, claims, and governance tooling so
+              users can move from holding assets to participating in communities and DAOs.
+            </p>
+          </div>
+        </Card>
       </>
     );
   }

@@ -6,6 +6,7 @@ import { DEFAULT_THEME, type GrapeChain, type GrapeTheme, type WalletSetupState 
 import { generateWalletMnemonic, type WalletMnemonicLength, validateWalletMnemonic } from '../../../packages/solana/src/mnemonic';
 import {
   fetchMobileJupiterPrices,
+  fetchMobileShyftWalletTokens,
   fetchMobileShyftTokenMetadata,
   formatUsdValue,
   getMobileEthereumRpcUrl,
@@ -64,6 +65,12 @@ export type MobileAsset = {
   symbol: string;
   amountLabel: string;
   valueLabel: string;
+  logoUri?: string;
+  chain: GrapeChain;
+  address?: string;
+  metadataSource?: 'native' | 'shyft' | 'rpc';
+  decimals?: number;
+  description?: string;
 };
 
 type StoredSecretPayload =
@@ -505,8 +512,9 @@ async function loadSolanaAssets(address: string): Promise<MobileAsset[]> {
   }
   const connection = new Connection(getMobileSolanaRpcUrl(DEFAULT_SOLANA_NETWORK), 'confirmed');
   const owner = new PublicKey(address);
-  const [lamports, legacyTokenAccounts, token2022Accounts, shyftMetadata] = await Promise.all([
+  const [lamports, shyftTokens, legacyTokenAccounts, token2022Accounts, shyftMetadata] = await Promise.all([
     connection.getBalance(owner, 'confirmed'),
+    fetchMobileShyftWalletTokens(address, DEFAULT_SOLANA_NETWORK).catch(() => []),
     connection.getParsedTokenAccountsByOwner(owner, {
       programId: new PublicKey(SOLANA_LEGACY_TOKEN_PROGRAM)
     }),
@@ -545,19 +553,58 @@ async function loadSolanaAssets(address: string): Promise<MobileAsset[]> {
       name: 'Solana',
       symbol: 'SOL',
       amountLabel: `${solAmount.toFixed(4).replace(/\.?0+$/, '')} SOL`,
-      valueLabel: formatUsdValue(solUsdPrice ? solAmount * solUsdPrice : null)
+      valueLabel: formatUsdValue(solUsdPrice ? solAmount * solUsdPrice : null),
+      logoUri: 'https://media.solana-cdn.com/image/width=100/https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/solana/info/logo.png',
+      chain: 'solana',
+      address: JUPITER_SOL_MINT,
+      metadataSource: 'native',
+      decimals: 9,
+      description: 'Native SOL balance on this wallet.'
     }
   ];
 
-  tokenEntries.forEach((entry) => {
+  const hasShyftHoldings = shyftTokens.length > 0;
+  const effectiveTokenEntries = hasShyftHoldings
+    ? shyftTokens.map((token) => ({
+        mint: token.mint,
+        amountLabel: token.balanceLabel ?? `${token.balanceUi ?? 0}`,
+        numericAmount: token.balanceUi ?? 0,
+        name: token.name,
+        symbol: token.symbol,
+        logoUri: token.logoUri
+      }))
+    : tokenEntries.map((entry) => {
+        const metadata = shyftMetadata[entry.mint];
+        return {
+          mint: entry.mint,
+          amountLabel: entry.amountLabel,
+          numericAmount: entry.numericAmount,
+          name: metadata?.name,
+          symbol: metadata?.symbol,
+          logoUri: metadata?.logoUri
+        };
+      });
+
+  effectiveTokenEntries.forEach((entry) => {
     const metadata = shyftMetadata[entry.mint];
     const tokenUsdPrice = jupiterPrices[entry.mint]?.usdPrice ?? null;
+    const symbol = entry.symbol || metadata?.symbol || shortenAddress(entry.mint);
     assets.push({
       id: entry.mint,
-      name: metadata?.name || shortenAddress(entry.mint),
-      symbol: metadata?.symbol || shortenAddress(entry.mint),
-      amountLabel: `${entry.amountLabel} ${metadata?.symbol || ''}`.trim(),
-      valueLabel: formatUsdValue(tokenUsdPrice ? entry.numericAmount * tokenUsdPrice : null)
+      name: entry.name || metadata?.name || shortenAddress(entry.mint),
+      symbol,
+      amountLabel: hasShyftHoldings ? entry.amountLabel : `${entry.amountLabel} ${symbol}`.trim(),
+      valueLabel: formatUsdValue(tokenUsdPrice ? entry.numericAmount * tokenUsdPrice : null),
+      logoUri: entry.logoUri || metadata?.logoUri,
+      chain: 'solana',
+      address: entry.mint,
+      metadataSource: hasShyftHoldings ? 'shyft' : metadata?.name || metadata?.symbol || metadata?.logoUri ? 'shyft' : 'rpc',
+      decimals: metadata?.decimals,
+      description: hasShyftHoldings
+        ? `Metadata powered by Shyft for ${symbol}.`
+        : metadata?.name
+          ? `Metadata powered by Shyft for ${metadata.name}.`
+          : undefined
     });
   });
 
@@ -616,14 +663,22 @@ async function loadSuiAssets(address: string): Promise<MobileAsset[]> {
       name: 'Sui',
       symbol: 'SUI',
       amountLabel: `${formatMobileSuiAmount(holdings.totalMist, 9)} SUI`,
-      valueLabel: ''
+      valueLabel: '',
+      chain: 'sui',
+      address,
+      metadataSource: 'native',
+      decimals: 9
     },
     ...holdings.coins.map((coin) => ({
       id: coin.coinType,
       name: coin.name,
       symbol: coin.symbol,
       amountLabel: `${coin.amount} ${coin.symbol}`,
-      valueLabel: ''
+      valueLabel: '',
+      chain: 'sui' as const,
+      address: coin.coinType,
+      metadataSource: 'rpc' as const,
+      decimals: coin.decimals
     }))
   ];
 }
@@ -638,7 +693,11 @@ async function loadEthereumAssets(address: string): Promise<MobileAsset[]> {
       name: 'Ethereum',
       symbol: 'ETH',
       amountLabel: `${holdings.formatted} ETH`,
-      valueLabel: ''
+      valueLabel: '',
+      chain: 'ethereum',
+      address,
+      metadataSource: 'native',
+      decimals: 18
     }
   ];
 }
@@ -653,7 +712,11 @@ async function loadMonadAssets(address: string): Promise<MobileAsset[]> {
       name: 'Monad',
       symbol: 'MON',
       amountLabel: `${holdings.formatted} MON`,
-      valueLabel: ''
+      valueLabel: '',
+      chain: 'monad',
+      address,
+      metadataSource: 'native',
+      decimals: 18
     }
   ];
 }

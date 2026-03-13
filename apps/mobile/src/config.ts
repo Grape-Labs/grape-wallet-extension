@@ -9,6 +9,16 @@ export const MOBILE_MONAD_TESTNET_RPC_URL = 'https://testnet-rpc.monad.xyz';
 
 export const MOBILE_JUPITER_SOL_MINT = 'So11111111111111111111111111111111111111112';
 
+export type MobileShyftWalletToken = {
+  mint: string;
+  name?: string;
+  symbol?: string;
+  logoUri?: string;
+  decimals?: number;
+  balanceUi?: number;
+  balanceLabel?: string;
+};
+
 function readPublicEnv(key: string) {
   const value = process.env[key];
   if (typeof value !== 'string') {
@@ -107,10 +117,10 @@ export async function fetchMobileJupiterPrices(ids: string[]) {
   );
 }
 
-export async function fetchMobileShyftTokenMetadata(wallet: string, network: 'mainnet-beta' | 'devnet' = 'mainnet-beta') {
+export async function fetchMobileShyftWalletTokens(wallet: string, network: 'mainnet-beta' | 'devnet' = 'mainnet-beta') {
   const apiKey = getMobileShyftApiKey();
   if (!apiKey) {
-    return {} as Record<string, { mint: string; name?: string; symbol?: string; logoUri?: string }>;
+    return [] as MobileShyftWalletToken[];
   }
 
   const url = new URL('https://api.shyft.to/sol/v1/wallet/all_tokens');
@@ -132,11 +142,13 @@ export async function fetchMobileShyftTokenMetadata(wallet: string, network: 'ma
       address?: string;
       token_address?: string;
       mint?: string;
+      balance?: number | string;
       name?: string;
       symbol?: string;
       image?: string;
       logoURI?: string;
       info?: {
+        decimals?: number;
         name?: string;
         symbol?: string;
         image?: string;
@@ -145,26 +157,39 @@ export async function fetchMobileShyftTokenMetadata(wallet: string, network: 'ma
   };
 
   const entries = Array.isArray(payload.result) ? payload.result : [];
-  return Object.fromEntries(
-    entries
-      .map((entry) => {
-        const mint = entry.address?.trim() || entry.token_address?.trim() || entry.mint?.trim();
-        if (!mint) {
-          return null;
-        }
+  return entries
+    .map((entry) => {
+      const mint = entry.address?.trim() || entry.token_address?.trim() || entry.mint?.trim();
+      if (!mint) {
+        return null;
+      }
 
-        return [
-          mint,
-          {
-            mint,
-            name: entry.info?.name?.trim() || entry.name?.trim() || undefined,
-            symbol: entry.info?.symbol?.trim() || entry.symbol?.trim() || undefined,
-            logoUri: entry.info?.image?.trim() || entry.image?.trim() || entry.logoURI?.trim() || undefined
-          }
-        ] as const;
-      })
-      .filter((entry): entry is readonly [string, { mint: string; name?: string; symbol?: string; logoUri?: string }] => !!entry)
-  );
+      const numericBalance =
+        typeof entry.balance === 'number'
+          ? entry.balance
+          : typeof entry.balance === 'string'
+            ? Number(entry.balance)
+            : NaN;
+      const balanceUi = Number.isFinite(numericBalance) ? numericBalance : 0;
+      const decimals = typeof entry.info?.decimals === 'number' ? entry.info.decimals : undefined;
+      const symbol = entry.info?.symbol?.trim() || entry.symbol?.trim() || undefined;
+
+      return {
+        mint,
+        name: entry.info?.name?.trim() || entry.name?.trim() || undefined,
+        symbol,
+        logoUri: entry.info?.image?.trim() || entry.image?.trim() || entry.logoURI?.trim() || undefined,
+        decimals,
+        balanceUi,
+        balanceLabel: symbol ? `${balanceUi} ${symbol}` : `${balanceUi}`
+      } satisfies MobileShyftWalletToken;
+    })
+    .filter((entry): entry is MobileShyftWalletToken => !!entry && entry.balanceUi > 0);
+}
+
+export async function fetchMobileShyftTokenMetadata(wallet: string, network: 'mainnet-beta' | 'devnet' = 'mainnet-beta') {
+  const tokens = await fetchMobileShyftWalletTokens(wallet, network);
+  return Object.fromEntries(tokens.map((token) => [token.mint, token]));
 }
 
 export function formatUsdValue(value: number | null) {
