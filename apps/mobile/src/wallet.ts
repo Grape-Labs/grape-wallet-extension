@@ -1,25 +1,37 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Crypto from 'expo-crypto';
-import { getItemAsync, setItemAsync } from 'expo-secure-store';
+import { deleteItemAsync, getItemAsync, setItemAsync } from 'expo-secure-store';
 
-import { DEFAULT_THEME, type GrapeChain, type GrapeTheme, type WalletSetupState } from '@grape/core';
+import { DEFAULT_THEME, type GrapeChain, type GrapeTheme, type VaultSecret, type WalletSetupState } from '@grape/core';
 import { generateWalletMnemonic, type WalletMnemonicLength, validateWalletMnemonic } from '../../../packages/solana/src/mnemonic';
 import {
+  createMobileJupiterSwapTransaction,
+  fetchMobileJupiterQuote,
   fetchMobileJupiterPrices,
+  fetchMobileNativeBridgeQuote,
+  fetchMobileShyftTransactionHistory,
   fetchMobileShyftWalletTokens,
-  fetchMobileShyftTokenMetadata,
   formatUsdValue,
   getMobileEthereumRpcUrl,
+  getMobileSupportedBridgeDestinations,
   getMobileMonadRpcUrl,
-  getMobileSolanaRpcUrl
+  getMobileSolanaRpcUrl,
+  type MobileBridgeQuoteSummary,
+  type MobileJupiterQuoteResponse
 } from './config';
 import {
   deriveMobileSuiAccount0,
+  exportMobileSuiWalletSecret,
   formatMobileSuiAmount,
   getMobileSuiHoldings,
   getMobileSuiSendUnsupportedMessage,
   importMobileSuiPrivateKey
 } from './sui';
+import type {
+  MobileGovernanceResponse,
+  MobileGovernanceVoteResponse
+} from './governance';
+import type { MobileReputationResponse } from './reputation';
 
 export type MobileWalletSource = 'created' | 'imported-mnemonic' | 'imported-private-key';
 
@@ -37,13 +49,14 @@ export type MobileActivity = {
   id: string;
   chain: GrapeChain;
   walletId: string;
-  type: 'send';
+  type: string;
   title: string;
   subtitle: string;
   amountLabel: string;
   timestamp: number;
   signature: string;
-  status: 'success';
+  status: 'success' | 'failed' | 'unknown';
+  source?: 'local' | 'shyft';
 };
 
 export type MobileWalletState = {
@@ -51,6 +64,8 @@ export type MobileWalletState = {
   selectedChain: GrapeChain;
   selectedTheme: GrapeTheme;
   selectedWalletIds: Partial<Record<GrapeChain, string>>;
+  trackedReputationSpaceIds: string[];
+  trackedGovernanceDaoIds: string[];
   wallets: MobileWallet[];
   passwordSalt: string;
   passwordHash: string;
@@ -71,6 +86,50 @@ export type MobileAsset = {
   metadataSource?: 'native' | 'shyft' | 'rpc';
   decimals?: number;
   description?: string;
+  tokenType?: 'native' | 'spl' | 'erc20' | 'sui-coin';
+  accountAddress?: string;
+  programId?: string;
+};
+
+export type MobileWalletExport = {
+  chain: GrapeChain;
+  privateKey: string;
+  sourceKind: 'mnemonic' | 'private-key';
+};
+
+export type MobileSwapQuote = {
+  inputMint: string;
+  outputMint: string;
+  inputAmountUi: string;
+  slippageBps: number;
+  selectedRouteId: string;
+  routes: Array<{
+    id: string;
+    label: string;
+    quoteResponse: MobileJupiterQuoteResponse;
+    outputAmountUi: string;
+    priceImpactPct: string | null;
+    routeLabels: string[];
+  }>;
+};
+
+export type MobileSwapExecuteResponse = {
+  signature: string;
+  inputMint: string;
+  outputMint: string;
+  inputAmountUi: string;
+  outputAmountUi: string;
+};
+
+export type MobileBridgeExecuteResponse = {
+  signature: string;
+  fromChain: GrapeChain;
+  toChain: GrapeChain;
+  fromAmountUi: string;
+  toAmountUi: string;
+  fromSymbol: string;
+  toSymbol: string;
+  destinationAddress: string;
 };
 
 type StoredSecretPayload =
@@ -92,6 +151,42 @@ const DEFAULT_EVM_NETWORK = 'mainnet';
 const SOLANA_LEGACY_TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
 const SOLANA_TOKEN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
 const JUPITER_SOL_MINT = 'So11111111111111111111111111111111111111112';
+const MOBILE_SOLANA_ASSET_CACHE_TTL_MS = 30_000;
+const mobileSolanaAssetCache = new Map<string, { expiresAt: number; assets: MobileAsset[] }>();
+const MOBILE_REPUTATION_CACHE_TTL_MS = 30_000;
+const mobileReputationCache = new Map<string, { expiresAt: number; data: MobileReputationResponse }>();
+const MOBILE_GOVERNANCE_CACHE_TTL_MS = 30_000;
+const mobileGovernanceCache = new Map<string, { expiresAt: number; data: MobileGovernanceResponse }>();
+
+function normalizeWalletAddressKey(chain: GrapeChain, address: string) {
+  const trimmed = address.trim();
+  if (chain === 'solana' || chain === 'sui') {
+    return trimmed;
+  }
+
+  return trimmed.toLowerCase();
+}
+
+function dedupeWallets(wallets: MobileWallet[]) {
+  const seen = new Map<string, MobileWallet>();
+  const duplicateWalletIdMap = new Map<string, string>();
+
+  wallets.forEach((wallet) => {
+    const dedupeKey = `${wallet.chain}:${normalizeWalletAddressKey(wallet.chain, wallet.address)}`;
+    const existing = seen.get(dedupeKey);
+    if (!existing) {
+      seen.set(dedupeKey, wallet);
+      return;
+    }
+
+    duplicateWalletIdMap.set(wallet.id, existing.id);
+  });
+
+  return {
+    wallets: [...seen.values()],
+    duplicateWalletIdMap
+  };
+}
 
 function loadSolanaDeriveModule() {
   return require('../../../packages/solana/src/derive') as typeof import('../../../packages/solana/src/derive');
@@ -127,6 +222,8 @@ export function createEmptyMobileWalletState(): MobileWalletState {
     selectedChain: DEFAULT_CHAIN,
     selectedTheme: DEFAULT_THEME,
     selectedWalletIds: {},
+    trackedReputationSpaceIds: [],
+    trackedGovernanceDaoIds: [],
     wallets: [],
     passwordSalt: '',
     passwordHash: '',
@@ -156,6 +253,8 @@ export async function loadMobileWalletState(): Promise<MobileWalletState> {
     ...parsed,
     wallets: Array.isArray(parsed.wallets) ? parsed.wallets : [],
     selectedWalletIds: parsed.selectedWalletIds ?? {},
+    trackedReputationSpaceIds: Array.isArray(parsed.trackedReputationSpaceIds) ? parsed.trackedReputationSpaceIds : [],
+    trackedGovernanceDaoIds: Array.isArray(parsed.trackedGovernanceDaoIds) ? parsed.trackedGovernanceDaoIds : [],
     activities: Array.isArray(parsed.activities) ? parsed.activities : []
   };
 
@@ -163,7 +262,8 @@ export async function loadMobileWalletState(): Promise<MobileWalletState> {
 }
 
 export async function persistMobileWalletState(state: MobileWalletState) {
-  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  const normalized = normalizeMobileWalletState(state);
+  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
 }
 
 export async function createWalletSet(input: {
@@ -190,6 +290,8 @@ export async function createWalletSet(input: {
     selectedChain: DEFAULT_CHAIN,
     selectedTheme: DEFAULT_THEME,
     selectedWalletIds: Object.fromEntries(wallets.map((wallet) => [wallet.chain, wallet.id])),
+    trackedReputationSpaceIds: [],
+    trackedGovernanceDaoIds: [],
     wallets,
     passwordSalt,
     passwordHash,
@@ -198,8 +300,9 @@ export async function createWalletSet(input: {
     activities: []
   };
 
-  await persistMobileWalletState(state);
-  return state;
+  const normalized = normalizeMobileWalletState(state);
+  await persistMobileWalletState(normalized);
+  return normalized;
 }
 
 export async function addWalletSet(input: {
@@ -228,8 +331,9 @@ export async function addWalletSet(input: {
     }
   };
 
-  await persistMobileWalletState(nextState);
-  return nextState;
+  const normalized = normalizeMobileWalletState(nextState);
+  await persistMobileWalletState(normalized);
+  return normalized;
 }
 
 export async function createPrivateKeyWallet(input: {
@@ -254,6 +358,8 @@ export async function createPrivateKeyWallet(input: {
     selectedWalletIds: {
       [input.chain]: wallet.id
     },
+    trackedReputationSpaceIds: [],
+    trackedGovernanceDaoIds: [],
     wallets: [wallet],
     passwordSalt,
     passwordHash,
@@ -262,8 +368,9 @@ export async function createPrivateKeyWallet(input: {
     activities: []
   };
 
-  await persistMobileWalletState(state);
-  return state;
+  const normalized = normalizeMobileWalletState(state);
+  await persistMobileWalletState(normalized);
+  return normalized;
 }
 
 export async function addPrivateKeyWallet(input: {
@@ -288,6 +395,55 @@ export async function addPrivateKeyWallet(input: {
       [input.chain]: wallet.id
     }
   };
+
+  const normalized = normalizeMobileWalletState(nextState);
+  await persistMobileWalletState(normalized);
+  return normalized;
+}
+
+export async function removeMobileWallet(input: {
+  state: MobileWalletState;
+  walletId: string;
+}): Promise<MobileWalletState> {
+  const targetWallet = input.state.wallets.find((wallet) => wallet.id === input.walletId);
+  if (!targetWallet) {
+    return normalizeMobileWalletState(input.state);
+  }
+
+  const nextWallets = input.state.wallets.filter((wallet) => wallet.id !== input.walletId);
+  const nextActivities = input.state.activities.filter((activity) => activity.walletId !== input.walletId);
+
+  await deleteStoredSecretIfUnused(input.state.wallets, targetWallet.secretRef, input.walletId);
+
+  if (nextWallets.length === 0) {
+    const emptyState = createEmptyMobileWalletState();
+    await persistMobileWalletState(emptyState);
+    return emptyState;
+  }
+
+  const nextSelectedWalletIds = { ...input.state.selectedWalletIds };
+  if (nextSelectedWalletIds[targetWallet.chain] === targetWallet.id) {
+    const replacement = nextWallets.find((wallet) => wallet.chain === targetWallet.chain);
+    if (replacement) {
+      nextSelectedWalletIds[targetWallet.chain] = replacement.id;
+    } else {
+      delete nextSelectedWalletIds[targetWallet.chain];
+    }
+  }
+
+  const nextSelectedChain =
+    nextWallets.some((wallet) => wallet.chain === input.state.selectedChain)
+      ? input.state.selectedChain
+      : nextWallets[0]?.chain ?? DEFAULT_CHAIN;
+
+  const nextState = normalizeMobileWalletState({
+    ...input.state,
+    setup: 'ready',
+    wallets: nextWallets,
+    activities: nextActivities,
+    selectedWalletIds: nextSelectedWalletIds,
+    selectedChain: nextSelectedChain
+  });
 
   await persistMobileWalletState(nextState);
   return nextState;
@@ -319,8 +475,586 @@ export async function loadWalletAssets(wallet: MobileWallet): Promise<MobileAsse
   }
 }
 
+export async function loadWalletActivity(wallet: MobileWallet): Promise<MobileActivity[]> {
+  switch (wallet.chain) {
+    case 'solana': {
+      const history = await fetchMobileShyftTransactionHistory(wallet.address, DEFAULT_SOLANA_NETWORK, 30).catch(() => []);
+      return history.map((entry) => ({
+        ...entry,
+        chain: 'solana' as const,
+        walletId: wallet.id
+      }));
+    }
+    default:
+      return [];
+  }
+}
+
+function parseDecimalAmount(amount: string, decimals: number): bigint {
+  const normalized = amount.trim();
+  if (!/^(?:\d+(?:\.\d+)?|\.\d+)$/.test(normalized)) {
+    throw new Error('Amount must be a positive decimal value.');
+  }
+
+  const [wholePart, fractionalPart = ''] = normalized.split('.');
+  if (fractionalPart.length > decimals) {
+    throw new Error(`Amount exceeds the maximum precision for this asset (${decimals} decimals).`);
+  }
+
+  const whole = wholePart && wholePart !== '.' ? wholePart : '0';
+  const fraction = fractionalPart.padEnd(decimals, '0');
+  const digits = `${whole}${fraction}`.replace(/^0+(?=\d)/, '');
+  return BigInt(digits || '0');
+}
+
+function formatUiAmount(rawAmount: string, decimals: number): string {
+  const amount = Number(rawAmount);
+  if (!Number.isFinite(amount)) {
+    return rawAmount;
+  }
+
+  return (amount / 10 ** decimals).toLocaleString(undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: Math.min(Math.max(decimals, 0), 6)
+  });
+}
+
+async function getSolanaMintDecimals(mint: string) {
+  const web3 = loadSolanaWeb3Module();
+  const { Connection, PublicKey } = web3;
+  const connection = new Connection(getMobileSolanaRpcUrl(DEFAULT_SOLANA_NETWORK), 'confirmed');
+  const accountInfo = await connection.getParsedAccountInfo(new PublicKey(mint), 'confirmed');
+  const parsed = accountInfo.value?.data;
+  if (!parsed || typeof parsed !== 'object' || !('parsed' in parsed) || !parsed.parsed) {
+    return 9;
+  }
+
+  const parsedInfo = (parsed as { parsed?: { info?: { decimals?: number } } }).parsed?.info;
+  return typeof parsedInfo?.decimals === 'number' ? parsedInfo.decimals : 9;
+}
+
+function extractSwapRouteLabels(quoteResponse: MobileJupiterQuoteResponse): string[] {
+  return Array.isArray(quoteResponse.routePlan)
+    ? quoteResponse.routePlan
+        .map((route) => (typeof route?.swapInfo?.label === 'string' ? route.swapInfo.label : null))
+        .filter((label): label is string => !!label)
+    : [];
+}
+
+function resolveBridgeDestination(state: MobileWalletState, chain: GrapeChain, walletId?: string) {
+  const chainWallets = state.wallets.filter((candidate) => candidate.chain === chain);
+  const wallet = chainWallets.find((candidate) => candidate.id === walletId) ?? chainWallets[0];
+  if (!wallet) {
+    throw new Error(`Add a ${chain} wallet before bridging to that chain.`);
+  }
+
+  return wallet;
+}
+
+function extractBridgeTransactionRequest(quoteResponse: Record<string, unknown>) {
+  const directTransactionRequest =
+    typeof quoteResponse.transactionRequest === 'object' && quoteResponse.transactionRequest
+      ? (quoteResponse.transactionRequest as { to?: string; data?: string; value?: string })
+      : null;
+
+  if (directTransactionRequest?.to && directTransactionRequest.data) {
+    return directTransactionRequest;
+  }
+
+  const candidateCollections = [quoteResponse.includedSteps, quoteResponse.steps];
+  for (const collection of candidateCollections) {
+    if (!Array.isArray(collection)) {
+      continue;
+    }
+
+    for (const step of collection) {
+      if (typeof step !== 'object' || !step) {
+        continue;
+      }
+
+      const transactionRequest =
+        typeof (step as { transactionRequest?: unknown }).transactionRequest === 'object' &&
+        (step as { transactionRequest?: unknown }).transactionRequest
+          ? ((step as { transactionRequest: { to?: string; data?: string; value?: string } }).transactionRequest)
+          : null;
+
+      if (transactionRequest?.to && transactionRequest.data) {
+        return transactionRequest;
+      }
+    }
+  }
+
+  return null;
+}
+
+function getBridgeAmountUi(
+  quoteResponse: Record<string, unknown>,
+  side: 'from' | 'to',
+  fallback: string
+) {
+  const estimate =
+    typeof quoteResponse.estimate === 'object' && quoteResponse.estimate
+      ? (quoteResponse.estimate as { fromAmount?: string; toAmount?: string })
+      : null;
+  return side === 'from' ? estimate?.fromAmount ?? fallback : estimate?.toAmount ?? '0';
+}
+
+function getBridgeSymbol(
+  quoteResponse: Record<string, unknown>,
+  side: 'from' | 'to',
+  fallback: string
+) {
+  const estimate =
+    typeof quoteResponse.estimate === 'object' && quoteResponse.estimate
+      ? (quoteResponse.estimate as {
+          fromToken?: { symbol?: string };
+          toToken?: { symbol?: string };
+        })
+      : null;
+
+  return side === 'from' ? estimate?.fromToken?.symbol ?? fallback : estimate?.toToken?.symbol ?? fallback;
+}
+
+export async function getWalletSwapQuote(input: {
+  wallet: MobileWallet;
+  inputAsset: MobileAsset;
+  outputAsset: MobileAsset;
+  amount: string;
+  slippageBps: number;
+}): Promise<MobileSwapQuote> {
+  if (input.wallet.chain !== 'solana') {
+    throw new Error('Swaps are currently available for Solana only.');
+  }
+
+  const inputMint = input.inputAsset.tokenType === 'spl' ? input.inputAsset.address ?? '' : JUPITER_SOL_MINT;
+  const outputMint = input.outputAsset.tokenType === 'spl' ? input.outputAsset.address ?? '' : JUPITER_SOL_MINT;
+  if (!inputMint || !outputMint) {
+    throw new Error('Choose valid assets before requesting a swap quote.');
+  }
+  if (inputMint === outputMint) {
+    throw new Error('Choose a different output asset.');
+  }
+
+  const inputDecimals = input.inputAsset.tokenType === 'spl' ? input.inputAsset.decimals ?? 0 : 9;
+  const outputDecimals =
+    input.outputAsset.tokenType === 'spl'
+      ? input.outputAsset.decimals ?? (await getSolanaMintDecimals(outputMint))
+      : 9;
+  const amountBaseUnits = parseDecimalAmount(input.amount, inputDecimals).toString();
+  const quoteResponse = await fetchMobileJupiterQuote({
+    inputMint,
+    outputMint,
+    amount: amountBaseUnits,
+    slippageBps: input.slippageBps
+  });
+  const directQuoteResponse =
+    quoteResponse.routePlan && quoteResponse.routePlan.length === 1
+      ? null
+      : await fetchMobileJupiterQuote({
+          inputMint,
+          outputMint,
+          amount: amountBaseUnits,
+          slippageBps: input.slippageBps,
+          onlyDirectRoutes: true
+        }).catch(() => null);
+
+  const routes = [quoteResponse, directQuoteResponse]
+    .filter((entry): entry is MobileJupiterQuoteResponse => !!entry)
+    .map((entry, index) => {
+      const routeLabels = extractSwapRouteLabels(entry);
+      const isDirectCandidate = index === 1;
+      return {
+        id: isDirectCandidate ? 'direct' : 'best',
+        label: isDirectCandidate ? 'Direct route' : 'Best route',
+        quoteResponse: entry,
+        outputAmountUi: formatUiAmount(entry.outAmount, outputDecimals),
+        priceImpactPct: typeof entry.priceImpactPct === 'string' ? entry.priceImpactPct : null,
+        routeLabels
+      };
+    })
+    .filter((route, index, allRoutes) => {
+      return (
+        allRoutes.findIndex((candidate) => {
+          return (
+            candidate.outputAmountUi === route.outputAmountUi &&
+            candidate.routeLabels.join('|') === route.routeLabels.join('|')
+          );
+        }) === index
+      );
+    });
+
+  if (routes.length === 0) {
+    throw new Error('Unable to fetch a swap quote right now.');
+  }
+
+  return {
+    inputMint,
+    outputMint,
+    inputAmountUi: input.amount,
+    slippageBps: input.slippageBps,
+    selectedRouteId: routes[0].id,
+    routes
+  };
+}
+
+export async function executeWalletSwap(input: {
+  wallet: MobileWallet;
+  quoteResponse: MobileJupiterQuoteResponse;
+}): Promise<MobileSwapExecuteResponse> {
+  if (input.wallet.chain !== 'solana') {
+    throw new Error('Swaps are currently available for Solana only.');
+  }
+
+  const secret = await loadWalletSecret(input.wallet.secretRef);
+  const { resolveSolanaVaultSecret } = loadSolanaDeriveModule();
+  const { signAndSendSerializedTransaction } = loadSolanaSigningModule();
+  const keypair =
+    secret.kind === 'mnemonic'
+      ? resolveSolanaVaultSecret({ kind: 'mnemonic', mnemonic: secret.mnemonic })
+      : resolveSolanaVaultSecret({ kind: 'private-key', secretKey: secret.secretKey });
+  const swap = await createMobileJupiterSwapTransaction({
+    quoteResponse: input.quoteResponse,
+    userPublicKey: input.wallet.address
+  });
+  const signature = await signAndSendSerializedTransaction(
+    swap.swapTransaction,
+    keypair,
+    getMobileSolanaRpcUrl(DEFAULT_SOLANA_NETWORK)
+  );
+
+  const [inputDecimals, outputDecimals] = await Promise.all([
+    getSolanaMintDecimals(input.quoteResponse.inputMint),
+    getSolanaMintDecimals(input.quoteResponse.outputMint)
+  ]);
+
+  return {
+    signature,
+    inputMint: input.quoteResponse.inputMint,
+    outputMint: input.quoteResponse.outputMint,
+    inputAmountUi: formatUiAmount(input.quoteResponse.inAmount, inputDecimals),
+    outputAmountUi: formatUiAmount(input.quoteResponse.outAmount, outputDecimals)
+  };
+}
+
+export async function getWalletBridgeQuote(input: {
+  state: MobileWalletState;
+  wallet: MobileWallet;
+  amount: string;
+  toChain: GrapeChain;
+  destinationWalletId?: string;
+}): Promise<MobileBridgeQuoteSummary> {
+  if (input.wallet.chain === 'sui') {
+    throw new Error('Bridge source is coming soon for Sui wallets.');
+  }
+  if (input.toChain === input.wallet.chain) {
+    throw new Error('Choose a different destination chain.');
+  }
+
+  const supported = getMobileSupportedBridgeDestinations(input.wallet.chain as 'solana' | 'ethereum' | 'monad');
+  if (!supported.includes(input.toChain as never)) {
+    throw new Error(`Bridging from ${input.wallet.chain} to ${input.toChain} is not supported yet.`);
+  }
+
+  const destinationWallet = resolveBridgeDestination(input.state, input.toChain, input.destinationWalletId);
+  const decimals = input.wallet.chain === 'solana' ? 9 : 18;
+  const amountRaw = parseDecimalAmount(input.amount, decimals).toString();
+
+  return fetchMobileNativeBridgeQuote({
+    fromChain: input.wallet.chain as 'solana' | 'ethereum' | 'monad',
+    toChain: destinationWallet.chain as 'solana' | 'ethereum' | 'monad' | 'sui',
+    amountRaw,
+    fromAddress: input.wallet.address,
+    toAddress: destinationWallet.address
+  });
+}
+
+export async function executeWalletBridge(input: {
+  state: MobileWalletState;
+  wallet: MobileWallet;
+  quoteResponse: Record<string, unknown>;
+  toChain: GrapeChain;
+  destinationWalletId?: string;
+}): Promise<MobileBridgeExecuteResponse> {
+  const destinationWallet = resolveBridgeDestination(input.state, input.toChain, input.destinationWalletId);
+  const transactionRequest = extractBridgeTransactionRequest(input.quoteResponse);
+  if (!transactionRequest?.to || !transactionRequest.data) {
+    throw new Error('This bridge route requires an unsupported transaction format. Try a different route or amount.');
+  }
+
+  const secret = await loadWalletSecret(input.wallet.secretRef);
+  let signature: string;
+
+  if (input.wallet.chain === 'solana') {
+    const { resolveSolanaVaultSecret } = loadSolanaDeriveModule();
+    const { signAndSendSerializedTransaction } = loadSolanaSigningModule();
+    const keypair =
+      secret.kind === 'mnemonic'
+        ? resolveSolanaVaultSecret({ kind: 'mnemonic', mnemonic: secret.mnemonic })
+        : resolveSolanaVaultSecret({ kind: 'private-key', secretKey: secret.secretKey });
+    signature = await signAndSendSerializedTransaction(
+      transactionRequest.data,
+      keypair,
+      getMobileSolanaRpcUrl(DEFAULT_SOLANA_NETWORK)
+    );
+  } else if (input.wallet.chain === 'ethereum') {
+    signature = await loadEthereumModule().sendEthereumTransactionRequest(
+      DEFAULT_EVM_NETWORK,
+      secret as VaultSecret,
+      {
+        to: transactionRequest.to,
+        data: transactionRequest.data,
+        value: transactionRequest.value,
+        customRpcUrl: getMobileEthereumRpcUrl(DEFAULT_EVM_NETWORK)
+      }
+    );
+  } else if (input.wallet.chain === 'monad') {
+    signature = await loadMonadModule().sendMonadTransactionRequest(
+      DEFAULT_EVM_NETWORK,
+      secret as VaultSecret,
+      {
+        to: transactionRequest.to,
+        data: transactionRequest.data,
+        value: transactionRequest.value,
+        customRpcUrl: getMobileMonadRpcUrl(DEFAULT_EVM_NETWORK)
+      }
+    );
+  } else {
+    throw new Error('Bridge source is not supported for this chain yet.');
+  }
+
+  return {
+    signature,
+    fromChain: input.wallet.chain,
+    toChain: destinationWallet.chain,
+    fromAmountUi: getBridgeAmountUi(input.quoteResponse, 'from', '0'),
+    toAmountUi: getBridgeAmountUi(input.quoteResponse, 'to', '0'),
+    fromSymbol: getBridgeSymbol(input.quoteResponse, 'from', input.wallet.chain === 'solana' ? 'SOL' : input.wallet.chain === 'ethereum' ? 'ETH' : 'MON'),
+    toSymbol: getBridgeSymbol(input.quoteResponse, 'to', destinationWallet.chain === 'solana' ? 'SOL' : destinationWallet.chain === 'ethereum' ? 'ETH' : destinationWallet.chain === 'monad' ? 'MON' : 'SUI'),
+    destinationAddress: destinationWallet.address
+  };
+}
+
+export async function updateTrackedReputationSpaces(input: {
+  state: MobileWalletState;
+  daoIds: string[];
+}): Promise<MobileWalletState> {
+  const nextState = normalizeMobileWalletState({
+    ...input.state,
+    trackedReputationSpaceIds: input.daoIds
+  });
+  await persistMobileWalletState(nextState);
+  return nextState;
+}
+
+export async function updateTrackedGovernanceDaos(input: {
+  state: MobileWalletState;
+  daoIds: string[];
+}): Promise<MobileWalletState> {
+  const nextState = normalizeMobileWalletState({
+    ...input.state,
+    trackedGovernanceDaoIds: input.daoIds
+  });
+  await persistMobileWalletState(nextState);
+  return nextState;
+}
+
+export async function loadWalletReputation(
+  wallet: MobileWallet,
+  trackedDaoIds: string[]
+): Promise<MobileReputationResponse> {
+  if (wallet.chain !== 'solana' || trackedDaoIds.length === 0) {
+    return {
+      spaces: [],
+      totalPoints: '0',
+      totalEffectivePoints: '0',
+      source: 'none',
+      refreshedAt: Date.now()
+    };
+  }
+
+  const normalizedDaoIds = normalizeTrackedReputationSpaceIds(trackedDaoIds);
+  const cacheKey = `${wallet.address}:${normalizedDaoIds.join(',')}`;
+  const cached = mobileReputationCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.data;
+  }
+
+  const { fetchMobileOgReputationForWallet } = require('./reputation') as typeof import('./reputation');
+  const data = await fetchMobileOgReputationForWallet(wallet.address, normalizedDaoIds);
+  mobileReputationCache.set(cacheKey, {
+    expiresAt: Date.now() + MOBILE_REPUTATION_CACHE_TTL_MS,
+    data
+  });
+  return data;
+}
+
+export async function loadWalletGovernance(
+  wallet: MobileWallet,
+  trackedDaoIds: string[]
+): Promise<MobileGovernanceResponse> {
+  if (wallet.chain !== 'solana') {
+    return {
+      trackedDaos: normalizeTrackedDaoIds(trackedDaoIds),
+      discoveredDaos: [],
+      memberDaos: 0,
+      proposals: [],
+      source: 'none',
+      network: DEFAULT_SOLANA_NETWORK,
+      refreshedAt: Date.now()
+    };
+  }
+
+  const normalizedDaoIds = normalizeTrackedDaoIds(trackedDaoIds);
+  const cacheKey = `${wallet.address}:${normalizedDaoIds.join(',')}`;
+  const cached = mobileGovernanceCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.data;
+  }
+
+  const { fetchMobileGovernanceForWallet } = require('./governance') as typeof import('./governance');
+  const data = await fetchMobileGovernanceForWallet(wallet.address, normalizedDaoIds);
+  mobileGovernanceCache.set(cacheKey, {
+    expiresAt: Date.now() + MOBILE_GOVERNANCE_CACHE_TTL_MS,
+    data
+  });
+  return data;
+}
+
+export async function castWalletGovernanceVote(input: {
+  state: MobileWalletState;
+  wallet: MobileWallet;
+  daoId: string;
+  governanceId: string;
+  proposalId: string;
+  proposalOwnerRecordId: string;
+  tokenOwnerRecordId: string;
+  governingTokenMint: string;
+  voteKind: 'approve' | 'deny' | 'abstain';
+  choiceRank?: number;
+}): Promise<MobileGovernanceVoteResponse> {
+  if (input.wallet.chain !== 'solana') {
+    throw new Error('Governance voting is currently supported for Solana wallets only.');
+  }
+
+  const secret = await loadWalletSecretWithWalletFallback(input.state, input.wallet);
+  const { resolveSolanaVaultSecret } = loadSolanaDeriveModule();
+  const { signAndSendTransaction } = loadSolanaTransfersModule();
+  const web3 = loadSolanaWeb3Module();
+  const { Connection, PublicKey, Transaction } = web3;
+  const {
+    getGovernance,
+    getGovernanceProgramVersion,
+    getRealm,
+    getProposal,
+    ProposalState,
+    Vote,
+    VoteChoice,
+    VoteKind,
+    withCastVote
+  } = require('@solana/spl-governance') as typeof import('@solana/spl-governance');
+  const keypair =
+    secret.kind === 'mnemonic'
+      ? resolveSolanaVaultSecret({ kind: 'mnemonic', mnemonic: secret.mnemonic })
+      : resolveSolanaVaultSecret({ kind: 'private-key', secretKey: secret.secretKey });
+  const owner = new PublicKey(input.wallet.address);
+  const governanceOwner = findGovernanceOwnerByDao(input.daoId);
+  const programId = new PublicKey(governanceOwner.owner);
+  const realmPk = new PublicKey(input.daoId);
+  const governancePk = new PublicKey(input.governanceId);
+  const proposalPk = new PublicKey(input.proposalId);
+  const proposalOwnerRecordPk = new PublicKey(input.proposalOwnerRecordId);
+  const tokenOwnerRecordPk = new PublicKey(input.tokenOwnerRecordId);
+  const governingTokenMintPk = new PublicKey(input.governingTokenMint);
+  const connection = new Connection(getMobileSolanaRpcUrl(DEFAULT_SOLANA_NETWORK), 'confirmed');
+
+  const [programVersion, proposalAccount, governanceAccount, realmAccount] = await Promise.all([
+    getGovernanceProgramVersion(connection, programId),
+    getProposal(connection, proposalPk),
+    getGovernance(connection, governancePk),
+    getRealm(connection, realmPk)
+  ]);
+
+  if (proposalAccount.account.state !== ProposalState.Voting) {
+    throw new Error('This proposal is not in the voting window anymore.');
+  }
+
+  const instructions: import('@solana/web3.js').TransactionInstruction[] = [];
+  const vote =
+    input.voteKind === 'deny'
+      ? new Vote({ voteType: VoteKind.Deny, approveChoices: undefined, deny: true, veto: undefined })
+      : input.voteKind === 'abstain'
+        ? new Vote({ voteType: VoteKind.Abstain, approveChoices: undefined, deny: undefined, veto: undefined })
+        : new Vote({
+            voteType: VoteKind.Approve,
+            approveChoices: [new VoteChoice({ rank: input.choiceRank ?? 0, weightPercentage: 100 })],
+            deny: undefined,
+            veto: undefined
+          });
+
+  await withCastVote(
+    instructions,
+    programId,
+    programVersion,
+    realmAccount.pubkey,
+    governanceAccount.pubkey,
+    proposalAccount.pubkey,
+    proposalOwnerRecordPk,
+    tokenOwnerRecordPk,
+    owner,
+    governingTokenMintPk,
+    vote,
+    owner
+  );
+
+  const { blockhash } = await connection.getLatestBlockhash('confirmed');
+  const transaction = new Transaction({
+    feePayer: owner,
+    recentBlockhash: blockhash
+  });
+  transaction.add(...instructions);
+  const signature = await signAndSendTransaction(transaction, keypair, connection);
+  mobileGovernanceCache.clear();
+
+  return {
+    signature,
+    daoId: input.daoId,
+    proposalId: input.proposalId,
+    voteKind: input.voteKind,
+    choiceLabel: input.voteKind === 'approve' ? `Option ${input.choiceRank ?? 0}` : undefined,
+    network: DEFAULT_SOLANA_NETWORK
+  };
+}
+
 export async function sendNativeAsset(input: {
   wallet: MobileWallet;
+  recipient: string;
+  amount: string;
+}): Promise<string> {
+  return sendWalletAsset({
+    ...input,
+    asset: {
+      id: input.wallet.chain,
+      name: input.wallet.chain,
+      symbol:
+        input.wallet.chain === 'solana'
+          ? 'SOL'
+          : input.wallet.chain === 'ethereum'
+            ? 'ETH'
+            : input.wallet.chain === 'monad'
+              ? 'MON'
+              : 'SUI',
+      amountLabel: '',
+      valueLabel: '',
+      chain: input.wallet.chain,
+      metadataSource: 'native',
+      tokenType: 'native'
+    }
+  });
+}
+
+export async function sendWalletAsset(input: {
+  wallet: MobileWallet;
+  asset: MobileAsset;
   recipient: string;
   amount: string;
 }): Promise<string> {
@@ -330,51 +1064,137 @@ export async function sendNativeAsset(input: {
     case 'solana': {
       const { resolveSolanaVaultSecret } = loadSolanaDeriveModule();
       const { signAndSendTransaction } = loadSolanaSigningModule();
-      const { buildSolTransferTransaction } = loadSolanaTransfersModule();
+      const { buildSolTransferTransaction, buildSplTokenTransferTransaction } = loadSolanaTransfersModule();
       const web3 = loadSolanaWeb3Module();
       const { Connection, PublicKey } = web3;
       const connection = new Connection(getMobileSolanaRpcUrl(DEFAULT_SOLANA_NETWORK), 'confirmed');
       const keypair = secret.kind === 'mnemonic'
         ? resolveSolanaVaultSecret({ kind: 'mnemonic', mnemonic: secret.mnemonic })
         : resolveSolanaVaultSecret({ kind: 'private-key', secretKey: secret.secretKey });
-      const transaction = await buildSolTransferTransaction(connection, new PublicKey(input.wallet.address), {
-        recipient: input.recipient,
-        amount: input.amount
-      });
+      const owner = new PublicKey(input.wallet.address);
+      const transaction =
+        input.asset.tokenType === 'spl'
+          ? await buildSplTokenTransferTransaction(connection, owner, {
+              recipient: input.recipient,
+              mint: input.asset.address ?? '',
+              accountAddress: input.asset.accountAddress ?? '',
+              decimals: input.asset.decimals ?? 0,
+              programId: input.asset.programId ?? SOLANA_LEGACY_TOKEN_PROGRAM,
+              amount: input.amount
+            })
+          : await buildSolTransferTransaction(connection, owner, {
+              recipient: input.recipient,
+              amount: input.amount
+            });
       return signAndSendTransaction(transaction, keypair, connection);
     }
     case 'sui': {
+      if (input.asset.tokenType === 'sui-coin') {
+        throw new Error('Sui token send is not available on mobile yet.');
+      }
       throw new Error(getMobileSuiSendUnsupportedMessage());
     }
     case 'ethereum': {
-      const { sendEthereum } = loadEthereumModule();
+      const { sendEthereum, sendEthereumToken } = loadEthereumModule();
       const vaultSecret = secret.kind === 'mnemonic'
         ? { kind: 'mnemonic' as const, mnemonic: secret.mnemonic }
         : { kind: 'private-key' as const, secretKey: secret.secretKey };
-      return sendEthereum(DEFAULT_EVM_NETWORK, vaultSecret, {
-        recipient: input.recipient,
-        amountEther: input.amount,
-        customRpcUrl: getMobileEthereumRpcUrl(DEFAULT_EVM_NETWORK)
-      });
+      return input.asset.tokenType === 'erc20' && input.asset.address && typeof input.asset.decimals === 'number'
+        ? sendEthereumToken(DEFAULT_EVM_NETWORK, vaultSecret, {
+            recipient: input.recipient,
+            amount: input.amount,
+            tokenAddress: input.asset.address,
+            decimals: input.asset.decimals,
+            customRpcUrl: getMobileEthereumRpcUrl(DEFAULT_EVM_NETWORK)
+          })
+        : sendEthereum(DEFAULT_EVM_NETWORK, vaultSecret, {
+            recipient: input.recipient,
+            amountEther: input.amount,
+            customRpcUrl: getMobileEthereumRpcUrl(DEFAULT_EVM_NETWORK)
+          });
     }
     case 'monad': {
-      const { sendMonad } = loadMonadModule();
+      const { sendMonad, sendMonadToken } = loadMonadModule();
       const vaultSecret = secret.kind === 'mnemonic'
         ? { kind: 'mnemonic' as const, mnemonic: secret.mnemonic }
         : { kind: 'private-key' as const, secretKey: secret.secretKey };
-      return sendMonad(DEFAULT_EVM_NETWORK, vaultSecret, {
-        recipient: input.recipient,
-        amountEther: input.amount,
-        customRpcUrl: getMobileMonadRpcUrl(DEFAULT_EVM_NETWORK)
-      });
+      return input.asset.tokenType === 'erc20' && input.asset.address && typeof input.asset.decimals === 'number'
+        ? sendMonadToken(DEFAULT_EVM_NETWORK, vaultSecret, {
+            recipient: input.recipient,
+            amount: input.amount,
+            tokenAddress: input.asset.address,
+            decimals: input.asset.decimals,
+            customRpcUrl: getMobileMonadRpcUrl(DEFAULT_EVM_NETWORK)
+          })
+        : sendMonad(DEFAULT_EVM_NETWORK, vaultSecret, {
+            recipient: input.recipient,
+            amountEther: input.amount,
+            customRpcUrl: getMobileMonadRpcUrl(DEFAULT_EVM_NETWORK)
+          });
     }
     default:
       throw new Error('Unsupported chain.');
   }
 }
 
+export async function exportMobileWalletPrivateKey(input: {
+  state: MobileWalletState;
+  wallet: MobileWallet;
+  password?: string;
+  allowUnlockedSession?: boolean;
+}): Promise<MobileWalletExport> {
+  const password = input.password?.trim() ?? '';
+  if (password) {
+    const valid = await unlockMobileWalletState(input.state, password);
+    if (!valid) {
+      throw new Error('Password is incorrect.');
+    }
+  } else if (!input.allowUnlockedSession) {
+    throw new Error('Password is required.');
+  }
+
+  const secret = await loadWalletSecretWithWalletFallback(input.state, input.wallet);
+
+  switch (input.wallet.chain) {
+    case 'solana': {
+      const { exportSolanaSoftwareWalletSecret } = loadSolanaDeriveModule();
+      const exported = exportSolanaSoftwareWalletSecret(secret as VaultSecret);
+      return {
+        chain: 'solana',
+        privateKey: exported.privateKeyBase58,
+        sourceKind: exported.kind
+      };
+    }
+    case 'sui': {
+      const exported = exportMobileSuiWalletSecret(secret as VaultSecret);
+      return {
+        chain: 'sui',
+        privateKey: exported.privateKey,
+        sourceKind: secret.kind
+      };
+    }
+    case 'ethereum': {
+      return {
+        chain: 'ethereum',
+        privateKey: exportEvmPrivateKey(secret, loadEthereumModule().resolveEthereumVaultSecret(secret as VaultSecret)),
+        sourceKind: secret.kind
+      };
+    }
+    case 'monad': {
+      return {
+        chain: 'monad',
+        privateKey: exportEvmPrivateKey(secret, loadMonadModule().resolveMonadVaultSecret(secret as VaultSecret)),
+        sourceKind: secret.kind
+      };
+    }
+    default:
+      throw new Error('This wallet cannot be exported.');
+  }
+}
+
 export function createSendActivity(input: {
   wallet: MobileWallet;
+  asset: MobileAsset;
   recipient: string;
   amountLabel: string;
   signature: string;
@@ -384,12 +1204,59 @@ export function createSendActivity(input: {
     chain: input.wallet.chain,
     walletId: input.wallet.id,
     type: 'send',
-    title: `Sent ${input.wallet.chain === 'solana' ? 'asset' : input.wallet.chain === 'sui' ? 'SUI' : input.wallet.chain === 'ethereum' ? 'ETH' : 'MON'}`,
+    title: `Sent ${input.asset.symbol}`,
     subtitle: shortenAddress(input.recipient),
     amountLabel: input.amountLabel,
     timestamp: Date.now(),
     signature: input.signature,
     status: 'success'
+    ,
+    source: 'local'
+  };
+}
+
+export function createSwapActivity(input: {
+  wallet: MobileWallet;
+  inputAsset: MobileAsset;
+  outputAsset: MobileAsset;
+  inputAmountLabel: string;
+  outputAmountLabel: string;
+  signature: string;
+}): MobileActivity {
+  return {
+    id: `activity-${createSecretRef()}`,
+    chain: input.wallet.chain,
+    walletId: input.wallet.id,
+    type: 'swap',
+    title: `Swapped ${input.inputAsset.symbol} to ${input.outputAsset.symbol}`,
+    subtitle: `${input.inputAmountLabel} -> ${input.outputAmountLabel}`,
+    amountLabel: input.outputAmountLabel,
+    timestamp: Date.now(),
+    signature: input.signature,
+    status: 'success',
+    source: 'local'
+  };
+}
+
+export function createBridgeActivity(input: {
+  wallet: MobileWallet;
+  destinationWallet: MobileWallet;
+  fromAmountLabel: string;
+  toAmountLabel: string;
+  signature: string;
+}): MobileActivity {
+  return {
+    id: `activity-${createSecretRef()}`,
+    chain: input.wallet.chain,
+    walletId: input.wallet.id,
+    type: 'bridge',
+    title: `Bridged to ${input.destinationWallet.chain}`,
+    subtitle: shortenAddress(input.destinationWallet.address),
+    amountLabel: `${input.fromAmountLabel} -> ${input.toAmountLabel}`,
+    timestamp: Date.now(),
+    signature: input.signature,
+    status: 'success',
+    source: 'local'
   };
 }
 
@@ -465,12 +1332,53 @@ function shortenAddress(address: string) {
 }
 
 async function loadWalletSecret(secretRef: string): Promise<StoredSecretPayload> {
-  const raw = await getItemAsync(toSecureStoreKey(secretRef));
-  if (!raw) {
-    throw new Error('Wallet secret could not be found on this device.');
+  const candidates = getSecureStoreKeyCandidates(secretRef);
+
+  for (const key of candidates) {
+    const raw = await getItemAsync(key);
+    if (!raw) {
+      continue;
+    }
+
+    const preferredKey = toSecureStoreKey(secretRef);
+    if (key !== preferredKey) {
+      await setItemAsync(preferredKey, raw).catch(() => undefined);
+    }
+
+    return JSON.parse(raw) as StoredSecretPayload;
   }
 
-  return JSON.parse(raw) as StoredSecretPayload;
+  throw new Error('Wallet secret could not be found on this device.');
+}
+
+async function loadWalletSecretWithWalletFallback(state: MobileWalletState, wallet: MobileWallet): Promise<StoredSecretPayload> {
+  try {
+    return await loadWalletSecret(wallet.secretRef);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '';
+    if (!message.includes('Wallet secret could not be found on this device')) {
+      throw error;
+    }
+
+    const siblingCandidates = state.wallets.filter(
+      (candidate) =>
+        candidate.id !== wallet.id &&
+        candidate.name === wallet.name &&
+        candidate.source === wallet.source &&
+        candidate.secretRef &&
+        candidate.secretRef !== wallet.secretRef
+    );
+
+    for (const candidate of siblingCandidates) {
+      try {
+        return await loadWalletSecret(candidate.secretRef);
+      } catch {
+        continue;
+      }
+    }
+
+    throw error;
+  }
 }
 
 async function importPrivateKeyWallet(chain: GrapeChain, privateKey: string) {
@@ -499,6 +1407,28 @@ async function importPrivateKeyWallet(chain: GrapeChain, privateKey: string) {
   }
 }
 
+function exportEvmPrivateKey(
+  secret: StoredSecretPayload,
+  account: { getHdKey?: () => { privateKey?: Uint8Array | null } } | { address: string }
+) {
+  if (secret.kind === 'private-key') {
+    return secret.secretKey;
+  }
+
+  const hdKey = (account as { getHdKey?: () => { privateKey?: Uint8Array | null } }).getHdKey?.();
+  if (hdKey?.privateKey) {
+    return bytesToHexPrivateKey(hdKey.privateKey);
+  }
+
+  throw new Error('Private key export is not available for this wallet.');
+}
+
+function bytesToHexPrivateKey(bytes: Uint8Array) {
+  return `0x${Array.from(bytes)
+    .map((value) => value.toString(16).padStart(2, '0'))
+    .join('')}`;
+}
+
 async function createPasswordHash(password: string, salt: string) {
   return Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, `${salt}:${password}`);
 }
@@ -510,39 +1440,128 @@ async function loadSolanaAssets(address: string): Promise<MobileAsset[]> {
     console.warn('[Grape mobile] Skipping Solana asset load for invalid address', address);
     return [];
   }
+
+  const cached = mobileSolanaAssetCache.get(address);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.assets;
+  }
+
   const connection = new Connection(getMobileSolanaRpcUrl(DEFAULT_SOLANA_NETWORK), 'confirmed');
   const owner = new PublicKey(address);
-  const [lamports, shyftTokens, legacyTokenAccounts, token2022Accounts, shyftMetadata] = await Promise.all([
-    connection.getBalance(owner, 'confirmed'),
+  const [lamports, shyftTokens, rpcTokenEntries] = await Promise.all([
+    connection.getBalance(owner, 'confirmed').catch(() => 0),
     fetchMobileShyftWalletTokens(address, DEFAULT_SOLANA_NETWORK).catch(() => []),
-    connection.getParsedTokenAccountsByOwner(owner, {
-      programId: new PublicKey(SOLANA_LEGACY_TOKEN_PROGRAM)
-    }),
-    connection.getParsedTokenAccountsByOwner(owner, {
-      programId: new PublicKey(SOLANA_TOKEN_2022_PROGRAM)
-    }),
-    fetchMobileShyftTokenMetadata(address, DEFAULT_SOLANA_NETWORK).catch(() => ({}))
+    Promise.all([
+      connection.getParsedTokenAccountsByOwner(owner, {
+        programId: new PublicKey(SOLANA_LEGACY_TOKEN_PROGRAM)
+      }),
+      connection.getParsedTokenAccountsByOwner(owner, {
+        programId: new PublicKey(SOLANA_TOKEN_2022_PROGRAM)
+      })
+    ])
+      .then(([legacyTokenAccounts, token2022Accounts]) =>
+        [...legacyTokenAccounts.value, ...token2022Accounts.value]
+          .map((account) => {
+            const parsed = account.account.data.parsed.info as {
+              mint: string;
+              tokenAmount: { uiAmountString?: string; amount: string; uiAmount?: number; decimals?: number };
+            };
+            const amount = parsed.tokenAmount.uiAmountString ?? parsed.tokenAmount.amount;
+            const numericAmount = Number(parsed.tokenAmount.uiAmount ?? amount);
+            if (!amount || amount === '0' || numericAmount <= 0) {
+              return null;
+            }
+
+            return {
+              mint: parsed.mint,
+              amountLabel: amount,
+              numericAmount,
+              accountAddress: account.pubkey.toBase58(),
+              programId: account.account.owner.toBase58(),
+              decimals: parsed.tokenAmount.decimals
+            };
+          })
+          .filter((entry): entry is {
+            mint: string;
+            amountLabel: string;
+            numericAmount: number;
+            accountAddress: string;
+            programId: string;
+            decimals?: number;
+          } => !!entry)
+      )
+      .catch(() => [])
   ]);
 
-  const tokenEntries = [...legacyTokenAccounts.value, ...token2022Accounts.value]
-    .map((account) => {
-      const parsed = account.account.data.parsed.info as {
-        mint: string;
-        tokenAmount: { uiAmountString?: string; amount: string; uiAmount?: number };
-      };
-      const amount = parsed.tokenAmount.uiAmountString ?? parsed.tokenAmount.amount;
-      const numericAmount = Number(parsed.tokenAmount.uiAmount ?? amount);
-      if (!amount || amount === '0' || numericAmount <= 0) {
-        return null;
-      }
+  const mergedTokenEntries = new Map<
+    string,
+    {
+      mint: string;
+      amountLabel: string;
+      numericAmount: number;
+      name?: string;
+      symbol?: string;
+      logoUri?: string;
+      decimals?: number;
+      metadataSource: 'shyft' | 'rpc';
+      accountAddress?: string;
+      programId?: string;
+    }
+  >();
 
-      return {
-        mint: parsed.mint,
-        amountLabel: amount,
-        numericAmount
-      };
-    })
-    .filter((entry): entry is { mint: string; amountLabel: string; numericAmount: number } => !!entry);
+  const shyftTokenMap = new Map(
+    shyftTokens.map((token) => [token.mint.trim(), token] as const)
+  );
+
+  rpcTokenEntries.forEach((entry) => {
+    const mint = entry.mint.trim();
+    const shyftToken = shyftTokenMap.get(mint);
+    const symbol = shyftToken?.symbol || shortenAddress(entry.mint);
+    mergedTokenEntries.set(mint, {
+      mint,
+      amountLabel: `${entry.amountLabel} ${symbol}`.trim(),
+      numericAmount: entry.numericAmount,
+      name: shyftToken?.name,
+      symbol: shyftToken?.symbol,
+      logoUri: shyftToken?.logoUri,
+      decimals: shyftToken?.decimals ?? entry.decimals,
+      accountAddress: entry.accountAddress,
+      programId: entry.programId,
+      metadataSource: shyftToken ? 'shyft' : 'rpc'
+    });
+  });
+
+  shyftTokens.forEach((token) => {
+    const mint = token.mint.trim();
+    const existing = mergedTokenEntries.get(mint);
+    if (existing) {
+      mergedTokenEntries.set(mint, {
+        ...existing,
+        name: token.name || existing.name,
+        symbol: token.symbol || existing.symbol,
+        logoUri: token.logoUri || existing.logoUri,
+        decimals: token.decimals ?? existing.decimals,
+        metadataSource: 'shyft'
+      });
+      return;
+    }
+
+    const symbol = token.symbol || shortenAddress(mint);
+    mergedTokenEntries.set(mint, {
+      mint,
+      amountLabel: token.balanceLabel ?? `${token.balanceUi ?? 0}`,
+      numericAmount: token.balanceUi ?? 0,
+      name: token.name,
+      symbol,
+        logoUri: token.logoUri,
+        decimals: token.decimals,
+        metadataSource: 'shyft'
+      });
+  });
+
+  const tokenEntries = [...mergedTokenEntries.values()].sort(
+    (left, right) => right.numericAmount - left.numericAmount
+  );
 
   const jupiterPrices = await fetchMobileJupiterPrices([JUPITER_SOL_MINT, ...tokenEntries.map((entry) => entry.mint)]).catch(() => ({}));
   const solUsdPrice = jupiterPrices[JUPITER_SOL_MINT]?.usdPrice ?? null;
@@ -559,53 +1578,35 @@ async function loadSolanaAssets(address: string): Promise<MobileAsset[]> {
       address: JUPITER_SOL_MINT,
       metadataSource: 'native',
       decimals: 9,
-      description: 'Native SOL balance on this wallet.'
+      description: 'Native SOL balance on this wallet.',
+      tokenType: 'native'
     }
   ];
 
-  const hasShyftHoldings = shyftTokens.length > 0;
-  const effectiveTokenEntries = hasShyftHoldings
-    ? shyftTokens.map((token) => ({
-        mint: token.mint,
-        amountLabel: token.balanceLabel ?? `${token.balanceUi ?? 0}`,
-        numericAmount: token.balanceUi ?? 0,
-        name: token.name,
-        symbol: token.symbol,
-        logoUri: token.logoUri
-      }))
-    : tokenEntries.map((entry) => {
-        const metadata = shyftMetadata[entry.mint];
-        return {
-          mint: entry.mint,
-          amountLabel: entry.amountLabel,
-          numericAmount: entry.numericAmount,
-          name: metadata?.name,
-          symbol: metadata?.symbol,
-          logoUri: metadata?.logoUri
-        };
-      });
-
-  effectiveTokenEntries.forEach((entry) => {
-    const metadata = shyftMetadata[entry.mint];
+  tokenEntries.forEach((entry) => {
     const tokenUsdPrice = jupiterPrices[entry.mint]?.usdPrice ?? null;
-    const symbol = entry.symbol || metadata?.symbol || shortenAddress(entry.mint);
+    const symbol = entry.symbol || shortenAddress(entry.mint);
     assets.push({
       id: entry.mint,
-      name: entry.name || metadata?.name || shortenAddress(entry.mint),
+      name: entry.name || shortenAddress(entry.mint),
       symbol,
-      amountLabel: hasShyftHoldings ? entry.amountLabel : `${entry.amountLabel} ${symbol}`.trim(),
+      amountLabel: entry.amountLabel,
       valueLabel: formatUsdValue(tokenUsdPrice ? entry.numericAmount * tokenUsdPrice : null),
-      logoUri: entry.logoUri || metadata?.logoUri,
+      logoUri: entry.logoUri,
       chain: 'solana',
       address: entry.mint,
-      metadataSource: hasShyftHoldings ? 'shyft' : metadata?.name || metadata?.symbol || metadata?.logoUri ? 'shyft' : 'rpc',
-      decimals: metadata?.decimals,
-      description: hasShyftHoldings
-        ? `Metadata powered by Shyft for ${symbol}.`
-        : metadata?.name
-          ? `Metadata powered by Shyft for ${metadata.name}.`
-          : undefined
+      metadataSource: entry.metadataSource,
+      decimals: entry.decimals,
+      description: entry.metadataSource === 'shyft' ? `Metadata powered by Shyft for ${symbol}.` : undefined,
+      tokenType: 'spl',
+      accountAddress: entry.accountAddress,
+      programId: entry.programId
     });
+  });
+
+  mobileSolanaAssetCache.set(address, {
+    expiresAt: Date.now() + (assets.length > 1 ? MOBILE_SOLANA_ASSET_CACHE_TTL_MS : 5_000),
+    assets
   });
 
   return assets;
@@ -613,20 +1614,27 @@ async function loadSolanaAssets(address: string): Promise<MobileAsset[]> {
 
 function normalizeMobileWalletState(state: MobileWalletState): MobileWalletState {
   const validChains = new Set<GrapeChain>(['solana', 'sui', 'ethereum', 'monad']);
-  const wallets = state.wallets.filter(
-    (wallet): wallet is MobileWallet =>
-      Boolean(wallet) &&
-      typeof wallet.id === 'string' &&
-      typeof wallet.name === 'string' &&
-      typeof wallet.address === 'string' &&
-      typeof wallet.chain === 'string' &&
-      validChains.has(wallet.chain as GrapeChain)
+  const deduped = dedupeWallets(
+    state.wallets
+    .filter(
+      (wallet): wallet is MobileWallet =>
+        Boolean(wallet) &&
+        typeof wallet.id === 'string' &&
+        typeof wallet.name === 'string' &&
+        typeof wallet.address === 'string' &&
+        typeof wallet.chain === 'string' &&
+        validChains.has(wallet.chain as GrapeChain)
+    )
   );
+  const wallets = deduped.wallets;
+  const duplicateWalletIdMap = deduped.duplicateWalletIdMap;
 
   const selectedWalletIds = Object.fromEntries(
-    Object.entries(state.selectedWalletIds).filter(([chain, walletId]) =>
-      wallets.some((wallet) => wallet.chain === chain && wallet.id === walletId)
-    )
+    Object.entries(state.selectedWalletIds)
+      .map(([chain, walletId]) => [chain, duplicateWalletIdMap.get(walletId) ?? walletId] as const)
+      .filter(([chain, walletId]) =>
+        wallets.some((wallet) => wallet.chain === chain && wallet.id === walletId)
+      )
   ) as Partial<Record<GrapeChain, string>>;
 
   const preferredChain =
@@ -641,7 +1649,65 @@ function normalizeMobileWalletState(state: MobileWalletState): MobileWalletState
     ...state,
     wallets,
     selectedChain,
-    selectedWalletIds
+    selectedWalletIds,
+    trackedReputationSpaceIds: normalizeTrackedReputationSpaceIds(state.trackedReputationSpaceIds),
+    trackedGovernanceDaoIds: normalizeTrackedDaoIds(state.trackedGovernanceDaoIds)
+  };
+}
+
+function normalizeTrackedReputationSpaceIds(value: string[] | null | undefined) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return Array.from(
+    new Set(
+      value
+        .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+        .filter(Boolean)
+    )
+  );
+}
+
+function normalizeTrackedDaoIds(value: string[] | null | undefined) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return Array.from(
+    new Set(
+      value
+        .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+        .filter(Boolean)
+    )
+  );
+}
+
+function findGovernanceOwnerByDao(daoId: string) {
+  const governanceOwners = [
+    { owner: 'GovMaiHfpVPw8BAM1mbdzgmSZYDw2tdP32J2fapoQoYs', dao: '899YG3yk4F66ZgbNWLHriZHTXSKk9e1kvsKEquW7L6Mo' },
+    { owner: 'GqTPL6qRf5aUuqscLh8Rg2HTxPUXfhhAXDptTLhp1t2J', dao: 'DPiH3H3c7t47BMxqTxLsuPQpEC6Kne8GA9VXbxpnZxFE' },
+    { owner: 'GovHgfDPyQ1GwazJTDY2avSVY8GGcpmCapmmCsymRaGe', dao: 'FiG6YoqWnVzUmxFNukcRVXZC51HvLr6mts8nxcm7ScR8' },
+    { owner: 'JPGov2SBA6f7XSJF5R4Si5jEJekGiyrwP2m7gSEqLUs', dao: 'FbpwgUzRPTneoZHDMNnM1zXb7Jm9iY8MzX2mAM8L6f43' },
+    { owner: 'JPGov2SBA6f7XSJF5R4Si5jEJekGiyrwP2m7gSEqLUs', dao: 'ATnhhZJ74xg4mzxDyNQ5YAE1BZ98PhrhAsMS4xNXquvX' },
+    { owner: 'pytGY6tWRgGinSCvRLnSv4fHfBTMoiDGiCsesmHWM6U', dao: '4ct8XU5tKbMNRphWy4rePsS9kBqPhDdvZoGpmprPaug4' },
+    { owner: 'GMnke6kxYvqoAXgbFGnu84QzvNHoqqTnijWSXYYTFQbB', dao: 'B1CxhV1khhj7n5mi5hebbivesqH9mvXr5Hfh2nD2UCh6' },
+    { owner: 'hgovkRU6Ghe1Qoyb54HdSLdqN7VtxaifBzRmh9jtd3S', dao: '2VfPJn8ML1hNBnsEBo7SzmG11UJc7gbY8b23A3K8expd' },
+    { owner: 'MGovW65tDhMMcpEmsegpsdgvzb6zUwGsNjhXFxRAnjd', dao: '5o6gEoeJBpuXT1H1ijFTq3KcSGx7ayabdG2hji7cB3FG' },
+    { owner: 'J9uWvULFL47gtCPvgR3oN7W357iehn5WF2Vn9MJvcSxz', dao: '66Du7mXgS2KMQBUk6m9h3TszMjqZqdWhsG3Duuf69VNW' },
+    { owner: 'ALLGnZikNaJQeN4KCAbDjZRSzvSefUdeTpk18yfizZvT', dao: 'A7nud4wxpAySc7Ai11vwXtkez79tHvcEvSquFBxw4iDh' },
+    { owner: 'AEauWRrpn9Cs6GXujzdp1YhMmv2288kBt3SdEcPYEerr', dao: 'DA5G7QQbFioZ6K33wQcH8fVdgFcnaDjLD7DLQkapZg5X' },
+    { owner: 'GMpXgTSJt2nJ7zjD1RwbT2QyPhKqD2MjAZuEaLsfPYLF', dao: 'Cdui9Va8XnKVng3VGZXcfBFF6XSxbqSi2XruMc7iu817' },
+    { owner: 'GmtpXy362L8cZfkRmTZMYunWVe8TyRjX5B7sodPZ63LJ', dao: '2sEcHwzsNBwNoTM1yAXjtF1HTMQKUAXf8ivtdpSpo9Fv' },
+    { owner: 'AVoAYTs36yB5izAaBkxRG67wL1AMwG3vo41hKtUSb8is', dao: '3MMDxjv1SzEFQDKryT7csAvaydYtrgMAc3L9xL9CVLCg' },
+    { owner: '5hAykmD4YGcQ7Am3N7nC9kyELq6CThAkU82nhNKDJiCy', dao: '759qyfKDMMuo9v36tW7fbGanL63mZFPNbhU7zjPrkuGK' },
+    { owner: 'jdaoDN37BrVRvxuXSeyR7xE5Z9CAoQApexGrQJbnj6V', dao: '5g94Ver64ruf9CGBL3k2oQGdKCUt4QKjN7NQojSrHAwH' },
+    { owner: 'jtogvBNH3WBSWDYD5FJfQP2ZxNTuf82zL8GkEhPeaJx', dao: 'jjCAwuuNpJCNMLAanpwgJZ6cdXzLPXe2GfD6TaDQBXt' }
+  ];
+
+  return governanceOwners.find((entry) => entry.dao === daoId) ?? {
+    owner: 'GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPCVZw',
+    dao: daoId
   };
 }
 
@@ -667,7 +1733,8 @@ async function loadSuiAssets(address: string): Promise<MobileAsset[]> {
       chain: 'sui',
       address,
       metadataSource: 'native',
-      decimals: 9
+      decimals: 9,
+      tokenType: 'native'
     },
     ...holdings.coins.map((coin) => ({
       id: coin.coinType,
@@ -678,7 +1745,8 @@ async function loadSuiAssets(address: string): Promise<MobileAsset[]> {
       chain: 'sui' as const,
       address: coin.coinType,
       metadataSource: 'rpc' as const,
-      decimals: coin.decimals
+      decimals: coin.decimals,
+      tokenType: coin.coinType === '0x2::sui::SUI' ? 'native' as const : 'sui-coin' as const
     }))
   ];
 }
@@ -697,7 +1765,8 @@ async function loadEthereumAssets(address: string): Promise<MobileAsset[]> {
       chain: 'ethereum',
       address,
       metadataSource: 'native',
-      decimals: 18
+      decimals: 18,
+      tokenType: 'native'
     }
   ];
 }
@@ -716,7 +1785,8 @@ async function loadMonadAssets(address: string): Promise<MobileAsset[]> {
       chain: 'monad',
       address,
       metadataSource: 'native',
-      decimals: 18
+      decimals: 18,
+      tokenType: 'native'
     }
   ];
 }
@@ -731,6 +1801,43 @@ function createSecretRef() {
 
 function toSecureStoreKey(secretRef: string) {
   return `${SECRET_PREFIX}${secretRef}`.replace(/[^a-zA-Z0-9]/g, '');
+}
+
+function getSecureStoreKeyCandidates(secretRef: string) {
+  const candidates = new Set<string>();
+  const trimmed = secretRef.trim();
+
+  if (trimmed) {
+    candidates.add(toSecureStoreKey(trimmed));
+    candidates.add(trimmed);
+    candidates.add(`${SECRET_PREFIX}${trimmed}`);
+    candidates.add(`grape:mobile:secret:${trimmed}`);
+    candidates.add(`grape-mobile-secret-${trimmed}`);
+
+    const alphanumeric = trimmed.replace(/[^a-zA-Z0-9]/g, '');
+    if (alphanumeric) {
+      candidates.add(toSecureStoreKey(alphanumeric));
+      candidates.add(`${SECRET_PREFIX}${alphanumeric}`);
+      candidates.add(`grape:mobile:secret:${alphanumeric}`);
+      candidates.add(`grape-mobile-secret-${alphanumeric}`);
+    }
+  }
+
+  return [...candidates].filter((candidate) => isValidSecureStoreKey(candidate));
+}
+
+function isValidSecureStoreKey(value: string) {
+  return /^[a-zA-Z0-9]+$/.test(value);
+}
+
+async function deleteStoredSecretIfUnused(wallets: MobileWallet[], secretRef: string, removedWalletId: string) {
+  const stillUsed = wallets.some((wallet) => wallet.id !== removedWalletId && wallet.secretRef === secretRef);
+  if (stillUsed) {
+    return;
+  }
+
+  const preferredKey = toSecureStoreKey(secretRef);
+  await deleteItemAsync(preferredKey).catch(() => undefined);
 }
 
 async function tryAddDerivedWallet(

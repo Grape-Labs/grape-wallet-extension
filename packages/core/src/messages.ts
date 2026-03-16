@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 const bytesSchema = z.string().min(1);
-const decimalAmountSchema = z.string().trim().regex(/^\d+(\.\d+)?$/, 'Amount must be a positive decimal value.');
+const decimalAmountSchema = z.string().trim().regex(/^(?:\d+(?:\.\d+)?|\.\d+)$/, 'Amount must be a positive decimal value.');
 
 const sendAssetSchema = z.discriminatedUnion('kind', [
   z.object({
@@ -280,6 +280,14 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     idleTimeoutMs: z.number().int().positive()
   }),
   z.object({
+    type: z.literal('wallet_set_reputation_spaces'),
+    daoIds: z.array(z.string().trim().min(32)).max(64)
+  }),
+  z.object({
+    type: z.literal('wallet_set_governance_daos'),
+    daoIds: z.array(z.string().trim().min(32)).max(64)
+  }),
+  z.object({
     type: z.literal('wallet_set_biometric_unlock'),
     config: z
       .object({
@@ -306,8 +314,26 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     staleWhileRevalidate: z.boolean().optional()
   }),
   z.object({
+    type: z.literal('wallet_get_reputation')
+  }),
+  z.object({
+    type: z.literal('wallet_get_governance')
+  }),
+  z.object({
     type: z.literal('wallet_get_activity'),
     limit: z.number().int().min(1).max(100).optional()
+  }),
+  z.object({
+    type: z.literal('wallet_cast_governance_vote'),
+    daoId: z.string().trim().min(32),
+    governanceId: z.string().trim().min(32),
+    proposalId: z.string().trim().min(32),
+    proposalOwnerRecordId: z.string().trim().min(32),
+    tokenOwnerRecordId: z.string().trim().min(32),
+    governingTokenMint: z.string().trim().min(32),
+    voteKind: z.enum(['approve', 'deny', 'abstain']),
+    choiceRank: z.number().int().min(0).max(32).optional(),
+    password: z.string().min(1).optional()
   }),
   z.object({
     type: z.literal('wallet_preview_chain_token'),

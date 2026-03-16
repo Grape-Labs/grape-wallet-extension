@@ -81,6 +81,18 @@ describe('message routing contracts', () => {
     expect(executeMessage.type).toBe('wallet_execute_swap');
   });
 
+  it('accepts decimal runtime message amounts without a leading zero', () => {
+    const quoteMessage = runtimeMessageSchema.parse({
+      type: 'wallet_get_swap_quote',
+      amount: '.1',
+      slippageBps: 50,
+      inputAsset: { kind: 'sol' },
+      outputMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
+    });
+
+    expect(quoteMessage.amount).toBe('.1');
+  });
+
   it('validates token maintenance and incident response runtime messages', () => {
     const burn = runtimeMessageSchema.parse({
       type: 'wallet_burn_token',

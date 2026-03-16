@@ -23,6 +23,7 @@ export type ApprovalRecord = {
   requestedPermissions?: string[];
   network: WalletState['selectedNetwork'];
   publicKey?: string;
+  walletId?: string;
   transactionSummary?: TransactionSummary;
   requiresPassword?: boolean;
   hostSurfaceId?: string;
@@ -44,6 +45,7 @@ export type WalletStateResponse = {
   activeAccount?: { publicKey: string };
   recentRecipients: WalletRecipient[];
   canUseUnlockedSigner: boolean;
+  unlockedWalletIds: string[];
 };
 
 export type TokenHolding = {
@@ -99,6 +101,82 @@ export type WalletAssetsResponse = {
   cachedAt?: number;
   fromCache?: boolean;
   stale?: boolean;
+};
+
+export type WalletReputationSpace = {
+  daoId: string;
+  repMint: string;
+  currentSeason: number;
+  latestSeasonWithPoints: number;
+  seasonCount: number;
+  points: string;
+  latestSeasonPoints: string;
+  effectivePoints: string;
+  metadataUri?: string | null;
+  name?: string;
+  symbol?: string;
+  description?: string;
+  imageUri?: string;
+};
+
+export type WalletReputationResponse = {
+  spaces: WalletReputationSpace[];
+  totalPoints: string;
+  source: 'vine' | 'none';
+  network: WalletState['selectedNetwork'];
+  refreshedAt: number;
+};
+
+export type WalletGovernanceProposalChoice = {
+  rank: number;
+  label: string;
+  voteWeight: string;
+  voteResult?: string | null;
+};
+
+export type WalletGovernanceProposal = {
+  daoId: string;
+  realmName: string;
+  governanceProgramId: string;
+  governanceId: string;
+  proposalId: string;
+  proposalName: string;
+  descriptionLink?: string | null;
+  state: string;
+  stateCode: number;
+  draftAt: number | null;
+  votingAt: number | null;
+  votingEndsAt: number | null;
+  governingTokenMint: string;
+  proposalOwnerRecordId: string;
+  tokenOwnerRecordId: string | null;
+  canVote: boolean;
+  hasVoted: boolean;
+  hasDenyOption: boolean;
+  choices: WalletGovernanceProposalChoice[];
+  yesVotes: string;
+  noVotes: string;
+  abstainVotes: string;
+  denyVotes: string;
+};
+
+export type WalletGovernanceResponse = {
+  trackedDaos: string[];
+  discoveredDaos: string[];
+  memberDaos: number;
+  proposals: WalletGovernanceProposal[];
+  source: 'shyft' | 'rpc' | 'none';
+  network: WalletState['selectedNetwork'];
+  refreshedAt: number;
+};
+
+export type WalletGovernanceVoteResponse = {
+  signature: string;
+  daoId: string;
+  proposalId: string;
+  voteKind: 'approve' | 'deny' | 'abstain';
+  choiceLabel?: string;
+  network: WalletState['selectedNetwork'];
 };
 
 export type ChainTokenPreviewResponse = {
@@ -165,14 +243,19 @@ export type WalletExportResponse = {
 };
 
 export type WalletSwapQuoteResponse = {
-  quoteResponse: JupiterQuoteResponse;
   inputMint: string;
   outputMint: string;
   inputAmountUi: string;
-  outputAmountUi: string;
-  priceImpactPct: string | null;
-  routeLabels: string[];
   slippageBps: number;
+  selectedRouteId: string;
+  routes: Array<{
+    id: string;
+    label: string;
+    quoteResponse: JupiterQuoteResponse;
+    outputAmountUi: string;
+    priceImpactPct: string | null;
+    routeLabels: string[];
+  }>;
 };
 
 export type WalletSwapExecuteResponse = {
@@ -184,16 +267,21 @@ export type WalletSwapExecuteResponse = {
 };
 
 export type WalletBridgeQuoteResponse = {
-  quoteResponse: Record<string, unknown>;
   fromChain: WalletState['selectedChain'];
   toChain: WalletState['selectedChain'];
-  fromAmountUi: string;
-  toAmountUi: string;
-  fromSymbol: string;
-  toSymbol: string;
-  minimumReceivedUi?: string | null;
-  feeUsd?: string | null;
-  routeLabels: string[];
+  selectedRouteId: string;
+  routes: Array<{
+    id: string;
+    label: string;
+    quoteResponse: Record<string, unknown>;
+    fromAmountUi: string;
+    toAmountUi: string;
+    fromSymbol: string;
+    toSymbol: string;
+    minimumReceivedUi?: string | null;
+    feeUsd?: string | null;
+    routeLabels: string[];
+  }>;
 };
 
 export type WalletBridgeExecuteResponse = {

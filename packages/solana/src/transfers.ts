@@ -66,7 +66,7 @@ export async function estimateLegacyTransactionFee(connection: Connection, trans
 
 export function parseDecimalAmount(value: string, decimals: number): bigint {
   const normalized = value.trim();
-  if (!/^\d+(\.\d+)?$/.test(normalized)) {
+  if (!/^(?:\d+(?:\.\d+)?|\.\d+)$/.test(normalized)) {
     throw new RpcError('INVALID_AMOUNT', 'Amount must be a positive decimal value.');
   }
 
@@ -75,7 +75,7 @@ export function parseDecimalAmount(value: string, decimals: number): bigint {
     throw new RpcError('INVALID_AMOUNT', `Amount supports at most ${decimals} decimal places.`);
   }
 
-  const whole = BigInt(wholePart);
+  const whole = BigInt(wholePart || '0');
   const fraction = BigInt((fractionPart + '0'.repeat(decimals)).slice(0, decimals) || '0');
   const base = 10n ** BigInt(decimals);
   const amount = whole * base + fraction;

@@ -110,6 +110,8 @@ export type WalletState = {
   wallets: WalletProfile[];
   selectedChain: GrapeChain;
   selectedWalletIds: Partial<Record<GrapeChain, string>>;
+  trackedReputationSpaceIds: string[];
+  trackedGovernanceDaoIds: string[];
   chainState: {
     solana: SolanaChainState;
     sui: SuiChainState;
@@ -131,6 +133,8 @@ export type LegacyWalletState = {
   selectedAccountId?: string;
   selectedChain?: GrapeChain;
   selectedWalletIds?: Partial<Record<GrapeChain, string>>;
+  trackedReputationSpaceIds?: string[];
+  trackedGovernanceDaoIds?: string[];
   chainState?: Partial<WalletState['chainState']>;
   selectedNetwork?: GrapeNetwork;
   selectedTheme?: GrapeTheme;
@@ -181,6 +185,8 @@ export function createEmptyWalletState(): WalletState {
     wallets: [],
     selectedChain: DEFAULT_CHAIN,
     selectedWalletIds: {},
+    trackedReputationSpaceIds: [],
+    trackedGovernanceDaoIds: [],
     chainState: {
       solana: {
         selectedNetwork: 'devnet',
@@ -314,6 +320,8 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
       wallets: normalizedWallets,
       selectedChain,
       selectedWalletIds,
+      trackedReputationSpaceIds: normalizeTrackedReputationSpaceIds(input.trackedReputationSpaceIds),
+      trackedGovernanceDaoIds: normalizeTrackedDaoIds(input.trackedGovernanceDaoIds),
       chainState,
       selectedWalletId: selectedWalletId ?? selectedWalletIds.solana ?? normalizedWallets.find((wallet) => wallet.chain === 'solana')?.id,
       selectedNetwork: chainState.solana.selectedNetwork,
@@ -345,6 +353,8 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
       selectedWalletIds: {
         solana: 'wallet-1'
       },
+      trackedReputationSpaceIds: normalizeTrackedReputationSpaceIds(input.trackedReputationSpaceIds),
+      trackedGovernanceDaoIds: normalizeTrackedDaoIds(input.trackedGovernanceDaoIds),
       chainState: {
         solana: {
           selectedNetwork: input.selectedNetwork ?? 'devnet',
@@ -374,6 +384,8 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
     wallets: [],
     selectedChain: input.selectedChain ?? DEFAULT_CHAIN,
     selectedWalletIds: {},
+    trackedReputationSpaceIds: normalizeTrackedReputationSpaceIds(input.trackedReputationSpaceIds),
+    trackedGovernanceDaoIds: normalizeTrackedDaoIds(input.trackedGovernanceDaoIds),
     chainState: normalizeChainState(input.chainState, input.selectedNetwork, input.customRpcUrls),
     selectedNetwork: input.selectedNetwork ?? 'devnet',
     selectedTheme: normalizeTheme(input.selectedTheme),
@@ -381,6 +393,24 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
     customRpcUrls: normalizeCustomRpcUrls(input.customRpcUrls),
     idleTimeoutMs: input.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS
   };
+}
+
+function normalizeTrackedReputationSpaceIds(value: string[] | undefined): string[] {
+  return normalizeTrackedDaoIds(value);
+}
+
+function normalizeTrackedDaoIds(value: string[] | undefined): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return Array.from(
+    new Set(
+      value
+        .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+        .filter((entry) => entry.length > 0)
+    )
+  );
 }
 
 function isLegacyReadyWalletState(input: WalletState | LegacyWalletState): input is LegacyWalletState & {

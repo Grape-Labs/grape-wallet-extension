@@ -54,6 +54,9 @@ import type {
   WalletAssetsResponse,
   WalletBridgeExecuteResponse,
   WalletBridgeQuoteResponse,
+  WalletGovernanceResponse,
+  WalletGovernanceVoteResponse,
+  WalletReputationResponse,
   WalletStakeAccountsResponse,
   WalletStakeActionResponse,
   WalletStateResponse,
@@ -72,7 +75,7 @@ import { mountPage } from '../lib';
 import { OnboardingView } from '../onboarding/OnboardingView';
 
 type PopupView = 'home' | 'send' | 'receive' | 'swap' | 'bridge' | 'settings' | 'asset' | 'security' | 'approval';
-type HomeTab = 'tokens' | 'collectibles' | 'activity' | 'staking';
+type HomeTab = 'tokens' | 'community' | 'governance' | 'collectibles' | 'activity' | 'staking';
 type AssetOption =
   | {
       id: string;
@@ -225,6 +228,21 @@ function formatAddress(address: string | undefined): string {
     return 'Unknown';
   }
   return `${address.slice(0, 4)}...${address.slice(-4)}`;
+}
+
+function formatWholeNumberString(value: string | null | undefined): string {
+  if (!value) {
+    return '0';
+  }
+  try {
+    return BigInt(value).toLocaleString();
+  } catch {
+    return value;
+  }
+}
+
+function buildOgReputationSpaceUrl(daoId: string): string {
+  return `https://reputation.governance.so/dao/${daoId}`;
 }
 
 function formatWalletSourceLabel(
@@ -884,6 +902,9 @@ function PopupPage() {
   const [customRpcInput, setCustomRpcInput] = useState('');
   const [customRpcBusy, setCustomRpcBusy] = useState(false);
   const [customRpcError, setCustomRpcError] = useState<string | null>(null);
+  const [reputationSpaceInput, setReputationSpaceInput] = useState('');
+  const [reputationSpaceSaving, setReputationSpaceSaving] = useState(false);
+  const [reputationSpaceError, setReputationSpaceError] = useState<string | null>(null);
   const [swapInputAssetId, setSwapInputAssetId] = useState('sol');
   const [swapOutputMint, setSwapOutputMint] = useState<string>(COMMON_SWAP_TOKENS[1].mint);
   const [swapInputPickerOpen, setSwapInputPickerOpen] = useState(false);
@@ -894,6 +915,7 @@ function PopupPage() {
   const [swapSlippageBps, setSwapSlippageBps] = useState('50');
   const [swapPassword, setSwapPassword] = useState('');
   const [swapQuote, setSwapQuote] = useState<WalletSwapQuoteResponse | null>(null);
+  const [swapSelectedRouteId, setSwapSelectedRouteId] = useState<string | null>(null);
   const [swapResult, setSwapResult] = useState<WalletSwapExecuteResponse | null>(null);
   const [swapError, setSwapError] = useState<string | null>(null);
   const [quotingSwap, setQuotingSwap] = useState(false);
@@ -904,6 +926,7 @@ function PopupPage() {
   const [bridgeAmount, setBridgeAmount] = useState('');
   const [bridgePassword, setBridgePassword] = useState('');
   const [bridgeQuote, setBridgeQuote] = useState<WalletBridgeQuoteResponse | null>(null);
+  const [bridgeSelectedRouteId, setBridgeSelectedRouteId] = useState<string | null>(null);
   const [bridgeResult, setBridgeResult] = useState<WalletBridgeExecuteResponse | null>(null);
   const [bridgeError, setBridgeError] = useState<string | null>(null);
   const [quotingBridge, setQuotingBridge] = useState(false);
@@ -912,6 +935,32 @@ function PopupPage() {
   const [bridgeWalletPickerOpen, setBridgeWalletPickerOpen] = useState(false);
   const bridgeQuoteRequestRef = useRef(0);
   const [assetsLoading, setAssetsLoading] = useState(false);
+  const [reputation, setReputation] = useState<WalletReputationResponse>({
+    spaces: [],
+    totalPoints: '0',
+    source: 'none',
+    network: 'mainnet-beta',
+    refreshedAt: Date.now()
+  });
+  const [reputationLoading, setReputationLoading] = useState(false);
+  const [reputationError, setReputationError] = useState<string | null>(null);
+  const [governanceDaoInput, setGovernanceDaoInput] = useState('');
+  const [governanceDaoSaving, setGovernanceDaoSaving] = useState(false);
+  const [governanceDaoError, setGovernanceDaoError] = useState<string | null>(null);
+  const [governance, setGovernance] = useState<WalletGovernanceResponse>({
+    trackedDaos: [],
+    discoveredDaos: [],
+    memberDaos: 0,
+    proposals: [],
+    source: 'none',
+    network: 'mainnet-beta',
+    refreshedAt: Date.now()
+  });
+  const [governanceLoading, setGovernanceLoading] = useState(false);
+  const [governanceError, setGovernanceError] = useState<string | null>(null);
+  const [governanceVotingProposalId, setGovernanceVotingProposalId] = useState<string | null>(null);
+  const [governanceVoteError, setGovernanceVoteError] = useState<string | null>(null);
+  const [governanceVoteResult, setGovernanceVoteResult] = useState<WalletGovernanceVoteResponse | null>(null);
   const [activity, setActivity] = useState<WalletActivityItem[]>([]);
   const [activityLoading, setActivityLoading] = useState(false);
   const [activityError, setActivityError] = useState<string | null>(null);
@@ -1065,6 +1114,19 @@ function PopupPage() {
   }, []);
 
   useEffect(() => {
+    const handleStorageChange: Parameters<typeof chrome.storage.onChanged.addListener>[0] = (changes, areaName) => {
+      if (areaName !== 'local' || !changes[STORAGE_KEYS.approvals]) {
+        return;
+      }
+
+      void refreshActiveApproval();
+    };
+
+    chrome.storage.onChanged.addListener(handleStorageChange);
+    return () => chrome.storage.onChanged.removeListener(handleStorageChange);
+  }, []);
+
+  useEffect(() => {
     void isBiometricUnlockSupported().then(setBiometricSupported).catch(() => setBiometricSupported(false));
   }, []);
 
@@ -1114,6 +1176,12 @@ function PopupPage() {
 
   useEffect(() => {
     if ((selectedChainValue === 'sui' || selectedChainValue === 'monad' || selectedChainValue === 'ethereum') && (homeTab === 'collectibles' || homeTab === 'staking')) {
+      setHomeTab('tokens');
+    }
+  }, [homeTab, selectedChainValue]);
+
+  useEffect(() => {
+    if ((selectedChainValue === 'sui' || selectedChainValue === 'monad' || selectedChainValue === 'ethereum') && (homeTab === 'community' || homeTab === 'governance')) {
       setHomeTab('tokens');
     }
   }, [homeTab, selectedChainValue]);
@@ -1337,6 +1405,122 @@ function PopupPage() {
       }
     }).then(setReceiveQr);
   }, [activePublicKey]);
+
+  useEffect(() => {
+    if (!state || state.wallet.setup !== 'ready' || state.session.locked || state.wallet.selectedChain !== 'solana') {
+      setReputation({
+        spaces: [],
+        totalPoints: '0',
+        source: 'none',
+        network: state?.wallet.selectedNetwork ?? 'mainnet-beta',
+        refreshedAt: Date.now()
+      });
+      setReputationError(null);
+      setReputationLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setReputationLoading(true);
+    void sendRuntimeMessage<WalletReputationResponse>({ type: 'wallet_get_reputation' })
+      .then((nextReputation) => {
+        if (cancelled) {
+          return;
+        }
+        setReputation(nextReputation);
+        setReputationError(null);
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+        setReputation({
+          spaces: [],
+          totalPoints: '0',
+          source: 'none',
+          network: state.wallet.selectedNetwork,
+          refreshedAt: Date.now()
+        });
+        setReputationError(error instanceof Error ? error.message : 'Unable to load OG reputation.');
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setReputationLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    state?.activeWallet?.id,
+    state?.activeAccount?.publicKey,
+    state?.session.locked,
+    state?.wallet.selectedChain,
+    state?.wallet.selectedNetwork,
+    state?.wallet.trackedReputationSpaceIds,
+    state?.wallet.setup
+  ]);
+
+  useEffect(() => {
+    if (!state || state.wallet.setup !== 'ready' || state.session.locked || state.wallet.selectedChain !== 'solana') {
+      setGovernance({
+        trackedDaos: state?.wallet.trackedGovernanceDaoIds ?? [],
+        discoveredDaos: [],
+        memberDaos: 0,
+        proposals: [],
+        source: 'none',
+        network: state?.wallet.selectedNetwork ?? 'mainnet-beta',
+        refreshedAt: Date.now()
+      });
+      setGovernanceError(null);
+      setGovernanceLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setGovernanceLoading(true);
+    void sendRuntimeMessage<WalletGovernanceResponse>({ type: 'wallet_get_governance' })
+      .then((nextGovernance) => {
+        if (cancelled) {
+          return;
+        }
+        setGovernance(nextGovernance);
+        setGovernanceError(null);
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+        setGovernance({
+          trackedDaos: state.wallet.trackedGovernanceDaoIds,
+          discoveredDaos: [],
+          memberDaos: 0,
+          proposals: [],
+          source: 'none',
+          network: state.wallet.selectedNetwork,
+          refreshedAt: Date.now()
+        });
+        setGovernanceError(error instanceof Error ? error.message : 'Unable to load governance proposals.');
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setGovernanceLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    state?.activeWallet?.id,
+    state?.activeAccount?.publicKey,
+    state?.session.locked,
+    state?.wallet.selectedChain,
+    state?.wallet.selectedNetwork,
+    state?.wallet.trackedGovernanceDaoIds,
+    state?.wallet.setup
+  ]);
 
   const homeBalance = useMemo(
     () => formatBaseUnitAmount(assets.lamports, assets.nativeDecimals ?? 9, assets.nativeSymbol),
@@ -1578,10 +1762,12 @@ function PopupPage() {
       });
       if (swapQuoteRequestRef.current === requestId) {
         setSwapQuote(quote);
+        setSwapSelectedRouteId(quote.selectedRouteId);
       }
     } catch (error) {
       if (swapQuoteRequestRef.current === requestId) {
         setSwapQuote(null);
+        setSwapSelectedRouteId(null);
         setSwapError(error instanceof Error ? error.message : 'Unable to fetch swap quote.');
       }
     } finally {
@@ -1596,12 +1782,21 @@ function PopupPage() {
       return;
     }
 
+    const activeRoute =
+      swapQuote.routes.find((route) => route.id === swapSelectedRouteId) ??
+      swapQuote.routes[0] ??
+      null;
+    if (!activeRoute) {
+      setSwapError('No swap route is available.');
+      return;
+    }
+
     try {
       setSubmittingSwap(true);
       setSwapError(null);
       const result = await sendRuntimeMessage<WalletSwapExecuteResponse>({
         type: 'wallet_execute_swap',
-        quoteResponse: swapQuote.quoteResponse,
+        quoteResponse: activeRoute.quoteResponse,
         password: canUseUnlockedSigner ? undefined : swapPassword || undefined
       });
       setSwapResult(result);
@@ -1634,10 +1829,12 @@ function PopupPage() {
       });
       if (bridgeQuoteRequestRef.current === requestId) {
         setBridgeQuote(quote);
+        setBridgeSelectedRouteId(quote.selectedRouteId);
       }
     } catch (error) {
       if (bridgeQuoteRequestRef.current === requestId) {
         setBridgeQuote(null);
+        setBridgeSelectedRouteId(null);
         setBridgeError(error instanceof Error ? error.message : 'Unable to fetch a bridge quote.');
       }
     } finally {
@@ -1652,12 +1849,21 @@ function PopupPage() {
       return;
     }
 
+    const activeRoute =
+      bridgeQuote.routes.find((route) => route.id === bridgeSelectedRouteId) ??
+      bridgeQuote.routes[0] ??
+      null;
+    if (!activeRoute) {
+      setBridgeError('No bridge route is available.');
+      return;
+    }
+
     try {
       setSubmittingBridge(true);
       setBridgeError(null);
       const result = await sendRuntimeMessage<WalletBridgeExecuteResponse>({
         type: 'wallet_execute_bridge',
-        quoteResponse: bridgeQuote.quoteResponse,
+        quoteResponse: activeRoute.quoteResponse,
         toChain: bridgeDestinationChain,
         destinationWalletId: selectedBridgeDestinationWallet.id,
         password: canUseUnlockedSigner ? undefined : bridgePassword || undefined
@@ -2072,6 +2278,8 @@ function PopupPage() {
       setup: 'idle',
       wallets: [],
       privacyMode: false,
+      trackedReputationSpaceIds: [],
+      trackedGovernanceDaoIds: [],
       selectedChain: 'solana',
       selectedNetwork: 'mainnet-beta',
       customRpcUrls: {},
@@ -2097,6 +2305,9 @@ function PopupPage() {
   const isMonadChain = selectedChain === 'monad';
   const isEthereumChain = selectedChain === 'ethereum';
   const selectedNetworkLabel = formatNetworkLabel(selectedChain, wallet.selectedNetwork);
+  const totalEffectiveReputationPoints = reputation.spaces.reduce((sum, space) => sum + BigInt(space.effectivePoints), BigInt(0)).toString();
+  const actionableGovernanceProposalCount = governance.proposals.filter((proposal) => proposal.canVote).length;
+  const totalGovernanceDaoCount = new Set([...governance.discoveredDaos, ...wallet.trackedGovernanceDaoIds]).size;
   const selectedNetworkCustomRpc =
     selectedChain === 'sui'
       ? wallet.chainState.sui.customRpcUrl ?? ''
@@ -2240,6 +2451,18 @@ function PopupPage() {
     );
   }
 
+  if (session.locked && !isWatchOnlyWallet && view === 'approval' && activeApproval) {
+    return (
+      <PageShell
+        eyebrow={null}
+        title="Review request"
+        subtitle="Unlock and approve or reject this request from the popup."
+      >
+        {renderApproval()}
+      </PageShell>
+    );
+  }
+
   if (session.locked && !isWatchOnlyWallet) {
     return (
       <PageShell eyebrow={null} title="" subtitle="">
@@ -2374,6 +2597,117 @@ function PopupPage() {
       setCustomRpcError(error instanceof Error ? error.message : 'Unable to update custom RPC.');
     } finally {
       setCustomRpcBusy(false);
+    }
+  }
+
+  async function handleSaveReputationSpaces(daoIds: string[]) {
+    try {
+      setReputationSpaceSaving(true);
+      setReputationSpaceError(null);
+      await sendRuntimeMessage<WalletStateResponse>({
+        type: 'wallet_set_reputation_spaces',
+        daoIds
+      });
+      await refresh();
+    } catch (error) {
+      setReputationSpaceError(error instanceof Error ? error.message : 'Unable to update tracked reputation spaces.');
+    } finally {
+      setReputationSpaceSaving(false);
+    }
+  }
+
+  async function handleAddReputationSpace() {
+    const nextDaoId = reputationSpaceInput.trim();
+    if (!nextDaoId) {
+      return;
+    }
+    if (wallet.trackedReputationSpaceIds.includes(nextDaoId)) {
+      setReputationSpaceError('That reputation space is already tracked.');
+      return;
+    }
+
+    await handleSaveReputationSpaces([...wallet.trackedReputationSpaceIds, nextDaoId]);
+    setReputationSpaceInput('');
+  }
+
+  async function handleRemoveReputationSpace(daoId: string) {
+    await handleSaveReputationSpaces(wallet.trackedReputationSpaceIds.filter((entry) => entry !== daoId));
+  }
+
+  async function handleSaveGovernanceDaos(daoIds: string[]) {
+    try {
+      setGovernanceDaoSaving(true);
+      setGovernanceDaoError(null);
+      await sendRuntimeMessage<WalletStateResponse>({
+        type: 'wallet_set_governance_daos',
+        daoIds
+      });
+      await refresh();
+    } catch (error) {
+      setGovernanceDaoError(error instanceof Error ? error.message : 'Unable to update tracked governance DAOs.');
+    } finally {
+      setGovernanceDaoSaving(false);
+    }
+  }
+
+  async function handleAddGovernanceDao() {
+    const nextDaoId = governanceDaoInput.trim();
+    if (!nextDaoId) {
+      return;
+    }
+    if (wallet.trackedGovernanceDaoIds.includes(nextDaoId)) {
+      setGovernanceDaoError('That governance DAO is already tracked.');
+      return;
+    }
+    if (governance.discoveredDaos.includes(nextDaoId)) {
+      setGovernanceDaoError('That governance DAO is already auto-detected for this wallet.');
+      return;
+    }
+
+    await handleSaveGovernanceDaos([...wallet.trackedGovernanceDaoIds, nextDaoId]);
+    setGovernanceDaoInput('');
+  }
+
+  async function handleRemoveGovernanceDao(daoId: string) {
+    await handleSaveGovernanceDaos(wallet.trackedGovernanceDaoIds.filter((entry) => entry !== daoId));
+  }
+
+  async function handleGovernanceVote(input: {
+    daoId: string;
+    governanceId: string;
+    proposalId: string;
+    proposalOwnerRecordId: string;
+    tokenOwnerRecordId: string | null;
+    governingTokenMint: string;
+    voteKind: 'approve' | 'deny' | 'abstain';
+    choiceRank?: number;
+  }) {
+    if (!input.tokenOwnerRecordId) {
+      setGovernanceVoteError('This wallet does not have a voting record for that proposal mint.');
+      return;
+    }
+
+    try {
+      setGovernanceVotingProposalId(input.proposalId);
+      setGovernanceVoteError(null);
+      setGovernanceVoteResult(null);
+      const result = await sendRuntimeMessage<WalletGovernanceVoteResponse>({
+        type: 'wallet_cast_governance_vote',
+        daoId: input.daoId,
+        governanceId: input.governanceId,
+        proposalId: input.proposalId,
+        proposalOwnerRecordId: input.proposalOwnerRecordId,
+        tokenOwnerRecordId: input.tokenOwnerRecordId,
+        governingTokenMint: input.governingTokenMint,
+        voteKind: input.voteKind,
+        choiceRank: input.choiceRank
+      });
+      setGovernanceVoteResult(result);
+      await refresh();
+    } catch (error) {
+      setGovernanceVoteError(error instanceof Error ? error.message : 'Unable to submit governance vote.');
+    } finally {
+      setGovernanceVotingProposalId(null);
     }
   }
 
@@ -2839,7 +3173,11 @@ function PopupPage() {
   function renderHome() {
     const nativeAssetName = assets.nativeName ?? (isEthereumChain ? 'Ethereum' : isSuiChain ? 'Sui' : isMonadChain ? 'Monad' : 'Solana');
     const nativeAssetSymbol = assets.nativeSymbol ?? (isEthereumChain ? 'ETH' : isSuiChain ? 'SUI' : isMonadChain ? 'MON' : 'SOL');
-    const activeHomeTab = (isSuiChain || isMonadChain || isEthereumChain) && (homeTab === 'collectibles' || homeTab === 'staking') ? 'tokens' : homeTab;
+    const activeHomeTab =
+      (isSuiChain || isMonadChain || isEthereumChain) &&
+      (homeTab === 'collectibles' || homeTab === 'staking' || homeTab === 'community' || homeTab === 'governance')
+        ? 'tokens'
+        : homeTab;
     const nativeAssetId = isEthereumChain ? 'ethereum' : isMonadChain ? 'monad' : isSuiChain ? 'sui' : 'sol';
 
     return (
@@ -2931,6 +3269,53 @@ function PopupPage() {
               <span className="quick-action-icon"><QrCode size={18} /></span>
             </button>
           </div>
+
+          {isSolanaChain ? (
+            <div className="wallet-home-shortcuts">
+              <button
+                type="button"
+                className="wallet-shortcut-card"
+                onClick={() => setHomeTab('community')}
+                aria-label="Open community reputation"
+              >
+                <span className="wallet-shortcut-label">OG Reputation</span>
+                <strong>
+                  {reputationLoading
+                    ? 'Loading...'
+                    : reputation.spaces.length > 0
+                      ? `${formatWholeNumberString(totalEffectiveReputationPoints)} pts`
+                      : wallet.trackedReputationSpaceIds.length > 0
+                        ? 'No points yet'
+                        : 'Add spaces'}
+                </strong>
+                <span className="wallet-shortcut-meta">
+                  {reputation.spaces.length} space{reputation.spaces.length === 1 ? '' : 's'}
+                </span>
+              </button>
+              <button
+                type="button"
+                className="wallet-shortcut-card"
+                onClick={() => setHomeTab('governance')}
+                aria-label="Open governance proposals"
+              >
+                <span className="wallet-shortcut-label">Governance</span>
+                <strong>
+                  {governanceLoading
+                    ? 'Loading...'
+                    : actionableGovernanceProposalCount > 0
+                      ? `${actionableGovernanceProposalCount} ready`
+                      : governance.proposals.length > 0
+                        ? `${governance.proposals.length} active`
+                        : totalGovernanceDaoCount > 0
+                          ? 'No active'
+                          : 'Scanning DAOs'}
+                </strong>
+                <span className="wallet-shortcut-meta">
+                  {totalGovernanceDaoCount} DAO{totalGovernanceDaoCount === 1 ? '' : 's'}
+                </span>
+              </button>
+            </div>
+          ) : null}
         </Card>
 
         {isWatchOnlyWallet ? (
@@ -2942,6 +3327,16 @@ function PopupPage() {
             <Tabs.Trigger className="content-tab" value="tokens">
               <span className="content-tab-copy">Tokens</span>
             </Tabs.Trigger>
+            {isSolanaChain ? (
+              <Tabs.Trigger className="content-tab" value="community">
+                <span className="content-tab-copy">Community</span>
+              </Tabs.Trigger>
+            ) : null}
+            {isSolanaChain ? (
+              <Tabs.Trigger className="content-tab" value="governance">
+                <span className="content-tab-copy">Governance</span>
+              </Tabs.Trigger>
+            ) : null}
             <Tabs.Trigger className="content-tab" value="activity">
               <span className="content-tab-copy">Activity</span>
             </Tabs.Trigger>
@@ -3022,8 +3417,243 @@ function PopupPage() {
           </Tabs.Content>
 
           {isSolanaChain ? (
-          <Tabs.Content value="collectibles">
-            <Card className="asset-panel-card">
+            <Tabs.Content value="community">
+              <Card className="asset-panel-card community-panel-card">
+                <div className="community-panel-header">
+                  <div>
+                    <strong>Grape Community</strong>
+                    <p className="muted">
+                      Identity, reputation, access, claims, and governance start here. Track the spaces this wallet is
+                      part of and see how its standing evolves.
+                    </p>
+                  </div>
+                  <Button tone="secondary" onClick={() => setView('settings')}>
+                    Manage spaces
+                  </Button>
+                </div>
+
+                {reputationLoading ? <p className="muted">Loading OG reputation…</p> : null}
+                {!reputationLoading && reputationError ? <p className="danger-box">{reputationError}</p> : null}
+                {!reputationLoading && !reputationError && reputation.spaces.length > 0 ? (
+                  <>
+                    <div className="community-summary-grid">
+                      <div className="community-summary-card">
+                        <span className="muted">Effective points</span>
+                        <strong>{formatWholeNumberString(totalEffectiveReputationPoints)}</strong>
+                      </div>
+                      <div className="community-summary-card">
+                        <span className="muted">Tracked spaces</span>
+                        <strong>{reputation.spaces.length}</strong>
+                      </div>
+                    </div>
+                    <div className="grape-reputation-list">
+                      {reputation.spaces.map((space) => (
+                        <div key={`${space.daoId}:${space.currentSeason}`} className="grape-reputation-row">
+                          <div className="grape-reputation-space">
+                            <div className="grape-reputation-avatar">
+                              {space.imageUri ? <img src={space.imageUri} alt={space.name ?? 'Reputation space'} /> : 'OG'}
+                            </div>
+                            <div className="grape-reputation-copy">
+                              <strong>{space.name ?? `Space ${formatAddress(space.daoId)}`}</strong>
+                              <span>
+                                {space.symbol ?? formatAddress(space.repMint)} • Latest season {space.latestSeasonWithPoints}:{' '}
+                                {formatWholeNumberString(space.latestSeasonPoints)} pts
+                              </span>
+                            </div>
+                          </div>
+                          <div className="grape-reputation-points">
+                            <strong>{formatWholeNumberString(space.effectivePoints)}</strong>
+                            <div className="grape-reputation-points-meta">
+                              <span>effective</span>
+                              <button
+                                type="button"
+                                className="grape-reputation-link"
+                                onClick={() => window.open(buildOgReputationSpaceUrl(space.daoId), '_blank', 'noopener,noreferrer')}
+                                aria-label={`Open ${space.name ?? space.daoId} reputation space`}
+                                title="Open reputation space"
+                              >
+                                <ExternalLink size={13} />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                ) : null}
+                {!reputationLoading && !reputationError && reputation.spaces.length === 0 ? (
+                  <div className="community-empty-state">
+                    <strong>No tracked reputation yet</strong>
+                    <p className="muted">
+                      Add the OG Reputation Spaces this wallet belongs to from Settings and Grape will surface the
+                      wallet&apos;s points here.
+                    </p>
+                    <Button onClick={() => setView('settings')}>Add spaces</Button>
+                  </div>
+                ) : null}
+              </Card>
+            </Tabs.Content>
+          ) : null}
+
+          {isSolanaChain ? (
+            <Tabs.Content value="governance">
+              <Card className="asset-panel-card community-panel-card">
+                <div className="community-panel-header">
+                  <div>
+                    <strong>Governance</strong>
+                    <p className="muted">
+                      Follow active proposals for the DAOs this wallet participates in and cast votes directly from
+                      Grape.
+                    </p>
+                  </div>
+                  <Button tone="secondary" onClick={() => setView('settings')}>
+                    Manage DAOs
+                  </Button>
+                </div>
+
+                {governanceVoteResult ? (
+                  <p className="success-box">
+                    Vote submitted. Signature {formatAddress(governanceVoteResult.signature)}
+                  </p>
+                ) : null}
+                {governanceVoteError ? <p className="danger-box">{governanceVoteError}</p> : null}
+                {governanceLoading ? <p className="muted">Loading governance proposals…</p> : null}
+                {!governanceLoading && governanceError ? <p className="danger-box">{governanceError}</p> : null}
+                {!governanceLoading && !governanceError && governance.proposals.length > 0 ? (
+                  <>
+                    <div className="community-summary-grid">
+                      <div className="community-summary-card">
+                        <span className="muted">Active proposals</span>
+                        <strong>{governance.proposals.length}</strong>
+                      </div>
+                      <div className="community-summary-card">
+                        <span className="muted">Detected DAOs</span>
+                        <strong>{totalGovernanceDaoCount}</strong>
+                      </div>
+                    </div>
+                    <div className="governance-proposal-list">
+                      {governance.proposals.map((proposal) => (
+                        <div key={proposal.proposalId} className="governance-proposal-card">
+                          <div className="governance-proposal-header">
+                            <div className="governance-proposal-copy">
+                              <strong>{proposal.proposalName}</strong>
+                              <span>
+                                {proposal.realmName} • {proposal.state}
+                                {proposal.votingEndsAt ? ` • ends ${new Date(proposal.votingEndsAt * 1000).toLocaleString()}` : ''}
+                              </span>
+                            </div>
+                            <div className="governance-proposal-badges">
+                              <StatusPill tone={proposal.canVote ? 'success' : proposal.hasVoted ? 'warning' : 'neutral'}>
+                                {proposal.canVote ? 'Vote now' : proposal.hasVoted ? 'Voted' : proposal.state}
+                              </StatusPill>
+                              {proposal.descriptionLink ? (
+                                <button
+                                  type="button"
+                                  className="grape-reputation-link"
+                                  onClick={() => window.open(proposal.descriptionLink ?? '', '_blank', 'noopener,noreferrer')}
+                                  aria-label={`Open ${proposal.proposalName}`}
+                                  title="Open proposal"
+                                >
+                                  <ExternalLink size={13} />
+                                </button>
+                              ) : null}
+                            </div>
+                          </div>
+                          <div className="governance-proposal-metrics">
+                            <span>Yes {formatWholeNumberString(proposal.yesVotes)}</span>
+                            {BigInt(proposal.noVotes) > BigInt(0) ? <span>No {formatWholeNumberString(proposal.noVotes)}</span> : null}
+                            {BigInt(proposal.abstainVotes) > BigInt(0) ? <span>Abstain {formatWholeNumberString(proposal.abstainVotes)}</span> : null}
+                            {BigInt(proposal.denyVotes) > BigInt(0) ? <span>Deny {formatWholeNumberString(proposal.denyVotes)}</span> : null}
+                          </div>
+                          {proposal.canVote ? (
+                            <div className="governance-vote-actions">
+                              {proposal.choices.map((choice) => (
+                                <Button
+                                  key={`${proposal.proposalId}:${choice.rank}`}
+                                  tone="secondary"
+                                  disabled={governanceVotingProposalId === proposal.proposalId}
+                                  onClick={() =>
+                                    void handleGovernanceVote({
+                                      daoId: proposal.daoId,
+                                      governanceId: proposal.governanceId,
+                                      proposalId: proposal.proposalId,
+                                      proposalOwnerRecordId: proposal.proposalOwnerRecordId,
+                                      tokenOwnerRecordId: proposal.tokenOwnerRecordId,
+                                      governingTokenMint: proposal.governingTokenMint,
+                                      voteKind: 'approve',
+                                      choiceRank: choice.rank
+                                    })
+                                  }
+                                >
+                                  {governanceVotingProposalId === proposal.proposalId ? 'Submitting…' : choice.label}
+                                </Button>
+                              ))}
+                              {proposal.hasDenyOption ? (
+                                <Button
+                                  tone="secondary"
+                                  disabled={governanceVotingProposalId === proposal.proposalId}
+                                  onClick={() =>
+                                    void handleGovernanceVote({
+                                      daoId: proposal.daoId,
+                                      governanceId: proposal.governanceId,
+                                      proposalId: proposal.proposalId,
+                                      proposalOwnerRecordId: proposal.proposalOwnerRecordId,
+                                      tokenOwnerRecordId: proposal.tokenOwnerRecordId,
+                                      governingTokenMint: proposal.governingTokenMint,
+                                      voteKind: 'deny'
+                                    })
+                                  }
+                                >
+                                  {governanceVotingProposalId === proposal.proposalId ? 'Submitting…' : 'Deny'}
+                                </Button>
+                              ) : null}
+                              <Button
+                                tone="secondary"
+                                disabled={governanceVotingProposalId === proposal.proposalId}
+                                onClick={() =>
+                                  void handleGovernanceVote({
+                                    daoId: proposal.daoId,
+                                    governanceId: proposal.governanceId,
+                                    proposalId: proposal.proposalId,
+                                    proposalOwnerRecordId: proposal.proposalOwnerRecordId,
+                                    tokenOwnerRecordId: proposal.tokenOwnerRecordId,
+                                    governingTokenMint: proposal.governingTokenMint,
+                                    voteKind: 'abstain'
+                                  })
+                                }
+                              >
+                                {governanceVotingProposalId === proposal.proposalId ? 'Submitting…' : 'Abstain'}
+                              </Button>
+                            </div>
+                          ) : (
+                            <p className="muted governance-proposal-note">
+                              {proposal.hasVoted
+                                ? 'This wallet already voted on the active proposal.'
+                                : 'This wallet is tracking the DAO, but it does not currently have voting power for this proposal.'}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                ) : null}
+                {!governanceLoading && !governanceError && governance.proposals.length === 0 ? (
+                  <div className="community-empty-state">
+                    <strong>No active governance proposals</strong>
+                    <p className="muted">
+                      Grape now auto-detects the Solana DAOs this wallet belongs to. You can still add extra realm ids
+                      from Settings if you want to track specific DAOs manually.
+                    </p>
+                    <Button onClick={() => setView('settings')}>Review DAOs</Button>
+                  </div>
+                ) : null}
+              </Card>
+            </Tabs.Content>
+          ) : null}
+
+          {isSolanaChain ? (
+            <Tabs.Content value="collectibles">
+              <Card className="asset-panel-card">
               {collectibleItems.length > 0 ? (
                 <div className="collectible-grid">
                   {collectibleItems.map((item) => (
@@ -3230,15 +3860,6 @@ function PopupPage() {
           ) : null}
         </Tabs.Root>
 
-        <Card className="asset-panel-card grape-tools-panel-card">
-          <div className="grape-tools-copy">
-            <strong>Grape Tools</strong>
-            <p className="muted">
-              The wallet will connect directly to Grape identity, reputation, access, claims, and governance tooling so
-              users can move from holding assets to participating in communities and DAOs.
-            </p>
-          </div>
-        </Card>
       </>
     );
   }
@@ -4093,6 +4714,120 @@ function PopupPage() {
             </div>
           </div>
         </Card>
+        <Card title="OG Reputation Spaces">
+          <div className="stack">
+            <p className="muted">
+              Add the reputation spaces this wallet is part of, and Grape will track the wallet&apos;s points in each
+              space directly.
+            </p>
+            {selectedChain !== 'solana' ? (
+              <p className="muted">Tracked reputation spaces are currently supported for Solana wallets.</p>
+            ) : (
+              <>
+                <div className="inline wrap-actions">
+                  <Input
+                    value={reputationSpaceInput}
+                    onChange={(event) => setReputationSpaceInput(event.target.value)}
+                    placeholder="Add reputation space DAO id"
+                  />
+                  <Button onClick={() => void handleAddReputationSpace()} disabled={reputationSpaceSaving || !reputationSpaceInput.trim()}>
+                    {reputationSpaceSaving ? 'Saving...' : 'Add space'}
+                  </Button>
+                </div>
+                {wallet.trackedReputationSpaceIds.length > 0 ? (
+                  <div className="reputation-space-list">
+                    {wallet.trackedReputationSpaceIds.map((daoId) => (
+                      <div key={daoId} className="reputation-space-row">
+                        <div className="stack compact-stack">
+                          <strong>{formatAddress(daoId)}</strong>
+                          <span className="muted mono settings-inline-value">{daoId}</span>
+                        </div>
+                        <div className="reputation-space-actions">
+                          <Button tone="secondary" onClick={() => window.open(buildOgReputationSpaceUrl(daoId), '_blank', 'noopener,noreferrer')}>
+                            Open
+                          </Button>
+                          <Button tone="secondary" onClick={() => void handleRemoveReputationSpace(daoId)} disabled={reputationSpaceSaving}>
+                            Remove
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="muted">No reputation spaces are tracked yet.</p>
+                )}
+              </>
+            )}
+            {reputationSpaceError ? <p className="danger-box">{reputationSpaceError}</p> : null}
+          </div>
+        </Card>
+        <Card title="Governance DAOs">
+          <div className="stack">
+            <p className="muted">
+              Grape auto-detects the Solana DAOs this wallet participates in from governance membership records. You
+              can also add extra realm ids manually if you want to track them explicitly.
+            </p>
+            {selectedChain !== 'solana' ? (
+              <p className="muted">Governance proposal tracking is currently supported for Solana wallets.</p>
+            ) : (
+              <>
+                {governance.discoveredDaos.length > 0 ? (
+                  <div className="stack">
+                    <strong>Detected DAOs</strong>
+                    <div className="reputation-space-list">
+                      {governance.discoveredDaos.map((daoId) => (
+                        <div key={`detected:${daoId}`} className="reputation-space-row">
+                          <div className="stack compact-stack">
+                            <strong>{formatAddress(daoId)}</strong>
+                            <span className="muted mono settings-inline-value">{daoId}</span>
+                          </div>
+                          <div className="reputation-space-actions">
+                            <StatusPill tone="success">Detected</StatusPill>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="muted">No governance DAOs have been auto-detected for this wallet yet.</p>
+                )}
+                <div className="inline wrap-actions">
+                  <Input
+                    value={governanceDaoInput}
+                    onChange={(event) => setGovernanceDaoInput(event.target.value)}
+                    placeholder="Track an extra governance DAO realm id"
+                  />
+                  <Button onClick={() => void handleAddGovernanceDao()} disabled={governanceDaoSaving || !governanceDaoInput.trim()}>
+                    {governanceDaoSaving ? 'Saving...' : 'Add tracked DAO'}
+                  </Button>
+                </div>
+                {wallet.trackedGovernanceDaoIds.length > 0 ? (
+                  <div className="stack">
+                    <strong>Manual tracked DAOs</strong>
+                    <div className="reputation-space-list">
+                      {wallet.trackedGovernanceDaoIds.map((daoId) => (
+                        <div key={daoId} className="reputation-space-row">
+                          <div className="stack compact-stack">
+                            <strong>{formatAddress(daoId)}</strong>
+                            <span className="muted mono settings-inline-value">{daoId}</span>
+                          </div>
+                          <div className="reputation-space-actions">
+                            <Button tone="secondary" onClick={() => void handleRemoveGovernanceDao(daoId)} disabled={governanceDaoSaving}>
+                              Remove
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="muted">No extra governance DAOs are manually tracked.</p>
+                )}
+              </>
+            )}
+            {governanceDaoError ? <p className="danger-box">{governanceDaoError}</p> : null}
+          </div>
+        </Card>
       </>
     );
   }
@@ -4380,7 +5115,11 @@ function PopupPage() {
         : selectedSwapOutputOption?.symbol
           ? 'Not owned yet'
           : 'Unknown';
-    const quoteOutputValue = swapQuote ? `${swapQuote.outputAmountUi} ${outputAssetSymbol}` : '0';
+    const activeSwapRoute =
+      swapQuote?.routes.find((route) => route.id === swapSelectedRouteId) ??
+      swapQuote?.routes[0] ??
+      null;
+    const quoteOutputValue = activeSwapRoute ? `${activeSwapRoute.outputAmountUi} ${outputAssetSymbol}` : '0';
 
     if (submittingSwap) {
       return (
@@ -4664,10 +5403,37 @@ function PopupPage() {
         {swapQuote ? (
           <Card title="Quote">
             <div className="stack">
-              <KeyValueRow label="Estimated output" value={`${swapQuote.outputAmountUi} ${outputAssetSymbol}`} />
+              {swapQuote.routes.length > 1 ? (
+                <div className="swap-route-picker">
+                  {swapQuote.routes.map((route) => {
+                    const active = route.id === (swapSelectedRouteId ?? swapQuote.selectedRouteId);
+                    return (
+                      <button
+                        key={route.id}
+                        type="button"
+                        className={`swap-route-option ${active ? 'active' : ''}`.trim()}
+                        onClick={() => setSwapSelectedRouteId(route.id)}
+                      >
+                        <div className="swap-route-option-copy">
+                          <strong>{route.label}</strong>
+                          <span>{route.routeLabels.length > 0 ? route.routeLabels.join(' -> ') : 'Jupiter route'}</span>
+                        </div>
+                        <div className="swap-route-option-meta">
+                          <strong>{route.outputAmountUi}</strong>
+                          <span>{route.priceImpactPct ?? 'Impact n/a'}</span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+              <KeyValueRow label="Estimated output" value={`${activeSwapRoute?.outputAmountUi ?? '0'} ${outputAssetSymbol}`} />
               <KeyValueRow label="Slippage" value={`${swapQuote.slippageBps} bps`} />
-              <KeyValueRow label="Price impact" value={swapQuote.priceImpactPct ?? 'Unavailable'} />
-              <KeyValueRow label="Route" value={swapQuote.routeLabels.length > 0 ? swapQuote.routeLabels.join(' -> ') : 'Jupiter route'} />
+              <KeyValueRow label="Price impact" value={activeSwapRoute?.priceImpactPct ?? 'Unavailable'} />
+              <KeyValueRow
+                label="Route"
+                value={activeSwapRoute?.routeLabels.length ? activeSwapRoute.routeLabels.join(' -> ') : 'Jupiter route'}
+              />
               {!canUseUnlockedSigner ? (
                 <label className="stack">
                   <span className="muted">Password</span>
@@ -4750,7 +5516,11 @@ function PopupPage() {
     const sourceSymbol = assets.nativeSymbol ?? LIFI_NATIVE_SYMBOL[selectedChain];
     const sourceName = assets.nativeName ?? sourceChainOption?.label ?? sourceSymbol;
     const bridgeDestinationAddress = selectedBridgeDestinationAccount?.publicKey ?? null;
-    const bridgeCanExecute = bridgeQuote ? hasExecutableBridgeTransaction(bridgeQuote.quoteResponse) : false;
+    const activeBridgeRoute =
+      bridgeQuote?.routes.find((route) => route.id === bridgeSelectedRouteId) ??
+      bridgeQuote?.routes[0] ??
+      null;
+    const bridgeCanExecute = activeBridgeRoute ? hasExecutableBridgeTransaction(activeBridgeRoute.quoteResponse) : false;
 
     if (isWatchOnlyWallet) {
       return (
@@ -4995,14 +5765,48 @@ function PopupPage() {
             <p className="muted">Fetching the best route…</p>
           ) : bridgeQuote ? (
             <div className="stack bridge-quote-stack">
+              {bridgeQuote.routes.length > 1 ? (
+                <div className="swap-route-picker">
+                  {bridgeQuote.routes.map((route) => {
+                    const active = route.id === (bridgeSelectedRouteId ?? bridgeQuote.selectedRouteId);
+                    return (
+                      <button
+                        key={route.id}
+                        type="button"
+                        className={`swap-route-option ${active ? 'active' : ''}`.trim()}
+                        onClick={() => setBridgeSelectedRouteId(route.id)}
+                      >
+                        <div className="swap-route-option-copy">
+                          <strong>{route.label}</strong>
+                          <span>{route.routeLabels.length > 0 ? route.routeLabels.join(' → ') : 'Bridge route'}</span>
+                        </div>
+                        <div className="swap-route-option-meta">
+                          <strong>{route.toAmountUi}</strong>
+                          <span>{route.feeUsd ? `$${route.feeUsd}` : 'Fee n/a'}</span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
               <div className="bridge-quote-grid">
-                <KeyValueRow label="You send" value={`${bridgeQuote.fromAmountUi} ${bridgeQuote.fromSymbol}`} />
-                <KeyValueRow label="You receive" value={`${bridgeQuote.toAmountUi} ${bridgeQuote.toSymbol}`} />
-                <KeyValueRow label="Minimum received" value={bridgeQuote.minimumReceivedUi ? `${bridgeQuote.minimumReceivedUi} ${bridgeQuote.toSymbol}` : 'Unavailable'} />
-                <KeyValueRow label="Estimated fees" value={bridgeQuote.feeUsd ? `$${bridgeQuote.feeUsd}` : 'Unavailable'} />
+                <KeyValueRow label="You send" value={`${activeBridgeRoute?.fromAmountUi ?? '0'} ${activeBridgeRoute?.fromSymbol ?? sourceSymbol}`} />
+                <KeyValueRow label="You receive" value={`${activeBridgeRoute?.toAmountUi ?? '0'} ${activeBridgeRoute?.toSymbol ?? sourceSymbol}`} />
+                <KeyValueRow
+                  label="Minimum received"
+                  value={
+                    activeBridgeRoute?.minimumReceivedUi
+                      ? `${activeBridgeRoute.minimumReceivedUi} ${activeBridgeRoute.toSymbol}`
+                      : 'Unavailable'
+                  }
+                />
+                <KeyValueRow label="Estimated fees" value={activeBridgeRoute?.feeUsd ? `$${activeBridgeRoute.feeUsd}` : 'Unavailable'} />
               </div>
               <KeyValueRow label="Destination" value={`${destinationChainOption?.label ?? bridgeDestinationChain} · ${selectedBridgeDestinationWallet?.name ?? 'Wallet'}`} />
-              <KeyValueRow label="Route" value={bridgeQuote.routeLabels.length > 0 ? bridgeQuote.routeLabels.join(' → ') : 'Bridge route'} />
+              <KeyValueRow
+                label="Route"
+                value={activeBridgeRoute?.routeLabels.length ? activeBridgeRoute.routeLabels.join(' → ') : 'Bridge route'}
+              />
               {!bridgeCanExecute ? <p className="warning-box">This quoted route is not directly executable in Grape yet. Try a different destination or amount.</p> : null}
             </div>
           ) : (

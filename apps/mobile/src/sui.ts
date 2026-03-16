@@ -1,5 +1,6 @@
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { MIST_PER_SUI, SUI_TYPE_ARG, normalizeSuiAddress } from '@mysten/sui/utils';
+import type { VaultSecret } from '@grape/core';
 import { getMobileSuiRpcUrl } from './config';
 
 const DEFAULT_SUI_NETWORK = 'mainnet';
@@ -33,6 +34,26 @@ export function deriveMobileSuiAccount0(mnemonic: string) {
     address: keypair.toSuiAddress(),
     derivationPath: SUI_DERIVATION_PATH
   };
+}
+
+export function exportMobileSuiWalletSecret(secret: VaultSecret) {
+  if (secret.kind === 'mnemonic') {
+    const keypair = Ed25519Keypair.deriveKeypair(secret.mnemonic, SUI_DERIVATION_PATH);
+    return {
+      privateKey: keypair.getSecretKey(),
+      derivationPath: SUI_DERIVATION_PATH
+    };
+  }
+
+  if (secret.kind === 'private-key') {
+    const imported = importMobileSuiPrivateKey(secret.secretKey);
+    return {
+      privateKey: imported.secretKey,
+      derivationPath: imported.derivationPath
+    };
+  }
+
+  throw new Error('Unsupported Sui wallet secret.');
 }
 
 export function importMobileSuiPrivateKey(privateKey: string) {

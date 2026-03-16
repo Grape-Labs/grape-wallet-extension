@@ -9,6 +9,7 @@ import {
   Image,
   ImageBackground,
   KeyboardAvoidingView,
+  Linking,
   Platform,
   Pressable,
   SafeAreaView,
@@ -23,11 +24,13 @@ import {
 } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
-import Svg, { Defs, LinearGradient as SvgLinearGradient, Stop, Text as SvgText } from 'react-native-svg';
+import Svg, { Defs, LinearGradient as SvgLinearGradient, Stop, SvgUri, Text as SvgText } from 'react-native-svg';
 import {
   Button as PaperButton,
   Checkbox,
   MD3DarkTheme,
+  Modal as PaperModal,
+  Portal,
   Provider as PaperProvider,
   SegmentedButtons,
   TextInput as PaperTextInput
@@ -38,23 +41,45 @@ import { chains, getMobileTheme, mobileThemes, type MobileThemePalette } from '.
 import {
   addWalletSet,
   addPrivateKeyWallet,
+  createBridgeActivity,
+  createSwapActivity,
   createEmptyMobileWalletState,
   createSendActivity,
   createWalletMnemonic,
   createPrivateKeyWallet,
   createWalletSet,
+  castWalletGovernanceVote,
+  executeWalletBridge,
+  executeWalletSwap,
+  exportMobileWalletPrivateKey,
   type MobileActivity,
   type MobileAsset,
+  type MobileSwapQuote,
   type MobileWallet,
   type MobileWalletState,
   getSelectedWallet,
+  getWalletBridgeQuote,
+  getWalletSwapQuote,
   isValidMnemonic,
   loadMobileWalletState,
+  loadWalletReputation,
+  loadWalletGovernance,
+  removeMobileWallet,
+  loadWalletActivity,
   loadWalletAssets,
   persistMobileWalletState,
-  sendNativeAsset,
+  sendWalletAsset,
+  updateTrackedGovernanceDaos,
+  updateTrackedReputationSpaces,
   unlockMobileWalletState
 } from './src/wallet';
+import type { MobileBridgeQuoteSummary } from './src/config';
+import { getMobileSupportedBridgeDestinations } from './src/config';
+import type {
+  MobileGovernanceResponse,
+  MobileGovernanceVoteResponse
+} from './src/governance';
+import type { MobileReputationResponse } from './src/reputation';
 import type { WalletMnemonicLength } from '../../packages/solana/src/mnemonic';
 
 const GRAPE_LOGO_IMAGE = require('./assets/grape_logo_white.png');
@@ -70,7 +95,7 @@ const THEME_BACKGROUND_ASSETS: Partial<Record<GrapeTheme, number>> = {
 type Screen = 'loading' | 'setup' | 'locked' | 'ready';
 type SetupMode = 'create' | 'import';
 type ImportKind = 'mnemonic' | 'private-key';
-type MainTab = 'home' | 'receive' | 'activity' | 'settings';
+type MainTab = 'home' | 'receive' | 'governance' | 'activity' | 'settings';
 
 function chainMeta(chain: (typeof chains)[number]['id']) {
   return chains.find((item) => item.id === chain) ?? chains[0];
@@ -105,6 +130,21 @@ function maskValue(value: string, privacyMode: boolean) {
   return privacyMode ? '***' : value;
 }
 
+function formatWholeNumberString(value: string | null | undefined) {
+  if (!value) {
+    return '0';
+  }
+  try {
+    return BigInt(value).toLocaleString();
+  } catch {
+    return value;
+  }
+}
+
+function buildOgReputationSpaceUrl(daoId: string) {
+  return `https://reputation.governance.so/dao/${daoId}`;
+}
+
 function getAssetSubtitle(asset: MobileAsset, selectedChainLabel: string, selectedChainShort: string) {
   const normalizedName = asset.name.trim().toLowerCase();
   const normalizedChainLabel = selectedChainLabel.trim().toLowerCase();
@@ -129,6 +169,31 @@ function getAssetSubtitle(asset: MobileAsset, selectedChainLabel: string, select
   return asset.symbol;
 }
 
+function isSvgUri(uri?: string) {
+  return typeof uri === 'string' && uri.trim().toLowerCase().includes('.svg');
+}
+
+function dedupeVisibleWallets(wallets: MobileWallet[]) {
+  const seen = new Set<string>();
+  return wallets.filter((wallet) => {
+    const key = `${wallet.chain}:${wallet.address.trim().toLowerCase()}`;
+    if (seen.has(key)) {
+      return false;
+    }
+
+    seen.add(key);
+    return true;
+  });
+}
+
+async function openOgReputationSpace(daoId: string) {
+  const url = buildOgReputationSpaceUrl(daoId);
+  const supported = await Linking.canOpenURL(url);
+  if (supported) {
+    await Linking.openURL(url);
+  }
+}
+
 export default function App() {
   const { width } = useWindowDimensions();
   const [screen, setScreen] = useState<Screen>('loading');
@@ -147,18 +212,76 @@ export default function App() {
   const [confirmBackedUp, setConfirmBackedUp] = useState(false);
   const [unlockPassword, setUnlockPassword] = useState('');
   const [assets, setAssets] = useState<MobileAsset[]>([]);
+  const [remoteActivity, setRemoteActivity] = useState<MobileActivity[]>([]);
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const [assetsLoading, setAssetsLoading] = useState(false);
+  const [activityLoading, setActivityLoading] = useState(false);
   const [submitLoading, setSubmitLoading] = useState(false);
   const [sendRecipient, setSendRecipient] = useState('');
   const [sendAmount, setSendAmount] = useState('');
   const [sendLoading, setSendLoading] = useState(false);
   const [unlocked, setUnlocked] = useState(false);
   const [walletListExpanded, setWalletListExpanded] = useState(false);
-  const [showSendComposer, setShowSendComposer] = useState(false);
+  const [sendScreenVisible, setSendScreenVisible] = useState(false);
+  const [sendAssetId, setSendAssetId] = useState<string | null>(null);
+  const [sendAssetPickerVisible, setSendAssetPickerVisible] = useState(false);
+  const [sendAssetSearch, setSendAssetSearch] = useState('');
+  const [swapScreenVisible, setSwapScreenVisible] = useState(false);
+  const [swapInputAssetId, setSwapInputAssetId] = useState<string | null>(null);
+  const [swapOutputAssetId, setSwapOutputAssetId] = useState<string | null>(null);
+  const [swapInputPickerVisible, setSwapInputPickerVisible] = useState(false);
+  const [swapOutputPickerVisible, setSwapOutputPickerVisible] = useState(false);
+  const [swapAssetSearch, setSwapAssetSearch] = useState('');
+  const [swapAmount, setSwapAmount] = useState('');
+  const [swapQuote, setSwapQuote] = useState<MobileSwapQuote | null>(null);
+  const [swapSelectedRouteId, setSwapSelectedRouteId] = useState<string | null>(null);
+  const [swapQuoteLoading, setSwapQuoteLoading] = useState(false);
+  const [swapExecuteLoading, setSwapExecuteLoading] = useState(false);
+  const [swapError, setSwapError] = useState<string | null>(null);
+  const [bridgeScreenVisible, setBridgeScreenVisible] = useState(false);
+  const [bridgeAmount, setBridgeAmount] = useState('');
+  const [bridgeToChain, setBridgeToChain] = useState<MobileWalletState['selectedChain']>('ethereum');
+  const [bridgeDestinationWalletId, setBridgeDestinationWalletId] = useState<string | null>(null);
+  const [bridgeQuote, setBridgeQuote] = useState<MobileBridgeQuoteSummary | null>(null);
+  const [bridgeSelectedRouteId, setBridgeSelectedRouteId] = useState<string | null>(null);
+  const [bridgeQuoteLoading, setBridgeQuoteLoading] = useState(false);
+  const [bridgeExecuteLoading, setBridgeExecuteLoading] = useState(false);
+  const [bridgeError, setBridgeError] = useState<string | null>(null);
   const [walletComposerVisible, setWalletComposerVisible] = useState(false);
   const [biometricAvailable, setBiometricAvailable] = useState(false);
   const [biometricLoading, setBiometricLoading] = useState(false);
+  const [reputation, setReputation] = useState<MobileReputationResponse>({
+    spaces: [],
+    totalPoints: '0',
+    totalEffectivePoints: '0',
+    source: 'none',
+    refreshedAt: Date.now()
+  });
+  const [reputationLoading, setReputationLoading] = useState(false);
+  const [reputationError, setReputationError] = useState<string | null>(null);
+  const [reputationSpaceInput, setReputationSpaceInput] = useState('');
+  const [reputationSaving, setReputationSaving] = useState(false);
+  const [governance, setGovernance] = useState<MobileGovernanceResponse>({
+    trackedDaos: [],
+    discoveredDaos: [],
+    memberDaos: 0,
+    proposals: [],
+    source: 'none',
+    network: 'mainnet-beta',
+    refreshedAt: Date.now()
+  });
+  const [governanceLoading, setGovernanceLoading] = useState(false);
+  const [governanceError, setGovernanceError] = useState<string | null>(null);
+  const [governanceDaoInput, setGovernanceDaoInput] = useState('');
+  const [governanceSaving, setGovernanceSaving] = useState(false);
+  const [governanceVotingProposalId, setGovernanceVotingProposalId] = useState<string | null>(null);
+  const [governanceVoteError, setGovernanceVoteError] = useState<string | null>(null);
+  const [governanceVoteResult, setGovernanceVoteResult] = useState<MobileGovernanceVoteResponse | null>(null);
+  const [exportPassword, setExportPassword] = useState('');
+  const [exportLoading, setExportLoading] = useState(false);
+  const [exportReveal, setExportReveal] = useState(false);
+  const [exportedPrivateKey, setExportedPrivateKey] = useState<string | null>(null);
+  const [exportVerifiedWalletId, setExportVerifiedWalletId] = useState<string | null>(null);
 
   const selectedWallet = useMemo(() => getSelectedWallet(walletState), [walletState]);
   const selectedChainMeta = chainMeta(walletState.selectedChain);
@@ -203,7 +326,7 @@ export default function App() {
   const lockBreathScale = useRef(new Animated.Value(1)).current;
   const lockHaloPulse = useRef(new Animated.Value(0.18)).current;
   const chainWallets = useMemo(
-    () => walletState.wallets.filter((wallet) => wallet.chain === walletState.selectedChain),
+    () => dedupeVisibleWallets(walletState.wallets.filter((wallet) => wallet.chain === walletState.selectedChain)),
     [walletState.selectedChain, walletState.wallets]
   );
   const walletsByChain = useMemo(
@@ -211,17 +334,26 @@ export default function App() {
       chains
         .map((chain) => ({
           chain,
-          wallets: walletState.wallets.filter((wallet) => wallet.chain === chain.id)
+          wallets: dedupeVisibleWallets(walletState.wallets.filter((wallet) => wallet.chain === chain.id))
         }))
         .filter((entry) => entry.wallets.length > 0),
     [walletState.wallets]
   );
   const filteredActivity = useMemo(
-    () =>
-      walletState.activities
-        .filter((activity) => activity.chain === walletState.selectedChain)
-        .sort((left, right) => right.timestamp - left.timestamp),
-    [walletState.activities, walletState.selectedChain]
+    () => {
+      const local = walletState.activities.filter((activity) => activity.chain === walletState.selectedChain);
+      const merged = new Map<string, MobileActivity>();
+
+      [...remoteActivity, ...local].forEach((activity) => {
+        const key = activity.signature || activity.id;
+        if (!merged.has(key)) {
+          merged.set(key, activity);
+        }
+      });
+
+      return [...merged.values()].sort((left, right) => right.timestamp - left.timestamp);
+    },
+    [remoteActivity, walletState.activities, walletState.selectedChain]
   );
   const headlineAsset = assets[0];
   const holdingsSummary = assets.length === 0 ? '--' : headlineAsset?.amountLabel ?? '--';
@@ -229,6 +361,94 @@ export default function App() {
     () => assets.find((asset) => asset.id === selectedAssetId) ?? null,
     [assets, selectedAssetId]
   );
+  const totalEffectiveReputationPoints = useMemo(
+    () => formatWholeNumberString(reputation.totalEffectivePoints),
+    [reputation.totalEffectivePoints]
+  );
+  const actionableGovernanceProposalCount = useMemo(
+    () => governance.proposals.filter((proposal) => proposal.canVote).length,
+    [governance.proposals]
+  );
+  const totalGovernanceDaoCount = useMemo(
+    () => new Set([...governance.discoveredDaos, ...walletState.trackedGovernanceDaoIds]).size,
+    [governance.discoveredDaos, walletState.trackedGovernanceDaoIds]
+  );
+  const selectedSendAsset = useMemo(() => {
+    if (sendAssetId) {
+      return assets.find((asset) => asset.id === sendAssetId) ?? null;
+    }
+
+    return assets[0] ?? null;
+  }, [assets, sendAssetId]);
+  const filteredSendAssets = useMemo(() => {
+    const query = sendAssetSearch.trim().toLowerCase();
+    if (!query) {
+      return assets;
+    }
+
+    return assets.filter((asset) => {
+      const haystacks = [
+        asset.name,
+        asset.symbol,
+        asset.address ?? '',
+        asset.description ?? ''
+      ];
+
+      return haystacks.some((value) => value.toLowerCase().includes(query));
+    });
+  }, [assets, sendAssetSearch]);
+  const swappableAssets = useMemo(
+    () => (selectedWallet?.chain === 'solana' ? assets.filter((asset) => asset.chain === 'solana') : []),
+    [assets, selectedWallet?.chain]
+  );
+  const selectedSwapInputAsset = useMemo(() => {
+    if (swapInputAssetId) {
+      return swappableAssets.find((asset) => asset.id === swapInputAssetId) ?? null;
+    }
+
+    return swappableAssets[0] ?? null;
+  }, [swapInputAssetId, swappableAssets]);
+  const swapOutputCandidates = useMemo(
+    () => swappableAssets.filter((asset) => asset.id !== selectedSwapInputAsset?.id),
+    [selectedSwapInputAsset?.id, swappableAssets]
+  );
+  const selectedSwapOutputAsset = useMemo(() => {
+    if (swapOutputAssetId) {
+      return swapOutputCandidates.find((asset) => asset.id === swapOutputAssetId) ?? null;
+    }
+
+    return swapOutputCandidates[0] ?? null;
+  }, [swapOutputCandidates, swapOutputAssetId]);
+  const filteredSwapAssets = useMemo(() => {
+    const query = swapAssetSearch.trim().toLowerCase();
+    if (!query) {
+      return swappableAssets;
+    }
+
+    return swappableAssets.filter((asset) =>
+      [asset.name, asset.symbol, asset.address ?? '', asset.description ?? ''].some((value) => value.toLowerCase().includes(query))
+    );
+  }, [swapAssetSearch, swappableAssets]);
+  const bridgeDestinationChains = useMemo(() => {
+    if (!selectedWallet || selectedWallet.chain === 'sui') {
+      return [] as MobileWalletState['selectedChain'][];
+    }
+
+    return getMobileSupportedBridgeDestinations(
+      selectedWallet.chain as 'solana' | 'ethereum' | 'monad'
+    ) as MobileWalletState['selectedChain'][];
+  }, [selectedWallet?.chain]);
+  const bridgeDestinationWallets = useMemo(
+    () => dedupeVisibleWallets(walletState.wallets.filter((wallet) => wallet.chain === bridgeToChain)),
+    [bridgeToChain, walletState.wallets]
+  );
+  const selectedBridgeDestinationWallet = useMemo(() => {
+    if (bridgeDestinationWalletId) {
+      return bridgeDestinationWallets.find((wallet) => wallet.id === bridgeDestinationWalletId) ?? null;
+    }
+
+    return bridgeDestinationWallets[0] ?? null;
+  }, [bridgeDestinationWalletId, bridgeDestinationWallets]);
 
   useEffect(() => {
     let mounted = true;
@@ -479,19 +699,25 @@ export default function App() {
   useEffect(() => {
     let mounted = true;
 
-    async function refreshAssets() {
+    async function refreshWalletData() {
       if (!unlocked || !selectedWallet) {
         setAssets([]);
+        setRemoteActivity([]);
         return;
       }
 
       setAssetsLoading(true);
+      setActivityLoading(true);
       try {
-        const nextAssets = await loadWalletAssets(selectedWallet);
+        const [nextAssets, nextActivity] = await Promise.all([
+          loadWalletAssets(selectedWallet),
+          loadWalletActivity(selectedWallet).catch(() => [])
+        ]);
         if (!mounted) {
           return;
         }
         setAssets(nextAssets);
+        setRemoteActivity(nextActivity);
         setError(null);
       } catch (unknownError) {
         if (!mounted) {
@@ -501,19 +727,183 @@ export default function App() {
       } finally {
         if (mounted) {
           setAssetsLoading(false);
+          setActivityLoading(false);
         }
       }
     }
 
-    void refreshAssets();
+    void refreshWalletData();
     return () => {
       mounted = false;
     };
   }, [selectedWallet, unlocked]);
 
   useEffect(() => {
+    let mounted = true;
+
+    async function refreshWalletReputation() {
+      if (!unlocked || !selectedWallet || selectedWallet.chain !== 'solana') {
+        if (mounted) {
+          setReputation({
+            spaces: [],
+            totalPoints: '0',
+            totalEffectivePoints: '0',
+            source: 'none',
+            refreshedAt: Date.now()
+          });
+          setReputationError(null);
+          setReputationLoading(false);
+        }
+        return;
+      }
+
+      if (walletState.trackedReputationSpaceIds.length === 0) {
+        if (mounted) {
+          setReputation({
+            spaces: [],
+            totalPoints: '0',
+            totalEffectivePoints: '0',
+            source: 'none',
+            refreshedAt: Date.now()
+          });
+          setReputationError(null);
+          setReputationLoading(false);
+        }
+        return;
+      }
+
+      setReputationLoading(true);
+      try {
+        const nextReputation = await loadWalletReputation(selectedWallet, walletState.trackedReputationSpaceIds);
+        if (!mounted) {
+          return;
+        }
+        setReputation(nextReputation);
+        setReputationError(null);
+      } catch (unknownError) {
+        if (!mounted) {
+          return;
+        }
+        setReputationError(unknownError instanceof Error ? unknownError.message : 'Unable to load reputation.');
+      } finally {
+        if (mounted) {
+          setReputationLoading(false);
+        }
+      }
+    }
+
+    void refreshWalletReputation();
+    return () => {
+      mounted = false;
+    };
+  }, [selectedWallet, unlocked, walletState.trackedReputationSpaceIds]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function refreshWalletGovernance() {
+      if (!unlocked || !selectedWallet || selectedWallet.chain !== 'solana') {
+        if (mounted) {
+          setGovernance({
+            trackedDaos: walletState.trackedGovernanceDaoIds,
+            discoveredDaos: [],
+            memberDaos: 0,
+            proposals: [],
+            source: 'none',
+            network: 'mainnet-beta',
+            refreshedAt: Date.now()
+          });
+          setGovernanceError(null);
+          setGovernanceLoading(false);
+        }
+        return;
+      }
+
+      setGovernanceLoading(true);
+      try {
+        const nextGovernance = await loadWalletGovernance(selectedWallet, walletState.trackedGovernanceDaoIds);
+        if (!mounted) {
+          return;
+        }
+        setGovernance(nextGovernance);
+        setGovernanceError(null);
+      } catch (unknownError) {
+        if (!mounted) {
+          return;
+        }
+        setGovernance({
+          trackedDaos: walletState.trackedGovernanceDaoIds,
+          discoveredDaos: [],
+          memberDaos: 0,
+          proposals: [],
+          source: 'none',
+          network: 'mainnet-beta',
+          refreshedAt: Date.now()
+        });
+        setGovernanceError(unknownError instanceof Error ? unknownError.message : 'Unable to load governance proposals.');
+      } finally {
+        if (mounted) {
+          setGovernanceLoading(false);
+        }
+      }
+    }
+
+    void refreshWalletGovernance();
+    return () => {
+      mounted = false;
+    };
+  }, [selectedWallet, unlocked, walletState.trackedGovernanceDaoIds]);
+
+  useEffect(() => {
     setSelectedAssetId(null);
   }, [selectedWallet?.id, walletState.selectedChain]);
+
+  useEffect(() => {
+    setSendRecipient('');
+    setSendAmount('');
+    setSendAssetId(null);
+    setSendScreenVisible(false);
+    setSendAssetPickerVisible(false);
+    setSendAssetSearch('');
+  }, [selectedWallet?.id, walletState.selectedChain]);
+
+  useEffect(() => {
+    setSwapAmount('');
+    setSwapQuote(null);
+    setSwapSelectedRouteId(null);
+    setSwapInputAssetId(null);
+    setSwapOutputAssetId(null);
+    setSwapAssetSearch('');
+    setSwapInputPickerVisible(false);
+    setSwapOutputPickerVisible(false);
+    setSwapScreenVisible(false);
+    setSwapError(null);
+  }, [selectedWallet?.id, walletState.selectedChain]);
+
+  useEffect(() => {
+    const nextToChain = bridgeDestinationChains[0] ?? 'ethereum';
+    setBridgeAmount('');
+    setBridgeToChain(nextToChain);
+    setBridgeDestinationWalletId(null);
+    setBridgeQuote(null);
+    setBridgeSelectedRouteId(null);
+    setBridgeScreenVisible(false);
+    setBridgeError(null);
+  }, [bridgeDestinationChains, selectedWallet?.id, walletState.selectedChain]);
+
+  useEffect(() => {
+    if (!bridgeDestinationWallets.some((wallet) => wallet.id === bridgeDestinationWalletId)) {
+      setBridgeDestinationWalletId(bridgeDestinationWallets[0]?.id ?? null);
+    }
+  }, [bridgeDestinationWalletId, bridgeDestinationWallets]);
+
+  useEffect(() => {
+    setExportPassword('');
+    setExportLoading(false);
+    setExportReveal(false);
+    setExportedPrivateKey(null);
+    setExportVerifiedWalletId(null);
+  }, [selectedWallet?.id]);
 
   async function saveState(nextState: MobileWalletState) {
     setWalletState(nextState);
@@ -672,7 +1062,9 @@ export default function App() {
     };
     await saveState(nextState);
     setWalletListExpanded(false);
-    setShowSendComposer(false);
+    setSendScreenVisible(false);
+    setSwapScreenVisible(false);
+    setBridgeScreenVisible(false);
     setMainTab('home');
   }
 
@@ -687,6 +1079,9 @@ export default function App() {
     };
     await saveState(nextState);
     setWalletListExpanded(false);
+    setSendScreenVisible(false);
+    setSwapScreenVisible(false);
+    setBridgeScreenVisible(false);
   }
 
   async function handleRefreshAssets() {
@@ -695,19 +1090,65 @@ export default function App() {
     }
 
     setAssetsLoading(true);
+    setActivityLoading(true);
+    setGovernanceLoading(selectedWallet.chain === 'solana');
     try {
-      const nextAssets = await loadWalletAssets(selectedWallet);
+      const [nextAssets, nextActivity, nextReputation, nextGovernance] = await Promise.all([
+        loadWalletAssets(selectedWallet),
+        loadWalletActivity(selectedWallet).catch(() => []),
+        selectedWallet.chain === 'solana'
+          ? loadWalletReputation(selectedWallet, walletState.trackedReputationSpaceIds).catch(() => ({
+              spaces: [],
+              totalPoints: '0',
+              totalEffectivePoints: '0',
+              source: 'none' as const,
+              refreshedAt: Date.now()
+            }))
+          : Promise.resolve({
+              spaces: [],
+              totalPoints: '0',
+              totalEffectivePoints: '0',
+              source: 'none' as const,
+              refreshedAt: Date.now()
+            }),
+        selectedWallet.chain === 'solana'
+          ? loadWalletGovernance(selectedWallet, walletState.trackedGovernanceDaoIds).catch(() => ({
+              trackedDaos: walletState.trackedGovernanceDaoIds,
+              discoveredDaos: [],
+              memberDaos: 0,
+              proposals: [],
+              source: 'none' as const,
+              network: 'mainnet-beta' as const,
+              refreshedAt: Date.now()
+            }))
+          : Promise.resolve({
+              trackedDaos: walletState.trackedGovernanceDaoIds,
+              discoveredDaos: [],
+              memberDaos: 0,
+              proposals: [],
+              source: 'none' as const,
+              network: 'mainnet-beta' as const,
+              refreshedAt: Date.now()
+            })
+      ]);
       setAssets(nextAssets);
+      setRemoteActivity(nextActivity);
+      setReputation(nextReputation);
+      setGovernance(nextGovernance);
+      setReputationError(null);
+      setGovernanceError(null);
       setError(null);
     } catch (unknownError) {
       setError(unknownError instanceof Error ? unknownError.message : 'Unable to refresh holdings.');
     } finally {
       setAssetsLoading(false);
+      setActivityLoading(false);
+      setGovernanceLoading(false);
     }
   }
 
   async function handleSend() {
-    if (!selectedWallet) {
+    if (!selectedWallet || !selectedSendAsset) {
       return;
     }
     if (!sendRecipient.trim() || !sendAmount.trim()) {
@@ -717,16 +1158,18 @@ export default function App() {
 
     setSendLoading(true);
     try {
-      const signature = await sendNativeAsset({
+      const signature = await sendWalletAsset({
         wallet: selectedWallet,
+        asset: selectedSendAsset,
         recipient: sendRecipient.trim(),
         amount: sendAmount.trim()
       });
 
       const activity = createSendActivity({
         wallet: selectedWallet,
+        asset: selectedSendAsset,
         recipient: sendRecipient.trim(),
-        amountLabel: `${sendAmount.trim()} ${selectedChainMeta.short}`,
+        amountLabel: `${sendAmount.trim()} ${selectedSendAsset.symbol}`,
         signature
       });
       const nextState = {
@@ -737,7 +1180,8 @@ export default function App() {
       await saveState(nextState);
       setSendRecipient('');
       setSendAmount('');
-      setShowSendComposer(false);
+      setSendAssetId(null);
+      setSendScreenVisible(false);
       setError(null);
       Alert.alert('Sent', `Transaction submitted.\n\n${signature}`);
       const nextAssets = await loadWalletAssets(selectedWallet);
@@ -747,6 +1191,172 @@ export default function App() {
       setError(unknownError instanceof Error ? unknownError.message : 'Unable to send asset.');
     } finally {
       setSendLoading(false);
+    }
+  }
+
+  async function handleGetSwapQuote() {
+    if (!selectedWallet || !selectedSwapInputAsset || !selectedSwapOutputAsset) {
+      setSwapError('Choose both swap assets first.');
+      return;
+    }
+    if (!swapAmount.trim()) {
+      setSwapError('Enter an amount to swap.');
+      return;
+    }
+
+    setSwapQuoteLoading(true);
+    setSwapError(null);
+    try {
+      const nextQuote = await getWalletSwapQuote({
+        wallet: selectedWallet,
+        inputAsset: selectedSwapInputAsset,
+        outputAsset: selectedSwapOutputAsset,
+        amount: swapAmount.trim(),
+        slippageBps: 50
+      });
+      setSwapQuote(nextQuote);
+      setSwapSelectedRouteId(nextQuote.selectedRouteId);
+    } catch (unknownError) {
+      setSwapQuote(null);
+      setSwapSelectedRouteId(null);
+      setSwapError(unknownError instanceof Error ? unknownError.message : 'Unable to fetch a swap quote.');
+    } finally {
+      setSwapQuoteLoading(false);
+    }
+  }
+
+  async function handleExecuteSwap() {
+    if (!selectedWallet || !selectedSwapInputAsset || !selectedSwapOutputAsset || !swapQuote) {
+      return;
+    }
+
+    const activeRoute = swapQuote.routes.find((route) => route.id === swapSelectedRouteId) ?? swapQuote.routes[0];
+    if (!activeRoute) {
+      setSwapError('Choose a route before swapping.');
+      return;
+    }
+
+    setSwapExecuteLoading(true);
+    setSwapError(null);
+    try {
+      const result = await executeWalletSwap({
+        wallet: selectedWallet,
+        quoteResponse: activeRoute.quoteResponse
+      });
+      const activity = createSwapActivity({
+        wallet: selectedWallet,
+        inputAsset: selectedSwapInputAsset,
+        outputAsset: selectedSwapOutputAsset,
+        inputAmountLabel: `${result.inputAmountUi} ${selectedSwapInputAsset.symbol}`,
+        outputAmountLabel: `${result.outputAmountUi} ${selectedSwapOutputAsset.symbol}`,
+        signature: result.signature
+      });
+      const nextState = {
+        ...walletState,
+        activities: [activity, ...walletState.activities].slice(0, 100)
+      };
+
+      await saveState(nextState);
+      setSwapAmount('');
+      setSwapQuote(null);
+      setSwapSelectedRouteId(null);
+      setSwapScreenVisible(false);
+      Alert.alert('Swap submitted', `${result.inputAmountUi} ${selectedSwapInputAsset.symbol} -> ${result.outputAmountUi} ${selectedSwapOutputAsset.symbol}`);
+      const [nextAssets, nextActivity] = await Promise.all([
+        loadWalletAssets(selectedWallet),
+        loadWalletActivity(selectedWallet).catch(() => [])
+      ]);
+      setAssets(nextAssets);
+      setRemoteActivity(nextActivity);
+      setMainTab('activity');
+    } catch (unknownError) {
+      setSwapError(unknownError instanceof Error ? unknownError.message : 'Unable to execute the swap.');
+    } finally {
+      setSwapExecuteLoading(false);
+    }
+  }
+
+  async function handleGetBridgeQuote() {
+    if (!selectedWallet || !selectedBridgeDestinationWallet) {
+      setBridgeError('Choose a destination wallet first.');
+      return;
+    }
+    if (!bridgeAmount.trim()) {
+      setBridgeError('Enter an amount to bridge.');
+      return;
+    }
+
+    setBridgeQuoteLoading(true);
+    setBridgeError(null);
+    try {
+      const nextQuote = await getWalletBridgeQuote({
+        state: walletState,
+        wallet: selectedWallet,
+        amount: bridgeAmount.trim(),
+        toChain: bridgeToChain,
+        destinationWalletId: selectedBridgeDestinationWallet.id
+      });
+      setBridgeQuote(nextQuote);
+      setBridgeSelectedRouteId(nextQuote.selectedRouteId);
+    } catch (unknownError) {
+      setBridgeQuote(null);
+      setBridgeSelectedRouteId(null);
+      setBridgeError(unknownError instanceof Error ? unknownError.message : 'Unable to fetch a bridge quote.');
+    } finally {
+      setBridgeQuoteLoading(false);
+    }
+  }
+
+  async function handleExecuteBridge() {
+    if (!selectedWallet || !selectedBridgeDestinationWallet || !bridgeQuote) {
+      return;
+    }
+
+    const activeRoute = bridgeQuote.routes.find((route) => route.id === bridgeSelectedRouteId) ?? bridgeQuote.routes[0];
+    if (!activeRoute) {
+      setBridgeError('Choose a route before bridging.');
+      return;
+    }
+
+    setBridgeExecuteLoading(true);
+    setBridgeError(null);
+    try {
+      const result = await executeWalletBridge({
+        state: walletState,
+        wallet: selectedWallet,
+        quoteResponse: activeRoute.quoteResponse,
+        toChain: bridgeToChain,
+        destinationWalletId: selectedBridgeDestinationWallet.id
+      });
+      const activity = createBridgeActivity({
+        wallet: selectedWallet,
+        destinationWallet: selectedBridgeDestinationWallet,
+        fromAmountLabel: `${result.fromAmountUi} ${result.fromSymbol}`,
+        toAmountLabel: `${result.toAmountUi} ${result.toSymbol}`,
+        signature: result.signature
+      });
+      const nextState = {
+        ...walletState,
+        activities: [activity, ...walletState.activities].slice(0, 100)
+      };
+
+      await saveState(nextState);
+      setBridgeAmount('');
+      setBridgeQuote(null);
+      setBridgeSelectedRouteId(null);
+      setBridgeScreenVisible(false);
+      Alert.alert('Bridge submitted', `${result.fromAmountUi} ${result.fromSymbol} -> ${result.toAmountUi} ${result.toSymbol}`);
+      const [nextAssets, nextActivity] = await Promise.all([
+        loadWalletAssets(selectedWallet),
+        loadWalletActivity(selectedWallet).catch(() => [])
+      ]);
+      setAssets(nextAssets);
+      setRemoteActivity(nextActivity);
+      setMainTab('activity');
+    } catch (unknownError) {
+      setBridgeError(unknownError instanceof Error ? unknownError.message : 'Unable to execute the bridge.');
+    } finally {
+      setBridgeExecuteLoading(false);
     }
   }
 
@@ -788,6 +1398,233 @@ export default function App() {
     });
   }
 
+  async function handleAddReputationSpace() {
+    const daoId = reputationSpaceInput.trim();
+    if (!daoId) {
+      return;
+    }
+
+    setReputationSaving(true);
+    try {
+      const nextState = await updateTrackedReputationSpaces({
+        state: walletState,
+        daoIds: [...walletState.trackedReputationSpaceIds, daoId]
+      });
+      setWalletState(nextState);
+      setReputationSpaceInput('');
+      setReputationError(null);
+    } catch (unknownError) {
+      setReputationError(unknownError instanceof Error ? unknownError.message : 'Unable to add reputation space.');
+    } finally {
+      setReputationSaving(false);
+    }
+  }
+
+  async function handleRemoveReputationSpace(daoId: string) {
+    setReputationSaving(true);
+    try {
+      const nextState = await updateTrackedReputationSpaces({
+        state: walletState,
+        daoIds: walletState.trackedReputationSpaceIds.filter((entry) => entry !== daoId)
+      });
+      setWalletState(nextState);
+      setReputationError(null);
+    } catch (unknownError) {
+      setReputationError(unknownError instanceof Error ? unknownError.message : 'Unable to remove reputation space.');
+    } finally {
+      setReputationSaving(false);
+    }
+  }
+
+  async function handleAddGovernanceDao() {
+    const daoId = governanceDaoInput.trim();
+    if (!daoId) {
+      return;
+    }
+    if (walletState.trackedGovernanceDaoIds.includes(daoId)) {
+      setGovernanceError('That governance DAO is already tracked.');
+      return;
+    }
+    if (governance.discoveredDaos.includes(daoId)) {
+      setGovernanceError('That governance DAO is already auto-detected for this wallet.');
+      return;
+    }
+
+    setGovernanceSaving(true);
+    try {
+      const nextState = await updateTrackedGovernanceDaos({
+        state: walletState,
+        daoIds: [...walletState.trackedGovernanceDaoIds, daoId]
+      });
+      setWalletState(nextState);
+      setGovernanceDaoInput('');
+      setGovernanceError(null);
+    } catch (unknownError) {
+      setGovernanceError(unknownError instanceof Error ? unknownError.message : 'Unable to add governance DAO.');
+    } finally {
+      setGovernanceSaving(false);
+    }
+  }
+
+  async function handleRemoveGovernanceDao(daoId: string) {
+    setGovernanceSaving(true);
+    try {
+      const nextState = await updateTrackedGovernanceDaos({
+        state: walletState,
+        daoIds: walletState.trackedGovernanceDaoIds.filter((entry) => entry !== daoId)
+      });
+      setWalletState(nextState);
+      setGovernanceError(null);
+    } catch (unknownError) {
+      setGovernanceError(unknownError instanceof Error ? unknownError.message : 'Unable to remove governance DAO.');
+    } finally {
+      setGovernanceSaving(false);
+    }
+  }
+
+  async function handleGovernanceVote(input: {
+    daoId: string;
+    governanceId: string;
+    proposalId: string;
+    proposalOwnerRecordId: string;
+    tokenOwnerRecordId: string | null;
+    governingTokenMint: string;
+    voteKind: 'approve' | 'deny' | 'abstain';
+    choiceRank?: number;
+  }) {
+    if (!selectedWallet || !input.tokenOwnerRecordId) {
+      setGovernanceVoteError('This wallet does not have a voting record for that proposal mint.');
+      return;
+    }
+
+    try {
+      setGovernanceVotingProposalId(input.proposalId);
+      setGovernanceVoteError(null);
+      setGovernanceVoteResult(null);
+      const result = await castWalletGovernanceVote({
+        state: walletState,
+        wallet: selectedWallet,
+        daoId: input.daoId,
+        governanceId: input.governanceId,
+        proposalId: input.proposalId,
+        proposalOwnerRecordId: input.proposalOwnerRecordId,
+        tokenOwnerRecordId: input.tokenOwnerRecordId,
+        governingTokenMint: input.governingTokenMint,
+        voteKind: input.voteKind,
+        choiceRank: input.choiceRank
+      });
+      setGovernanceVoteResult(result);
+      const nextGovernance = await loadWalletGovernance(selectedWallet, walletState.trackedGovernanceDaoIds);
+      setGovernance(nextGovernance);
+      Alert.alert('Vote submitted', result.signature);
+    } catch (unknownError) {
+      setGovernanceVoteError(unknownError instanceof Error ? unknownError.message : 'Unable to submit governance vote.');
+    } finally {
+      setGovernanceVotingProposalId(null);
+    }
+  }
+
+  async function handleDeleteWallet(wallet: MobileWallet) {
+    Alert.alert('Delete wallet', `Remove ${wallet.name} from Grape on this device?`, [
+      {
+        text: 'Cancel',
+        style: 'cancel'
+      },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () => {
+          void (async () => {
+            try {
+              const nextState = await removeMobileWallet({
+                state: walletState,
+                walletId: wallet.id
+              });
+              setWalletState(nextState);
+              setError(null);
+              setSelectedAssetId(null);
+              setSendAssetId(null);
+              setSendScreenVisible(false);
+              if (nextState.setup !== 'ready' || nextState.wallets.length === 0) {
+                setUnlocked(false);
+                setScreen('setup');
+                setMainTab('home');
+              }
+            } catch (unknownError) {
+              setError(unknownError instanceof Error ? unknownError.message : 'Unable to delete wallet.');
+            }
+          })();
+        }
+      }
+    ]);
+  }
+
+  async function handleVerifyExportPassword() {
+    if (!selectedWallet) {
+      return;
+    }
+
+    setExportLoading(true);
+    setError(null);
+    try {
+      const exported = await exportMobileWalletPrivateKey({
+        state: walletState,
+        wallet: selectedWallet,
+        password: exportPassword
+      });
+      setExportVerifiedWalletId(selectedWallet.id);
+      setExportedPrivateKey(exported.privateKey);
+      setExportReveal(true);
+      setExportPassword('');
+    } catch (unknownError) {
+      setExportVerifiedWalletId(null);
+      setExportedPrivateKey(null);
+      setExportReveal(false);
+      setError(unknownError instanceof Error ? unknownError.message : 'Unable to verify password for export.');
+    } finally {
+      setExportLoading(false);
+    }
+  }
+
+  async function handleBiometricVerifyExport() {
+    if (!selectedWallet || !walletState.biometricEnabled || !biometricAvailable || exportLoading || biometricLoading) {
+      return;
+    }
+
+    setError(null);
+    setBiometricLoading(true);
+
+    try {
+      const result = await LocalAuthentication.authenticateAsync({
+        promptMessage: 'Verify to reveal export key',
+        fallbackLabel: 'Use password',
+        disableDeviceFallback: false
+      });
+
+      if (!result.success) {
+        setError('Biometric verification was cancelled.');
+        return;
+      }
+
+      const exported = await exportMobileWalletPrivateKey({
+        state: walletState,
+        wallet: selectedWallet,
+        allowUnlockedSession: unlocked
+      });
+      setExportVerifiedWalletId(selectedWallet.id);
+      setExportedPrivateKey(exported.privateKey);
+      setExportReveal(true);
+      setExportPassword('');
+    } catch (unknownError) {
+      setExportVerifiedWalletId(null);
+      setExportedPrivateKey(null);
+      setExportReveal(false);
+      setError(unknownError instanceof Error ? unknownError.message : 'Unable to verify export with biometrics.');
+    } finally {
+      setBiometricLoading(false);
+    }
+  }
+
   async function handleBiometricUnlock() {
     if (!walletState.biometricEnabled || !biometricAvailable || submitLoading || biometricLoading) {
       return;
@@ -821,8 +1658,48 @@ export default function App() {
   function handleLock() {
     setUnlocked(false);
     setMainTab('home');
-    setShowSendComposer(false);
+    setSendScreenVisible(false);
     setScreen('locked');
+  }
+
+  function openSendScreen(assetId?: string | null) {
+    setSwapScreenVisible(false);
+    setBridgeScreenVisible(false);
+    setSendAssetId(assetId ?? null);
+    setSelectedAssetId(null);
+    setSendRecipient('');
+    setSendAmount('');
+    setSendAssetSearch('');
+    setSendAssetPickerVisible(false);
+    setError(null);
+    setSendScreenVisible(true);
+  }
+
+  function openSwapScreen(inputAssetId?: string | null, outputAssetId?: string | null) {
+    setSendScreenVisible(false);
+    setBridgeScreenVisible(false);
+    setSelectedAssetId(null);
+    setSwapInputAssetId(inputAssetId ?? null);
+    setSwapOutputAssetId(outputAssetId ?? null);
+    setSwapAmount('');
+    setSwapQuote(null);
+    setSwapSelectedRouteId(null);
+    setSwapInputPickerVisible(false);
+    setSwapOutputPickerVisible(false);
+    setSwapAssetSearch('');
+    setSwapError(null);
+    setSwapScreenVisible(true);
+  }
+
+  function openBridgeScreen() {
+    setSendScreenVisible(false);
+    setSwapScreenVisible(false);
+    setSelectedAssetId(null);
+    setBridgeAmount('');
+    setBridgeQuote(null);
+    setBridgeSelectedRouteId(null);
+    setBridgeError(null);
+    setBridgeScreenVisible(true);
   }
 
   function renderBrandWordmark() {
@@ -856,6 +1733,24 @@ export default function App() {
         style={{ width: size, height: size, resizeMode: 'contain' }}
       />
     );
+  }
+
+  function renderAssetGlyph(asset: MobileAsset, size: number, textStyle: object, imageStyle: object) {
+    if (asset.logoUri) {
+      if (isSvgUri(asset.logoUri)) {
+        return <SvgUri uri={asset.logoUri} width={size} height={size} />;
+      }
+
+      return (
+        <Image
+          source={{ uri: asset.logoUri }}
+          style={imageStyle}
+          resizeMode="cover"
+        />
+      );
+    }
+
+    return <Text style={textStyle}>{asset.symbol.slice(0, 1)}</Text>;
   }
 
   function renderMnemonicPills(mnemonic: string) {
@@ -898,6 +1793,46 @@ export default function App() {
             ]}
           />
         </View>
+      </View>
+    );
+  }
+
+  function renderSolanaCommunityShortcuts() {
+    if (selectedWallet?.chain !== 'solana') {
+      return null;
+    }
+
+    const reputationValue = reputationLoading
+      ? 'Loading...'
+      : reputation.spaces.length > 0
+        ? `${totalEffectiveReputationPoints} pts`
+        : walletState.trackedReputationSpaceIds.length > 0
+          ? 'No points yet'
+          : 'Add spaces';
+    const reputationMeta = `${reputation.spaces.length} space${reputation.spaces.length === 1 ? '' : 's'}`;
+    const governanceValue = governanceLoading
+      ? 'Loading...'
+      : actionableGovernanceProposalCount > 0
+        ? `${actionableGovernanceProposalCount} ready`
+        : governance.proposals.length > 0
+          ? `${governance.proposals.length} active`
+          : totalGovernanceDaoCount > 0
+            ? 'Tracked'
+            : 'Join DAOs';
+    const governanceMeta = `${totalGovernanceDaoCount} DAO${totalGovernanceDaoCount === 1 ? '' : 's'}`;
+
+    return (
+      <View style={styles.communityShortcutRow}>
+        <Pressable style={styles.communityShortcutCard} onPress={() => setMainTab('settings')}>
+          <Text style={styles.communityShortcutLabel}>OG Reputation</Text>
+          <Text style={styles.communityShortcutValue}>{reputationValue}</Text>
+          <Text style={styles.communityShortcutMeta}>{reputationMeta}</Text>
+        </Pressable>
+        <Pressable style={styles.communityShortcutCard} onPress={() => setMainTab('governance')}>
+          <Text style={styles.communityShortcutLabel}>Governance</Text>
+          <Text style={styles.communityShortcutValue}>{governanceValue}</Text>
+          <Text style={styles.communityShortcutMeta}>{governanceMeta}</Text>
+        </Pressable>
       </View>
     );
   }
@@ -1156,17 +2091,17 @@ export default function App() {
               contentStyle={styles.paperInputContent}
               outlineStyle={styles.paperOutline}
               textColor={activeTheme.text}
+              right={
+                walletState.biometricEnabled && biometricAvailable ? (
+                  <PaperTextInput.Icon
+                    icon="fingerprint"
+                    onPress={() => void handleBiometricUnlock()}
+                    disabled={biometricLoading || submitLoading}
+                    forceTextInputFocus={false}
+                  />
+                ) : undefined
+              }
             />
-            {walletState.biometricEnabled && biometricAvailable ? (
-              <PaperButton
-                mode="outlined"
-                style={styles.paperSecondaryButton}
-                disabled={biometricLoading || submitLoading}
-                onPress={() => void handleBiometricUnlock()}
-              >
-                {biometricLoading ? 'Checking device…' : 'Use Face ID / Touch ID'}
-              </PaperButton>
-            ) : null}
             {error ? <Text style={styles.errorText}>{error}</Text> : null}
             <PaperButton
               mode="contained"
@@ -1202,11 +2137,7 @@ export default function App() {
 
             <View style={styles.assetDetailHeader}>
               <View style={styles.assetDetailGlyph}>
-                {selectedAsset.logoUri ? (
-                  <Image source={{ uri: selectedAsset.logoUri }} style={styles.assetDetailGlyphImage} resizeMode="cover" />
-                ) : (
-                  <Text style={styles.assetDetailGlyphText}>{selectedAsset.symbol.slice(0, 1)}</Text>
-                )}
+                {renderAssetGlyph(selectedAsset, 56, styles.assetDetailGlyphText, styles.assetDetailGlyphImage)}
               </View>
               <View style={styles.assetDetailCopy}>
                 <Text style={styles.assetDetailName}>{selectedAsset.name}</Text>
@@ -1272,20 +2203,14 @@ export default function App() {
             <Pressable
               style={styles.primaryButton}
               onPress={() => {
-                setShowSendComposer(true);
-                setSelectedAssetId(null);
+                openSendScreen(selectedAsset.id);
               }}
             >
               <Text style={styles.primaryButtonText}>Send asset</Text>
             </Pressable>
           </View>
 
-          <View style={styles.sectionCard}>
-            <Text style={styles.sectionTitle}>Grape Tools</Text>
-            <Text style={styles.sectionHint}>
-              The wallet will connect directly to Grape identity, reputation, access, claims, and governance tooling so users can move from holding assets to participating in communities and DAOs.
-            </Text>
-          </View>
+          {renderSolanaCommunityShortcuts()}
         </View>
       );
     }
@@ -1318,7 +2243,7 @@ export default function App() {
           </View>
 
           <View style={styles.quickActionsRow}>
-            <Pressable style={styles.quickActionButton} onPress={() => setShowSendComposer((value) => !value)}>
+            <Pressable style={styles.quickActionButton} onPress={() => openSendScreen()}>
               <MaterialCommunityIcons name="send-outline" size={24} color={activeTheme.text} />
               <Text style={styles.quickActionLabel}>Send</Text>
             </Pressable>
@@ -1326,16 +2251,28 @@ export default function App() {
               <MaterialCommunityIcons name="qrcode" size={24} color={activeTheme.text} />
               <Text style={styles.quickActionLabel}>Receive</Text>
             </Pressable>
-            <Pressable style={styles.quickActionButtonDisabled}>
-              <MaterialCommunityIcons name="swap-horizontal" size={24} color={activeTheme.muted} />
-              <Text style={styles.quickActionLabelMuted}>Swap</Text>
+            <Pressable
+              style={selectedWallet?.chain === 'solana' ? styles.quickActionButton : styles.quickActionButtonDisabled}
+              onPress={selectedWallet?.chain === 'solana' ? () => openSwapScreen() : undefined}
+            >
+              <MaterialCommunityIcons name="swap-horizontal" size={24} color={selectedWallet?.chain === 'solana' ? activeTheme.text : activeTheme.muted} />
+              <Text style={selectedWallet?.chain === 'solana' ? styles.quickActionLabel : styles.quickActionLabelMuted}>Swap</Text>
             </Pressable>
-            <Pressable style={styles.quickActionButtonDisabled}>
-              <MaterialCommunityIcons name="transit-connection-variant" size={24} color={activeTheme.muted} />
-              <Text style={styles.quickActionLabelMuted}>Bridge</Text>
+            <Pressable
+              style={selectedWallet && bridgeDestinationChains.length > 0 ? styles.quickActionButton : styles.quickActionButtonDisabled}
+              onPress={selectedWallet && bridgeDestinationChains.length > 0 ? () => openBridgeScreen() : undefined}
+            >
+              <MaterialCommunityIcons
+                name="transit-connection-variant"
+                size={24}
+                color={selectedWallet && bridgeDestinationChains.length > 0 ? activeTheme.text : activeTheme.muted}
+              />
+              <Text style={selectedWallet && bridgeDestinationChains.length > 0 ? styles.quickActionLabel : styles.quickActionLabelMuted}>Bridge</Text>
             </Pressable>
           </View>
         </View>
+
+        {renderSolanaCommunityShortcuts()}
 
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
@@ -1387,45 +2324,6 @@ export default function App() {
           </ScrollView>
         </View>
 
-        {showSendComposer ? (
-          <View style={[styles.sectionCard, styles.formCard]}>
-            <Text style={styles.sectionTitle}>Send {selectedChainMeta.short}</Text>
-            <Text style={styles.sectionHint}>Native send is live. Token send comes next.</Text>
-            <PaperTextInput
-              value={sendRecipient}
-              onChangeText={setSendRecipient}
-              placeholder="Recipient"
-              mode="outlined"
-              style={styles.paperInput}
-              contentStyle={styles.paperInputContent}
-              outlineStyle={styles.paperOutline}
-              textColor={activeTheme.text}
-            />
-            <PaperTextInput
-              value={sendAmount}
-              onChangeText={setSendAmount}
-              placeholder={`Amount in ${selectedChainMeta.short}`}
-              keyboardType="decimal-pad"
-              mode="outlined"
-              style={styles.paperInput}
-              contentStyle={styles.paperInputContent}
-              outlineStyle={styles.paperOutline}
-              textColor={activeTheme.text}
-            />
-            {error ? <Text style={styles.errorText}>{error}</Text> : null}
-            <PaperButton
-              mode="contained"
-              style={styles.paperPrimaryButton}
-              buttonColor={activeTheme.primaryButton}
-              textColor={activeTheme.primaryButtonText}
-              disabled={sendLoading || !selectedWallet}
-              onPress={() => void handleSend()}
-            >
-              {sendLoading ? 'Sending...' : `Send ${selectedChainMeta.short}`}
-            </PaperButton>
-          </View>
-        ) : null}
-
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Holdings</Text>
@@ -1448,15 +2346,7 @@ export default function App() {
                   return (
                     <Pressable key={asset.id} style={styles.assetRow} onPress={() => setSelectedAssetId(asset.id)}>
                       <View style={styles.assetGlyph}>
-                        {asset.logoUri ? (
-                          <Image
-                            source={{ uri: asset.logoUri }}
-                            style={styles.assetGlyphImage}
-                            resizeMode="cover"
-                          />
-                        ) : (
-                          <Text style={styles.assetGlyphText}>{asset.symbol.slice(0, 1)}</Text>
-                        )}
+                        {renderAssetGlyph(asset, 52, styles.assetGlyphText, styles.assetGlyphImage)}
                       </View>
                       <View style={styles.assetCopy}>
                         <Text style={styles.assetName}>{asset.name}</Text>
@@ -1477,12 +2367,6 @@ export default function App() {
           </View>
         </View>
 
-        <View style={styles.sectionCard}>
-          <Text style={styles.sectionTitle}>Grape Tools</Text>
-          <Text style={styles.sectionHint}>
-            The wallet will connect directly to Grape identity, reputation, access, claims, and governance tooling so users can move from holding assets to participating in communities and DAOs.
-          </Text>
-        </View>
       </>
     );
   }
@@ -1519,11 +2403,556 @@ export default function App() {
     );
   }
 
+  function renderGovernanceTab() {
+    if (selectedWallet?.chain !== 'solana') {
+      return (
+        <View style={styles.sectionCard}>
+          <Text style={styles.sectionTitle}>Governance</Text>
+          <Text style={styles.sectionHint}>Governance proposal tracking and voting are currently available for Solana wallets only.</Text>
+        </View>
+      );
+    }
+
+    return (
+      <View style={styles.stack}>
+        <View style={styles.sectionCard}>
+          <Text style={styles.sectionTitle}>Governance</Text>
+          <Text style={styles.sectionHint}>
+            Follow active proposals for the DAOs this wallet participates in and cast votes directly from mobile.
+          </Text>
+          <View style={styles.reputationSummaryGrid}>
+            <View style={styles.reputationSummaryCard}>
+              <Text style={styles.reputationSummaryLabel}>Active proposals</Text>
+              <Text style={styles.reputationSummaryValue}>{governance.proposals.length}</Text>
+            </View>
+            <View style={styles.reputationSummaryCard}>
+              <Text style={styles.reputationSummaryLabel}>Participating DAOs</Text>
+              <Text style={styles.reputationSummaryValue}>{totalGovernanceDaoCount}</Text>
+            </View>
+          </View>
+        </View>
+
+        {governanceVoteResult ? (
+          <View style={styles.successBox}>
+            <Text style={styles.successBoxText}>Vote submitted. Signature {shortenAddress(governanceVoteResult.signature)}</Text>
+          </View>
+        ) : null}
+        {governanceVoteError ? <Text style={styles.errorText}>{governanceVoteError}</Text> : null}
+        {governanceLoading ? (
+          <View style={styles.sectionCard}>
+            <View style={styles.loadingRow}>
+              <ActivityIndicator color={activeTheme.grape} />
+              <Text style={styles.sectionHint}>Loading governance proposals...</Text>
+            </View>
+          </View>
+        ) : null}
+        {!governanceLoading && governanceError ? (
+          <View style={styles.sectionCard}>
+            <Text style={styles.errorText}>{governanceError}</Text>
+          </View>
+        ) : null}
+        {!governanceLoading && !governanceError && governance.proposals.length === 0 ? (
+          <View style={styles.sectionCard}>
+            <Text style={styles.sectionTitle}>No active governance proposals</Text>
+            <Text style={styles.sectionHint}>
+              {totalGovernanceDaoCount > 0
+                ? 'This wallet is part of tracked or discovered DAOs, but none currently have active proposals.'
+                : 'No governance DAOs have been detected for this wallet yet.'}
+            </Text>
+          </View>
+        ) : null}
+
+        {!governanceLoading && !governanceError
+          ? governance.proposals.map((proposal) => (
+              <View key={proposal.proposalId} style={styles.sectionCard}>
+                <View style={styles.governanceProposalHeader}>
+                  <View style={styles.governanceProposalCopy}>
+                    <Text style={styles.governanceProposalTitle}>{proposal.proposalName}</Text>
+                    <Text style={styles.sectionHint}>
+                      {proposal.realmName} • {proposal.state}
+                      {proposal.votingEndsAt ? ` • ends ${new Date(proposal.votingEndsAt * 1000).toLocaleString()}` : ''}
+                    </Text>
+                  </View>
+                  <View style={styles.governanceProposalBadges}>
+                    <View style={[styles.governanceStatusPill, proposal.canVote ? styles.governanceStatusPillSuccess : null]}>
+                      <Text style={[styles.governanceStatusPillText, proposal.canVote ? styles.governanceStatusPillTextSuccess : null]}>
+                        {proposal.canVote ? 'Vote now' : proposal.hasVoted ? 'Voted' : proposal.state}
+                      </Text>
+                    </View>
+                    {proposal.descriptionLink ? (
+                      <Pressable
+                        style={styles.reputationOpenButton}
+                        onPress={() => void Linking.openURL(proposal.descriptionLink ?? '')}
+                      >
+                        <Feather name="external-link" size={16} color={activeTheme.text} />
+                      </Pressable>
+                    ) : null}
+                  </View>
+                </View>
+
+                <View style={styles.governanceMetricsRow}>
+                  <Text style={styles.governanceMetricText}>Yes {formatWholeNumberString(proposal.yesVotes)}</Text>
+                  {BigInt(proposal.noVotes) > BigInt(0) ? (
+                    <Text style={styles.governanceMetricText}>No {formatWholeNumberString(proposal.noVotes)}</Text>
+                  ) : null}
+                  {BigInt(proposal.abstainVotes) > BigInt(0) ? (
+                    <Text style={styles.governanceMetricText}>Abstain {formatWholeNumberString(proposal.abstainVotes)}</Text>
+                  ) : null}
+                  {BigInt(proposal.denyVotes) > BigInt(0) ? (
+                    <Text style={styles.governanceMetricText}>Deny {formatWholeNumberString(proposal.denyVotes)}</Text>
+                  ) : null}
+                </View>
+
+                {proposal.canVote ? (
+                  <View style={styles.governanceVoteActions}>
+                    {proposal.choices.map((choice) => (
+                      <Pressable
+                        key={`${proposal.proposalId}:${choice.rank}`}
+                        style={styles.governanceVoteButton}
+                        disabled={governanceVotingProposalId === proposal.proposalId}
+                        onPress={() =>
+                          void handleGovernanceVote({
+                            daoId: proposal.daoId,
+                            governanceId: proposal.governanceId,
+                            proposalId: proposal.proposalId,
+                            proposalOwnerRecordId: proposal.proposalOwnerRecordId,
+                            tokenOwnerRecordId: proposal.tokenOwnerRecordId,
+                            governingTokenMint: proposal.governingTokenMint,
+                            voteKind: 'approve',
+                            choiceRank: choice.rank
+                          })
+                        }
+                      >
+                        <Text style={styles.governanceVoteButtonText}>
+                          {governanceVotingProposalId === proposal.proposalId ? 'Submitting...' : choice.label}
+                        </Text>
+                      </Pressable>
+                    ))}
+                    {proposal.hasDenyOption ? (
+                      <Pressable
+                        style={styles.governanceVoteButtonSecondary}
+                        disabled={governanceVotingProposalId === proposal.proposalId}
+                        onPress={() =>
+                          void handleGovernanceVote({
+                            daoId: proposal.daoId,
+                            governanceId: proposal.governanceId,
+                            proposalId: proposal.proposalId,
+                            proposalOwnerRecordId: proposal.proposalOwnerRecordId,
+                            tokenOwnerRecordId: proposal.tokenOwnerRecordId,
+                            governingTokenMint: proposal.governingTokenMint,
+                            voteKind: 'deny'
+                          })
+                        }
+                      >
+                        <Text style={styles.governanceVoteButtonSecondaryText}>
+                          {governanceVotingProposalId === proposal.proposalId ? 'Submitting...' : 'Deny'}
+                        </Text>
+                      </Pressable>
+                    ) : null}
+                    <Pressable
+                      style={styles.governanceVoteButtonSecondary}
+                      disabled={governanceVotingProposalId === proposal.proposalId}
+                      onPress={() =>
+                        void handleGovernanceVote({
+                          daoId: proposal.daoId,
+                          governanceId: proposal.governanceId,
+                          proposalId: proposal.proposalId,
+                          proposalOwnerRecordId: proposal.proposalOwnerRecordId,
+                          tokenOwnerRecordId: proposal.tokenOwnerRecordId,
+                          governingTokenMint: proposal.governingTokenMint,
+                          voteKind: 'abstain'
+                        })
+                      }
+                    >
+                      <Text style={styles.governanceVoteButtonSecondaryText}>
+                        {governanceVotingProposalId === proposal.proposalId ? 'Submitting...' : 'Abstain'}
+                      </Text>
+                    </Pressable>
+                  </View>
+                ) : (
+                  <Text style={styles.sectionHint}>
+                    {proposal.hasVoted
+                      ? 'This wallet already voted on the active proposal.'
+                      : 'This wallet is tracking the DAO, but it does not currently have voting power for this proposal.'}
+                  </Text>
+                )}
+              </View>
+            ))
+          : null}
+      </View>
+    );
+  }
+
+  function renderSendTab() {
+    const selectedSendAssetSubtitle = selectedSendAsset
+      ? getAssetSubtitle(selectedSendAsset, selectedChainMeta.label, selectedChainMeta.short)
+      : null;
+
+    return (
+      <View style={styles.stack}>
+        <View style={styles.sectionCard}>
+          <Pressable style={styles.detailBackRow} onPress={() => setSendScreenVisible(false)}>
+            <Feather name="chevron-left" size={18} color={activeTheme.text} />
+            <Text style={styles.detailBackText}>Back to wallet</Text>
+          </Pressable>
+
+          <Text style={styles.sectionTitle}>Send asset</Text>
+          <Text style={styles.sectionHint}>
+            Choose what to send from {selectedWallet?.name ?? 'this wallet'}, then confirm the destination and amount.
+          </Text>
+        </View>
+
+        <View style={[styles.sectionCard, styles.formCard]}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Asset</Text>
+            <Text style={styles.sectionHint}>{assets.length} available</Text>
+          </View>
+          <Pressable style={styles.sendAssetSelectButton} onPress={() => setSendAssetPickerVisible(true)}>
+            {selectedSendAsset ? (
+              <>
+                <View style={styles.sendSelectedAssetGlyph}>
+                  {renderAssetGlyph(selectedSendAsset, 44, styles.assetGlyphText, styles.assetGlyphImage)}
+                </View>
+                <View style={styles.sendSelectedAssetCopy}>
+                  <Text style={styles.sendSelectedAssetName}>{selectedSendAsset.name}</Text>
+                  <Text style={styles.sendSelectedAssetMeta}>
+                    {selectedSendAssetSubtitle ?? selectedSendAsset.symbol}
+                  </Text>
+                </View>
+                <View style={styles.assetValueStack}>
+                  <Text style={styles.assetValue}>{maskValue(selectedSendAsset.amountLabel, walletState.privacyMode)}</Text>
+                  <Text style={styles.assetValueMeta}>Tap to switch</Text>
+                </View>
+              </>
+            ) : (
+              <>
+                <View style={styles.sendSelectedAssetGlyph}>
+                  <MaterialCommunityIcons name="swap-horizontal-circle-outline" size={26} color={activeTheme.text} />
+                </View>
+                <View style={styles.sendSelectedAssetCopy}>
+                  <Text style={styles.sendSelectedAssetName}>Choose asset</Text>
+                  <Text style={styles.sendSelectedAssetMeta}>Select what you want to send</Text>
+                </View>
+              </>
+            )}
+            <Feather name="chevron-down" size={18} color={activeTheme.muted} style={styles.rowChevronIcon} />
+          </Pressable>
+        </View>
+
+        <View style={[styles.sectionCard, styles.formCard]}>
+          <Text style={styles.sectionTitle}>Transfer details</Text>
+          {selectedSendAsset ? (
+            <View style={styles.sendSelectedAssetCard}>
+              <View style={styles.sendSelectedAssetGlyph}>
+                {renderAssetGlyph(selectedSendAsset, 44, styles.assetGlyphText, styles.assetGlyphImage)}
+              </View>
+              <View style={styles.sendSelectedAssetCopy}>
+                <Text style={styles.sendSelectedAssetName}>{selectedSendAsset.name}</Text>
+                <Text style={styles.sendSelectedAssetMeta}>
+                  {selectedSendAssetSubtitle ?? selectedSendAsset.symbol}
+                </Text>
+              </View>
+              <Text style={styles.sendSelectedAssetBalance}>
+                {maskValue(selectedSendAsset.amountLabel, walletState.privacyMode)}
+              </Text>
+            </View>
+          ) : null}
+          <PaperTextInput
+            value={sendRecipient}
+            onChangeText={setSendRecipient}
+            placeholder="Recipient"
+            autoCapitalize="none"
+            autoCorrect={false}
+            mode="outlined"
+            style={styles.paperInput}
+            contentStyle={styles.paperInputContent}
+            outlineStyle={styles.paperOutline}
+            textColor={activeTheme.text}
+          />
+          <PaperTextInput
+            value={sendAmount}
+            onChangeText={setSendAmount}
+            placeholder={selectedSendAsset ? `Amount in ${selectedSendAsset.symbol}` : 'Amount'}
+            keyboardType="decimal-pad"
+            mode="outlined"
+            style={styles.paperInput}
+            contentStyle={styles.paperInputContent}
+            outlineStyle={styles.paperOutline}
+            textColor={activeTheme.text}
+          />
+          {selectedWallet?.chain === 'sui' && selectedSendAsset?.tokenType === 'sui-coin' ? (
+            <Text style={styles.sectionHint}>Sui fungible token send is not available on mobile yet. Native SUI only.</Text>
+          ) : null}
+          {error ? <Text style={styles.errorText}>{error}</Text> : null}
+          <PaperButton
+            mode="contained"
+            style={styles.paperPrimaryButton}
+            buttonColor={activeTheme.primaryButton}
+            textColor={activeTheme.primaryButtonText}
+            disabled={sendLoading || !selectedWallet || !selectedSendAsset}
+            onPress={() => void handleSend()}
+          >
+            {sendLoading ? 'Sending...' : `Send ${selectedSendAsset?.symbol ?? selectedChainMeta.short}`}
+          </PaperButton>
+        </View>
+      </View>
+    );
+  }
+
+  function renderRoutePicker(options: Array<{ id: string; label: string; meta: string; helper?: string }>, selectedId: string | null, onSelect: (id: string) => void) {
+    return (
+      <View style={styles.routePicker}>
+        {options.map((option) => (
+          <Pressable
+            key={option.id}
+            style={[styles.routeOption, selectedId === option.id ? styles.routeOptionActive : null]}
+            onPress={() => onSelect(option.id)}
+          >
+            <Text style={styles.routeOptionLabel}>{option.label}</Text>
+            <Text style={styles.routeOptionValue}>{option.meta}</Text>
+            {option.helper ? <Text style={styles.routeOptionHelper}>{option.helper}</Text> : null}
+          </Pressable>
+        ))}
+      </View>
+    );
+  }
+
+  function renderSwapTab() {
+    const selectedInputSubtitle = selectedSwapInputAsset
+      ? getAssetSubtitle(selectedSwapInputAsset, selectedChainMeta.label, selectedChainMeta.short)
+      : null;
+    const selectedOutputSubtitle = selectedSwapOutputAsset
+      ? getAssetSubtitle(selectedSwapOutputAsset, selectedChainMeta.label, selectedChainMeta.short)
+      : null;
+    const routeOptions = (swapQuote?.routes ?? []).map((route) => ({
+      id: route.id,
+      label: route.label,
+      meta: `${route.outputAmountUi} ${selectedSwapOutputAsset?.symbol ?? ''}`.trim(),
+      helper: route.routeLabels.length > 0 ? route.routeLabels.join(' · ') : route.priceImpactPct ? `${route.priceImpactPct}% impact` : undefined
+    }));
+
+    return (
+      <View style={styles.stack}>
+        <View style={styles.sectionCard}>
+          <Pressable style={styles.detailBackRow} onPress={() => setSwapScreenVisible(false)}>
+            <Feather name="chevron-left" size={18} color={activeTheme.text} />
+            <Text style={styles.detailBackText}>Back to wallet</Text>
+          </Pressable>
+          <Text style={styles.sectionTitle}>Swap</Text>
+          <Text style={styles.sectionHint}>Review multiple Jupiter routes, then swap between assets held in this Solana wallet.</Text>
+        </View>
+
+        <View style={[styles.sectionCard, styles.formCard]}>
+          <Text style={styles.sectionTitle}>From</Text>
+          <Pressable style={styles.sendAssetSelectButton} onPress={() => setSwapInputPickerVisible(true)}>
+            {selectedSwapInputAsset ? (
+              <>
+                <View style={styles.sendSelectedAssetGlyph}>
+                  {renderAssetGlyph(selectedSwapInputAsset, 44, styles.assetGlyphText, styles.assetGlyphImage)}
+                </View>
+                <View style={styles.sendSelectedAssetCopy}>
+                  <Text style={styles.sendSelectedAssetName}>{selectedSwapInputAsset.name}</Text>
+                  <Text style={styles.sendSelectedAssetMeta}>{selectedInputSubtitle ?? selectedSwapInputAsset.symbol}</Text>
+                </View>
+                <View style={styles.assetValueStack}>
+                  <Text style={styles.assetValue}>{maskValue(selectedSwapInputAsset.amountLabel, walletState.privacyMode)}</Text>
+                  <Text style={styles.assetValueMeta}>Tap to switch</Text>
+                </View>
+              </>
+            ) : null}
+            <Feather name="chevron-down" size={18} color={activeTheme.muted} style={styles.rowChevronIcon} />
+          </Pressable>
+
+          <Text style={styles.sectionTitle}>To</Text>
+          <Pressable style={styles.sendAssetSelectButton} onPress={() => setSwapOutputPickerVisible(true)}>
+            {selectedSwapOutputAsset ? (
+              <>
+                <View style={styles.sendSelectedAssetGlyph}>
+                  {renderAssetGlyph(selectedSwapOutputAsset, 44, styles.assetGlyphText, styles.assetGlyphImage)}
+                </View>
+                <View style={styles.sendSelectedAssetCopy}>
+                  <Text style={styles.sendSelectedAssetName}>{selectedSwapOutputAsset.name}</Text>
+                  <Text style={styles.sendSelectedAssetMeta}>{selectedOutputSubtitle ?? selectedSwapOutputAsset.symbol}</Text>
+                </View>
+              </>
+            ) : (
+              <View style={styles.sendSelectedAssetCopy}>
+                <Text style={styles.sendSelectedAssetName}>Choose output asset</Text>
+                <Text style={styles.sendSelectedAssetMeta}>Select what you want to receive</Text>
+              </View>
+            )}
+            <Feather name="chevron-down" size={18} color={activeTheme.muted} style={styles.rowChevronIcon} />
+          </Pressable>
+
+          <PaperTextInput
+            value={swapAmount}
+            onChangeText={setSwapAmount}
+            placeholder={selectedSwapInputAsset ? `Amount in ${selectedSwapInputAsset.symbol}` : 'Amount'}
+            keyboardType="decimal-pad"
+            mode="outlined"
+            style={styles.paperInput}
+            contentStyle={styles.paperInputContent}
+            outlineStyle={styles.paperOutline}
+            textColor={activeTheme.text}
+          />
+          {swapError ? <Text style={styles.errorText}>{swapError}</Text> : null}
+          <PaperButton
+            mode="contained"
+            style={styles.paperPrimaryButton}
+            buttonColor={activeTheme.primaryButton}
+            textColor={activeTheme.primaryButtonText}
+            disabled={swapQuoteLoading || swapExecuteLoading || !selectedSwapInputAsset || !selectedSwapOutputAsset}
+            onPress={() => void handleGetSwapQuote()}
+          >
+            {swapQuoteLoading ? 'Fetching routes...' : 'Get routes'}
+          </PaperButton>
+        </View>
+
+        {swapQuote ? (
+          <View style={[styles.sectionCard, styles.formCard]}>
+            <Text style={styles.sectionTitle}>Routes</Text>
+            <Text style={styles.sectionHint}>Pick the route you want Grape to execute.</Text>
+            {renderRoutePicker(routeOptions, swapSelectedRouteId, setSwapSelectedRouteId)}
+            <PaperButton
+              mode="contained"
+              style={styles.paperPrimaryButton}
+              buttonColor={activeTheme.primaryButton}
+              textColor={activeTheme.primaryButtonText}
+              disabled={swapExecuteLoading}
+              onPress={() => void handleExecuteSwap()}
+            >
+              {swapExecuteLoading ? 'Submitting swap...' : `Swap ${selectedSwapInputAsset?.symbol ?? ''}`}
+            </PaperButton>
+          </View>
+        ) : null}
+      </View>
+    );
+  }
+
+  function renderBridgeTab() {
+    const routeOptions = (bridgeQuote?.routes ?? []).map((route) => ({
+      id: route.id,
+      label: route.label,
+      meta: `${route.toAmountUi} ${route.toSymbol}`.trim(),
+      helper: route.routeLabels.length > 0 ? route.routeLabels.join(' · ') : route.feeUsd ? `${route.feeUsd} fee` : undefined
+    }));
+
+    return (
+      <View style={styles.stack}>
+        <View style={styles.sectionCard}>
+          <Pressable style={styles.detailBackRow} onPress={() => setBridgeScreenVisible(false)}>
+            <Feather name="chevron-left" size={18} color={activeTheme.text} />
+            <Text style={styles.detailBackText}>Back to wallet</Text>
+          </Pressable>
+          <Text style={styles.sectionTitle}>Bridge</Text>
+          <Text style={styles.sectionHint}>Move a native asset from this wallet to another chain wallet you already manage in Grape.</Text>
+        </View>
+
+        <View style={[styles.sectionCard, styles.formCard]}>
+          <Text style={styles.sectionTitle}>Destination chain</Text>
+          <SegmentedButtons
+            value={bridgeToChain}
+            onValueChange={(value) => {
+              setBridgeToChain(value as MobileWalletState['selectedChain']);
+              setBridgeQuote(null);
+              setBridgeSelectedRouteId(null);
+              setBridgeError(null);
+            }}
+            buttons={bridgeDestinationChains.map((chain) => ({ value: chain, label: chainMeta(chain).short }))}
+            style={styles.paperSegments}
+            density="small"
+          />
+
+          <Text style={styles.sectionTitle}>Destination wallet</Text>
+          <View style={styles.stack}>
+            {bridgeDestinationWallets.length === 0 ? (
+              <Text style={styles.sectionHint}>Add a {chainMeta(bridgeToChain).label} wallet before bridging there.</Text>
+            ) : (
+              bridgeDestinationWallets.map((wallet) => {
+                const active = wallet.id === selectedBridgeDestinationWallet?.id;
+                return (
+                  <Pressable
+                    key={wallet.id}
+                    style={[styles.walletRow, active ? styles.walletRowActive : null]}
+                    onPress={() => {
+                      setBridgeDestinationWalletId(wallet.id);
+                      setBridgeQuote(null);
+                      setBridgeSelectedRouteId(null);
+                    }}
+                  >
+                    <View style={styles.walletCopy}>
+                      <Text style={styles.walletName}>{wallet.name}</Text>
+                      <Text style={styles.walletMeta}>{shortenAddress(wallet.address)}</Text>
+                    </View>
+                    {active ? <Feather name="check" size={18} color={activeTheme.text} style={styles.rowCheckIcon} /> : null}
+                  </Pressable>
+                );
+              })
+            )}
+          </View>
+
+          <PaperTextInput
+            value={bridgeAmount}
+            onChangeText={setBridgeAmount}
+            placeholder={selectedWallet ? `Amount in ${selectedWallet.chain === 'solana' ? 'SOL' : selectedWallet.chain === 'ethereum' ? 'ETH' : selectedWallet.chain === 'monad' ? 'MON' : 'asset'}` : 'Amount'}
+            keyboardType="decimal-pad"
+            mode="outlined"
+            style={styles.paperInput}
+            contentStyle={styles.paperInputContent}
+            outlineStyle={styles.paperOutline}
+            textColor={activeTheme.text}
+          />
+          {bridgeError ? <Text style={styles.errorText}>{bridgeError}</Text> : null}
+          <PaperButton
+            mode="contained"
+            style={styles.paperPrimaryButton}
+            buttonColor={activeTheme.primaryButton}
+            textColor={activeTheme.primaryButtonText}
+            disabled={bridgeQuoteLoading || bridgeExecuteLoading || !selectedBridgeDestinationWallet}
+            onPress={() => void handleGetBridgeQuote()}
+          >
+            {bridgeQuoteLoading ? 'Fetching routes...' : 'Get routes'}
+          </PaperButton>
+        </View>
+
+        {bridgeQuote ? (
+          <View style={[styles.sectionCard, styles.formCard]}>
+            <Text style={styles.sectionTitle}>Routes</Text>
+            <Text style={styles.sectionHint}>Pick the bridge route you want Grape to use.</Text>
+            {renderRoutePicker(routeOptions, bridgeSelectedRouteId, setBridgeSelectedRouteId)}
+            <PaperButton
+              mode="contained"
+              style={styles.paperPrimaryButton}
+              buttonColor={activeTheme.primaryButton}
+              textColor={activeTheme.primaryButtonText}
+              disabled={bridgeExecuteLoading}
+              onPress={() => void handleExecuteBridge()}
+            >
+              {bridgeExecuteLoading ? 'Submitting bridge...' : 'Bridge now'}
+            </PaperButton>
+          </View>
+        ) : null}
+      </View>
+    );
+  }
+
   function renderActivityRow(activity: MobileActivity) {
+    const isFailed = activity.status === 'failed';
+    const isSuccess = activity.status === 'success';
+    const statusLabel = isFailed ? 'Failed' : isSuccess ? 'Success' : 'Pending';
+    const glyphName =
+      activity.type.includes('send') || activity.type.includes('transfer')
+        ? 'arrow-top-right'
+        : activity.type.includes('swap')
+          ? 'swap-horizontal'
+          : activity.type.includes('stake')
+            ? 'archive-arrow-up'
+            : 'clock-outline';
+
     return (
       <View key={activity.id} style={styles.activityRow}>
         <View style={styles.activityGlyph}>
-          <MaterialCommunityIcons name="arrow-top-right" size={20} color={activeTheme.text} />
+          <MaterialCommunityIcons name={glyphName as never} size={20} color={activeTheme.text} />
         </View>
         <View style={styles.activityCopy}>
           <Text style={styles.activityName}>{activity.title}</Text>
@@ -1531,7 +2960,7 @@ export default function App() {
           <Text style={styles.activityMeta}>{formatActivityTime(activity.timestamp)}</Text>
         </View>
         <View style={styles.activityStatus}>
-          <Text style={styles.activityStatusText}>Sent</Text>
+          <Text style={styles.activityStatusText}>{statusLabel}</Text>
         </View>
       </View>
     );
@@ -1548,7 +2977,11 @@ export default function App() {
           {filteredActivity.length === 0 ? (
             <View style={styles.sectionCard}>
               <Text style={styles.sectionTitle}>No activity yet</Text>
-              <Text style={styles.sectionHint}>Recent sends will appear here once you start using the wallet.</Text>
+              <Text style={styles.sectionHint}>
+                {activityLoading
+                  ? 'Loading recent activity...'
+                  : 'Recent wallet activity will appear here once the chain index catches up.'}
+              </Text>
             </View>
           ) : (
             filteredActivity.map(renderActivityRow)
@@ -1618,10 +3051,199 @@ export default function App() {
         </View>
 
         <View style={styles.sectionCard}>
+          <Text style={styles.sectionTitle}>Backup & export</Text>
+          <Text style={styles.sectionHint}>
+            Export the current wallet private key only if you have a secure destination. A successful password or biometric check reveals it immediately.
+          </Text>
+          <PaperTextInput
+            value={exportPassword}
+            onChangeText={setExportPassword}
+            placeholder="Password"
+            secureTextEntry
+            mode="outlined"
+            style={styles.paperInput}
+            contentStyle={styles.paperInputContent}
+            outlineStyle={styles.paperOutline}
+            textColor={activeTheme.text}
+            right={
+              walletState.biometricEnabled && biometricAvailable ? (
+                <PaperTextInput.Icon
+                  icon="fingerprint"
+                  onPress={() => void handleBiometricVerifyExport()}
+                  disabled={exportLoading || biometricLoading || !selectedWallet}
+                  forceTextInputFocus={false}
+                />
+              ) : undefined
+            }
+          />
+          <View style={styles.walletToolsRow}>
+            <PaperButton
+              mode="contained"
+              style={[styles.paperPrimaryButton, styles.walletToolButton]}
+              buttonColor={activeTheme.primaryButton}
+              textColor={activeTheme.primaryButtonText}
+              disabled={exportLoading || !exportPassword.trim() || !selectedWallet}
+              onPress={() => void handleVerifyExportPassword()}
+            >
+              {exportLoading ? 'Checking...' : 'Reveal with password'}
+            </PaperButton>
+            <PaperButton
+              mode="outlined"
+              style={[styles.paperSecondaryButton, styles.walletToolButton]}
+              disabled={!exportedPrivateKey || exportVerifiedWalletId !== selectedWallet?.id}
+              onPress={() => setExportReveal((value) => !value)}
+            >
+              {exportReveal ? 'Hide key' : 'Show key'}
+            </PaperButton>
+          </View>
+          <View style={styles.exportSecretCard}>
+            <Text style={styles.exportSecretLabel}>Private key</Text>
+            <Text style={styles.settingsMono}>
+              {exportedPrivateKey && exportReveal && exportVerifiedWalletId === selectedWallet?.id
+                ? exportedPrivateKey
+                : '••••••••••••••••••••••••••••••••'}
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.sectionCard}>
           <Text style={styles.sectionTitle}>Network services</Text>
           <Text style={styles.sectionHint}>
             RPC, Shyft metadata, and Jupiter pricing can be supplied with EXPO_PUBLIC environment values.
           </Text>
+        </View>
+
+        <View style={styles.sectionCard}>
+          <Text style={styles.sectionTitle}>Governance DAOs</Text>
+          <Text style={styles.sectionHint}>
+            Grape auto-detects the Solana DAOs this wallet participates in from governance membership records. You can also track extra realm ids here.
+          </Text>
+          {selectedWallet?.chain !== 'solana' ? (
+            <Text style={styles.sectionHint}>Governance proposal tracking is currently supported for Solana wallets.</Text>
+          ) : (
+            <>
+              <Text style={styles.settingsTitle}>Auto-detected</Text>
+              {governance.discoveredDaos.length > 0 ? (
+                <View style={styles.stack}>
+                  {governance.discoveredDaos.map((daoId) => (
+                    <View key={daoId} style={styles.reputationSpaceRow}>
+                      <View style={styles.reputationSpaceCopy}>
+                        <Text style={styles.reputationSpaceTitle}>{shortenAddress(daoId)}</Text>
+                        <Text style={styles.reputationSpaceMono}>{daoId}</Text>
+                      </View>
+                      <View style={styles.activePill}>
+                        <Text style={styles.activePillText}>Detected</Text>
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              ) : (
+                <Text style={styles.sectionHint}>No governance DAOs have been auto-detected for this wallet yet.</Text>
+              )}
+
+              <PaperTextInput
+                value={governanceDaoInput}
+                onChangeText={setGovernanceDaoInput}
+                placeholder="Track an extra governance DAO realm id"
+                mode="outlined"
+                autoCapitalize="none"
+                autoCorrect={false}
+                style={styles.paperInput}
+                contentStyle={styles.paperInputContent}
+                outlineStyle={styles.paperOutline}
+                textColor={activeTheme.text}
+              />
+              <PaperButton
+                mode="contained"
+                style={styles.paperPrimaryButton}
+                buttonColor={activeTheme.primaryButton}
+                textColor={activeTheme.primaryButtonText}
+                disabled={governanceSaving || !governanceDaoInput.trim()}
+                onPress={() => void handleAddGovernanceDao()}
+              >
+                {governanceSaving ? 'Saving...' : 'Add tracked DAO'}
+              </PaperButton>
+              {walletState.trackedGovernanceDaoIds.length > 0 ? (
+                <View style={styles.stack}>
+                  {walletState.trackedGovernanceDaoIds.map((daoId) => (
+                    <View key={daoId} style={styles.reputationSpaceRow}>
+                      <View style={styles.reputationSpaceCopy}>
+                        <Text style={styles.reputationSpaceTitle}>{shortenAddress(daoId)}</Text>
+                        <Text style={styles.reputationSpaceMono}>{daoId}</Text>
+                      </View>
+                      <Pressable
+                        style={styles.reputationRemoveButton}
+                        onPress={() => void handleRemoveGovernanceDao(daoId)}
+                      >
+                        <Feather name="trash-2" size={16} color={activeTheme.danger} />
+                      </Pressable>
+                    </View>
+                  ))}
+                </View>
+              ) : (
+                <Text style={styles.sectionHint}>No extra governance DAOs are being tracked.</Text>
+              )}
+              {governanceError ? <Text style={styles.errorText}>{governanceError}</Text> : null}
+            </>
+          )}
+        </View>
+
+        <View style={styles.sectionCard}>
+          <Text style={styles.sectionTitle}>OG Reputation Spaces</Text>
+          <Text style={styles.sectionHint}>
+            Track Solana OG reputation by adding DAO space ids here. Home will then show the current wallet’s effective points per tracked space.
+          </Text>
+          <PaperTextInput
+            value={reputationSpaceInput}
+            onChangeText={setReputationSpaceInput}
+            placeholder="Add Solana DAO space id"
+            mode="outlined"
+            autoCapitalize="none"
+            autoCorrect={false}
+            style={styles.paperInput}
+            contentStyle={styles.paperInputContent}
+            outlineStyle={styles.paperOutline}
+            textColor={activeTheme.text}
+          />
+          <PaperButton
+            mode="contained"
+            style={styles.paperPrimaryButton}
+            buttonColor={activeTheme.primaryButton}
+            textColor={activeTheme.primaryButtonText}
+            disabled={reputationSaving || !reputationSpaceInput.trim()}
+            onPress={() => void handleAddReputationSpace()}
+          >
+            {reputationSaving ? 'Saving...' : 'Add reputation space'}
+          </PaperButton>
+          {reputationError ? <Text style={styles.errorText}>{reputationError}</Text> : null}
+          {walletState.trackedReputationSpaceIds.length === 0 ? (
+            <Text style={styles.sectionHint}>No tracked spaces yet.</Text>
+          ) : (
+            <View style={styles.stack}>
+              {walletState.trackedReputationSpaceIds.map((daoId) => (
+                <View key={daoId} style={styles.reputationSpaceRow}>
+                  <View style={styles.reputationSpaceCopy}>
+                    <Text style={styles.reputationSpaceTitle}>{shortenAddress(daoId)}</Text>
+                    <Text style={styles.reputationSpaceMono}>{daoId}</Text>
+                  </View>
+                  <View style={styles.reputationSpaceActions}>
+                    <Pressable
+                      style={styles.reputationOpenButton}
+                      onPress={() => void openOgReputationSpace(daoId)}
+                    >
+                      <Feather name="external-link" size={16} color={activeTheme.text} />
+                    </Pressable>
+                    <Pressable
+                      style={styles.reputationRemoveButton}
+                      onPress={() => void handleRemoveReputationSpace(daoId)}
+                    >
+                      <Feather name="trash-2" size={16} color={activeTheme.danger} />
+                    </Pressable>
+                  </View>
+                </View>
+              ))}
+            </View>
+          )}
         </View>
 
         <View style={styles.sectionCard}>
@@ -1796,11 +3418,22 @@ export default function App() {
                               <Text style={styles.walletMeta}>{formatWalletSource(wallet)}</Text>
                               <Text style={styles.walletMeta}>{shortenAddress(wallet.address)}</Text>
                             </View>
-                            {active ? (
-                              <View style={styles.activePill}>
-                                <Text style={styles.activePillText}>Active</Text>
-                              </View>
-                            ) : null}
+                            <View style={styles.walletRowActions}>
+                              {active ? (
+                                <View style={styles.activePill}>
+                                  <Text style={styles.activePillText}>Active</Text>
+                                </View>
+                              ) : null}
+                              <Pressable
+                                style={styles.walletDeleteButton}
+                                onPress={(event) => {
+                                  event.stopPropagation();
+                                  void handleDeleteWallet(wallet);
+                                }}
+                              >
+                                <Feather name="trash-2" size={16} color={activeTheme.danger} />
+                              </Pressable>
+                            </View>
                           </Pressable>
                         );
                       })}
@@ -1826,14 +3459,22 @@ export default function App() {
   function renderReadyScreen() {
     return (
       <>
+        <KeyboardAvoidingView
+          style={styles.screenFlex}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
+        >
         <ScrollView
           contentContainerStyle={[
             styles.mainContent,
             {
-              paddingHorizontal: screenPadding
+              paddingHorizontal: screenPadding,
+              paddingBottom: sendScreenVisible || swapScreenVisible || bridgeScreenVisible ? 220 : 140
             }
           ]}
           showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
         >
             <Animated.View
               style={[
@@ -1857,13 +3498,26 @@ export default function App() {
               </View>
             ) : null}
 
-            {mainTab === 'home' ? renderHomeTab() : null}
-            {mainTab === 'receive' ? renderReceiveTab() : null}
-            {mainTab === 'activity' ? renderActivityTab() : null}
-            {mainTab === 'settings' ? renderSettingsTab() : null}
+            {sendScreenVisible
+              ? renderSendTab()
+              : swapScreenVisible
+                ? renderSwapTab()
+                : bridgeScreenVisible
+                  ? renderBridgeTab()
+                  : mainTab === 'home'
+                    ? renderHomeTab()
+                    : mainTab === 'receive'
+                      ? renderReceiveTab()
+                      : mainTab === 'governance'
+                        ? renderGovernanceTab()
+                        : mainTab === 'activity'
+                          ? renderActivityTab()
+                          : renderSettingsTab()}
           </Animated.View>
         </ScrollView>
+        </KeyboardAvoidingView>
 
+        {sendScreenVisible || swapScreenVisible || bridgeScreenVisible ? null : (
         <View style={[styles.footerShell, { left: footerInset, right: footerInset, bottom: footerInset - 2 }]}>
           <Pressable
             style={[styles.footerButton, mainTab === 'home' ? styles.footerButtonActive : null]}
@@ -1880,6 +3534,13 @@ export default function App() {
             <Text style={[styles.footerLabel, mainTab === 'receive' ? styles.footerLabelActive : null]}>Receive</Text>
           </Pressable>
           <Pressable
+            style={[styles.footerButton, mainTab === 'governance' ? styles.footerButtonActive : null]}
+            onPress={() => setMainTab('governance')}
+          >
+            <MaterialCommunityIcons name="bank-outline" size={24} color={mainTab === 'governance' ? activeTheme.text : activeTheme.muted} />
+            <Text style={[styles.footerLabel, mainTab === 'governance' ? styles.footerLabelActive : null]}>Gov</Text>
+          </Pressable>
+          <Pressable
             style={[styles.footerButton, mainTab === 'activity' ? styles.footerButtonActive : null]}
             onPress={() => setMainTab('activity')}
           >
@@ -1894,6 +3555,194 @@ export default function App() {
             <Text style={[styles.footerLabel, mainTab === 'settings' ? styles.footerLabelActive : null]}>Settings</Text>
           </Pressable>
         </View>
+        )}
+        <Portal>
+          <PaperModal
+            visible={sendAssetPickerVisible}
+            onDismiss={() => setSendAssetPickerVisible(false)}
+            contentContainerStyle={styles.sendAssetPickerModal}
+          >
+            <View style={styles.sendAssetPickerHeader}>
+              <Text style={styles.sectionTitle}>Select asset</Text>
+              <Text style={styles.sectionHint}>{assets.length} available in this wallet</Text>
+            </View>
+            <PaperTextInput
+              value={sendAssetSearch}
+              onChangeText={setSendAssetSearch}
+              placeholder="Search by name, symbol, or address"
+              mode="outlined"
+              style={styles.paperInput}
+              contentStyle={styles.paperInputContent}
+              outlineStyle={styles.paperOutline}
+              textColor={activeTheme.text}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <ScrollView style={styles.sendAssetPickerList} keyboardShouldPersistTaps="handled">
+              <View style={styles.stack}>
+                {filteredSendAssets.length === 0 ? (
+                  <Text style={styles.sectionHint}>No assets match your search.</Text>
+                ) : (
+                  filteredSendAssets.map((asset) => {
+                    const active = asset.id === selectedSendAsset?.id;
+                    const assetSubtitle = getAssetSubtitle(asset, selectedChainMeta.label, selectedChainMeta.short);
+                    return (
+                      <Pressable
+                        key={asset.id}
+                        style={[styles.assetRow, active ? styles.assetRowActive : null]}
+                        onPress={() => {
+                          setSendAssetId(asset.id);
+                          setSendAssetPickerVisible(false);
+                          setSendAssetSearch('');
+                        }}
+                      >
+                        <View style={styles.assetGlyph}>
+                          {renderAssetGlyph(asset, 52, styles.assetGlyphText, styles.assetGlyphImage)}
+                        </View>
+                        <View style={styles.assetCopy}>
+                          <Text style={styles.assetName}>{asset.name}</Text>
+                          {assetSubtitle ? <Text style={styles.assetMeta}>{assetSubtitle}</Text> : null}
+                        </View>
+                        <View style={styles.assetValueStack}>
+                          <Text style={styles.assetValue}>{maskValue(asset.amountLabel, walletState.privacyMode)}</Text>
+                          {asset.valueLabel ? (
+                            <Text style={styles.assetValueMeta}>{maskValue(asset.valueLabel, walletState.privacyMode)}</Text>
+                          ) : null}
+                        </View>
+                        {active ? <Feather name="check" size={18} color={activeTheme.text} style={styles.rowCheckIcon} /> : null}
+                      </Pressable>
+                    );
+                  })
+                )}
+              </View>
+            </ScrollView>
+          </PaperModal>
+          <PaperModal
+            visible={swapInputPickerVisible}
+            onDismiss={() => setSwapInputPickerVisible(false)}
+            contentContainerStyle={styles.sendAssetPickerModal}
+          >
+            <View style={styles.sendAssetPickerHeader}>
+              <Text style={styles.sectionTitle}>Swap from</Text>
+              <Text style={styles.sectionHint}>{swappableAssets.length} available in this wallet</Text>
+            </View>
+            <PaperTextInput
+              value={swapAssetSearch}
+              onChangeText={setSwapAssetSearch}
+              placeholder="Search by name, symbol, or address"
+              mode="outlined"
+              style={styles.paperInput}
+              contentStyle={styles.paperInputContent}
+              outlineStyle={styles.paperOutline}
+              textColor={activeTheme.text}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <ScrollView style={styles.sendAssetPickerList} keyboardShouldPersistTaps="handled">
+              <View style={styles.stack}>
+                {filteredSwapAssets.length === 0 ? (
+                  <Text style={styles.sectionHint}>No assets match your search.</Text>
+                ) : (
+                  filteredSwapAssets.map((asset) => {
+                    const active = asset.id === selectedSwapInputAsset?.id;
+                    const assetSubtitle = getAssetSubtitle(asset, selectedChainMeta.label, selectedChainMeta.short);
+                    return (
+                      <Pressable
+                        key={asset.id}
+                        style={[styles.assetRow, active ? styles.assetRowActive : null]}
+                        onPress={() => {
+                          setSwapInputAssetId(asset.id);
+                          if (swapOutputAssetId === asset.id) {
+                            setSwapOutputAssetId(null);
+                          }
+                          setSwapQuote(null);
+                          setSwapSelectedRouteId(null);
+                          setSwapInputPickerVisible(false);
+                          setSwapAssetSearch('');
+                        }}
+                      >
+                        <View style={styles.assetGlyph}>
+                          {renderAssetGlyph(asset, 52, styles.assetGlyphText, styles.assetGlyphImage)}
+                        </View>
+                        <View style={styles.assetCopy}>
+                          <Text style={styles.assetName}>{asset.name}</Text>
+                          {assetSubtitle ? <Text style={styles.assetMeta}>{assetSubtitle}</Text> : null}
+                        </View>
+                        <View style={styles.assetValueStack}>
+                          <Text style={styles.assetValue}>{maskValue(asset.amountLabel, walletState.privacyMode)}</Text>
+                          {asset.valueLabel ? <Text style={styles.assetValueMeta}>{maskValue(asset.valueLabel, walletState.privacyMode)}</Text> : null}
+                        </View>
+                        {active ? <Feather name="check" size={18} color={activeTheme.text} style={styles.rowCheckIcon} /> : null}
+                      </Pressable>
+                    );
+                  })
+                )}
+              </View>
+            </ScrollView>
+          </PaperModal>
+          <PaperModal
+            visible={swapOutputPickerVisible}
+            onDismiss={() => setSwapOutputPickerVisible(false)}
+            contentContainerStyle={styles.sendAssetPickerModal}
+          >
+            <View style={styles.sendAssetPickerHeader}>
+              <Text style={styles.sectionTitle}>Swap to</Text>
+              <Text style={styles.sectionHint}>{swapOutputCandidates.length} available in this wallet</Text>
+            </View>
+            <PaperTextInput
+              value={swapAssetSearch}
+              onChangeText={setSwapAssetSearch}
+              placeholder="Search by name, symbol, or address"
+              mode="outlined"
+              style={styles.paperInput}
+              contentStyle={styles.paperInputContent}
+              outlineStyle={styles.paperOutline}
+              textColor={activeTheme.text}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <ScrollView style={styles.sendAssetPickerList} keyboardShouldPersistTaps="handled">
+              <View style={styles.stack}>
+                {filteredSwapAssets.filter((asset) => asset.id !== selectedSwapInputAsset?.id).length === 0 ? (
+                  <Text style={styles.sectionHint}>No output assets match your search.</Text>
+                ) : (
+                  filteredSwapAssets
+                    .filter((asset) => asset.id !== selectedSwapInputAsset?.id)
+                    .map((asset) => {
+                      const active = asset.id === selectedSwapOutputAsset?.id;
+                      const assetSubtitle = getAssetSubtitle(asset, selectedChainMeta.label, selectedChainMeta.short);
+                      return (
+                        <Pressable
+                          key={asset.id}
+                          style={[styles.assetRow, active ? styles.assetRowActive : null]}
+                          onPress={() => {
+                            setSwapOutputAssetId(asset.id);
+                            setSwapQuote(null);
+                            setSwapSelectedRouteId(null);
+                            setSwapOutputPickerVisible(false);
+                            setSwapAssetSearch('');
+                          }}
+                        >
+                          <View style={styles.assetGlyph}>
+                            {renderAssetGlyph(asset, 52, styles.assetGlyphText, styles.assetGlyphImage)}
+                          </View>
+                          <View style={styles.assetCopy}>
+                            <Text style={styles.assetName}>{asset.name}</Text>
+                            {assetSubtitle ? <Text style={styles.assetMeta}>{assetSubtitle}</Text> : null}
+                          </View>
+                          <View style={styles.assetValueStack}>
+                            <Text style={styles.assetValue}>{maskValue(asset.amountLabel, walletState.privacyMode)}</Text>
+                            {asset.valueLabel ? <Text style={styles.assetValueMeta}>{maskValue(asset.valueLabel, walletState.privacyMode)}</Text> : null}
+                          </View>
+                          {active ? <Feather name="check" size={18} color={activeTheme.text} style={styles.rowCheckIcon} /> : null}
+                        </Pressable>
+                      );
+                    })
+                )}
+              </View>
+            </ScrollView>
+          </PaperModal>
+        </Portal>
       </>
     );
   }
@@ -2631,6 +4480,10 @@ function createStyles(palette: MobileThemePalette) {
     flex: 1,
     gap: 2
   },
+  walletRowActions: {
+    alignItems: 'flex-end',
+    gap: 8
+  },
   walletName: {
     color: palette.text,
     fontSize: 17,
@@ -2653,6 +4506,16 @@ function createStyles(palette: MobileThemePalette) {
     fontSize: 13,
     fontWeight: '800'
   },
+  walletDeleteButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 94, 122, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 94, 122, 0.14)'
+  },
   assetRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2667,6 +4530,15 @@ function createStyles(palette: MobileThemePalette) {
         : palette.id === 'champagne'
           ? 'rgba(255,255,255,0.72)'
           : 'rgba(255,255,255,0.05)'
+  },
+  assetRowActive: {
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.14)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.84)'
+          : 'rgba(255,255,255,0.11)',
+    borderColor: palette.primaryButton
   },
   assetGlyph: {
     width: 44,
@@ -2716,10 +4588,134 @@ function createStyles(palette: MobileThemePalette) {
     fontSize: 12,
     fontWeight: '600'
   },
+  rowCheckIcon: {
+    marginLeft: 4
+  },
   rowChevron: {
     color: palette.muted,
     fontSize: 22,
     marginLeft: 4
+  },
+  rowChevronIcon: {
+    marginLeft: 4
+  },
+  sendSelectedAssetCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    padding: 15,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: palette.panelBorder,
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.1)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.76)'
+          : 'rgba(255,255,255,0.06)'
+  },
+  sendAssetSelectButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    padding: 15,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: palette.panelBorder,
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.1)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.76)'
+          : 'rgba(255,255,255,0.06)'
+  },
+  sendSelectedAssetGlyph: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#090b14',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)'
+  },
+  sendSelectedAssetCopy: {
+    flex: 1,
+    gap: 2
+  },
+  sendSelectedAssetName: {
+    color: palette.text,
+    fontSize: 16,
+    fontWeight: '800'
+  },
+  sendSelectedAssetMeta: {
+    color: palette.muted,
+    fontSize: 13,
+    fontWeight: '600'
+  },
+  sendSelectedAssetBalance: {
+    color: palette.text,
+    fontSize: 14,
+    fontWeight: '800'
+  },
+  sendAssetPickerModal: {
+    marginHorizontal: 16,
+    padding: 18,
+    borderRadius: 28,
+    borderWidth: 1,
+    borderColor: palette.panelBorder,
+    backgroundColor: palette.panel,
+    maxHeight: '76%'
+  },
+  sendAssetPickerHeader: {
+    gap: 4,
+    marginBottom: 12
+  },
+  sendAssetPickerList: {
+    marginTop: 14
+  },
+  routePicker: {
+    gap: 10,
+    marginTop: 8,
+    marginBottom: 12
+  },
+  routeOption: {
+    padding: 14,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: palette.panelBorder,
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.09)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.72)'
+          : 'rgba(255,255,255,0.05)',
+    gap: 4
+  },
+  routeOptionActive: {
+    borderColor: palette.primaryButton,
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.13)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.84)'
+          : 'rgba(255,255,255,0.1)'
+  },
+  routeOptionLabel: {
+    color: palette.text,
+    fontSize: 15,
+    fontWeight: '800'
+  },
+  routeOptionValue: {
+    color: palette.text,
+    fontSize: 17,
+    fontWeight: '900'
+  },
+  routeOptionHelper: {
+    color: palette.muted,
+    fontSize: 12,
+    fontWeight: '600'
   },
   receiveAddressCard: {
     padding: 18,
@@ -2926,6 +4922,26 @@ function createStyles(palette: MobileThemePalette) {
     lineHeight: 24,
     fontFamily: 'Courier'
   },
+  exportSecretCard: {
+    gap: 8,
+    padding: 14,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: palette.panelBorder,
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.09)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.72)'
+          : 'rgba(255,255,255,0.05)'
+  },
+  exportSecretLabel: {
+    color: palette.muted,
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase'
+  },
   footerShell: {
     position: 'absolute',
     flexDirection: 'row',
@@ -3002,6 +5018,320 @@ function createStyles(palette: MobileThemePalette) {
   paperSecondaryButton: {
     borderRadius: 18,
     backgroundColor: palette.id === 'apple' ? 'rgba(255,255,255,0.11)' : 'transparent'
+  },
+  inlineActionText: {
+    color: palette.grape,
+    fontSize: 13,
+    fontWeight: '800'
+  },
+  communityShortcutRow: {
+    flexDirection: 'row',
+    gap: 10
+  },
+  communityShortcutCard: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: palette.panelBorder,
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.09)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.76)'
+          : 'rgba(255,255,255,0.05)'
+  },
+  communityShortcutLabel: {
+    color: palette.muted,
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.9,
+    textTransform: 'uppercase'
+  },
+  communityShortcutValue: {
+    color: palette.text,
+    fontSize: 16,
+    fontWeight: '900',
+    lineHeight: 18
+  },
+  communityShortcutMeta: {
+    color: palette.muted,
+    fontSize: 12,
+    fontWeight: '700'
+  },
+  successBox: {
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(139,247,198,0.22)',
+    backgroundColor: 'rgba(139,247,198,0.12)'
+  },
+  successBoxText: {
+    color: palette.mint,
+    fontSize: 14,
+    fontWeight: '700',
+    lineHeight: 20
+  },
+  governanceProposalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 12
+  },
+  governanceProposalCopy: {
+    flex: 1,
+    gap: 4
+  },
+  governanceProposalTitle: {
+    color: palette.text,
+    fontSize: 18,
+    fontWeight: '800'
+  },
+  governanceProposalBadges: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8
+  },
+  governanceStatusPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
+    borderColor: palette.panelBorder
+  },
+  governanceStatusPillSuccess: {
+    backgroundColor: 'rgba(139,247,198,0.14)',
+    borderColor: 'rgba(139,247,198,0.1)'
+  },
+  governanceStatusPillText: {
+    color: palette.muted,
+    fontSize: 12,
+    fontWeight: '800'
+  },
+  governanceStatusPillTextSuccess: {
+    color: palette.mint
+  },
+  governanceMetricsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10
+  },
+  governanceMetricText: {
+    color: palette.muted,
+    fontSize: 13,
+    fontWeight: '700'
+  },
+  governanceVoteActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10
+  },
+  governanceVoteButton: {
+    minHeight: 42,
+    paddingHorizontal: 14,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: palette.primaryButton
+  },
+  governanceVoteButtonText: {
+    color: palette.primaryButtonText,
+    fontSize: 14,
+    fontWeight: '800'
+  },
+  governanceVoteButtonSecondary: {
+    minHeight: 42,
+    paddingHorizontal: 14,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: palette.panelBorder,
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.1)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.76)'
+          : 'rgba(255,255,255,0.06)'
+  },
+  governanceVoteButtonSecondaryText: {
+    color: palette.text,
+    fontSize: 14,
+    fontWeight: '800'
+  },
+  reputationSummaryGrid: {
+    flexDirection: 'row',
+    gap: 10
+  },
+  reputationSummaryCard: {
+    flex: 1,
+    gap: 4,
+    padding: 14,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: palette.panelBorder,
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.1)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.76)'
+          : 'rgba(255,255,255,0.06)'
+  },
+  reputationSummaryLabel: {
+    color: palette.muted,
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.7,
+    textTransform: 'uppercase'
+  },
+  reputationSummaryValue: {
+    color: palette.text,
+    fontSize: 22,
+    fontWeight: '900'
+  },
+  reputationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    padding: 14,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: palette.panelBorder,
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.09)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.72)'
+          : 'rgba(255,255,255,0.05)'
+  },
+  reputationLeading: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12
+  },
+  reputationAvatar: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)'
+  },
+  reputationAvatarImage: {
+    width: '100%',
+    height: '100%'
+  },
+  reputationAvatarText: {
+    color: palette.text,
+    fontSize: 13,
+    fontWeight: '800'
+  },
+  reputationCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 3
+  },
+  reputationName: {
+    color: palette.text,
+    fontSize: 15,
+    fontWeight: '800'
+  },
+  reputationMeta: {
+    color: palette.muted,
+    fontSize: 13,
+    lineHeight: 18
+  },
+  reputationPoints: {
+    alignItems: 'flex-end',
+    gap: 3
+  },
+  reputationPointsMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6
+  },
+  reputationPointsValue: {
+    color: palette.text,
+    fontSize: 18,
+    fontWeight: '900'
+  },
+  reputationPointsLabel: {
+    color: palette.muted,
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase'
+  },
+  reputationSpaceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    padding: 14,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: palette.panelBorder,
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.09)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.72)'
+          : 'rgba(255,255,255,0.05)'
+  },
+  reputationSpaceCopy: {
+    flex: 1,
+    gap: 4
+  },
+  reputationSpaceActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8
+  },
+  reputationSpaceTitle: {
+    color: palette.text,
+    fontSize: 15,
+    fontWeight: '800'
+  },
+  reputationSpaceMono: {
+    color: palette.muted,
+    fontSize: 13,
+    lineHeight: 18,
+    fontFamily: 'Courier'
+  },
+  reputationRemoveButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 94, 122, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 94, 122, 0.14)'
+  },
+  reputationOpenButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.12)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.82)'
+          : 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
+    borderColor: palette.panelBorder
   }
   });
 }

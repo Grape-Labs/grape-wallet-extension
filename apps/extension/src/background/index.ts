@@ -59,6 +59,20 @@ import {
   Transaction,
   TransactionInstruction
 } from '@solana/web3.js';
+import {
+  getAllGovernances,
+  getAllProposals,
+  getGovernance,
+  getGovernanceProgramVersion,
+  getRealm,
+  getVoteRecordsByVoter,
+  getTokenOwnerRecordsByOwner,
+  ProposalState,
+  Vote,
+  VoteChoice,
+  VoteKind,
+  withCastVote
+} from '@solana/spl-governance';
 import { sendEthereumTokenWithLedger, sendEthereumWithLedger } from '../../../../packages/ethereum/src/ledger';
 import { sendMonadTokenWithLedger, sendMonadWithLedger } from '../../../../packages/monad/src/ledger';
 import {
@@ -106,7 +120,10 @@ import type {
   StakeAccountRow,
   TokenHolding,
   WalletAssetsResponse,
-  WalletBridgeQuoteResponse
+  WalletBridgeQuoteResponse,
+  WalletGovernanceResponse,
+  WalletGovernanceVoteResponse,
+  WalletReputationResponse
 } from '../shared/models';
 
 import { filterCollectibleTokens, inferCollectibleMints, sortWalletTokens } from '../shared/assets';
@@ -149,12 +166,16 @@ const TOKEN_PROGRAM_IDS = [
   'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb'
 ] as const;
 const METADATA_PROGRAM_ID = new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s');
+const VINE_REP_PROGRAM_ID = new PublicKey('V1NE6WCWJPRiVFq5DtaN8p87M9DmmUd2zQuVbvLgQwX');
+const DEFAULT_GOVERNANCE_PROGRAM_ID = 'GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPCVZw';
+const GOVERNANCE_GRAPHQL_URL = 'https://grape.shyft.to/v1/graphql/';
 const KNOWN_TOKEN_SYMBOLS: Record<string, string> = {
   [JUPITER_SOL_MINT]: 'SOL',
   EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v: 'USDC'
 };
 const INCIDENT_BATCH_SIZE = 6;
 const ASSET_CACHE_TTL_MS = 45_000;
+const REPUTATION_CACHE_TTL_MS = 120_000;
 const STAKE_RETRY_ATTEMPTS = 3;
 
 function tryParseSolanaPublicKey(value: string): PublicKey | null {
@@ -195,11 +216,94 @@ type CollectibleMetadataHint = {
   imageUri?: string;
 };
 
+type VineSpaceConfig = {
+  daoId: string;
+  repMint: string;
+  currentSeason: number;
+  decayBps: number;
+  configPda: string;
+};
+
+type VineReputationAccount = {
+  season: number;
+  points: bigint;
+};
+
+type GovernanceOwner = {
+  owner: string;
+  name: string;
+  dao: string;
+};
+
+type GovernanceRealmInfo = {
+  daoId: string;
+  name: string;
+  communityMint: string;
+};
+
+type GovernanceMembershipRecord = {
+  pubkey: string;
+  governingTokenMint: string;
+  governingTokenOwner: string;
+  governanceDelegate: string | null;
+  governingTokenDepositAmount: string;
+};
+
+type GovernanceProgramAccount = {
+  pubkey: string;
+  realm: string;
+};
+
+type GovernanceProposalRecord = {
+  pubkey: string;
+  governance: string;
+  governingTokenMint: string;
+  tokenOwnerRecord: string;
+  state: number;
+  descriptionLink: string | null;
+  name: string;
+  draftAt: number | null;
+  votingAt: number | null;
+  maxVotingTime: number | null;
+  yesVotes: string;
+  noVotes: string;
+  abstainVotes: string;
+  denyVotes: string;
+  options: Array<{
+    rank: number;
+    label: string;
+    voteWeight: string;
+    voteResult?: string | null;
+  }>;
+  hasDenyOption: boolean;
+};
+
 type PendingResolver = {
   resolve: (value: unknown) => void;
   reject: (reason: Error) => void;
   debug?: (payload: ProviderDebugPayload) => void;
 };
+
+const GOVERNANCE_OWNERS: GovernanceOwner[] = [
+  { owner: 'GovMaiHfpVPw8BAM1mbdzgmSZYDw2tdP32J2fapoQoYs', name: 'Marinade_DAO', dao: '899YG3yk4F66ZgbNWLHriZHTXSKk9e1kvsKEquW7L6Mo' },
+  { owner: 'GqTPL6qRf5aUuqscLh8Rg2HTxPUXfhhAXDptTLhp1t2J', name: 'Mango', dao: 'DPiH3H3c7t47BMxqTxLsuPQpEC6Kne8GA9VXbxpnZxFE' },
+  { owner: 'GovHgfDPyQ1GwazJTDY2avSVY8GGcpmCapmmCsymRaGe', name: 'Psy_Finance', dao: 'FiG6YoqWnVzUmxFNukcRVXZC51HvLr6mts8nxcm7ScR8' },
+  { owner: 'JPGov2SBA6f7XSJF5R4Si5jEJekGiyrwP2m7gSEqLUs', name: 'Jet_Custody', dao: 'FbpwgUzRPTneoZHDMNnM1zXb7Jm9iY8MzX2mAM8L6f43' },
+  { owner: 'JPGov2SBA6f7XSJF5R4Si5jEJekGiyrwP2m7gSEqLUs', name: 'Jet_Custody', dao: 'ATnhhZJ74xg4mzxDyNQ5YAE1BZ98PhrhAsMS4xNXquvX' },
+  { owner: 'pytGY6tWRgGinSCvRLnSv4fHfBTMoiDGiCsesmHWM6U', name: 'Pyth_Governance', dao: '4ct8XU5tKbMNRphWy4rePsS9kBqPhDdvZoGpmprPaug4' },
+  { owner: 'GMnke6kxYvqoAXgbFGnu84QzvNHoqqTnijWSXYYTFQbB', name: 'MonkeDAO', dao: 'B1CxhV1khhj7n5mi5hebbivesqH9mvXr5Hfh2nD2UCh6' },
+  { owner: 'hgovkRU6Ghe1Qoyb54HdSLdqN7VtxaifBzRmh9jtd3S', name: 'Helium', dao: '2VfPJn8ML1hNBnsEBo7SzmG11UJc7gbY8b23A3K8expd' },
+  { owner: 'MGovW65tDhMMcpEmsegpsdgvzb6zUwGsNjhXFxRAnjd', name: 'MEAN_DAO', dao: '5o6gEoeJBpuXT1H1ijFTq3KcSGx7ayabdG2hji7cB3FG' },
+  { owner: 'J9uWvULFL47gtCPvgR3oN7W357iehn5WF2Vn9MJvcSxz', name: 'Orca', dao: '66Du7mXgS2KMQBUk6m9h3TszMjqZqdWhsG3Duuf69VNW' },
+  { owner: 'ALLGnZikNaJQeN4KCAbDjZRSzvSefUdeTpk18yfizZvT', name: 'ALLOVR_DAO', dao: 'A7nud4wxpAySc7Ai11vwXtkez79tHvcEvSquFBxw4iDh' },
+  { owner: 'AEauWRrpn9Cs6GXujzdp1YhMmv2288kBt3SdEcPYEerr', name: 'Metaplex_DAO', dao: 'DA5G7QQbFioZ6K33wQcH8fVdgFcnaDjLD7DLQkapZg5X' },
+  { owner: 'GMpXgTSJt2nJ7zjD1RwbT2QyPhKqD2MjAZuEaLsfPYLF', name: 'Metaplex_Genesis', dao: 'Cdui9Va8XnKVng3VGZXcfBFF6XSxbqSi2XruMc7iu817' },
+  { owner: 'GmtpXy362L8cZfkRmTZMYunWVe8TyRjX5B7sodPZ63LJ', name: 'Metaplex_Found', dao: '2sEcHwzsNBwNoTM1yAXjtF1HTMQKUAXf8ivtdpSpo9Fv' },
+  { owner: 'AVoAYTs36yB5izAaBkxRG67wL1AMwG3vo41hKtUSb8is', name: 'Serum', dao: '3MMDxjv1SzEFQDKryT7csAvaydYtrgMAc3L9xL9CVLCg' },
+  { owner: '5hAykmD4YGcQ7Am3N7nC9kyELq6CThAkU82nhNKDJiCy', name: 'SOCEAN', dao: '759qyfKDMMuo9v36tW7fbGanL63mZFPNbhU7zjPrkuGK' },
+  { owner: 'jdaoDN37BrVRvxuXSeyR7xE5Z9CAoQApexGrQJbnj6V', name: 'JungleDeFi_DAO', dao: '5g94Ver64ruf9CGBL3k2oQGdKCUt4QKjN7NQojSrHAwH' },
+  { owner: 'jtogvBNH3WBSWDYD5FJfQP2ZxNTuf82zL8GkEhPeaJx', name: 'Jito', dao: 'jjCAwuuNpJCNMLAanpwgJZ6cdXzLPXe2GfD6TaDQBXt' }
+];
 
 type UnlockedSecretCache = Record<string, {
   secret: VaultSecret;
@@ -254,8 +358,20 @@ class WalletController {
   private readonly pendingApprovals = new Map<string, PendingResolver>();
   private unlockedSecrets: UnlockedSecretCache = {};
   private readonly assetRefreshes = new Map<string, Promise<WalletAssetsResponse>>();
+  private readonly reputationRefreshes = new Map<string, Promise<WalletReputationResponse>>();
+  private readonly reputationCache = new Map<string, { cachedAt: number; data: WalletReputationResponse }>();
+  private readonly governanceRefreshes = new Map<string, Promise<WalletGovernanceResponse>>();
+  private readonly governanceCache = new Map<string, { cachedAt: number; data: WalletGovernanceResponse }>();
 
   private getAssetCacheKey(walletId: string, network: 'mainnet-beta' | 'devnet', publicKey: string) {
+    return `${walletId}:${network}:${publicKey}`;
+  }
+
+  private getReputationCacheKey(walletId: string, network: 'mainnet-beta' | 'devnet', publicKey: string) {
+    return `${walletId}:${network}:${publicKey}`;
+  }
+
+  private getGovernanceCacheKey(walletId: string, network: 'mainnet-beta' | 'devnet', publicKey: string) {
     return `${walletId}:${network}:${publicKey}`;
   }
 
@@ -1098,7 +1214,8 @@ class WalletController {
           : undefined,
       activeAccount: activeAccount ? { publicKey: activeAccount.publicKey } : undefined,
       recentRecipients: activeWallet?.recentRecipients ?? [],
-      canUseUnlockedSigner: !!(activeWallet && activeWallet.signer.kind !== 'watch-only' && this.unlockedSecrets[activeWallet.id]) && !session.locked
+      canUseUnlockedSigner: !!(activeWallet && activeWallet.signer.kind !== 'watch-only' && this.unlockedSecrets[activeWallet.id]) && !session.locked,
+      unlockedWalletIds: session.locked ? [] : Object.keys(this.unlockedSecrets)
     };
   }
 
@@ -1301,6 +1418,28 @@ class WalletController {
       ...walletState,
       idleTimeoutMs
     });
+    return this.getStateResponse();
+  }
+
+  async setTrackedReputationSpaces(daoIds: string[]) {
+    const walletState = await this.getWalletState();
+    const nextDaoIds = Array.from(new Set(daoIds.map((entry) => entry.trim()).filter((entry) => !!entry)));
+    await walletStateStorage.set({
+      ...walletState,
+      trackedReputationSpaceIds: nextDaoIds
+    });
+    this.reputationCache.clear();
+    return this.getStateResponse();
+  }
+
+  async setTrackedGovernanceDaos(daoIds: string[]) {
+    const walletState = await this.getWalletState();
+    const nextDaoIds = Array.from(new Set(daoIds.map((entry) => entry.trim()).filter((entry) => !!entry)));
+    await walletStateStorage.set({
+      ...walletState,
+      trackedGovernanceDaoIds: nextDaoIds
+    });
+    this.governanceCache.clear();
     return this.getStateResponse();
   }
 
@@ -1542,6 +1681,282 @@ class WalletController {
     }
 
     return this.refreshAssetsCache(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey);
+  }
+
+  private async refreshReputationCache(
+    walletId: string,
+    network: 'mainnet-beta' | 'devnet',
+    publicKey: string
+  ): Promise<WalletReputationResponse> {
+    const cacheKey = this.getReputationCacheKey(walletId, network, publicKey);
+    const inFlight = this.reputationRefreshes.get(cacheKey);
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const refreshPromise = (async () => {
+      const walletState = await this.getWalletState();
+      const targetWallet = walletState.wallets.find((wallet) => wallet.id === walletId);
+      if (!targetWallet || targetWallet.chain !== 'solana') {
+        const empty = {
+          spaces: [],
+          totalPoints: '0',
+          source: 'none' as const,
+          network,
+          refreshedAt: Date.now()
+        };
+        this.reputationCache.set(cacheKey, { cachedAt: Date.now(), data: empty });
+        return empty;
+      }
+
+      const owner = tryParseSolanaPublicKey(publicKey);
+      if (!owner) {
+        const empty = {
+          spaces: [],
+          totalPoints: '0',
+          source: 'none' as const,
+          network,
+          refreshedAt: Date.now()
+        };
+        this.reputationCache.set(cacheKey, { cachedAt: Date.now(), data: empty });
+        return empty;
+      }
+
+      const connection = this.createConnection(network, walletState);
+      let spaces: WalletReputationResponse['spaces'] = [];
+      try {
+        spaces = await fetchOgReputationForWallet(connection, owner, walletState.trackedReputationSpaceIds);
+      } catch {
+        spaces = [];
+      }
+      const totalPoints = spaces.reduce((sum, entry) => sum + BigInt(entry.points), BigInt(0)).toString();
+      const result: WalletReputationResponse = {
+        spaces,
+        totalPoints,
+        source: spaces.length > 0 ? 'vine' : 'none',
+        network,
+        refreshedAt: Date.now()
+      };
+      this.reputationCache.set(cacheKey, { cachedAt: Date.now(), data: result });
+      return result;
+    })().finally(() => {
+      this.reputationRefreshes.delete(cacheKey);
+    });
+
+    this.reputationRefreshes.set(cacheKey, refreshPromise);
+    return refreshPromise;
+  }
+
+  async getReputation() {
+    const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
+    if (!activeAccount || selectedWallet.chain !== 'solana') {
+      return {
+        spaces: [],
+        totalPoints: '0',
+        source: 'none' as const,
+        network: walletState.selectedNetwork,
+        refreshedAt: Date.now()
+      };
+    }
+
+    const cacheKey = this.getReputationCacheKey(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey);
+    const cached = this.reputationCache.get(cacheKey);
+    if (cached && Date.now() - cached.cachedAt < REPUTATION_CACHE_TTL_MS) {
+      return cached.data;
+    }
+
+    return this.refreshReputationCache(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey);
+  }
+
+  private async refreshGovernanceCache(
+    walletId: string,
+    network: 'mainnet-beta' | 'devnet',
+    publicKey: string
+  ): Promise<WalletGovernanceResponse> {
+    const cacheKey = this.getGovernanceCacheKey(walletId, network, publicKey);
+    const inFlight = this.governanceRefreshes.get(cacheKey);
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const refreshPromise = (async () => {
+      const walletState = await this.getWalletState();
+      const targetWallet = walletState.wallets.find((wallet) => wallet.id === walletId);
+      const trackedDaos = walletState.trackedGovernanceDaoIds;
+      if (!targetWallet || targetWallet.chain !== 'solana') {
+        const empty: WalletGovernanceResponse = {
+          trackedDaos,
+          discoveredDaos: [],
+          memberDaos: 0,
+          proposals: [],
+          source: 'none',
+          network,
+          refreshedAt: Date.now()
+        };
+        this.governanceCache.set(cacheKey, { cachedAt: Date.now(), data: empty });
+        return empty;
+      }
+
+      const owner = tryParseSolanaPublicKey(publicKey);
+      if (!owner) {
+        const empty: WalletGovernanceResponse = {
+          trackedDaos,
+          discoveredDaos: [],
+          memberDaos: 0,
+          proposals: [],
+          source: 'none',
+          network,
+          refreshedAt: Date.now()
+        };
+        this.governanceCache.set(cacheKey, { cachedAt: Date.now(), data: empty });
+        return empty;
+      }
+
+      const connection = this.createConnection(network, walletState);
+      let result: WalletGovernanceResponse;
+      try {
+        result = await fetchGovernanceForWallet(connection, owner, trackedDaos);
+      } catch {
+        result = {
+          trackedDaos,
+          discoveredDaos: [],
+          memberDaos: 0,
+          proposals: [],
+          source: 'none',
+          network,
+          refreshedAt: Date.now()
+        };
+      }
+      this.governanceCache.set(cacheKey, { cachedAt: Date.now(), data: result });
+      return result;
+    })().finally(() => {
+      this.governanceRefreshes.delete(cacheKey);
+    });
+
+    this.governanceRefreshes.set(cacheKey, refreshPromise);
+    return refreshPromise;
+  }
+
+  async getGovernance() {
+    const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
+    if (!activeAccount || selectedWallet.chain !== 'solana') {
+      return {
+        trackedDaos: walletState.trackedGovernanceDaoIds,
+        discoveredDaos: [],
+        memberDaos: 0,
+        proposals: [],
+        source: 'none' as const,
+        network: walletState.selectedNetwork,
+        refreshedAt: Date.now()
+      };
+    }
+
+    const cacheKey = this.getGovernanceCacheKey(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey);
+    const cached = this.governanceCache.get(cacheKey);
+    if (cached && Date.now() - cached.cachedAt < REPUTATION_CACHE_TTL_MS) {
+      return cached.data;
+    }
+
+    return this.refreshGovernanceCache(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey);
+  }
+
+  async castGovernanceVote(input: {
+    daoId: string;
+    governanceId: string;
+    proposalId: string;
+    proposalOwnerRecordId: string;
+    tokenOwnerRecordId: string;
+    governingTokenMint: string;
+    voteKind: 'approve' | 'deny' | 'abstain';
+    choiceRank?: number;
+    password?: string;
+  }): Promise<WalletGovernanceVoteResponse> {
+    const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    this.assertInteractiveWallet(selectedWallet);
+    if (selectedWallet.chain !== 'solana') {
+      throw new RpcError('UNSUPPORTED_CHAIN', 'Governance voting is currently supported for Solana wallets only.');
+    }
+
+    const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
+    if (!activeAccount) {
+      throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
+    }
+
+    const owner = tryParseSolanaPublicKey(activeAccount.publicKey);
+    if (!owner) {
+      throw new RpcError('INVALID_PUBLIC_KEY', 'Active wallet address is invalid.');
+    }
+
+    const governanceOwner = findGovernanceOwnerByDao(input.daoId);
+    const programId = new PublicKey(governanceOwner.owner);
+    const realmPk = new PublicKey(input.daoId);
+    const governancePk = new PublicKey(input.governanceId);
+    const proposalPk = new PublicKey(input.proposalId);
+    const proposalOwnerRecordPk = new PublicKey(input.proposalOwnerRecordId);
+    const tokenOwnerRecordPk = new PublicKey(input.tokenOwnerRecordId);
+    const governingTokenMintPk = new PublicKey(input.governingTokenMint);
+    const connection = this.createConnection(walletState.selectedNetwork, walletState);
+
+    const [programVersion, proposalAccount, governanceAccount, realmAccount] = await Promise.all([
+      getGovernanceProgramVersion(connection, programId),
+      getProposal(connection, proposalPk),
+      getGovernance(connection, governancePk),
+      getRealm(connection, realmPk)
+    ]);
+
+    if (proposalAccount.account.state !== ProposalState.Voting) {
+      throw new RpcError('PROPOSAL_NOT_VOTING', 'This proposal is not in the voting window anymore.');
+    }
+
+    const instructions: TransactionInstruction[] = [];
+    const vote =
+      input.voteKind === 'deny'
+        ? new Vote({ voteType: VoteKind.Deny, approveChoices: undefined, deny: true, veto: undefined })
+        : input.voteKind === 'abstain'
+          ? new Vote({ voteType: VoteKind.Abstain, approveChoices: undefined, deny: undefined, veto: undefined })
+          : new Vote({
+              voteType: VoteKind.Approve,
+              approveChoices: [new VoteChoice({ rank: input.choiceRank ?? 0, weightPercentage: 100 })],
+              deny: undefined,
+              veto: undefined
+            });
+
+    await withCastVote(
+      instructions,
+      programId,
+      programVersion,
+      realmAccount.pubkey,
+      governanceAccount.pubkey,
+      proposalAccount.pubkey,
+      proposalOwnerRecordPk,
+      tokenOwnerRecordPk,
+      owner,
+      governingTokenMintPk,
+      vote,
+      owner
+    );
+
+    const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
+    const { blockhash } = await connection.getLatestBlockhash('confirmed');
+    const transaction = new Transaction({
+      feePayer: owner,
+      recentBlockhash: blockhash
+    });
+    transaction.add(...instructions);
+    const signature = await this.submitTransactionForWallet(selectedWallet, activeAccount.publicKey, secret, connection, transaction);
+
+    this.governanceCache.clear();
+
+    return {
+      signature,
+      daoId: input.daoId,
+      proposalId: input.proposalId,
+      voteKind: input.voteKind,
+      choiceLabel: input.voteKind === 'approve' ? `Option ${input.choiceRank ?? 0}` : undefined,
+      network: walletState.selectedNetwork
+    };
   }
 
   async getStakeAccounts() {
@@ -2614,27 +3029,57 @@ class WalletController {
     }
 
     const inputDecimals = input.inputAsset.kind === 'spl-token' ? input.inputAsset.decimals : 9;
+    const amountBaseUnits = parseDecimalAmount(input.amount, inputDecimals).toString();
     const quoteResponse = await fetchJupiterQuote({
       inputMint,
       outputMint: input.outputMint,
-      amount: parseDecimalAmount(input.amount, inputDecimals).toString(),
+      amount: amountBaseUnits,
       slippageBps: input.slippageBps
     });
+    const directQuoteResponse =
+      quoteResponse.routePlan && quoteResponse.routePlan.length === 1
+        ? null
+        : await fetchJupiterQuote({
+            inputMint,
+            outputMint: input.outputMint,
+            amount: amountBaseUnits,
+            slippageBps: input.slippageBps,
+            onlyDirectRoutes: true
+          }).catch(() => null);
     const outputDecimals = await getMintDecimals(connection, input.outputMint);
 
+    const routes = [quoteResponse, directQuoteResponse]
+      .filter((entry): entry is JupiterQuoteResponse => !!entry)
+      .map((entry, index) => {
+        const routeLabels = extractSwapRouteLabels(entry);
+        const isDirectCandidate = index === 1;
+        return {
+          id: isDirectCandidate ? 'direct' : 'best',
+          label: isDirectCandidate ? 'Direct route' : 'Best route',
+          quoteResponse: entry,
+          outputAmountUi: formatUiAmount(entry.outAmount, outputDecimals),
+          priceImpactPct: typeof entry.priceImpactPct === 'string' ? entry.priceImpactPct : null,
+          routeLabels
+        };
+      })
+      .filter((route, index, allRoutes) => {
+        return (
+          allRoutes.findIndex((candidate) => {
+            return (
+              candidate.outputAmountUi === route.outputAmountUi &&
+              candidate.routeLabels.join('|') === route.routeLabels.join('|')
+            );
+          }) === index
+        );
+      });
+
     return {
-      quoteResponse,
       inputMint,
       outputMint: input.outputMint,
       inputAmountUi: input.amount,
-      outputAmountUi: formatUiAmount(quoteResponse.outAmount, outputDecimals),
-      priceImpactPct: typeof quoteResponse.priceImpactPct === 'string' ? quoteResponse.priceImpactPct : null,
-      routeLabels: Array.isArray(quoteResponse.routePlan)
-        ? quoteResponse.routePlan
-            .map((route) => (typeof route?.swapInfo?.label === 'string' ? route.swapInfo.label : null))
-            .filter((label): label is string => !!label)
-        : [],
-      slippageBps: input.slippageBps
+      slippageBps: input.slippageBps,
+      selectedRouteId: routes[0]?.id ?? 'best',
+      routes
     };
   }
 
@@ -3101,12 +3546,19 @@ class WalletController {
       return { publicKey: approval.publicKey };
     }
 
-    const { walletState, selectedWallet } = await this.ensureReadyWallet();
-    this.assertInteractiveWallet(selectedWallet);
-    const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, password);
+    const { walletState } = await this.ensureReadyWallet();
+    const approvalWallet =
+      (approval.walletId ? walletState.wallets.find((wallet) => wallet.id === approval.walletId) : undefined) ??
+      getSelectedWallet(walletState);
+    if (!approvalWallet) {
+      throw new RpcError('WALLET_NOT_FOUND', 'The wallet for this approval could not be found.');
+    }
+
+    this.assertInteractiveWallet(approvalWallet);
+    const secret = await this.getUnlockedSecret(approvalWallet.id, approvalWallet.vault, password);
     switch (approval.kind) {
       case 'sign-message': {
-        if (selectedWallet.signer.kind === 'ledger') {
+        if (approvalWallet.signer.kind === 'ledger') {
           throw new RpcError('LEDGER_UNSUPPORTED', 'Ledger message signing is not supported in this MVP.');
         }
 
@@ -3125,7 +3577,7 @@ class WalletController {
         const transactionRequest = approval.request as Extract<ProviderRequest, { method: 'signTransaction' }>;
         return {
           transaction:
-            selectedWallet.signer.kind === 'ledger'
+            approvalWallet.signer.kind === 'ledger'
               ? throwLedgerUnsupported()
               : signSerializedTransaction(transactionRequest.params.transaction, resolveSolanaVaultSecret(secret))
         };
@@ -3134,7 +3586,7 @@ class WalletController {
         const transactionsRequest = approval.request as Extract<ProviderRequest, { method: 'signAllTransactions' }>;
         return {
           transactions:
-            selectedWallet.signer.kind === 'ledger'
+            approvalWallet.signer.kind === 'ledger'
               ? throwLedgerUnsupported()
               : signSerializedTransactions(transactionsRequest.params.transactions, resolveSolanaVaultSecret(secret))
         };
@@ -3147,7 +3599,7 @@ class WalletController {
         try {
           return {
             signature:
-              selectedWallet.signer.kind === 'ledger'
+              approvalWallet.signer.kind === 'ledger'
                 ? throwLedgerUnsupported()
                 : await signAndSendSerializedTransaction(
                     transactionRequest.params.transaction,
@@ -3181,6 +3633,7 @@ class WalletController {
       origin: request.origin,
       createdAt: state.createdAt,
       publicKey,
+      walletId,
       network,
       requestedPermissions: extras?.requestedPermissions,
       transactionSummary: extras?.transactionSummary,
@@ -3391,6 +3844,1176 @@ function emitProviderDebug(port: chrome.runtime.Port, payload: ProviderDebugPayl
   }
 }
 
+function normalizeRemoteUrl(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+  if (value.startsWith('ipfs://')) {
+    return `https://ipfs.io/ipfs/${value.slice('ipfs://'.length)}`;
+  }
+  if (value.startsWith('ar://')) {
+    return `https://arweave.net/${value.slice('ar://'.length)}`;
+  }
+  return value;
+}
+
+function utf8Bytes(value: string) {
+  return new TextEncoder().encode(value);
+}
+
+function u16leBytes(value: number) {
+  const buffer = new Uint8Array(2);
+  const view = new DataView(buffer.buffer);
+  view.setUint16(0, value & 0xffff, true);
+  return buffer;
+}
+
+async function sha256Bytes(value: Uint8Array): Promise<Uint8Array> {
+  const hash = await crypto.subtle.digest('SHA-256', value);
+  return new Uint8Array(hash);
+}
+
+async function anchorAccountDiscriminator(name: string) {
+  const preimage = new TextEncoder().encode(`account:${name}`);
+  const hash = await sha256Bytes(preimage);
+  return hash.slice(0, 8);
+}
+
+function bytesEqual(left: Uint8Array, right: Uint8Array) {
+  if (left.length !== right.length) {
+    return false;
+  }
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function readUint16LE(bytes: Uint8Array, offset: number) {
+  return bytes[offset] | (bytes[offset + 1] << 8);
+}
+
+function readUint64LE(bytes: Uint8Array, offset: number) {
+  let value = BigInt(0);
+  for (let index = 7; index >= 0; index -= 1) {
+    value = (value << BigInt(8)) + BigInt(bytes[offset + index]);
+  }
+  return value;
+}
+
+function bigintToSafeNumber(value: bigint): number | null {
+  const max = BigInt(Number.MAX_SAFE_INTEGER);
+  if (value < BigInt(0) || value > max) {
+    return null;
+  }
+  return Number(value);
+}
+
+async function decodeVineSpaceConfig(data: Uint8Array): Promise<VineSpaceConfig | null> {
+  const discriminator = await anchorAccountDiscriminator('ReputationConfig');
+  if (data.length < 113 || !bytesEqual(data.subarray(0, 8), discriminator)) {
+    return null;
+  }
+
+  let offset = 8;
+  offset += 1;
+  const daoId = new PublicKey(data.subarray(offset, offset + 32)).toBase58();
+  offset += 32;
+  offset += 32;
+  const repMint = new PublicKey(data.subarray(offset, offset + 32)).toBase58();
+  offset += 32;
+  const currentSeason = readUint16LE(data, offset);
+  offset += 2;
+  const decayBps = readUint16LE(data, offset);
+
+  return {
+    daoId,
+    repMint,
+    currentSeason,
+    decayBps,
+    configPda: ''
+  };
+}
+
+async function decodeVineReputationAccount(data: Uint8Array): Promise<VineReputationAccount | null> {
+  const discriminator = await anchorAccountDiscriminator('Reputation');
+  if (data.length < 64 || !bytesEqual(data.subarray(0, 8), discriminator)) {
+    return null;
+  }
+
+  let offset = 8;
+  offset += 1;
+  if (data.length >= 92) {
+    offset += 32;
+  }
+  offset += 32;
+  const season = readUint16LE(data, offset);
+  offset += 2;
+  const points = readUint64LE(data, offset);
+
+  return {
+    season,
+    points
+  };
+}
+
+function getVineConfigPda(daoId: PublicKey) {
+  return PublicKey.findProgramAddressSync([utf8Bytes('config'), daoId.toBytes()], VINE_REP_PROGRAM_ID)[0];
+}
+
+function getVineProjectMetaPda(daoId: PublicKey) {
+  return PublicKey.findProgramAddressSync([utf8Bytes('project_meta'), daoId.toBytes()], VINE_REP_PROGRAM_ID)[0];
+}
+
+function getVineReputationPda(configPda: PublicKey, user: PublicKey, season: number) {
+  return PublicKey.findProgramAddressSync(
+    [utf8Bytes('reputation'), configPda.toBytes(), user.toBytes(), u16leBytes(season)],
+    VINE_REP_PROGRAM_ID
+  )[0];
+}
+
+async function decodeVineProjectMetadata(data: Uint8Array) {
+  const discriminator = await anchorAccountDiscriminator('ProjectMetadata');
+  if (data.length < 46 || !bytesEqual(data.subarray(0, 8), discriminator)) {
+    return null;
+  }
+
+  let offset = 8;
+  offset += 1;
+  offset += 32;
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const uriLength = view.getUint32(offset, true);
+  offset += 4;
+  if (offset + uriLength + 1 > data.length) {
+    return null;
+  }
+
+  const metadataUri = new TextDecoder().decode(data.slice(offset, offset + uriLength));
+  return {
+    metadataUri
+  };
+}
+
+async function fetchVineSpaceMetadata(
+  connection: Connection,
+  spaces: VineSpaceConfig[]
+): Promise<Record<string, { name?: string; symbol?: string; description?: string; imageUri?: string; metadataUri?: string | null }>> {
+  if (spaces.length === 0) {
+    return {};
+  }
+
+  const metadataPdas = spaces.map((space) => getVineProjectMetaPda(new PublicKey(space.daoId)));
+
+  const metadataAccounts = await connection.getMultipleAccountsInfo(metadataPdas, 'confirmed');
+  const entries = await Promise.all(
+    spaces.map(async (space, index) => {
+      const parsedMetadata = metadataAccounts[index]?.data
+        ? await decodeVineProjectMetadata(new Uint8Array(metadataAccounts[index]!.data))
+        : null;
+      const normalizedMetadataUri = normalizeRemoteUrl(parsedMetadata?.metadataUri ?? null);
+      let description: string | undefined;
+      let imageUri: string | undefined;
+      let jsonName: string | undefined;
+      let jsonSymbol: string | undefined;
+
+      if (normalizedMetadataUri) {
+        try {
+          const response = await fetch(normalizedMetadataUri, { cache: 'no-store' });
+          if (response.ok) {
+            const payload = (await response.json()) as {
+              name?: unknown;
+              symbol?: unknown;
+              description?: unknown;
+              image?: unknown;
+            };
+            jsonName = typeof payload.name === 'string' && payload.name.trim() ? payload.name.trim() : undefined;
+            jsonSymbol = typeof payload.symbol === 'string' && payload.symbol.trim() ? payload.symbol.trim() : undefined;
+            description =
+              typeof payload.description === 'string' && payload.description.trim() ? payload.description.trim() : undefined;
+            imageUri =
+              typeof payload.image === 'string' && payload.image.trim()
+                ? normalizeRemoteUrl(payload.image.trim()) ?? undefined
+                : undefined;
+          }
+        } catch {
+          imageUri = undefined;
+        }
+      }
+
+      return [
+        space.daoId,
+        {
+          name: jsonName ?? undefined,
+          symbol: jsonSymbol ?? undefined,
+          description,
+          imageUri,
+          metadataUri: normalizedMetadataUri
+        }
+      ] as const;
+    })
+  );
+
+  return Object.fromEntries(entries);
+}
+
+async function fetchTrackedVineSpaceConfigs(connection: Connection, trackedDaoIds: string[]): Promise<VineSpaceConfig[]> {
+  const uniqueDaoIds = Array.from(new Set(trackedDaoIds));
+  const daoEntries = uniqueDaoIds.flatMap((daoId) => {
+    try {
+      const daoPublicKey = new PublicKey(daoId);
+      return [{ daoId, daoPublicKey, configPda: getVineConfigPda(daoPublicKey) }];
+    } catch {
+      return [];
+    }
+  });
+
+  if (daoEntries.length === 0) {
+    return [];
+  }
+
+  const accounts = await connection.getMultipleAccountsInfo(
+    daoEntries.map((entry) => entry.configPda),
+    'confirmed'
+  );
+
+  const decodedEntries = await Promise.all(
+    daoEntries.map(async (entry, index) => {
+      const accountInfo = accounts[index];
+      if (!accountInfo?.data) {
+        return null;
+      }
+      const decoded = await decodeVineSpaceConfig(new Uint8Array(accountInfo.data));
+      if (!decoded) {
+        return null;
+      }
+      return {
+        ...decoded,
+        configPda: entry.configPda.toBase58()
+      };
+    })
+  );
+
+  return decodedEntries.filter((entry): entry is VineSpaceConfig => !!entry);
+}
+
+async function fetchAllVineSpaceConfigs(connection: Connection): Promise<VineSpaceConfig[]> {
+  const configsResult = await connection.getProgramAccounts(VINE_REP_PROGRAM_ID, {
+    commitment: 'confirmed'
+  });
+
+  const decodedEntries = await Promise.all(
+    configsResult.map(async (account) => {
+      const decoded = await decodeVineSpaceConfig(new Uint8Array(account.account.data));
+      if (!decoded) {
+        return null;
+      }
+      const expected = getVineConfigPda(new PublicKey(decoded.daoId)).toBase58();
+      if (expected !== account.pubkey.toBase58()) {
+        return null;
+      }
+      return {
+        ...decoded,
+        configPda: account.pubkey.toBase58()
+      };
+    })
+  );
+
+  return decodedEntries.filter((entry): entry is VineSpaceConfig => !!entry);
+}
+
+async function fetchOgReputationForWallet(
+  connection: Connection,
+  owner: PublicKey,
+  trackedDaoIds: string[] = []
+): Promise<WalletReputationResponse['spaces']> {
+  const configs =
+    trackedDaoIds.length > 0
+      ? await fetchTrackedVineSpaceConfigs(connection, trackedDaoIds)
+      : await fetchAllVineSpaceConfigs(connection);
+
+  const reputationRequests = configs.flatMap((space) => {
+    const configPda = new PublicKey(space.configPda);
+    return Array.from({ length: Math.max(0, space.currentSeason) }, (_value, index) => {
+      const season = index + 1;
+      return {
+        daoId: space.daoId,
+        repMint: space.repMint,
+        currentSeason: space.currentSeason,
+        season,
+        pda: getVineReputationPda(configPda, owner, season)
+      };
+    });
+  });
+  const decayByDao = new Map(configs.map((space) => [space.daoId, Math.max(0, Math.min(1, space.decayBps / 10000))] as const));
+
+  const reputationByDao = new Map<
+    string,
+    {
+      totalPoints: bigint;
+      latestSeasonWithPoints: number;
+      latestSeasonPoints: bigint;
+      effectivePoints: bigint;
+      seasonCount: number;
+    }
+  >();
+  const chunkSize = 100;
+  for (let startIndex = 0; startIndex < reputationRequests.length; startIndex += chunkSize) {
+    const chunk = reputationRequests.slice(startIndex, startIndex + chunkSize);
+    const accounts = await connection.getMultipleAccountsInfo(chunk.map((entry) => entry.pda), 'confirmed');
+    for (let index = 0; index < chunk.length; index += 1) {
+      const accountInfo = accounts[index];
+      if (!accountInfo?.data) {
+        continue;
+      }
+      const decoded = await decodeVineReputationAccount(new Uint8Array(accountInfo.data));
+      if (!decoded || decoded.points <= BigInt(0)) {
+        continue;
+      }
+
+      const daoId = chunk[index].daoId;
+      const currentSeason = chunk[index].currentSeason;
+      const seasonsAgo = Math.max(0, currentSeason - decoded.season);
+      const multiplier = Math.pow(decayByDao.get(daoId) ?? 1, seasonsAgo);
+      const effectivePointsNumber = bigintToSafeNumber(decoded.points);
+      const effectivePoints =
+        effectivePointsNumber === null ? decoded.points : BigInt(Math.round(effectivePointsNumber * multiplier));
+      const current = reputationByDao.get(daoId);
+      if (!current) {
+        reputationByDao.set(daoId, {
+          totalPoints: decoded.points,
+          latestSeasonWithPoints: decoded.season,
+          latestSeasonPoints: decoded.points,
+          effectivePoints,
+          seasonCount: 1
+        });
+        continue;
+      }
+
+      reputationByDao.set(daoId, {
+        totalPoints: current.totalPoints + decoded.points,
+        latestSeasonWithPoints: Math.max(current.latestSeasonWithPoints, decoded.season),
+        latestSeasonPoints:
+          decoded.season >= current.latestSeasonWithPoints ? decoded.points : current.latestSeasonPoints,
+        effectivePoints: current.effectivePoints + effectivePoints,
+        seasonCount: current.seasonCount + 1
+      });
+    }
+  }
+
+  const matchedSpaces = configs.filter((space) => reputationByDao.has(space.daoId));
+  const metadataByDao = await fetchVineSpaceMetadata(connection, matchedSpaces);
+
+  return matchedSpaces
+    .map((space) => {
+      const reputation = reputationByDao.get(space.daoId);
+      if (!reputation) {
+        return null;
+      }
+
+      const metadata = metadataByDao[space.daoId];
+      return {
+        daoId: space.daoId,
+        repMint: space.repMint,
+        currentSeason: space.currentSeason,
+        latestSeasonWithPoints: reputation.latestSeasonWithPoints,
+        seasonCount: reputation.seasonCount,
+        points: reputation.totalPoints.toString(),
+        latestSeasonPoints: reputation.latestSeasonPoints.toString(),
+        effectivePoints: reputation.effectivePoints.toString(),
+        metadataUri: metadata?.metadataUri ?? null,
+        name: metadata?.name,
+        symbol: metadata?.symbol,
+        description: metadata?.description,
+        imageUri: metadata?.imageUri
+      };
+    })
+    .filter((entry): entry is WalletReputationResponse['spaces'][number] => !!entry)
+    .sort((left, right) => {
+      const leftPoints = BigInt(left.points);
+      const rightPoints = BigInt(right.points);
+      if (rightPoints > leftPoints) {
+        return 1;
+      }
+      if (rightPoints < leftPoints) {
+        return -1;
+      }
+      return left.daoId.localeCompare(right.daoId);
+    });
+}
+
+function findGovernanceOwnerByDao(daoId: string): GovernanceOwner {
+  return (
+    GOVERNANCE_OWNERS.find((entry) => entry.dao === daoId) ?? {
+      owner: DEFAULT_GOVERNANCE_PROGRAM_ID,
+      name: DEFAULT_GOVERNANCE_PROGRAM_ID,
+      dao: daoId
+    }
+  );
+}
+
+function getGovernanceNamespaces(): Array<{ namespace: string; programId: string }> {
+  const seen = new Set<string>();
+  const entries = [
+    { namespace: DEFAULT_GOVERNANCE_PROGRAM_ID, programId: DEFAULT_GOVERNANCE_PROGRAM_ID },
+    ...GOVERNANCE_OWNERS.map((entry) => ({ namespace: entry.name, programId: entry.owner }))
+  ];
+
+  return entries.filter((entry) => {
+    const key = `${entry.namespace}:${entry.programId}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function escapeGraphqlString(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function parseGovernanceNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (/^0x/i.test(trimmed)) {
+    const parsed = Number.parseInt(trimmed, 16);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseGovernanceBigIntString(value: unknown): string {
+  if (typeof value === 'bigint') {
+    return value.toString();
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return BigInt(Math.trunc(value)).toString();
+  }
+  if (typeof value !== 'string') {
+    return '0';
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return '0';
+  }
+  try {
+    return BigInt(trimmed).toString();
+  } catch {
+    try {
+      return BigInt(`0x${trimmed.replace(/^0x/i, '')}`).toString();
+    } catch {
+      return '0';
+    }
+  }
+}
+
+function formatProposalStateLabel(stateCode: number): string {
+  switch (stateCode) {
+    case ProposalState.Draft:
+      return 'Draft';
+    case ProposalState.SigningOff:
+      return 'Signing Off';
+    case ProposalState.Voting:
+      return 'Voting';
+    case ProposalState.Succeeded:
+      return 'Succeeded';
+    case ProposalState.Executing:
+      return 'Executing';
+    case ProposalState.Completed:
+      return 'Completed';
+    case ProposalState.Cancelled:
+      return 'Cancelled';
+    case ProposalState.Defeated:
+      return 'Defeated';
+    case ProposalState.ExecutingWithErrors:
+      return 'Executing With Errors';
+    case ProposalState.Vetoed:
+      return 'Vetoed';
+    default:
+      return 'Unknown';
+  }
+}
+
+function isActiveGovernanceProposalState(stateCode: number): boolean {
+  return stateCode === ProposalState.Draft || stateCode === ProposalState.SigningOff || stateCode === ProposalState.Voting;
+}
+
+async function fetchGovernanceGraphql<T>(query: string): Promise<T> {
+  const response = await fetch(GOVERNANCE_GRAPHQL_URL, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'accept-encoding': 'gzip'
+    },
+    body: JSON.stringify({ query }),
+    cache: 'no-store'
+  });
+
+  if (!response.ok) {
+    throw new Error(`Governance GraphQL request failed with ${response.status}.`);
+  }
+
+  const payload = (await response.json()) as {
+    data?: T;
+    errors?: Array<{ message?: string }>;
+  };
+
+  if (Array.isArray(payload.errors) && payload.errors.length > 0) {
+    throw new Error(payload.errors.map((entry) => entry.message || 'Unknown GraphQL error').join('; '));
+  }
+
+  if (!payload.data) {
+    throw new Error('Governance GraphQL response did not include data.');
+  }
+
+  return payload.data;
+}
+
+function buildGovernanceRealmQuery(namespace: string, daoId: string): string {
+  const escapedDaoId = escapeGraphqlString(daoId);
+  return `
+    query GovernanceRealm {
+      ${namespace}_RealmV2(where: {pubkey: {_eq: "${escapedDaoId}"}}) {
+        pubkey
+        name
+        communityMint
+      }
+      ${namespace}_RealmV1(where: {pubkey: {_eq: "${escapedDaoId}"}}) {
+        pubkey
+        name
+        communityMint
+      }
+    }
+  `;
+}
+
+function buildGovernanceOwnerRecordsQuery(namespace: string, owner: string): string {
+  const escapedOwner = escapeGraphqlString(owner);
+  return `
+    query GovernanceOwnerRecords {
+      ${namespace}_TokenOwnerRecordV2(
+        limit: 5000,
+        where: {
+          _or: [
+            { governingTokenOwner: {_eq: "${escapedOwner}"} },
+            { governanceDelegate: {_eq: "${escapedOwner}"} }
+          ]
+        }
+      ) {
+        pubkey
+        realm
+        governingTokenMint
+        governingTokenOwner
+        governanceDelegate
+        governingTokenDepositAmount
+      }
+      ${namespace}_TokenOwnerRecordV1(
+        limit: 5000,
+        where: {
+          _or: [
+            { governingTokenOwner: {_eq: "${escapedOwner}"} },
+            { governanceDelegate: {_eq: "${escapedOwner}"} }
+          ]
+        }
+      ) {
+        pubkey
+        realm
+        governingTokenMint
+        governingTokenOwner
+        governanceDelegate
+        governingTokenDepositAmount
+      }
+    }
+  `;
+}
+
+function buildGovernanceMembershipQuery(namespace: string, daoId: string, owner: string): string {
+  const escapedDaoId = escapeGraphqlString(daoId);
+  const escapedOwner = escapeGraphqlString(owner);
+  return `
+    query GovernanceMembership {
+      ${namespace}_TokenOwnerRecordV2(
+        limit: 200,
+        where: {
+          realm: {_eq: "${escapedDaoId}"},
+          _or: [
+            { governingTokenOwner: {_eq: "${escapedOwner}"} },
+            { governanceDelegate: {_eq: "${escapedOwner}"} }
+          ]
+        }
+      ) {
+        pubkey
+        governingTokenMint
+        governingTokenOwner
+        governanceDelegate
+        governingTokenDepositAmount
+      }
+      ${namespace}_TokenOwnerRecordV1(
+        limit: 200,
+        where: {
+          realm: {_eq: "${escapedDaoId}"},
+          _or: [
+            { governingTokenOwner: {_eq: "${escapedOwner}"} },
+            { governanceDelegate: {_eq: "${escapedOwner}"} }
+          ]
+        }
+      ) {
+        pubkey
+        governingTokenMint
+        governingTokenOwner
+        governanceDelegate
+        governingTokenDepositAmount
+      }
+    }
+  `;
+}
+
+function buildGovernanceAccountsQuery(namespace: string, daoId: string): string {
+  const escapedDaoId = escapeGraphqlString(daoId);
+  return `
+    query GovernanceAccounts {
+      ${namespace}_GovernanceV2(limit: 500, where: {realm: {_eq: "${escapedDaoId}"}}) {
+        pubkey
+        realm
+      }
+      ${namespace}_GovernanceV1(limit: 500, where: {realm: {_eq: "${escapedDaoId}"}}) {
+        pubkey
+        realm
+      }
+    }
+  `;
+}
+
+function buildGovernanceProposalsQuery(namespace: string, governanceIds: string[]): string {
+  const ids = governanceIds.map((entry) => `"${escapeGraphqlString(entry)}"`).join(', ');
+  return `
+    query GovernanceProposals {
+      ${namespace}_ProposalV2(
+        limit: 500,
+        order_by: {draftAt: desc},
+        where: {governance: {_in: [${ids}]}}
+      ) {
+        pubkey
+        governance
+        governingTokenMint
+        tokenOwnerRecord
+        state
+        descriptionLink
+        draftAt
+        votingAt
+        maxVotingTime
+        name
+        options
+        denyVoteWeight
+        abstainVoteWeight
+      }
+      ${namespace}_ProposalV1(
+        limit: 500,
+        order_by: {draftAt: desc},
+        where: {governance: {_in: [${ids}]}}
+      ) {
+        pubkey
+        governance
+        governingTokenMint
+        tokenOwnerRecord
+        state
+        descriptionLink
+        draftAt
+        votingAt
+        maxVotingTime
+        name
+        yesVotesCount
+        noVotesCount
+      }
+    }
+  `;
+}
+
+function buildGovernanceVoteRecordsQuery(namespace: string, owner: string): string {
+  const escapedOwner = escapeGraphqlString(owner);
+  return `
+    query GovernanceVotesByOwner {
+      ${namespace}_VoteRecordV2(limit: 5000, where: {governingTokenOwner: {_eq: "${escapedOwner}"}}) {
+        proposal
+      }
+      ${namespace}_VoteRecordV1(limit: 5000, where: {governingTokenOwner: {_eq: "${escapedOwner}"}}) {
+        proposal
+      }
+    }
+  `;
+}
+
+function normalizeGovernanceRealmInfo(
+  data: Record<string, unknown>,
+  namespace: string,
+  daoId: string
+): GovernanceRealmInfo | null {
+  const v2 = Array.isArray(data[`${namespace}_RealmV2`]) ? (data[`${namespace}_RealmV2`] as Array<Record<string, unknown>>) : [];
+  const v1 = Array.isArray(data[`${namespace}_RealmV1`]) ? (data[`${namespace}_RealmV1`] as Array<Record<string, unknown>>) : [];
+  const row = v2[0] ?? v1[0];
+  if (!row) {
+    return null;
+  }
+
+  const communityMint = typeof row.communityMint === 'string' ? row.communityMint : null;
+  if (!communityMint) {
+    return null;
+  }
+
+  return {
+    daoId,
+    name: typeof row.name === 'string' && row.name.trim() ? row.name.trim() : `DAO ${daoId.slice(0, 4)}`,
+    communityMint
+  };
+}
+
+function normalizeGovernanceMembershipRecords(
+  data: Record<string, unknown>,
+  namespace: string
+): GovernanceMembershipRecord[] {
+  const rows = [
+    ...(Array.isArray(data[`${namespace}_TokenOwnerRecordV2`]) ? (data[`${namespace}_TokenOwnerRecordV2`] as Array<Record<string, unknown>>) : []),
+    ...(Array.isArray(data[`${namespace}_TokenOwnerRecordV1`]) ? (data[`${namespace}_TokenOwnerRecordV1`] as Array<Record<string, unknown>>) : [])
+  ];
+
+  return rows
+    .map((row) => {
+      const pubkey = typeof row.pubkey === 'string' ? row.pubkey : null;
+      const governingTokenMint = typeof row.governingTokenMint === 'string' ? row.governingTokenMint : null;
+      const governingTokenOwner = typeof row.governingTokenOwner === 'string' ? row.governingTokenOwner : null;
+      if (!pubkey || !governingTokenMint || !governingTokenOwner) {
+        return null;
+      }
+
+      return {
+        pubkey,
+        governingTokenMint,
+        governingTokenOwner,
+        governanceDelegate: typeof row.governanceDelegate === 'string' ? row.governanceDelegate : null,
+        governingTokenDepositAmount: parseGovernanceBigIntString(row.governingTokenDepositAmount)
+      } satisfies GovernanceMembershipRecord;
+    })
+    .filter((entry): entry is GovernanceMembershipRecord => !!entry);
+}
+
+function normalizeGovernanceOwnerDaoIds(
+  data: Record<string, unknown>,
+  namespace: string
+): string[] {
+  const rows = [
+    ...(Array.isArray(data[`${namespace}_TokenOwnerRecordV2`]) ? (data[`${namespace}_TokenOwnerRecordV2`] as Array<Record<string, unknown>>) : []),
+    ...(Array.isArray(data[`${namespace}_TokenOwnerRecordV1`]) ? (data[`${namespace}_TokenOwnerRecordV1`] as Array<Record<string, unknown>>) : [])
+  ];
+
+  return Array.from(
+    new Set(
+      rows
+        .map((row) => {
+          const realm = typeof row.realm === 'string' ? row.realm : '';
+          const deposit = parseGovernanceBigIntString(row.governingTokenDepositAmount);
+          return realm && BigInt(deposit) > BigInt(0) ? realm : '';
+        })
+        .filter((entry) => !!entry)
+    )
+  );
+}
+
+async function discoverGovernanceDaosForWallet(owner: PublicKey): Promise<string[]> {
+  const ownerKey = owner.toBase58();
+  const discovered = await Promise.all(
+    getGovernanceNamespaces().map(async ({ namespace }) => {
+      try {
+        const data = await fetchGovernanceGraphql<Record<string, unknown>>(buildGovernanceOwnerRecordsQuery(namespace, ownerKey));
+        return normalizeGovernanceOwnerDaoIds(data, namespace);
+      } catch {
+        return [] as string[];
+      }
+    })
+  );
+
+  return Array.from(new Set(discovered.flat()));
+}
+
+function normalizeGovernanceAccounts(
+  data: Record<string, unknown>,
+  namespace: string
+): GovernanceProgramAccount[] {
+  const rows = [
+    ...(Array.isArray(data[`${namespace}_GovernanceV2`]) ? (data[`${namespace}_GovernanceV2`] as Array<Record<string, unknown>>) : []),
+    ...(Array.isArray(data[`${namespace}_GovernanceV1`]) ? (data[`${namespace}_GovernanceV1`] as Array<Record<string, unknown>>) : [])
+  ];
+
+  return rows
+    .map((row) => {
+      const pubkey = typeof row.pubkey === 'string' ? row.pubkey : null;
+      const realm = typeof row.realm === 'string' ? row.realm : null;
+      return pubkey && realm ? ({ pubkey, realm } satisfies GovernanceProgramAccount) : null;
+    })
+    .filter((entry): entry is GovernanceProgramAccount => !!entry);
+}
+
+function normalizeGovernanceProposalRows(
+  data: Record<string, unknown>,
+  namespace: string
+): GovernanceProposalRecord[] {
+  const v2Rows = Array.isArray(data[`${namespace}_ProposalV2`]) ? (data[`${namespace}_ProposalV2`] as Array<Record<string, unknown>>) : [];
+  const v1Rows = Array.isArray(data[`${namespace}_ProposalV1`]) ? (data[`${namespace}_ProposalV1`] as Array<Record<string, unknown>>) : [];
+
+  const mappedV2 = v2Rows.map((row) => {
+    const options = Array.isArray(row.options)
+      ? row.options.map((option, index) => {
+          const item = option as Record<string, unknown>;
+          return {
+            rank: index,
+            label: typeof item.label === 'string' && item.label.trim() ? item.label.trim() : `Option ${index + 1}`,
+            voteWeight: parseGovernanceBigIntString(item.voteWeight),
+            voteResult: typeof item.voteResult === 'string' ? item.voteResult : null
+          };
+        })
+      : [];
+
+    return {
+      pubkey: typeof row.pubkey === 'string' ? row.pubkey : '',
+      governance: typeof row.governance === 'string' ? row.governance : '',
+      governingTokenMint: typeof row.governingTokenMint === 'string' ? row.governingTokenMint : '',
+      tokenOwnerRecord: typeof row.tokenOwnerRecord === 'string' ? row.tokenOwnerRecord : '',
+      state: parseGovernanceNumber(row.state) ?? -1,
+      descriptionLink: typeof row.descriptionLink === 'string' ? row.descriptionLink : null,
+      name: typeof row.name === 'string' ? row.name : 'Untitled proposal',
+      draftAt: parseGovernanceNumber(row.draftAt),
+      votingAt: parseGovernanceNumber(row.votingAt),
+      maxVotingTime: parseGovernanceNumber(row.maxVotingTime),
+      yesVotes: options[0]?.voteWeight ?? '0',
+      noVotes: '0',
+      abstainVotes: parseGovernanceBigIntString(row.abstainVoteWeight),
+      denyVotes: parseGovernanceBigIntString(row.denyVoteWeight),
+      options,
+      hasDenyOption: row.denyVoteWeight !== undefined && row.denyVoteWeight !== null
+    } satisfies GovernanceProposalRecord;
+  });
+
+  const mappedV1 = v1Rows.map((row) => ({
+    pubkey: typeof row.pubkey === 'string' ? row.pubkey : '',
+    governance: typeof row.governance === 'string' ? row.governance : '',
+    governingTokenMint: typeof row.governingTokenMint === 'string' ? row.governingTokenMint : '',
+    tokenOwnerRecord: typeof row.tokenOwnerRecord === 'string' ? row.tokenOwnerRecord : '',
+    state: parseGovernanceNumber(row.state) ?? -1,
+    descriptionLink: typeof row.descriptionLink === 'string' ? row.descriptionLink : null,
+    name: typeof row.name === 'string' ? row.name : 'Untitled proposal',
+    draftAt: parseGovernanceNumber(row.draftAt),
+    votingAt: parseGovernanceNumber(row.votingAt),
+    maxVotingTime: parseGovernanceNumber(row.maxVotingTime),
+    yesVotes: parseGovernanceBigIntString(row.yesVotesCount),
+    noVotes: parseGovernanceBigIntString(row.noVotesCount),
+    abstainVotes: '0',
+    denyVotes: '0',
+    options: [{ rank: 0, label: 'Approve', voteWeight: parseGovernanceBigIntString(row.yesVotesCount), voteResult: null }],
+    hasDenyOption: true
+  } satisfies GovernanceProposalRecord));
+
+  return [...mappedV2, ...mappedV1].filter(
+    (row) => row.pubkey && row.governance && row.governingTokenMint && row.tokenOwnerRecord && isActiveGovernanceProposalState(row.state)
+  );
+}
+
+function normalizeGovernanceVoteProposalIds(
+  data: Record<string, unknown>,
+  namespace: string
+): Set<string> {
+  const rows = [
+    ...(Array.isArray(data[`${namespace}_VoteRecordV2`]) ? (data[`${namespace}_VoteRecordV2`] as Array<Record<string, unknown>>) : []),
+    ...(Array.isArray(data[`${namespace}_VoteRecordV1`]) ? (data[`${namespace}_VoteRecordV1`] as Array<Record<string, unknown>>) : [])
+  ];
+
+  return new Set(
+    rows
+      .map((row) => (typeof row.proposal === 'string' ? row.proposal : ''))
+      .filter((entry) => !!entry)
+  );
+}
+
+async function fetchGovernanceForDaoViaGraphql(
+  owner: PublicKey,
+  daoId: string
+): Promise<{
+  source: 'shyft';
+  member: boolean;
+  proposals: WalletGovernanceResponse['proposals'];
+}> {
+  const governanceOwner = findGovernanceOwnerByDao(daoId);
+  const namespace = governanceOwner.name;
+  const ownerKey = owner.toBase58();
+
+  const [realmData, membershipData, governanceData, voteData] = await Promise.all([
+    fetchGovernanceGraphql<Record<string, unknown>>(buildGovernanceRealmQuery(namespace, daoId)),
+    fetchGovernanceGraphql<Record<string, unknown>>(buildGovernanceMembershipQuery(namespace, daoId, ownerKey)),
+    fetchGovernanceGraphql<Record<string, unknown>>(buildGovernanceAccountsQuery(namespace, daoId)),
+    fetchGovernanceGraphql<Record<string, unknown>>(buildGovernanceVoteRecordsQuery(namespace, ownerKey))
+  ]);
+
+  const realm = normalizeGovernanceRealmInfo(realmData, namespace, daoId);
+  const membershipRecords = normalizeGovernanceMembershipRecords(membershipData, namespace);
+  const governanceAccounts = normalizeGovernanceAccounts(governanceData, namespace);
+  const votedProposalIds = normalizeGovernanceVoteProposalIds(voteData, namespace);
+  if (!realm || membershipRecords.length === 0 || governanceAccounts.length === 0) {
+    return { source: 'shyft', member: membershipRecords.length > 0, proposals: [] };
+  }
+
+  const proposalData = await fetchGovernanceGraphql<Record<string, unknown>>(
+    buildGovernanceProposalsQuery(
+      namespace,
+      governanceAccounts.map((entry) => entry.pubkey)
+    )
+  );
+  const proposalRows = normalizeGovernanceProposalRows(proposalData, namespace);
+  const membershipByMint = new Map(membershipRecords.map((entry) => [entry.governingTokenMint, entry] as const));
+  const soleMembership = membershipRecords[0];
+
+  const proposals = proposalRows
+    .map((proposal) => {
+      const membership = membershipByMint.get(proposal.governingTokenMint) ?? soleMembership ?? null;
+      const votingEndsAt =
+        proposal.votingAt !== null && proposal.maxVotingTime !== null
+          ? proposal.votingAt + proposal.maxVotingTime
+          : null;
+      const hasVoted = votedProposalIds.has(proposal.pubkey);
+      const delegatedAway =
+        membership?.governanceDelegate !== null &&
+        membership?.governanceDelegate !== undefined &&
+        membership.governanceDelegate !== ownerKey;
+      const canVote =
+        proposal.state === ProposalState.Voting &&
+        !!membership &&
+        BigInt(membership.governingTokenDepositAmount) > BigInt(0) &&
+        !delegatedAway &&
+        !hasVoted;
+
+      return {
+        daoId,
+        realmName: realm.name,
+        governanceProgramId: governanceOwner.owner,
+        governanceId: proposal.governance,
+        proposalId: proposal.pubkey,
+        proposalName: proposal.name,
+        descriptionLink: proposal.descriptionLink,
+        state: formatProposalStateLabel(proposal.state),
+        stateCode: proposal.state,
+        draftAt: proposal.draftAt,
+        votingAt: proposal.votingAt,
+        votingEndsAt,
+        governingTokenMint: proposal.governingTokenMint,
+        proposalOwnerRecordId: proposal.tokenOwnerRecord,
+        tokenOwnerRecordId: membership?.pubkey ?? null,
+        canVote,
+        hasVoted,
+        hasDenyOption: proposal.hasDenyOption,
+        choices: proposal.options,
+        yesVotes: proposal.yesVotes,
+        noVotes: proposal.noVotes,
+        abstainVotes: proposal.abstainVotes,
+        denyVotes: proposal.denyVotes
+      } satisfies WalletGovernanceResponse['proposals'][number];
+    })
+    .sort((left, right) => (right.votingAt ?? right.draftAt ?? 0) - (left.votingAt ?? left.draftAt ?? 0));
+
+  return {
+    source: 'shyft',
+    member: membershipRecords.length > 0,
+    proposals
+  };
+}
+
+async function fetchGovernanceForDaoViaRpc(
+  connection: Connection,
+  owner: PublicKey,
+  daoId: string
+): Promise<{
+  source: 'rpc';
+  member: boolean;
+  proposals: WalletGovernanceResponse['proposals'];
+}> {
+  const governanceOwner = findGovernanceOwnerByDao(daoId);
+  const programId = new PublicKey(governanceOwner.owner);
+  const realmPk = new PublicKey(daoId);
+  const ownerKey = owner.toBase58();
+
+  const [realmAccount, tokenOwnerRecords, governanceAccounts, voteRecords] = await Promise.all([
+    getRealm(connection, realmPk),
+    getTokenOwnerRecordsByOwner(connection, programId, owner).catch(() => []),
+    getAllGovernances(connection, programId, realmPk).catch(() => []),
+    getVoteRecordsByVoter(connection, programId, owner).catch(() => [])
+  ]);
+
+  const realmTokenOwnerRecords = tokenOwnerRecords.filter((entry) => entry.account.realm.toBase58() === daoId);
+  if (realmTokenOwnerRecords.length === 0 || governanceAccounts.length === 0) {
+    return { source: 'rpc', member: realmTokenOwnerRecords.length > 0, proposals: [] };
+  }
+
+  const proposalBatches = await getAllProposals(connection, programId, realmPk).catch(() => []);
+  const proposals = proposalBatches.flatMap((batch) => batch);
+  const membershipByMint = new Map(
+    realmTokenOwnerRecords.map((entry) => [
+      entry.account.governingTokenMint.toBase58(),
+      {
+        pubkey: entry.pubkey.toBase58(),
+        governingTokenMint: entry.account.governingTokenMint.toBase58(),
+        governingTokenOwner: entry.account.governingTokenOwner.toBase58(),
+        governanceDelegate: entry.account.governanceDelegate?.toBase58() ?? null,
+        governingTokenDepositAmount: entry.account.governingTokenDepositAmount.toString()
+      } satisfies GovernanceMembershipRecord
+    ] as const)
+  );
+  const soleMembership = realmTokenOwnerRecords[0];
+  const votedProposalIds = new Set(voteRecords.map((entry) => entry.account.proposal.toBase58()));
+
+  return {
+    source: 'rpc',
+    member: realmTokenOwnerRecords.length > 0,
+    proposals: proposals
+      .filter((entry) => isActiveGovernanceProposalState(entry.account.state))
+      .map((entry) => {
+        const membership =
+          membershipByMint.get(entry.account.governingTokenMint.toBase58()) ??
+          (soleMembership
+            ? {
+                pubkey: soleMembership.pubkey.toBase58(),
+                governingTokenMint: soleMembership.account.governingTokenMint.toBase58(),
+                governingTokenOwner: soleMembership.account.governingTokenOwner.toBase58(),
+                governanceDelegate: soleMembership.account.governanceDelegate?.toBase58() ?? null,
+                governingTokenDepositAmount: soleMembership.account.governingTokenDepositAmount.toString()
+              }
+            : null);
+        const votingAt = entry.account.votingAt ? entry.account.votingAt.toNumber() : null;
+        const votingEndsAt =
+          votingAt !== null && entry.account.maxVotingTime !== null ? votingAt + entry.account.maxVotingTime : null;
+        const hasVoted = votedProposalIds.has(entry.pubkey.toBase58());
+        const delegatedAway =
+          membership?.governanceDelegate !== null &&
+          membership?.governanceDelegate !== undefined &&
+          membership.governanceDelegate !== ownerKey;
+        const options =
+          Array.isArray(entry.account.options) && entry.account.options.length > 0
+            ? entry.account.options.map((option, index) => ({
+                rank: index,
+                label: option.label,
+                voteWeight: option.voteWeight.toString(),
+                voteResult: option.voteResult != null ? String(option.voteResult) : null
+              }))
+            : [{ rank: 0, label: 'Approve', voteWeight: entry.account.yesVotesCount.toString(), voteResult: null }];
+
+        return {
+          daoId,
+          realmName: entry.account.name ? realmAccount.account.name : realmAccount.account.name,
+          governanceProgramId: governanceOwner.owner,
+          governanceId: entry.account.governance.toBase58(),
+          proposalId: entry.pubkey.toBase58(),
+          proposalName: entry.account.name,
+          descriptionLink: entry.account.descriptionLink,
+          state: formatProposalStateLabel(entry.account.state),
+          stateCode: entry.account.state,
+          draftAt: entry.account.draftAt ? entry.account.draftAt.toNumber() : null,
+          votingAt,
+          votingEndsAt,
+          governingTokenMint: entry.account.governingTokenMint.toBase58(),
+          proposalOwnerRecordId: entry.account.tokenOwnerRecord.toBase58(),
+          tokenOwnerRecordId: membership?.pubkey ?? null,
+          canVote:
+            entry.account.state === ProposalState.Voting &&
+            !!membership &&
+            BigInt(membership.governingTokenDepositAmount) > BigInt(0) &&
+            !delegatedAway &&
+            !hasVoted,
+          hasVoted,
+          hasDenyOption: entry.account.denyVoteWeight !== undefined,
+          choices: options,
+          yesVotes: entry.account.yesVotesCount.toString(),
+          noVotes: entry.account.noVotesCount.toString(),
+          abstainVotes: entry.account.abstainVoteWeight?.toString() ?? '0',
+          denyVotes: entry.account.denyVoteWeight?.toString() ?? '0'
+        } satisfies WalletGovernanceResponse['proposals'][number];
+      })
+      .sort((left, right) => (right.votingAt ?? right.draftAt ?? 0) - (left.votingAt ?? left.draftAt ?? 0))
+  };
+}
+
+async function fetchGovernanceForWallet(
+  connection: Connection,
+  owner: PublicKey,
+  trackedDaoIds: string[]
+): Promise<WalletGovernanceResponse> {
+  const uniqueTrackedDaoIds = Array.from(
+    new Set(
+      trackedDaoIds
+        .map((entry) => entry.trim())
+        .filter((entry) => !!entry)
+    )
+  );
+  const discoveredDaoIds = await discoverGovernanceDaosForWallet(owner);
+  const uniqueDaoIds = Array.from(new Set([...discoveredDaoIds, ...uniqueTrackedDaoIds]));
+
+  if (uniqueDaoIds.length === 0) {
+    return {
+      trackedDaos: uniqueTrackedDaoIds,
+      discoveredDaos: [],
+      memberDaos: 0,
+      proposals: [],
+      source: 'none',
+      network: connection.rpcEndpoint.includes('devnet') ? 'devnet' : 'mainnet-beta',
+      refreshedAt: Date.now()
+    };
+  }
+
+  const results = await Promise.all(
+    uniqueDaoIds.map(async (daoId) => {
+      try {
+        return await fetchGovernanceForDaoViaGraphql(owner, daoId);
+      } catch {
+        try {
+          return await fetchGovernanceForDaoViaRpc(connection, owner, daoId);
+        } catch {
+          return {
+            source: 'none' as const,
+            member: false,
+            proposals: []
+          };
+        }
+      }
+    })
+  );
+
+  const proposals = results
+    .flatMap((entry) => entry.proposals)
+    .sort((left, right) => (right.votingAt ?? right.draftAt ?? 0) - (left.votingAt ?? left.draftAt ?? 0))
+    .slice(0, 50);
+  const memberDaos = results.filter((entry) => entry.member).length;
+  const source = results.some((entry) => entry.source === 'shyft')
+    ? 'shyft'
+    : results.some((entry) => entry.source === 'rpc')
+      ? 'rpc'
+      : 'none';
+
+  return {
+    trackedDaos: uniqueTrackedDaoIds,
+    discoveredDaos: discoveredDaoIds,
+    memberDaos,
+    proposals,
+    source,
+    network: connection.rpcEndpoint.includes('devnet') ? 'devnet' : 'mainnet-beta',
+    refreshedAt: Date.now()
+  };
+}
+
 function readBorshString(bytes: Uint8Array, offset: number) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const length = view.getUint32(offset, true);
@@ -3539,6 +5162,14 @@ function formatUiAmount(rawAmount: string, decimals: number): string {
   });
 }
 
+function extractSwapRouteLabels(quoteResponse: JupiterQuoteResponse): string[] {
+  return Array.isArray(quoteResponse.routePlan)
+    ? quoteResponse.routePlan
+        .map((route) => (typeof route?.swapInfo?.label === 'string' ? route.swapInfo.label : null))
+        .filter((label): label is string => !!label)
+    : [];
+}
+
 const controller = new WalletController();
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -3667,6 +5298,12 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
         case 'wallet_set_idle_timeout':
           sendResponse(await controller.setIdleTimeout(message.idleTimeoutMs));
           break;
+        case 'wallet_set_reputation_spaces':
+          sendResponse(await controller.setTrackedReputationSpaces(message.daoIds));
+          break;
+        case 'wallet_set_governance_daos':
+          sendResponse(await controller.setTrackedGovernanceDaos(message.daoIds));
+          break;
         case 'wallet_set_biometric_unlock':
           sendResponse(await controller.setBiometricUnlock(message.config));
           break;
@@ -3676,8 +5313,17 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
         case 'wallet_get_assets':
           sendResponse(await controller.getAssets({ staleWhileRevalidate: message.staleWhileRevalidate }));
           break;
+        case 'wallet_get_reputation':
+          sendResponse(await controller.getReputation());
+          break;
+        case 'wallet_get_governance':
+          sendResponse(await controller.getGovernance());
+          break;
         case 'wallet_get_activity':
           sendResponse(await controller.getActivity(message.limit));
+          break;
+        case 'wallet_cast_governance_vote':
+          sendResponse(await controller.castGovernanceVote(message));
           break;
         case 'wallet_preview_chain_token':
           sendResponse(await controller.previewChainToken(message.tokenAddress));

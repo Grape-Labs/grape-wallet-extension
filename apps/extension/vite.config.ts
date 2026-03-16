@@ -69,7 +69,8 @@ function createManifestPlugin(mainnetRpcUrl: string): Plugin {
           'https://li.quest/*',
           'https://lite-api.jup.ag/*',
           'https://api.jup.ag/*',
-          'https://api.shyft.to/*'
+          'https://api.shyft.to/*',
+          'https://grape.shyft.to/*'
         ],
         content_scripts: [
           {

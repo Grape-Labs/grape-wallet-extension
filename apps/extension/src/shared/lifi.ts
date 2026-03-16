@@ -18,10 +18,10 @@ const FALLBACK_CHAIN_IDS: Partial<Record<GrapeChain, string>> = {
 };
 
 const SUPPORTED_BRIDGE_DESTINATIONS: Record<GrapeChain, GrapeChain[]> = {
-  solana: ['ethereum', 'monad'],
+  solana: ['ethereum', 'monad', 'sui'],
   sui: [],
   monad: ['solana', 'ethereum'],
-  ethereum: ['solana', 'monad']
+  ethereum: ['solana', 'monad', 'sui']
 };
 
 export const LIFI_NATIVE_TOKEN_ADDRESS: Record<GrapeChain, string> = {
@@ -115,16 +115,21 @@ type LifiQuoteResponse = {
 };
 
 export type BridgeQuoteSummary = {
-  quoteResponse: Record<string, unknown>;
   fromChain: GrapeChain;
   toChain: GrapeChain;
-  fromAmountUi: string;
-  toAmountUi: string;
-  fromSymbol: string;
-  toSymbol: string;
-  minimumReceivedUi?: string | null;
-  feeUsd?: string | null;
-  routeLabels: string[];
+  selectedRouteId: string;
+  routes: Array<{
+    id: string;
+    label: string;
+    quoteResponse: Record<string, unknown>;
+    fromAmountUi: string;
+    toAmountUi: string;
+    fromSymbol: string;
+    toSymbol: string;
+    minimumReceivedUi?: string | null;
+    feeUsd?: string | null;
+    routeLabels: string[];
+  }>;
 };
 
 function createHeaders(): Record<string, string> {
@@ -201,34 +206,74 @@ export async function fetchNativeBridgeQuote(input: {
     integrator: 'grape'
   });
 
-  const quote = await fetchLifiJson<LifiQuoteResponse>('/quote', params);
-  const fromSymbol = quote.estimate?.fromToken?.symbol ?? LIFI_NATIVE_SYMBOL[input.fromChain];
-  const toSymbol = quote.estimate?.toToken?.symbol ?? LIFI_NATIVE_SYMBOL[input.toChain];
-  const fromDecimals = quote.estimate?.fromToken?.decimals ?? LIFI_NATIVE_DECIMALS[input.fromChain];
-  const toDecimals = quote.estimate?.toToken?.decimals ?? LIFI_NATIVE_DECIMALS[input.toChain];
-  const routeSteps = (quote.includedSteps ?? quote.steps ?? [])
-    .map((step) => step.toolDetails?.name?.trim())
-    .filter((label): label is string => Boolean(label));
-  const feeUsd =
-    quote.estimate?.feeCosts?.[0]?.amountUSD ??
-    quote.estimate?.feeCosts?.[0]?.amountUsd ??
-    quote.estimate?.gasCosts?.[0]?.amountUSD ??
-    quote.estimate?.gasCosts?.[0]?.amountUsd ??
-    null;
+  const orderVariants = [
+    { id: 'cheapest', label: 'Cheapest route', order: 'CHEAPEST' },
+    { id: 'fastest', label: 'Fastest route', order: 'FASTEST' }
+  ] as const;
+
+  const quotes = await Promise.all(
+    orderVariants.map(async (variant) => {
+      const nextParams = new URLSearchParams(params);
+      nextParams.set('order', variant.order);
+      const quote = await fetchLifiJson<LifiQuoteResponse>('/quote', nextParams).catch(() => null);
+      if (!quote) {
+        return null;
+      }
+
+      const fromSymbol = quote.estimate?.fromToken?.symbol ?? LIFI_NATIVE_SYMBOL[input.fromChain];
+      const toSymbol = quote.estimate?.toToken?.symbol ?? LIFI_NATIVE_SYMBOL[input.toChain];
+      const fromDecimals = quote.estimate?.fromToken?.decimals ?? LIFI_NATIVE_DECIMALS[input.fromChain];
+      const toDecimals = quote.estimate?.toToken?.decimals ?? LIFI_NATIVE_DECIMALS[input.toChain];
+      const routeSteps = (quote.includedSteps ?? quote.steps ?? [])
+        .map((step) => step.toolDetails?.name?.trim())
+        .filter((label): label is string => Boolean(label));
+      const feeUsd =
+        quote.estimate?.feeCosts?.[0]?.amountUSD ??
+        quote.estimate?.feeCosts?.[0]?.amountUsd ??
+        quote.estimate?.gasCosts?.[0]?.amountUSD ??
+        quote.estimate?.gasCosts?.[0]?.amountUsd ??
+        null;
+
+      return {
+        id: variant.id,
+        label: variant.label,
+        quoteResponse: quote as Record<string, unknown>,
+        fromAmountUi: formatBaseUnits(quote.estimate?.fromAmount ?? input.amountRaw, fromDecimals),
+        toAmountUi: formatBaseUnits(quote.estimate?.toAmount ?? '0', toDecimals),
+        minimumReceivedUi: quote.estimate?.toAmountMin
+          ? formatBaseUnits(quote.estimate.toAmountMin, toDecimals)
+          : null,
+        fromSymbol,
+        toSymbol,
+        feeUsd,
+        routeLabels: Array.from(new Set(routeSteps.length > 0 ? routeSteps : quote.toolDetails?.name ? [quote.toolDetails.name] : []))
+      };
+    })
+  );
+
+  const routes = quotes
+    .filter((route): route is NonNullable<(typeof quotes)[number]> => !!route)
+    .filter((route, index, allRoutes) => {
+      return (
+        allRoutes.findIndex((candidate) => {
+          return (
+            candidate.toAmountUi === route.toAmountUi &&
+            candidate.minimumReceivedUi === route.minimumReceivedUi &&
+            candidate.routeLabels.join('|') === route.routeLabels.join('|')
+          );
+        }) === index
+      );
+    });
+
+  if (routes.length === 0) {
+    throw new Error('Unable to fetch a bridge quote right now.');
+  }
 
   return {
-    quoteResponse: quote as Record<string, unknown>,
     fromChain: input.fromChain,
     toChain: input.toChain,
-    fromAmountUi: formatBaseUnits(quote.estimate?.fromAmount ?? input.amountRaw, fromDecimals),
-    toAmountUi: formatBaseUnits(quote.estimate?.toAmount ?? '0', toDecimals),
-    minimumReceivedUi: quote.estimate?.toAmountMin
-      ? formatBaseUnits(quote.estimate.toAmountMin, toDecimals)
-      : null,
-    fromSymbol,
-    toSymbol,
-    feeUsd,
-    routeLabels: Array.from(new Set(routeSteps.length > 0 ? routeSteps : quote.toolDetails?.name ? [quote.toolDetails.name] : []))
+    selectedRouteId: routes[0].id,
+    routes
   };
 }
 
