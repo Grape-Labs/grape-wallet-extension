@@ -11,6 +11,7 @@ import {
   ArrowUpRight,
   Check,
   ChevronDown,
+  ChevronRight,
   Clock3,
   Copy,
   Eye,
@@ -54,6 +55,7 @@ import type {
   WalletAssetsResponse,
   WalletBridgeExecuteResponse,
   WalletBridgeQuoteResponse,
+  GovernanceDaoSummary,
   WalletGovernanceResponse,
   WalletGovernanceVoteResponse,
   WalletReputationResponse,
@@ -239,6 +241,117 @@ function formatWholeNumberString(value: string | null | undefined): string {
   } catch {
     return value;
   }
+}
+
+function formatGovernanceVotingPowerType(
+  type: WalletGovernanceResponse['proposals'][number]['votingPowerType']
+): string {
+  switch (type) {
+    case 'community':
+      return 'Community';
+    case 'council':
+      return 'Council';
+    case 'delegated-community':
+      return 'Delegated Community';
+    case 'delegated-council':
+      return 'Delegated Council';
+    default:
+      return 'Unknown';
+  }
+}
+
+function buildGovernanceProposalUrl(daoId: string, proposalId: string): string {
+  return `https://governance.so/proposal/${daoId}/${proposalId}`;
+}
+
+function formatGovernanceVoteSourceLabel(
+  source: WalletGovernanceResponse['proposals'][number]['voteSources'][number]
+): string {
+  return source.isDelegate
+    ? `delegated power from ${formatAddress(source.governingTokenOwner)}`
+    : 'your voting power';
+}
+
+function formatRelativeTimeFromNow(targetUnixSeconds: number, nowUnixSeconds = Math.floor(Date.now() / 1000)): string {
+  const deltaSeconds = Math.trunc(targetUnixSeconds - nowUnixSeconds);
+  const absSeconds = Math.abs(deltaSeconds);
+  const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+
+  if (absSeconds < 60) {
+    return rtf.format(deltaSeconds, 'second');
+  }
+  if (absSeconds < 3600) {
+    return rtf.format(Math.trunc(deltaSeconds / 60), 'minute');
+  }
+  if (absSeconds < 86400) {
+    return rtf.format(Math.trunc(deltaSeconds / 3600), 'hour');
+  }
+  if (absSeconds < 604800) {
+    return rtf.format(Math.trunc(deltaSeconds / 86400), 'day');
+  }
+  return rtf.format(Math.trunc(deltaSeconds / 604800), 'week');
+}
+
+function getGovernanceProposalTimeMeta(
+  proposal: WalletGovernanceResponse['proposals'][number],
+  nowUnixSeconds = Math.floor(Date.now() / 1000)
+): {
+  badgeLabel: string;
+  badgeTone: 'neutral' | 'warning' | 'success';
+  metaText: string | null;
+  noteText: string | null;
+  votingWindowOpen: boolean;
+} {
+  if (!proposal.votingEndsAt) {
+    return {
+      badgeLabel: proposal.canVote ? 'Vote now' : proposal.hasVoted ? 'Voted' : proposal.state,
+      badgeTone: proposal.canVote ? 'success' : proposal.hasVoted ? 'warning' : 'neutral',
+      metaText: null,
+      noteText: null,
+      votingWindowOpen: true
+    };
+  }
+
+  const votingWindowOpen = proposal.votingEndsAt > nowUnixSeconds;
+  const relativeTime = formatRelativeTimeFromNow(proposal.votingEndsAt, nowUnixSeconds);
+
+  if (votingWindowOpen) {
+    return {
+      badgeLabel: proposal.canVote ? 'Vote now' : proposal.hasVoted ? 'Voted' : 'Ending',
+      badgeTone: proposal.canVote ? 'success' : proposal.hasVoted ? 'warning' : 'neutral',
+      metaText: `Ending ${relativeTime}`,
+      noteText: null,
+      votingWindowOpen
+    };
+  }
+
+  if (proposal.stateCode === 2) {
+    return {
+      badgeLabel: 'Finalizing',
+      badgeTone: 'warning',
+      metaText: `Ended ${relativeTime}`,
+      noteText: 'Voting has ended. This proposal is awaiting on-chain finalization.',
+      votingWindowOpen
+    };
+  }
+
+  return {
+    badgeLabel: proposal.state === 'Completed' || proposal.state === 'Executing' ? proposal.state : 'Ended',
+    badgeTone: 'neutral',
+    metaText: `Ended ${relativeTime}`,
+    noteText: null,
+    votingWindowOpen
+  };
+}
+
+function formatVotingPower(rawAmount: bigint, decimals: number): string {
+  if (decimals === 0) return formatWholeNumberString(rawAmount.toString());
+  const divisor = BigInt(10 ** decimals);
+  const whole = rawAmount / divisor;
+  const remainder = rawAmount % divisor;
+  if (remainder === BigInt(0)) return formatWholeNumberString(whole.toString());
+  const fracStr = remainder.toString().padStart(decimals, '0').replace(/0+$/, '').slice(0, 4);
+  return `${formatWholeNumberString(whole.toString())}.${fracStr}`;
 }
 
 function buildOgReputationSpaceUrl(daoId: string): string {
@@ -950,17 +1063,23 @@ function PopupPage() {
   const [governance, setGovernance] = useState<WalletGovernanceResponse>({
     trackedDaos: [],
     discoveredDaos: [],
+    delegateDaos: [],
+    governedDaos: [],
     memberDaos: 0,
     proposals: [],
+    daos: [],
     source: 'none',
     network: 'mainnet-beta',
     refreshedAt: Date.now()
   });
   const [governanceLoading, setGovernanceLoading] = useState(false);
   const [governanceError, setGovernanceError] = useState<string | null>(null);
+  const [expandedDaoIds, setExpandedDaoIds] = useState<Set<string>>(new Set());
   const [governanceVotingProposalId, setGovernanceVotingProposalId] = useState<string | null>(null);
   const [governanceVoteError, setGovernanceVoteError] = useState<string | null>(null);
   const [governanceVoteResult, setGovernanceVoteResult] = useState<WalletGovernanceVoteResponse | null>(null);
+  const [governancePassword, setGovernancePassword] = useState('');
+  const [pendingHomeScrollTarget, setPendingHomeScrollTarget] = useState<'community' | 'governance' | null>(null);
   const [activity, setActivity] = useState<WalletActivityItem[]>([]);
   const [activityLoading, setActivityLoading] = useState(false);
   const [activityError, setActivityError] = useState<string | null>(null);
@@ -1017,6 +1136,8 @@ function PopupPage() {
   });
   const [activeApproval, setActiveApproval] = useState<ApprovalRecord | null>(null);
   const assetActionCardRef = useRef<HTMLDivElement | null>(null);
+  const communitySectionRef = useRef<HTMLDivElement | null>(null);
+  const governanceSectionRef = useRef<HTMLDivElement | null>(null);
 
   const surface = document.body.dataset.surface ?? 'page';
   const surfaceId = document.body.dataset.surfaceId ?? '';
@@ -1150,6 +1271,7 @@ function PopupPage() {
     setBridgePassword('');
     setStakePassword('');
     setBurnPassword('');
+    setGovernancePassword('');
     setIncidentPassword('');
   }, [state?.canUseUnlockedSigner]);
 
@@ -1303,6 +1425,23 @@ function PopupPage() {
       window.scrollTo(0, 0);
     }
   }, [view, assetId]);
+
+  useEffect(() => {
+    if (view !== 'home' || !pendingHomeScrollTarget) {
+      return;
+    }
+
+    const targetRef = pendingHomeScrollTarget === 'community' ? communitySectionRef : governanceSectionRef;
+    const frameId = window.requestAnimationFrame(() => {
+      targetRef.current?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start'
+      });
+      setPendingHomeScrollTarget(null);
+    });
+
+    return () => window.cancelAnimationFrame(frameId);
+  }, [homeTab, pendingHomeScrollTarget, view]);
 
   useEffect(() => {
     if (view !== 'asset' || !assetActionMode) {
@@ -1467,8 +1606,11 @@ function PopupPage() {
       setGovernance({
         trackedDaos: state?.wallet.trackedGovernanceDaoIds ?? [],
         discoveredDaos: [],
+        delegateDaos: [],
+        governedDaos: [],
         memberDaos: 0,
         proposals: [],
+        daos: [],
         source: 'none',
         network: state?.wallet.selectedNetwork ?? 'mainnet-beta',
         refreshedAt: Date.now()
@@ -1495,8 +1637,11 @@ function PopupPage() {
         setGovernance({
           trackedDaos: state.wallet.trackedGovernanceDaoIds,
           discoveredDaos: [],
+          delegateDaos: [],
+          governedDaos: [],
           memberDaos: 0,
           proposals: [],
+          daos: [],
           source: 'none',
           network: state.wallet.selectedNetwork,
           refreshedAt: Date.now()
@@ -2307,7 +2452,7 @@ function PopupPage() {
   const selectedNetworkLabel = formatNetworkLabel(selectedChain, wallet.selectedNetwork);
   const totalEffectiveReputationPoints = reputation.spaces.reduce((sum, space) => sum + BigInt(space.effectivePoints), BigInt(0)).toString();
   const actionableGovernanceProposalCount = governance.proposals.filter((proposal) => proposal.canVote).length;
-  const totalGovernanceDaoCount = new Set([...governance.discoveredDaos, ...wallet.trackedGovernanceDaoIds]).size;
+  const totalGovernanceDaoCount = new Set([...governance.discoveredDaos, ...governance.delegateDaos, ...governance.governedDaos, ...wallet.trackedGovernanceDaoIds]).size;
   const selectedNetworkCustomRpc =
     selectedChain === 'sui'
       ? wallet.chainState.sui.customRpcUrl ?? ''
@@ -2672,6 +2817,11 @@ function PopupPage() {
     await handleSaveGovernanceDaos(wallet.trackedGovernanceDaoIds.filter((entry) => entry !== daoId));
   }
 
+  function openHomeTabAndScroll(target: 'community' | 'governance') {
+    setHomeTab(target);
+    setPendingHomeScrollTarget(target);
+  }
+
   async function handleGovernanceVote(input: {
     daoId: string;
     governanceId: string;
@@ -2681,8 +2831,20 @@ function PopupPage() {
     governingTokenMint: string;
     voteKind: 'approve' | 'deny' | 'abstain';
     choiceRank?: number;
+    voteSources?: WalletGovernanceResponse['proposals'][number]['voteSources'];
   }) {
-    if (!input.tokenOwnerRecordId) {
+    const voteSources = (input.voteSources ?? []).filter((source) => !source.hasVoted);
+    const fallbackSource = input.tokenOwnerRecordId
+      ? [{
+          tokenOwnerRecordId: input.tokenOwnerRecordId,
+          governingTokenOwner: '',
+          isDelegate: false,
+          hasVoted: false
+        }]
+      : [];
+    const effectiveVoteSources = voteSources.length > 0 ? voteSources : fallbackSource;
+
+    if (effectiveVoteSources.length === 0) {
       setGovernanceVoteError('This wallet does not have a voting record for that proposal mint.');
       return;
     }
@@ -2691,18 +2853,40 @@ function PopupPage() {
       setGovernanceVotingProposalId(input.proposalId);
       setGovernanceVoteError(null);
       setGovernanceVoteResult(null);
-      const result = await sendRuntimeMessage<WalletGovernanceVoteResponse>({
-        type: 'wallet_cast_governance_vote',
-        daoId: input.daoId,
-        governanceId: input.governanceId,
-        proposalId: input.proposalId,
-        proposalOwnerRecordId: input.proposalOwnerRecordId,
-        tokenOwnerRecordId: input.tokenOwnerRecordId,
-        governingTokenMint: input.governingTokenMint,
-        voteKind: input.voteKind,
-        choiceRank: input.choiceRank
-      });
-      setGovernanceVoteResult(result);
+      const ownVoteSource = effectiveVoteSources.find((source) => !source.isDelegate) ?? effectiveVoteSources[0];
+      const delegatedVoteSources = effectiveVoteSources.filter(
+        (source) => source.isDelegate && source.tokenOwnerRecordId !== ownVoteSource.tokenOwnerRecordId
+      );
+      const selectedSources = [ownVoteSource];
+
+      if (delegatedVoteSources.length > 0) {
+        const delegatePrompt = delegatedVoteSources.length === 1
+          ? `This proposal also has ${formatGovernanceVoteSourceLabel(delegatedVoteSources[0])}. Vote ${input.voteKind === 'approve' ? 'Approve' : 'Deny'} with that delegated voting power too?`
+          : `This proposal also has ${delegatedVoteSources.length} delegated voting power sources. Vote ${input.voteKind === 'approve' ? 'Approve' : 'Deny'} with those delegated votes too?`;
+        if (window.confirm(delegatePrompt)) {
+          selectedSources.push(...delegatedVoteSources);
+        }
+      }
+
+      let lastResult: WalletGovernanceVoteResponse | null = null;
+      for (const source of selectedSources) {
+        lastResult = await sendRuntimeMessage<WalletGovernanceVoteResponse>({
+          type: 'wallet_cast_governance_vote',
+          daoId: input.daoId,
+          governanceId: input.governanceId,
+          proposalId: input.proposalId,
+          proposalOwnerRecordId: input.proposalOwnerRecordId,
+          tokenOwnerRecordId: source.tokenOwnerRecordId,
+          governingTokenMint: input.governingTokenMint,
+          voteKind: input.voteKind,
+          choiceRank: input.choiceRank,
+          password: canUseUnlockedSigner ? undefined : governancePassword || undefined
+        });
+      }
+      if (lastResult) {
+        setGovernanceVoteResult(lastResult);
+        setGovernancePassword('');
+      }
       await refresh();
     } catch (error) {
       setGovernanceVoteError(error instanceof Error ? error.message : 'Unable to submit governance vote.');
@@ -3275,7 +3459,7 @@ function PopupPage() {
               <button
                 type="button"
                 className="wallet-shortcut-card"
-                onClick={() => setHomeTab('community')}
+                onClick={() => openHomeTabAndScroll('community')}
                 aria-label="Open community reputation"
               >
                 <span className="wallet-shortcut-label">OG Reputation</span>
@@ -3295,7 +3479,7 @@ function PopupPage() {
               <button
                 type="button"
                 className="wallet-shortcut-card"
-                onClick={() => setHomeTab('governance')}
+                onClick={() => openHomeTabAndScroll('governance')}
                 aria-label="Open governance proposals"
               >
                 <span className="wallet-shortcut-label">Governance</span>
@@ -3305,9 +3489,9 @@ function PopupPage() {
                     : actionableGovernanceProposalCount > 0
                       ? `${actionableGovernanceProposalCount} ready`
                       : governance.proposals.length > 0
-                        ? `${governance.proposals.length} active`
+                        ? `${governance.proposals.length} recent`
                         : totalGovernanceDaoCount > 0
-                          ? 'No active'
+                          ? 'No recent'
                           : 'Scanning DAOs'}
                 </strong>
                 <span className="wallet-shortcut-meta">
@@ -3418,6 +3602,7 @@ function PopupPage() {
 
           {isSolanaChain ? (
             <Tabs.Content value="community">
+              <div ref={communitySectionRef}>
               <Card className="asset-panel-card community-panel-card">
                 <div className="community-panel-header">
                   <div>
@@ -3492,18 +3677,19 @@ function PopupPage() {
                   </div>
                 ) : null}
               </Card>
+              </div>
             </Tabs.Content>
           ) : null}
 
           {isSolanaChain ? (
             <Tabs.Content value="governance">
+              <div ref={governanceSectionRef}>
               <Card className="asset-panel-card community-panel-card">
-                <div className="community-panel-header">
-                  <div>
-                    <strong>Governance</strong>
-                    <p className="muted">
-                      Follow active proposals for the DAOs this wallet participates in and cast votes directly from
-                      Grape.
+                <div className="community-panel-header governance-panel-header">
+                  <div className="governance-panel-copy">
+                    <strong className="governance-panel-title">Governance</strong>
+                    <p className="muted governance-panel-description">
+                      Track live proposals across the DAOs this wallet can vote in and cast votes directly from Grape.
                     </p>
                   </div>
                   <Button tone="secondary" onClick={() => setView('settings')}>
@@ -3519,59 +3705,136 @@ function PopupPage() {
                 {governanceVoteError ? <p className="danger-box">{governanceVoteError}</p> : null}
                 {governanceLoading ? <p className="muted">Loading governance proposals…</p> : null}
                 {!governanceLoading && governanceError ? <p className="danger-box">{governanceError}</p> : null}
-                {!governanceLoading && !governanceError && governance.proposals.length > 0 ? (
-                  <>
-                    <div className="community-summary-grid">
-                      <div className="community-summary-card">
-                        <span className="muted">Active proposals</span>
-                        <strong>{governance.proposals.length}</strong>
+                {(() => {
+                  if (governanceLoading || governanceError) return null;
+                  const activeProposals = governance.proposals.filter(
+                    (p) => p.stateCode === 2
+                  );
+                  if (activeProposals.length === 0) {
+                    return (
+                      <div className="community-empty-state">
+                        <strong>No active votes</strong>
+                        <p className="muted">
+                          There are no open proposals requiring your vote right now. Your DAO memberships and voting
+                          power are visible in <button type="button" className="link-button" onClick={() => setView('settings')}>Manage DAOs</button>.
+                        </p>
                       </div>
-                      <div className="community-summary-card">
-                        <span className="muted">Detected DAOs</span>
-                        <strong>{totalGovernanceDaoCount}</strong>
-                      </div>
-                    </div>
-                    <div className="governance-proposal-list">
-                      {governance.proposals.map((proposal) => (
+                    );
+                  }
+                  return (
+                    <>
+                      {!canUseUnlockedSigner ? (
+                        <label className="stack">
+                          <span className="muted">Password</span>
+                          <div className="send-input-shell send-input-shell-sign">
+                            <Input
+                              type="password"
+                              value={governancePassword}
+                              onChange={(event) => setGovernancePassword(event.target.value)}
+                              placeholder="Password required to sign governance votes"
+                            />
+                            {biometricSupported && activeWallet?.biometricEnabled ? (
+                              <button
+                                type="button"
+                                className="biometric-inline-button"
+                                onClick={() => void handleBiometricUnlockForSigning()}
+                                aria-label="Unlock with device"
+                                title="Unlock with device"
+                                disabled={biometricUnlocking}
+                              >
+                                <Fingerprint size={16} />
+                              </button>
+                            ) : null}
+                          </div>
+                        </label>
+                      ) : (
+                        <p className="muted">Wallet is already unlocked. You can sign governance votes without re-entering your password.</p>
+                      )}
+                      <div className="governance-proposal-list">
+                        {activeProposals.map((proposal) => {
+                        const nowUnixSeconds = Math.floor(Date.now() / 1000);
+                        const daoSummary = governance.daos.find((dao) => dao.daoId === proposal.daoId) ?? null;
+                        const hasCommunityPower = daoSummary
+                          ? BigInt(daoSummary.communityVotingPower ?? '0') > 0n || BigInt(daoSummary.delegateCommunityVotingPower ?? '0') > 0n
+                          : false;
+                        const hasCouncilPower = daoSummary
+                          ? BigInt(daoSummary.councilVotingPower ?? '0') > 0n || BigInt(daoSummary.delegateCouncilVotingPower ?? '0') > 0n
+                          : false;
+                        const hasDaoVotingPower = hasCommunityPower || hasCouncilPower;
+                        const proposalVoteSources = proposal.voteSources ?? [];
+                        const availableVoteSources = proposalVoteSources.filter((source) => !source.hasVoted);
+                        const hasProposalVoteSources = proposalVoteSources.length > 0;
+                        const hasDelegatedProposalVoteSource = availableVoteSources.some((source) => source.isDelegate);
+                        const timeMeta = getGovernanceProposalTimeMeta(proposal, nowUnixSeconds);
+                        const canVoteNow = proposal.canVote && timeMeta.votingWindowOpen;
+                        const proposalUrl = buildGovernanceProposalUrl(proposal.daoId, proposal.proposalId);
+                        const inactiveVotingPowerMessage =
+                          !timeMeta.votingWindowOpen && timeMeta.noteText
+                            ? timeMeta.noteText
+                            : proposal.hasVoted && availableVoteSources.length === 0
+                              ? 'This wallet already voted on the active proposal.'
+                              : availableVoteSources.length > 0
+                                ? hasDelegatedProposalVoteSource
+                                  ? 'This wallet has delegated voting power available for this proposal.'
+                                  : 'This wallet has voting power available for this proposal.'
+                              : proposal.votingPowerType === 'community' && hasCouncilPower && !hasCommunityPower
+                                ? 'This is a Community proposal. This wallet currently has Council voting power in this DAO.'
+                              : proposal.votingPowerType === 'council' && hasCommunityPower && !hasCouncilPower
+                                ? 'This is a Council proposal. This wallet currently has Community voting power in this DAO.'
+                                : hasProposalVoteSources
+                                  ? 'This wallet has a proposal voter record, but that voting power is not currently available.'
+                                : proposal.votingPowerType === 'unknown' && (hasCommunityPower || hasCouncilPower)
+                                  ? 'This wallet has DAO voting power, but the proposal voting class could not be resolved yet.'
+                                  : hasDaoVotingPower
+                                    ? 'This wallet has governance power in this DAO, but the matching voter record for this proposal is not available yet.'
+                                    : 'This wallet is tracking the DAO, but it does not currently have voting power for this proposal.';
+
+                        return (
                         <div key={proposal.proposalId} className="governance-proposal-card">
                           <div className="governance-proposal-header">
                             <div className="governance-proposal-copy">
-                              <strong>{proposal.proposalName}</strong>
-                              <span>
-                                {proposal.realmName} • {proposal.state}
-                                {proposal.votingEndsAt ? ` • ends ${new Date(proposal.votingEndsAt * 1000).toLocaleString()}` : ''}
-                              </span>
-                            </div>
-                            <div className="governance-proposal-badges">
-                              <StatusPill tone={proposal.canVote ? 'success' : proposal.hasVoted ? 'warning' : 'neutral'}>
-                                {proposal.canVote ? 'Vote now' : proposal.hasVoted ? 'Voted' : proposal.state}
-                              </StatusPill>
-                              {proposal.descriptionLink ? (
+                              <strong className="governance-proposal-title">{proposal.proposalName}</strong>
+                              <div className="governance-proposal-badges">
+                                <StatusPill tone="neutral">{formatGovernanceVotingPowerType(proposal.votingPowerType)}</StatusPill>
+                                {proposal.isDelegate ? (
+                                  <StatusPill tone="neutral">Delegate</StatusPill>
+                                ) : null}
+                                <StatusPill tone={timeMeta.badgeTone}>
+                                  {timeMeta.badgeLabel}
+                                </StatusPill>
                                 <button
                                   type="button"
-                                  className="grape-reputation-link"
-                                  onClick={() => window.open(proposal.descriptionLink ?? '', '_blank', 'noopener,noreferrer')}
-                                  aria-label={`Open ${proposal.proposalName}`}
-                                  title="Open proposal"
+                                  className="governance-proposal-link"
+                                  onClick={() => window.open(proposalUrl, '_blank', 'noopener,noreferrer')}
+                                  aria-label={`Open ${proposal.proposalName} on governance.so`}
+                                  title="Open on governance.so"
                                 >
+                                  <span>Open</span>
                                   <ExternalLink size={13} />
                                 </button>
-                              ) : null}
+                              </div>
+                              <span className="governance-proposal-meta">
+                                {proposal.realmName} • {proposal.state}
+                                {timeMeta.metaText ? ` • ${timeMeta.metaText}` : ''}
+                                {proposal.votingEndsAt ? ` • ${new Date(proposal.votingEndsAt * 1000).toLocaleString()}` : ''}
+                              </span>
                             </div>
                           </div>
                           <div className="governance-proposal-metrics">
                             <span>Yes {formatWholeNumberString(proposal.yesVotes)}</span>
                             {BigInt(proposal.noVotes) > BigInt(0) ? <span>No {formatWholeNumberString(proposal.noVotes)}</span> : null}
-                            {BigInt(proposal.abstainVotes) > BigInt(0) ? <span>Abstain {formatWholeNumberString(proposal.abstainVotes)}</span> : null}
                             {BigInt(proposal.denyVotes) > BigInt(0) ? <span>Deny {formatWholeNumberString(proposal.denyVotes)}</span> : null}
                           </div>
-                          {proposal.canVote ? (
+                          {canVoteNow ? (
                             <div className="governance-vote-actions">
                               {proposal.choices.map((choice) => (
                                 <Button
                                   key={`${proposal.proposalId}:${choice.rank}`}
                                   tone="secondary"
-                                  disabled={governanceVotingProposalId === proposal.proposalId}
+                                  disabled={
+                                    governanceVotingProposalId === proposal.proposalId ||
+                                    (!canUseUnlockedSigner && !governancePassword.trim())
+                                  }
                                   onClick={() =>
                                     void handleGovernanceVote({
                                       daoId: proposal.daoId,
@@ -3581,7 +3844,8 @@ function PopupPage() {
                                       tokenOwnerRecordId: proposal.tokenOwnerRecordId,
                                       governingTokenMint: proposal.governingTokenMint,
                                       voteKind: 'approve',
-                                      choiceRank: choice.rank
+                                      choiceRank: choice.rank,
+                                      voteSources: proposal.voteSources
                                     })
                                   }
                                 >
@@ -3591,7 +3855,10 @@ function PopupPage() {
                               {proposal.hasDenyOption ? (
                                 <Button
                                   tone="secondary"
-                                  disabled={governanceVotingProposalId === proposal.proposalId}
+                                  disabled={
+                                    governanceVotingProposalId === proposal.proposalId ||
+                                    (!canUseUnlockedSigner && !governancePassword.trim())
+                                  }
                                   onClick={() =>
                                     void handleGovernanceVote({
                                       daoId: proposal.daoId,
@@ -3600,54 +3867,29 @@ function PopupPage() {
                                       proposalOwnerRecordId: proposal.proposalOwnerRecordId,
                                       tokenOwnerRecordId: proposal.tokenOwnerRecordId,
                                       governingTokenMint: proposal.governingTokenMint,
-                                      voteKind: 'deny'
+                                      voteKind: 'deny',
+                                      voteSources: proposal.voteSources
                                     })
                                   }
                                 >
                                   {governanceVotingProposalId === proposal.proposalId ? 'Submitting…' : 'Deny'}
                                 </Button>
                               ) : null}
-                              <Button
-                                tone="secondary"
-                                disabled={governanceVotingProposalId === proposal.proposalId}
-                                onClick={() =>
-                                  void handleGovernanceVote({
-                                    daoId: proposal.daoId,
-                                    governanceId: proposal.governanceId,
-                                    proposalId: proposal.proposalId,
-                                    proposalOwnerRecordId: proposal.proposalOwnerRecordId,
-                                    tokenOwnerRecordId: proposal.tokenOwnerRecordId,
-                                    governingTokenMint: proposal.governingTokenMint,
-                                    voteKind: 'abstain'
-                                  })
-                                }
-                              >
-                                {governanceVotingProposalId === proposal.proposalId ? 'Submitting…' : 'Abstain'}
-                              </Button>
                             </div>
                           ) : (
                             <p className="muted governance-proposal-note">
-                              {proposal.hasVoted
-                                ? 'This wallet already voted on the active proposal.'
-                                : 'This wallet is tracking the DAO, but it does not currently have voting power for this proposal.'}
+                              {inactiveVotingPowerMessage}
                             </p>
                           )}
                         </div>
-                      ))}
-                    </div>
-                  </>
-                ) : null}
-                {!governanceLoading && !governanceError && governance.proposals.length === 0 ? (
-                  <div className="community-empty-state">
-                    <strong>No active governance proposals</strong>
-                    <p className="muted">
-                      Grape now auto-detects the Solana DAOs this wallet belongs to. You can still add extra realm ids
-                      from Settings if you want to track specific DAOs manually.
-                    </p>
-                    <Button onClick={() => setView('settings')}>Review DAOs</Button>
-                  </div>
-                ) : null}
+                        );
+                        })}
+                      </div>
+                    </>
+                  );
+                })()}
               </Card>
+              </div>
             </Tabs.Content>
           ) : null}
 
@@ -4771,7 +5013,92 @@ function PopupPage() {
               <p className="muted">Governance proposal tracking is currently supported for Solana wallets.</p>
             ) : (
               <>
-                {governance.discoveredDaos.length > 0 ? (
+                {governance.daos.length > 0 ? (
+                  <div className="stack">
+                    <strong>DAO Memberships</strong>
+                    <div className="governance-dao-list">
+                      {governance.daos
+                        .filter((dao: GovernanceDaoSummary) => {
+                          const c = BigInt(dao.communityVotingPower ?? '0');
+                          const k = BigInt(dao.councilVotingPower ?? '0');
+                          const dc = BigInt(dao.delegateCommunityVotingPower ?? '0');
+                          const dk = BigInt(dao.delegateCouncilVotingPower ?? '0');
+                          return c > 0n || k > 0n || dc > 0n || dk > 0n;
+                        })
+                        .sort((a: GovernanceDaoSummary, b: GovernanceDaoSummary) => {
+                          const decA = BigInt(10 ** (a.communityTokenDecimals ?? 0));
+                          const decB = BigInt(10 ** (b.communityTokenDecimals ?? 0));
+                          const totalA = (BigInt(a.communityVotingPower ?? '0') + BigInt(a.delegateCommunityVotingPower ?? '0')) / decA
+                            + BigInt(a.councilVotingPower ?? '0') + BigInt(a.delegateCouncilVotingPower ?? '0');
+                          const totalB = (BigInt(b.communityVotingPower ?? '0') + BigInt(b.delegateCommunityVotingPower ?? '0')) / decB
+                            + BigInt(b.councilVotingPower ?? '0') + BigInt(b.delegateCouncilVotingPower ?? '0');
+                          return totalB > totalA ? 1 : totalB < totalA ? -1 : 0;
+                        })
+                        .map((dao: GovernanceDaoSummary) => {
+                          const communityPower = BigInt(dao.communityVotingPower ?? '0');
+                          const councilPower = BigInt(dao.councilVotingPower ?? '0');
+                          const delegateCommunityPower = BigInt(dao.delegateCommunityVotingPower ?? '0');
+                          const delegateCouncilPower = BigInt(dao.delegateCouncilVotingPower ?? '0');
+                          const dec = dao.communityTokenDecimals ?? 0;
+                          const isExpanded = expandedDaoIds.has(dao.daoId);
+                          const toggle = () => setExpandedDaoIds((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(dao.daoId)) next.delete(dao.daoId); else next.add(dao.daoId);
+                            return next;
+                          });
+                          const isMember = communityPower > 0n || councilPower > 0n;
+                          const isDelegate = delegateCommunityPower > 0n || delegateCouncilPower > 0n || dao.delegateCount > 0;
+                          return (
+                            <div key={dao.daoId} className="governance-dao-row">
+                              <button type="button" className="governance-dao-header" onClick={toggle}>
+                                <div className="governance-dao-header-left">
+                                  <span className="governance-dao-name">{dao.realmName}</span>
+                                  {dao.role === 'treasury' && <StatusPill tone="neutral">Treasury</StatusPill>}
+                                  {isMember && <StatusPill tone="success">Member</StatusPill>}
+                                  {isDelegate && <StatusPill tone="neutral">Delegate</StatusPill>}
+                                </div>
+                                {isExpanded
+                                  ? <ChevronDown size={14} className="governance-dao-chevron" />
+                                  : <ChevronRight size={14} className="governance-dao-chevron" />}
+                              </button>
+                              {isExpanded && (
+                                <div className="governance-dao-details">
+                                  {communityPower > 0n && (
+                                    <div className="governance-dao-stat">
+                                      <span className="governance-dao-stat-label">Community votes</span>
+                                      <span className="governance-dao-stat-value">{formatVotingPower(communityPower, dec)}</span>
+                                    </div>
+                                  )}
+                                  {councilPower > 0n && (
+                                    <div className="governance-dao-stat">
+                                      <span className="governance-dao-stat-label">Council votes</span>
+                                      <span className="governance-dao-stat-value">{formatVotingPower(councilPower, 0)}</span>
+                                    </div>
+                                  )}
+                                  {delegateCommunityPower > 0n && (
+                                    <div className="governance-dao-stat">
+                                      <span className="governance-dao-stat-label">
+                                        Delegated to you{dao.delegateCount > 0 ? ` (${dao.delegateCount} wallet${dao.delegateCount !== 1 ? 's' : ''})` : ''}
+                                      </span>
+                                      <span className="governance-dao-stat-value">{formatVotingPower(delegateCommunityPower, dec)}</span>
+                                    </div>
+                                  )}
+                                  {delegateCouncilPower > 0n && (
+                                    <div className="governance-dao-stat">
+                                      <span className="governance-dao-stat-label">
+                                        Delegated council{dao.delegateCount > 0 ? ` (${dao.delegateCount} wallet${dao.delegateCount !== 1 ? 's' : ''})` : ''}
+                                      </span>
+                                      <span className="governance-dao-stat-value">{formatVotingPower(delegateCouncilPower, 0)}</span>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                    </div>
+                  </div>
+                ) : governance.discoveredDaos.length > 0 ? (
                   <div className="stack">
                     <strong>Detected DAOs</strong>
                     <div className="reputation-space-list">

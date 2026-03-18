@@ -134,6 +134,13 @@ export type WalletGovernanceProposalChoice = {
   voteResult?: string | null;
 };
 
+export type WalletGovernanceProposalVoteSource = {
+  tokenOwnerRecordId: string;
+  governingTokenOwner: string;
+  isDelegate: boolean;
+  hasVoted: boolean;
+};
+
 export type WalletGovernanceProposal = {
   daoId: string;
   realmName: string;
@@ -153,6 +160,9 @@ export type WalletGovernanceProposal = {
   canVote: boolean;
   hasVoted: boolean;
   hasDenyOption: boolean;
+  isDelegate: boolean;
+  votingPowerType: 'community' | 'council' | 'delegated-community' | 'delegated-council' | 'unknown';
+  voteSources: WalletGovernanceProposalVoteSource[];
   choices: WalletGovernanceProposalChoice[];
   yesVotes: string;
   noVotes: string;
@@ -160,11 +170,34 @@ export type WalletGovernanceProposal = {
   denyVotes: string;
 };
 
+export type GovernanceDaoSummary = {
+  daoId: string;
+  realmName: string;
+  communityMint: string;
+  councilMint: string | null;
+  /** Decimals for the community governance token (0 = whole units, e.g. NFT-based) */
+  communityTokenDecimals: number;
+  role: 'member' | 'delegate' | 'treasury';
+  /** Own deposited community token voting power (raw bigint string) */
+  communityVotingPower: string;
+  /** Own deposited council token voting power (raw bigint string, always whole units) */
+  councilVotingPower: string;
+  /** Community tokens others have delegated to this wallet (raw bigint string) */
+  delegateCommunityVotingPower: string;
+  /** Council tokens others have delegated to this wallet (raw bigint string, always whole units) */
+  delegateCouncilVotingPower: string;
+  /** Number of wallets that have delegated to this wallet in this DAO */
+  delegateCount: number;
+};
+
 export type WalletGovernanceResponse = {
   trackedDaos: string[];
   discoveredDaos: string[];
+  delegateDaos: string[];
+  governedDaos: string[];
   memberDaos: number;
   proposals: WalletGovernanceProposal[];
+  daos: GovernanceDaoSummary[];
   source: 'shyft' | 'rpc' | 'none';
   network: WalletState['selectedNetwork'];
   refreshedAt: number;

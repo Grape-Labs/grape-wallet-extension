@@ -141,6 +141,105 @@ function formatWholeNumberString(value: string | null | undefined) {
   }
 }
 
+function formatGovernanceVotingPowerType(
+  type: MobileGovernanceResponse['proposals'][number]['votingPowerType']
+) {
+  switch (type) {
+    case 'community':
+      return 'Community';
+    case 'council':
+      return 'Council';
+    case 'delegated-community':
+      return 'Delegated Community';
+    case 'delegated-council':
+      return 'Delegated Council';
+    default:
+      return 'Unknown';
+  }
+}
+
+function buildGovernanceProposalUrl(daoId: string, proposalId: string) {
+  return `https://governance.so/proposal/${daoId}/${proposalId}`;
+}
+
+function formatGovernanceVoteSourceLabel(
+  source: MobileGovernanceResponse['proposals'][number]['voteSources'][number]
+) {
+  return source.isDelegate
+    ? `delegated power from ${shortenAddress(source.governingTokenOwner)}`
+    : 'your voting power';
+}
+
+function formatRelativeTimeFromNow(targetUnixSeconds: number, nowUnixSeconds = Math.floor(Date.now() / 1000)) {
+  const deltaSeconds = Math.trunc(targetUnixSeconds - nowUnixSeconds);
+  const absSeconds = Math.abs(deltaSeconds);
+  const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+
+  if (absSeconds < 60) {
+    return rtf.format(deltaSeconds, 'second');
+  }
+  if (absSeconds < 3600) {
+    return rtf.format(Math.trunc(deltaSeconds / 60), 'minute');
+  }
+  if (absSeconds < 86400) {
+    return rtf.format(Math.trunc(deltaSeconds / 3600), 'hour');
+  }
+  if (absSeconds < 604800) {
+    return rtf.format(Math.trunc(deltaSeconds / 86400), 'day');
+  }
+  return rtf.format(Math.trunc(deltaSeconds / 604800), 'week');
+}
+
+function getGovernanceProposalTimeMeta(
+  proposal: MobileGovernanceResponse['proposals'][number],
+  nowUnixSeconds = Math.floor(Date.now() / 1000)
+) {
+  if (!proposal.votingEndsAt) {
+    return {
+      badgeLabel: proposal.canVote ? 'Vote now' : proposal.hasVoted ? 'Voted' : proposal.state,
+      badgeSuccess: proposal.canVote,
+      badgeWarning: proposal.hasVoted,
+      metaText: null as string | null,
+      noteText: null as string | null,
+      votingWindowOpen: true
+    };
+  }
+
+  const votingWindowOpen = proposal.votingEndsAt > nowUnixSeconds;
+  const relativeTime = formatRelativeTimeFromNow(proposal.votingEndsAt, nowUnixSeconds);
+
+  if (votingWindowOpen) {
+    return {
+      badgeLabel: proposal.canVote ? 'Vote now' : proposal.hasVoted ? 'Voted' : 'Ending',
+      badgeSuccess: proposal.canVote,
+      badgeWarning: proposal.hasVoted,
+      metaText: `Ending ${relativeTime}`,
+      noteText: null as string | null,
+      votingWindowOpen
+    };
+  }
+
+  if (proposal.stateCode === 2) {
+    return {
+      badgeLabel: 'Finalizing',
+      badgeSuccess: false,
+      badgeWarning: true,
+      metaText: `Ended ${relativeTime}`,
+      noteText: 'Voting has ended. This proposal is awaiting on-chain finalization.',
+      votingWindowOpen
+    };
+  }
+
+  return {
+    badgeLabel: proposal.state === 'Completed' || proposal.state === 'Executing' ? proposal.state : 'Ended',
+    badgeSuccess: false,
+    badgeWarning: false,
+    metaText: `Ended ${relativeTime}`,
+    noteText: null as string | null,
+    votingWindowOpen
+  };
+}
+
 function buildOgReputationSpaceUrl(daoId: string) {
   return `https://reputation.governance.so/dao/${daoId}`;
 }
@@ -1491,8 +1590,24 @@ export default function App() {
     governingTokenMint: string;
     voteKind: 'approve' | 'deny' | 'abstain';
     choiceRank?: number;
+    voteSources?: MobileGovernanceResponse['proposals'][number]['voteSources'];
   }) {
-    if (!selectedWallet || !input.tokenOwnerRecordId) {
+    if (!selectedWallet) {
+      return;
+    }
+
+    const voteSources = (input.voteSources ?? []).filter((source) => !source.hasVoted);
+    const fallbackSource = input.tokenOwnerRecordId
+      ? [{
+          tokenOwnerRecordId: input.tokenOwnerRecordId,
+          governingTokenOwner: '',
+          isDelegate: false,
+          hasVoted: false
+        }]
+      : [];
+    const effectiveVoteSources = voteSources.length > 0 ? voteSources : fallbackSource;
+
+    if (effectiveVoteSources.length === 0) {
       setGovernanceVoteError('This wallet does not have a voting record for that proposal mint.');
       return;
     }
@@ -1501,18 +1616,48 @@ export default function App() {
       setGovernanceVotingProposalId(input.proposalId);
       setGovernanceVoteError(null);
       setGovernanceVoteResult(null);
-      const result = await castWalletGovernanceVote({
-        state: walletState,
-        wallet: selectedWallet,
-        daoId: input.daoId,
-        governanceId: input.governanceId,
-        proposalId: input.proposalId,
-        proposalOwnerRecordId: input.proposalOwnerRecordId,
-        tokenOwnerRecordId: input.tokenOwnerRecordId,
-        governingTokenMint: input.governingTokenMint,
-        voteKind: input.voteKind,
-        choiceRank: input.choiceRank
-      });
+      const ownVoteSource = effectiveVoteSources.find((source) => !source.isDelegate) ?? effectiveVoteSources[0];
+      const delegatedVoteSources = effectiveVoteSources.filter(
+        (source) => source.isDelegate && source.tokenOwnerRecordId !== ownVoteSource.tokenOwnerRecordId
+      );
+      const selectedSources = [ownVoteSource];
+
+      if (delegatedVoteSources.length > 0) {
+        const delegatePrompt = delegatedVoteSources.length === 1
+          ? `This proposal also has ${formatGovernanceVoteSourceLabel(delegatedVoteSources[0])}. Vote ${input.voteKind === 'approve' ? 'Approve' : 'Deny'} with that delegated voting power too?`
+          : `This proposal also has ${delegatedVoteSources.length} delegated voting power sources. Vote ${input.voteKind === 'approve' ? 'Approve' : 'Deny'} with those delegated votes too?`;
+        const includeDelegates = await new Promise<boolean>((resolve) => {
+          Alert.alert('Delegated voting power', delegatePrompt, [
+            { text: 'Only mine', style: 'cancel', onPress: () => resolve(false) },
+            { text: 'Vote all', onPress: () => resolve(true) }
+          ], {
+            cancelable: true,
+            onDismiss: () => resolve(false)
+          });
+        });
+        if (includeDelegates) {
+          selectedSources.push(...delegatedVoteSources);
+        }
+      }
+
+      let result: MobileGovernanceVoteResponse | null = null;
+      for (const source of selectedSources) {
+        result = await castWalletGovernanceVote({
+          state: walletState,
+          wallet: selectedWallet,
+          daoId: input.daoId,
+          governanceId: input.governanceId,
+          proposalId: input.proposalId,
+          proposalOwnerRecordId: input.proposalOwnerRecordId,
+          tokenOwnerRecordId: source.tokenOwnerRecordId,
+          governingTokenMint: input.governingTokenMint,
+          voteKind: input.voteKind,
+          choiceRank: input.choiceRank
+        });
+      }
+      if (!result) {
+        throw new Error('No eligible votes were available for this proposal.');
+      }
       setGovernanceVoteResult(result);
       const nextGovernance = await loadWalletGovernance(selectedWallet, walletState.trackedGovernanceDaoIds);
       setGovernance(nextGovernance);
@@ -2463,30 +2608,72 @@ export default function App() {
         ) : null}
 
         {!governanceLoading && !governanceError
-          ? governance.proposals.map((proposal) => (
+          ? governance.proposals.map((proposal) => {
+              const nowUnixSeconds = Math.floor(Date.now() / 1000);
+              const timeMeta = getGovernanceProposalTimeMeta(proposal, nowUnixSeconds);
+              const canVoteNow = proposal.canVote && timeMeta.votingWindowOpen;
+              const proposalVoteSources = proposal.voteSources ?? [];
+              const availableVoteSources = proposalVoteSources.filter((source) => !source.hasVoted);
+              const hasProposalVoteSources = proposalVoteSources.length > 0;
+              const hasDelegatedProposalVoteSource = availableVoteSources.some((source) => source.isDelegate);
+              const proposalUrl = buildGovernanceProposalUrl(proposal.daoId, proposal.proposalId);
+              const inactiveVotingPowerMessage =
+                !timeMeta.votingWindowOpen && timeMeta.noteText
+                  ? timeMeta.noteText
+                  : proposal.hasVoted && availableVoteSources.length === 0
+                    ? 'This wallet already voted on the active proposal.'
+                    : availableVoteSources.length > 0
+                      ? hasDelegatedProposalVoteSource
+                        ? 'This wallet has delegated voting power available for this proposal.'
+                        : 'This wallet has voting power available for this proposal.'
+                      : hasProposalVoteSources
+                        ? 'This wallet has a proposal voter record, but that voting power is not currently available.'
+                        : proposal.votingPowerType === 'unknown'
+                          ? 'This wallet has governance power in this DAO, but the proposal voting class could not be resolved yet.'
+                          : 'This wallet is tracking the DAO, but it does not currently have voting power for this proposal.';
+
+              return (
               <View key={proposal.proposalId} style={styles.sectionCard}>
                 <View style={styles.governanceProposalHeader}>
                   <View style={styles.governanceProposalCopy}>
                     <Text style={styles.governanceProposalTitle}>{proposal.proposalName}</Text>
-                    <Text style={styles.sectionHint}>
-                      {proposal.realmName} • {proposal.state}
-                      {proposal.votingEndsAt ? ` • ends ${new Date(proposal.votingEndsAt * 1000).toLocaleString()}` : ''}
-                    </Text>
-                  </View>
-                  <View style={styles.governanceProposalBadges}>
-                    <View style={[styles.governanceStatusPill, proposal.canVote ? styles.governanceStatusPillSuccess : null]}>
-                      <Text style={[styles.governanceStatusPillText, proposal.canVote ? styles.governanceStatusPillTextSuccess : null]}>
-                        {proposal.canVote ? 'Vote now' : proposal.hasVoted ? 'Voted' : proposal.state}
-                      </Text>
-                    </View>
-                    {proposal.descriptionLink ? (
-                      <Pressable
-                        style={styles.reputationOpenButton}
-                        onPress={() => void Linking.openURL(proposal.descriptionLink ?? '')}
+                    <View style={styles.governanceProposalBadges}>
+                      <View style={styles.governanceStatusPill}>
+                        <Text style={styles.governanceStatusPillText}>{formatGovernanceVotingPowerType(proposal.votingPowerType)}</Text>
+                      </View>
+                      {proposal.isDelegate ? (
+                        <View style={styles.governanceStatusPill}>
+                          <Text style={styles.governanceStatusPillText}>Delegate</Text>
+                        </View>
+                      ) : null}
+                      <View
+                        style={[
+                          styles.governanceStatusPill,
+                          timeMeta.badgeSuccess ? styles.governanceStatusPillSuccess : null
+                        ]}
                       >
+                        <Text
+                          style={[
+                            styles.governanceStatusPillText,
+                            timeMeta.badgeSuccess ? styles.governanceStatusPillTextSuccess : null
+                          ]}
+                        >
+                          {timeMeta.badgeLabel}
+                        </Text>
+                      </View>
+                      <Pressable
+                        style={styles.governanceOpenButton}
+                        onPress={() => void Linking.openURL(proposalUrl)}
+                      >
+                        <Text style={styles.governanceOpenButtonText}>Open</Text>
                         <Feather name="external-link" size={16} color={activeTheme.text} />
                       </Pressable>
-                    ) : null}
+                    </View>
+                    <Text style={styles.sectionHint}>
+                      {proposal.realmName} • {proposal.state}
+                      {timeMeta.metaText ? ` • ${timeMeta.metaText}` : ''}
+                      {proposal.votingEndsAt ? ` • ${new Date(proposal.votingEndsAt * 1000).toLocaleString()}` : ''}
+                    </Text>
                   </View>
                 </View>
 
@@ -2495,15 +2682,12 @@ export default function App() {
                   {BigInt(proposal.noVotes) > BigInt(0) ? (
                     <Text style={styles.governanceMetricText}>No {formatWholeNumberString(proposal.noVotes)}</Text>
                   ) : null}
-                  {BigInt(proposal.abstainVotes) > BigInt(0) ? (
-                    <Text style={styles.governanceMetricText}>Abstain {formatWholeNumberString(proposal.abstainVotes)}</Text>
-                  ) : null}
                   {BigInt(proposal.denyVotes) > BigInt(0) ? (
                     <Text style={styles.governanceMetricText}>Deny {formatWholeNumberString(proposal.denyVotes)}</Text>
                   ) : null}
                 </View>
 
-                {proposal.canVote ? (
+                {canVoteNow ? (
                   <View style={styles.governanceVoteActions}>
                     {proposal.choices.map((choice) => (
                       <Pressable
@@ -2519,7 +2703,8 @@ export default function App() {
                             tokenOwnerRecordId: proposal.tokenOwnerRecordId,
                             governingTokenMint: proposal.governingTokenMint,
                             voteKind: 'approve',
-                            choiceRank: choice.rank
+                            choiceRank: choice.rank,
+                            voteSources: proposal.voteSources
                           })
                         }
                       >
@@ -2540,7 +2725,8 @@ export default function App() {
                             proposalOwnerRecordId: proposal.proposalOwnerRecordId,
                             tokenOwnerRecordId: proposal.tokenOwnerRecordId,
                             governingTokenMint: proposal.governingTokenMint,
-                            voteKind: 'deny'
+                            voteKind: 'deny',
+                            voteSources: proposal.voteSources
                           })
                         }
                       >
@@ -2549,35 +2735,15 @@ export default function App() {
                         </Text>
                       </Pressable>
                     ) : null}
-                    <Pressable
-                      style={styles.governanceVoteButtonSecondary}
-                      disabled={governanceVotingProposalId === proposal.proposalId}
-                      onPress={() =>
-                        void handleGovernanceVote({
-                          daoId: proposal.daoId,
-                          governanceId: proposal.governanceId,
-                          proposalId: proposal.proposalId,
-                          proposalOwnerRecordId: proposal.proposalOwnerRecordId,
-                          tokenOwnerRecordId: proposal.tokenOwnerRecordId,
-                          governingTokenMint: proposal.governingTokenMint,
-                          voteKind: 'abstain'
-                        })
-                      }
-                    >
-                      <Text style={styles.governanceVoteButtonSecondaryText}>
-                        {governanceVotingProposalId === proposal.proposalId ? 'Submitting...' : 'Abstain'}
-                      </Text>
-                    </Pressable>
                   </View>
                 ) : (
                   <Text style={styles.sectionHint}>
-                    {proposal.hasVoted
-                      ? 'This wallet already voted on the active proposal.'
-                      : 'This wallet is tracking the DAO, but it does not currently have voting power for this proposal.'}
+                    {inactiveVotingPowerMessage}
                   </Text>
                 )}
               </View>
-            ))
+              );
+            })
           : null}
       </View>
     );
@@ -5077,10 +5243,7 @@ function createStyles(palette: MobileThemePalette) {
     lineHeight: 20
   },
   governanceProposalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    gap: 12
+    gap: 10
   },
   governanceProposalCopy: {
     flex: 1,
@@ -5093,6 +5256,7 @@ function createStyles(palette: MobileThemePalette) {
   },
   governanceProposalBadges: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     gap: 8
   },
@@ -5162,6 +5326,27 @@ function createStyles(palette: MobileThemePalette) {
   governanceVoteButtonSecondaryText: {
     color: palette.text,
     fontSize: 14,
+    fontWeight: '800'
+  },
+  governanceOpenButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    minHeight: 32,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: palette.panelBorder,
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.12)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.82)'
+          : 'rgba(255,255,255,0.08)'
+  },
+  governanceOpenButtonText: {
+    color: palette.text,
+    fontSize: 12,
     fontWeight: '800'
   },
   reputationSummaryGrid: {
