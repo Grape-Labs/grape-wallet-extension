@@ -128,7 +128,8 @@ import type {
   WalletBridgeQuoteResponse,
   WalletGovernanceResponse,
   WalletGovernanceVoteResponse,
-  WalletReputationResponse
+  WalletReputationResponse,
+  WalletVerificationResponse
 } from '../shared/models';
 
 import { filterCollectibleTokens, inferCollectibleMints, sortWalletTokens } from '../shared/assets';
@@ -172,6 +173,7 @@ const TOKEN_PROGRAM_IDS = [
 ] as const;
 const METADATA_PROGRAM_ID = new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s');
 const VINE_REP_PROGRAM_ID = new PublicKey('V1NE6WCWJPRiVFq5DtaN8p87M9DmmUd2zQuVbvLgQwX');
+const VERIFICATION_REGISTRY_PROGRAM_ID = new PublicKey('VrFyyRxPoyWxpABpBXU4YUCCF9p8giDSJUv2oXfDr5q');
 const DEFAULT_GOVERNANCE_PROGRAM_ID = 'GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPCVZw';
 const GOVERNANCE_GRAPHQL_URL = 'https://grape.shyft.to/v1/graphql/';
 const KNOWN_TOKEN_SYMBOLS: Record<string, string> = {
@@ -232,6 +234,28 @@ type VineSpaceConfig = {
 type VineReputationAccount = {
   season: number;
   points: bigint;
+};
+
+type VerificationSpaceAccount = {
+  daoId: string;
+  salt: Uint8Array;
+  attestor: string;
+  isFrozen: boolean;
+};
+
+type VerificationIdentityAccount = {
+  space: string;
+  platform: number;
+  verified: boolean;
+  verifiedAt: number | null;
+  expiresAt: number | null;
+  attestedBy: string | null;
+};
+
+type VerificationLinkAccount = {
+  identity: string;
+  walletHash: Uint8Array;
+  linkedAt: number | null;
 };
 
 type GovernanceOwner = {
@@ -367,6 +391,8 @@ class WalletController {
   private readonly assetRefreshes = new Map<string, Promise<WalletAssetsResponse>>();
   private readonly reputationRefreshes = new Map<string, Promise<WalletReputationResponse>>();
   private readonly reputationCache = new Map<string, { cachedAt: number; data: WalletReputationResponse }>();
+  private readonly verificationRefreshes = new Map<string, Promise<WalletVerificationResponse>>();
+  private readonly verificationCache = new Map<string, { cachedAt: number; data: WalletVerificationResponse }>();
   private readonly governanceRefreshes = new Map<string, Promise<WalletGovernanceResponse>>();
   private readonly governanceCache = new Map<string, { cachedAt: number; data: WalletGovernanceResponse }>();
 
@@ -375,6 +401,10 @@ class WalletController {
   }
 
   private getReputationCacheKey(walletId: string, network: 'mainnet-beta' | 'devnet', publicKey: string) {
+    return `${walletId}:${network}:${publicKey}`;
+  }
+
+  private getVerificationCacheKey(walletId: string, network: 'mainnet-beta' | 'devnet', publicKey: string) {
     return `${walletId}:${network}:${publicKey}`;
   }
 
@@ -1439,6 +1469,17 @@ class WalletController {
     return this.getStateResponse();
   }
 
+  async setTrackedVerificationSpaces(daoIds: string[]) {
+    const walletState = await this.getWalletState();
+    const nextDaoIds = Array.from(new Set(daoIds.map((entry) => entry.trim()).filter((entry) => !!entry)));
+    await walletStateStorage.set({
+      ...walletState,
+      trackedVerificationSpaceIds: nextDaoIds
+    });
+    this.verificationCache.clear();
+    return this.getStateResponse();
+  }
+
   async setTrackedGovernanceDaos(daoIds: string[]) {
     const walletState = await this.getWalletState();
     const nextDaoIds = Array.from(new Set(daoIds.map((entry) => entry.trim()).filter((entry) => !!entry)));
@@ -1774,6 +1815,97 @@ class WalletController {
     }
 
     return this.refreshReputationCache(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey);
+  }
+
+  private async refreshVerificationCache(
+    walletId: string,
+    network: 'mainnet-beta' | 'devnet',
+    publicKey: string
+  ): Promise<WalletVerificationResponse> {
+    const cacheKey = this.getVerificationCacheKey(walletId, network, publicKey);
+    const inFlight = this.verificationRefreshes.get(cacheKey);
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const refreshPromise = (async () => {
+      const walletState = await this.getWalletState();
+      const targetWallet = walletState.wallets.find((wallet) => wallet.id === walletId);
+      const trackedSpaces = walletState.trackedVerificationSpaceIds;
+      if (!targetWallet || targetWallet.chain !== 'solana') {
+        const empty: WalletVerificationResponse = {
+          trackedSpaces,
+          identities: [],
+          totalVerified: 0,
+          source: 'none',
+          network,
+          refreshedAt: Date.now()
+        };
+        this.verificationCache.set(cacheKey, { cachedAt: Date.now(), data: empty });
+        return empty;
+      }
+
+      const owner = tryParseSolanaPublicKey(publicKey);
+      if (!owner) {
+        const empty: WalletVerificationResponse = {
+          trackedSpaces,
+          identities: [],
+          totalVerified: 0,
+          source: 'none',
+          network,
+          refreshedAt: Date.now()
+        };
+        this.verificationCache.set(cacheKey, { cachedAt: Date.now(), data: empty });
+        return empty;
+      }
+
+      const connection = this.createConnection(network, walletState);
+      let identities: WalletVerificationResponse['identities'] = [];
+      try {
+        identities = await fetchVerificationForWallet(connection, owner, trackedSpaces);
+      } catch {
+        identities = [];
+      }
+
+      const result: WalletVerificationResponse = {
+        trackedSpaces,
+        identities,
+        totalVerified: identities.filter((identity) => identity.verified).length,
+        source: trackedSpaces.length > 0 ? 'onchain' : 'none',
+        network,
+        refreshedAt: Date.now()
+      };
+      this.verificationCache.set(cacheKey, { cachedAt: Date.now(), data: result });
+      return result;
+    })().finally(() => {
+      this.verificationRefreshes.delete(cacheKey);
+    });
+
+    this.verificationRefreshes.set(cacheKey, refreshPromise);
+    return refreshPromise;
+  }
+
+  async getVerification() {
+    const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
+    if (!activeAccount || selectedWallet.chain !== 'solana') {
+      return {
+        trackedSpaces: walletState.trackedVerificationSpaceIds,
+        identities: [],
+        totalVerified: 0,
+        source: 'none' as const,
+        network: walletState.selectedNetwork,
+        refreshedAt: Date.now()
+      };
+    }
+
+    const cacheKey = this.getVerificationCacheKey(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey);
+    const cached = this.verificationCache.get(cacheKey);
+    if (cached && Date.now() - cached.cachedAt < REPUTATION_CACHE_TTL_MS) {
+      return cached.data;
+    }
+
+    return this.refreshVerificationCache(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey);
   }
 
   private async refreshGovernanceCache(
@@ -3880,6 +4012,17 @@ function utf8Bytes(value: string) {
   return new TextEncoder().encode(value);
 }
 
+function concatBytes(...arrays: Uint8Array[]) {
+  const totalLength = arrays.reduce((sum, entry) => sum + entry.length, 0);
+  const merged = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const entry of arrays) {
+    merged.set(entry, offset);
+    offset += entry.length;
+  }
+  return merged;
+}
+
 function u16leBytes(value: number) {
   const buffer = new Uint8Array(2);
   const view = new DataView(buffer.buffer);
@@ -3922,12 +4065,124 @@ function readUint64LE(bytes: Uint8Array, offset: number) {
   return value;
 }
 
+function readInt64LE(bytes: Uint8Array, offset: number) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset + offset, 8);
+  return view.getBigInt64(0, true);
+}
+
 function bigintToSafeNumber(value: bigint): number | null {
   const max = BigInt(Number.MAX_SAFE_INTEGER);
   if (value < BigInt(0) || value > max) {
     return null;
   }
   return Number(value);
+}
+
+function bigintToSafeSignedNumber(value: bigint): number | null {
+  const max = BigInt(Number.MAX_SAFE_INTEGER);
+  const min = BigInt(Number.MIN_SAFE_INTEGER);
+  if (value < min || value > max) {
+    return null;
+  }
+  return Number(value);
+}
+
+function bytesToHex(bytes: Uint8Array) {
+  return Array.from(bytes)
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function getVerificationPlatform(platform: number): WalletVerificationResponse['identities'][number]['platform'] {
+  switch (platform) {
+    case 0:
+      return 'discord';
+    case 1:
+      return 'telegram';
+    case 2:
+      return 'twitter';
+    case 3:
+      return 'email';
+    default:
+      return 'unknown';
+  }
+}
+
+async function decodeVerificationSpaceAccount(data: Uint8Array): Promise<VerificationSpaceAccount | null> {
+  const discriminator = await anchorAccountDiscriminator('GrapeVerificationSpace');
+  if (data.length < 139 || !bytesEqual(data.subarray(0, 8), discriminator)) {
+    return null;
+  }
+
+  let offset = 8;
+  offset += 1;
+  const daoId = new PublicKey(data.subarray(offset, offset + 32)).toBase58();
+  offset += 32;
+  offset += 32;
+  const attestor = new PublicKey(data.subarray(offset, offset + 32)).toBase58();
+  offset += 32;
+  const isFrozen = data[offset] === 1;
+  offset += 2;
+  const salt = data.slice(offset, offset + 32);
+
+  return {
+    daoId,
+    salt,
+    attestor,
+    isFrozen
+  };
+}
+
+async function decodeVerificationIdentityAccount(data: Uint8Array): Promise<VerificationIdentityAccount | null> {
+  const discriminator = await anchorAccountDiscriminator('GrapeVerificationIdentity');
+  if (data.length < 124 || !bytesEqual(data.subarray(0, 8), discriminator)) {
+    return null;
+  }
+
+  let offset = 8;
+  offset += 1;
+  const space = new PublicKey(data.subarray(offset, offset + 32)).toBase58();
+  offset += 32;
+  const platform = data[offset];
+  offset += 1;
+  offset += 32;
+  const verified = data[offset] === 1;
+  offset += 1;
+  const verifiedAt = bigintToSafeSignedNumber(readInt64LE(data, offset));
+  offset += 8;
+  const expiresAt = bigintToSafeSignedNumber(readInt64LE(data, offset));
+  offset += 8;
+  const attestedBy = new PublicKey(data.subarray(offset, offset + 32)).toBase58();
+
+  return {
+    space,
+    platform,
+    verified,
+    verifiedAt,
+    expiresAt,
+    attestedBy
+  };
+}
+
+async function decodeVerificationLinkAccount(data: Uint8Array): Promise<VerificationLinkAccount | null> {
+  const discriminator = await anchorAccountDiscriminator('GrapeVerificationLink');
+  if (data.length < 82 || !bytesEqual(data.subarray(0, 8), discriminator)) {
+    return null;
+  }
+
+  let offset = 8;
+  offset += 1;
+  const identity = new PublicKey(data.subarray(offset, offset + 32)).toBase58();
+  offset += 32;
+  const walletHash = data.slice(offset, offset + 32);
+  offset += 32;
+  const linkedAt = bigintToSafeSignedNumber(readInt64LE(data, offset));
+
+  return {
+    identity,
+    walletHash,
+    linkedAt
+  };
 }
 
 async function decodeVineSpaceConfig(data: Uint8Array): Promise<VineSpaceConfig | null> {
@@ -4260,6 +4515,140 @@ async function fetchOgReputationForWallet(
       }
       return left.daoId.localeCompare(right.daoId);
     });
+}
+
+async function fetchVerificationForWallet(
+  connection: Connection,
+  owner: PublicKey,
+  trackedDaoIds: string[] = []
+): Promise<WalletVerificationResponse['identities']> {
+  const daoIds = Array.from(new Set(trackedDaoIds.map((entry) => entry.trim()).filter((entry) => !!entry)));
+  if (daoIds.length === 0) {
+    return [];
+  }
+
+  const spaceEntries = daoIds
+    .map((daoId) => {
+      const daoPk = tryParseSolanaPublicKey(daoId);
+      if (!daoPk) {
+        return null;
+      }
+      const [spacePda] = PublicKey.findProgramAddressSync(
+        [utf8Bytes('space'), daoPk.toBytes()],
+        VERIFICATION_REGISTRY_PROGRAM_ID
+      );
+      return { daoId, spacePda };
+    })
+    .filter((entry): entry is { daoId: string; spacePda: PublicKey } => !!entry);
+
+  const identities: WalletVerificationResponse['identities'] = [];
+  if (spaceEntries.length === 0) {
+    return identities;
+  }
+
+  const linkDiscriminatorB64 = arrayBufferToBase64(await anchorAccountDiscriminator('GrapeVerificationLink'));
+  const spaceAccounts = await connection.getMultipleAccountsInfo(spaceEntries.map((entry) => entry.spacePda), 'confirmed');
+
+  for (let index = 0; index < spaceEntries.length; index += 1) {
+    const spaceEntry = spaceEntries[index];
+    const accountInfo = spaceAccounts[index];
+    if (!accountInfo?.data) {
+      continue;
+    }
+
+    const decodedSpace = await decodeVerificationSpaceAccount(new Uint8Array(accountInfo.data));
+    if (!decodedSpace) {
+      continue;
+    }
+
+    const walletHash = await sha256Bytes(concatBytes(decodedSpace.salt, utf8Bytes('wallet'), owner.toBytes()));
+    const walletHashB64 = arrayBufferToBase64(walletHash);
+    const linkAccounts = await connection.getProgramAccounts(VERIFICATION_REGISTRY_PROGRAM_ID, {
+      commitment: 'confirmed',
+      filters: [
+        { memcmp: { offset: 0, bytes: linkDiscriminatorB64, encoding: 'base64' } },
+        { memcmp: { offset: 41, bytes: walletHashB64, encoding: 'base64' } }
+      ]
+    });
+
+    if (linkAccounts.length === 0) {
+      continue;
+    }
+
+    const parsedLinks = await Promise.all(
+      linkAccounts.map(async (account) => ({
+        pubkey: account.pubkey.toBase58(),
+        parsed: await decodeVerificationLinkAccount(new Uint8Array(account.account.data))
+      }))
+    );
+    const validLinks = parsedLinks.filter(
+      (entry): entry is { pubkey: string; parsed: VerificationLinkAccount } => !!entry.parsed
+    );
+    if (validLinks.length === 0) {
+      continue;
+    }
+
+    const identityKeys = validLinks.map((entry) => new PublicKey(entry.parsed.identity));
+    const identityAccounts = await connection.getMultipleAccountsInfo(identityKeys, 'confirmed');
+    const linkedWalletCounts = new Map<string, number>();
+
+    await Promise.all(
+      identityKeys.map(async (identityKey) => {
+        const linkedWallets = await connection.getProgramAccounts(VERIFICATION_REGISTRY_PROGRAM_ID, {
+          commitment: 'confirmed',
+          dataSlice: { offset: 0, length: 0 },
+          filters: [
+            { memcmp: { offset: 0, bytes: linkDiscriminatorB64, encoding: 'base64' } },
+            { memcmp: { offset: 9, bytes: identityKey.toBase58() } }
+          ]
+        });
+        linkedWalletCounts.set(identityKey.toBase58(), linkedWallets.length);
+      })
+    );
+
+    for (let identityIndex = 0; identityIndex < identityAccounts.length; identityIndex += 1) {
+      const identityAccount = identityAccounts[identityIndex];
+      if (!identityAccount?.data) {
+        continue;
+      }
+
+      const decodedIdentity = await decodeVerificationIdentityAccount(new Uint8Array(identityAccount.data));
+      if (!decodedIdentity || decodedIdentity.space !== spaceEntry.spacePda.toBase58()) {
+        continue;
+      }
+
+      const linkEntry = validLinks[identityIndex];
+      identities.push({
+        daoId: spaceEntry.daoId,
+        spaceId: spaceEntry.spacePda.toBase58(),
+        identityId: linkEntry.parsed.identity,
+        linkId: linkEntry.pubkey,
+        platform: getVerificationPlatform(decodedIdentity.platform),
+        platformCode: decodedIdentity.platform,
+        verified: decodedIdentity.verified,
+        verifiedAt: decodedIdentity.verifiedAt && decodedIdentity.verifiedAt > 0 ? decodedIdentity.verifiedAt : null,
+        expiresAt: decodedIdentity.expiresAt && decodedIdentity.expiresAt > 0 ? decodedIdentity.expiresAt : null,
+        attestedBy: decodedIdentity.attestedBy,
+        linkedAt: linkEntry.parsed.linkedAt && linkEntry.parsed.linkedAt > 0 ? linkEntry.parsed.linkedAt : null,
+        linkedWalletCount: linkedWalletCounts.get(linkEntry.parsed.identity) ?? 1,
+        currentWalletLinked: true,
+        walletHashHex: bytesToHex(linkEntry.parsed.walletHash)
+      });
+    }
+  }
+
+  return identities.sort((left, right) => {
+    if (left.verified !== right.verified) {
+      return left.verified ? -1 : 1;
+    }
+    if ((right.linkedAt ?? 0) !== (left.linkedAt ?? 0)) {
+      return (right.linkedAt ?? 0) - (left.linkedAt ?? 0);
+    }
+    if (left.daoId !== right.daoId) {
+      return left.daoId.localeCompare(right.daoId);
+    }
+    return left.platform.localeCompare(right.platform);
+  });
 }
 
 function findGovernanceOwnerByDao(daoId: string): GovernanceOwner {
@@ -6232,6 +6621,9 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
         case 'wallet_set_reputation_spaces':
           sendResponse(await controller.setTrackedReputationSpaces(message.daoIds));
           break;
+        case 'wallet_set_verification_spaces':
+          sendResponse(await controller.setTrackedVerificationSpaces(message.daoIds));
+          break;
         case 'wallet_set_governance_daos':
           sendResponse(await controller.setTrackedGovernanceDaos(message.daoIds));
           break;
@@ -6246,6 +6638,9 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
           break;
         case 'wallet_get_reputation':
           sendResponse(await controller.getReputation());
+          break;
+        case 'wallet_get_verification':
+          sendResponse(await controller.getVerification());
           break;
         case 'wallet_get_governance':
           sendResponse(await controller.getGovernance());

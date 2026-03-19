@@ -111,6 +111,7 @@ export type WalletState = {
   selectedChain: GrapeChain;
   selectedWalletIds: Partial<Record<GrapeChain, string>>;
   trackedReputationSpaceIds: string[];
+  trackedVerificationSpaceIds: string[];
   trackedGovernanceDaoIds: string[];
   chainState: {
     solana: SolanaChainState;
@@ -134,6 +135,7 @@ export type LegacyWalletState = {
   selectedChain?: GrapeChain;
   selectedWalletIds?: Partial<Record<GrapeChain, string>>;
   trackedReputationSpaceIds?: string[];
+  trackedVerificationSpaceIds?: string[];
   trackedGovernanceDaoIds?: string[];
   chainState?: Partial<WalletState['chainState']>;
   selectedNetwork?: GrapeNetwork;
@@ -186,6 +188,7 @@ export function createEmptyWalletState(): WalletState {
     selectedChain: DEFAULT_CHAIN,
     selectedWalletIds: {},
     trackedReputationSpaceIds: [],
+    trackedVerificationSpaceIds: [],
     trackedGovernanceDaoIds: [],
     chainState: {
       solana: {
@@ -321,6 +324,7 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
       selectedChain,
       selectedWalletIds,
       trackedReputationSpaceIds: normalizeTrackedReputationSpaceIds(input.trackedReputationSpaceIds),
+      trackedVerificationSpaceIds: normalizeTrackedVerificationSpaceIds(input.trackedVerificationSpaceIds),
       trackedGovernanceDaoIds: normalizeTrackedDaoIds(input.trackedGovernanceDaoIds),
       chainState,
       selectedWalletId: selectedWalletId ?? selectedWalletIds.solana ?? normalizedWallets.find((wallet) => wallet.chain === 'solana')?.id,
@@ -354,6 +358,7 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
         solana: 'wallet-1'
       },
       trackedReputationSpaceIds: normalizeTrackedReputationSpaceIds(input.trackedReputationSpaceIds),
+      trackedVerificationSpaceIds: normalizeTrackedVerificationSpaceIds(input.trackedVerificationSpaceIds),
       trackedGovernanceDaoIds: normalizeTrackedDaoIds(input.trackedGovernanceDaoIds),
       chainState: {
         solana: {
@@ -385,6 +390,7 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
     selectedChain: input.selectedChain ?? DEFAULT_CHAIN,
     selectedWalletIds: {},
     trackedReputationSpaceIds: normalizeTrackedReputationSpaceIds(input.trackedReputationSpaceIds),
+    trackedVerificationSpaceIds: normalizeTrackedVerificationSpaceIds(input.trackedVerificationSpaceIds),
     trackedGovernanceDaoIds: normalizeTrackedDaoIds(input.trackedGovernanceDaoIds),
     chainState: normalizeChainState(input.chainState, input.selectedNetwork, input.customRpcUrls),
     selectedNetwork: input.selectedNetwork ?? 'devnet',
@@ -396,6 +402,10 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
 }
 
 function normalizeTrackedReputationSpaceIds(value: string[] | undefined): string[] {
+  return normalizeTrackedDaoIds(value);
+}
+
+function normalizeTrackedVerificationSpaceIds(value: string[] | undefined): string[] {
   return normalizeTrackedDaoIds(value);
 }
 

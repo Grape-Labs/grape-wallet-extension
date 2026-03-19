@@ -284,6 +284,10 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     daoIds: z.array(z.string().trim().min(32)).max(64)
   }),
   z.object({
+    type: z.literal('wallet_set_verification_spaces'),
+    daoIds: z.array(z.string().trim().min(32)).max(64)
+  }),
+  z.object({
     type: z.literal('wallet_set_governance_daos'),
     daoIds: z.array(z.string().trim().min(32)).max(64)
   }),
@@ -315,6 +319,9 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('wallet_get_reputation')
+  }),
+  z.object({
+    type: z.literal('wallet_get_verification')
   }),
   z.object({
     type: z.literal('wallet_get_governance')

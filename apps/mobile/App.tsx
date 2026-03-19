@@ -71,6 +71,7 @@ import {
   sendWalletAsset,
   updateTrackedGovernanceDaos,
   updateTrackedReputationSpaces,
+  updateTrackedVerificationSpaces,
   unlockMobileWalletState
 } from './src/wallet';
 import type { MobileBridgeQuoteSummary } from './src/config';
@@ -258,6 +259,10 @@ function buildOgReputationSpaceUrl(daoId: string) {
   return `https://reputation.governance.so/dao/${daoId}`;
 }
 
+function buildVerificationSpaceUrl(daoId: string) {
+  return `https://verification.governance.so/?daoId=${encodeURIComponent(daoId)}`;
+}
+
 function getAssetSubtitle(asset: MobileAsset, selectedChainLabel: string, selectedChainShort: string) {
   const normalizedName = asset.name.trim().toLowerCase();
   const normalizedChainLabel = selectedChainLabel.trim().toLowerCase();
@@ -301,6 +306,14 @@ function dedupeVisibleWallets(wallets: MobileWallet[]) {
 
 async function openOgReputationSpace(daoId: string) {
   const url = buildOgReputationSpaceUrl(daoId);
+  const supported = await Linking.canOpenURL(url);
+  if (supported) {
+    await Linking.openURL(url);
+  }
+}
+
+async function openVerificationSpace(daoId: string) {
+  const url = buildVerificationSpaceUrl(daoId);
   const supported = await Linking.canOpenURL(url);
   if (supported) {
     await Linking.openURL(url);
@@ -374,6 +387,9 @@ export default function App() {
   const [reputationError, setReputationError] = useState<string | null>(null);
   const [reputationSpaceInput, setReputationSpaceInput] = useState('');
   const [reputationSaving, setReputationSaving] = useState(false);
+  const [verificationSpaceInput, setVerificationSpaceInput] = useState('');
+  const [verificationSaving, setVerificationSaving] = useState(false);
+  const [verificationError, setVerificationError] = useState<string | null>(null);
   const [governance, setGovernance] = useState<MobileGovernanceResponse>({
     trackedDaos: [],
     discoveredDaos: [],
@@ -478,6 +494,10 @@ export default function App() {
   const totalEffectiveReputationPoints = useMemo(
     () => formatWholeNumberString(reputation.totalEffectivePoints),
     [reputation.totalEffectivePoints]
+  );
+  const trackedVerificationSpaceCount = useMemo(
+    () => walletState.trackedVerificationSpaceIds.length,
+    [walletState.trackedVerificationSpaceIds]
   );
   const actionableGovernanceProposalCount = useMemo(
     () => governance.proposals.filter((proposal) => proposal.canVote).length,
@@ -1550,6 +1570,48 @@ export default function App() {
     }
   }
 
+  async function handleAddVerificationSpace() {
+    const daoId = verificationSpaceInput.trim();
+    if (!daoId) {
+      return;
+    }
+    if (walletState.trackedVerificationSpaceIds.includes(daoId)) {
+      setVerificationError('That verification space is already tracked.');
+      return;
+    }
+
+    setVerificationSaving(true);
+    try {
+      const nextState = await updateTrackedVerificationSpaces({
+        state: walletState,
+        daoIds: [...walletState.trackedVerificationSpaceIds, daoId]
+      });
+      setWalletState(nextState);
+      setVerificationSpaceInput('');
+      setVerificationError(null);
+    } catch (unknownError) {
+      setVerificationError(unknownError instanceof Error ? unknownError.message : 'Unable to add verification space.');
+    } finally {
+      setVerificationSaving(false);
+    }
+  }
+
+  async function handleRemoveVerificationSpace(daoId: string) {
+    setVerificationSaving(true);
+    try {
+      const nextState = await updateTrackedVerificationSpaces({
+        state: walletState,
+        daoIds: walletState.trackedVerificationSpaceIds.filter((entry) => entry !== daoId)
+      });
+      setWalletState(nextState);
+      setVerificationError(null);
+    } catch (unknownError) {
+      setVerificationError(unknownError instanceof Error ? unknownError.message : 'Unable to remove verification space.');
+    } finally {
+      setVerificationSaving(false);
+    }
+  }
+
   async function handleAddGovernanceDao() {
     const daoId = governanceDaoInput.trim();
     if (!daoId) {
@@ -2124,18 +2186,34 @@ export default function App() {
             ? 'Tracked'
             : 'Join DAOs';
     const governanceMeta = `${totalGovernanceDaoCount} DAO${totalGovernanceDaoCount === 1 ? '' : 's'}`;
+    const verificationValue = trackedVerificationSpaceCount > 0 ? 'Verify now' : 'Add spaces';
+    const verificationMeta = `${trackedVerificationSpaceCount} space${trackedVerificationSpaceCount === 1 ? '' : 's'}`;
+    const handleVerificationPress = () => {
+      if (trackedVerificationSpaceCount === 1 && walletState.trackedVerificationSpaceIds[0]) {
+        void openVerificationSpace(walletState.trackedVerificationSpaceIds[0]);
+        return;
+      }
+      setMainTab('settings');
+    };
 
     return (
-      <View style={styles.communityShortcutRow}>
-        <Pressable style={styles.communityShortcutCard} onPress={() => setMainTab('settings')}>
-          <Text style={styles.communityShortcutLabel}>OG Reputation</Text>
-          <Text style={styles.communityShortcutValue}>{reputationValue}</Text>
-          <Text style={styles.communityShortcutMeta}>{reputationMeta}</Text>
-        </Pressable>
-        <Pressable style={styles.communityShortcutCard} onPress={() => setMainTab('governance')}>
-          <Text style={styles.communityShortcutLabel}>Governance</Text>
-          <Text style={styles.communityShortcutValue}>{governanceValue}</Text>
-          <Text style={styles.communityShortcutMeta}>{governanceMeta}</Text>
+      <View style={styles.communityShortcutStack}>
+        <View style={styles.communityShortcutRow}>
+          <Pressable style={styles.communityShortcutCard} onPress={() => setMainTab('settings')}>
+            <Text style={styles.communityShortcutLabel}>OG Reputation</Text>
+            <Text style={styles.communityShortcutValue}>{reputationValue}</Text>
+            <Text style={styles.communityShortcutMeta}>{reputationMeta}</Text>
+          </Pressable>
+          <Pressable style={styles.communityShortcutCard} onPress={() => setMainTab('governance')}>
+            <Text style={styles.communityShortcutLabel}>Governance</Text>
+            <Text style={styles.communityShortcutValue}>{governanceValue}</Text>
+            <Text style={styles.communityShortcutMeta}>{governanceMeta}</Text>
+          </Pressable>
+        </View>
+        <Pressable style={styles.communityInlineShortcut} onPress={handleVerificationPress}>
+          <Text style={styles.communityInlineShortcutLabel}>Verification</Text>
+          <Text style={styles.communityInlineShortcutValue}>{verificationValue}</Text>
+          <Text style={styles.communityInlineShortcutMeta}>{verificationMeta}</Text>
         </Pressable>
       </View>
     );
@@ -3341,6 +3419,64 @@ export default function App() {
           <Text style={styles.sectionHint}>
             RPC, Shyft metadata, and Jupiter pricing can be supplied with EXPO_PUBLIC environment values.
           </Text>
+        </View>
+
+        <View style={styles.sectionCard}>
+          <Text style={styles.sectionTitle}>Verification Spaces</Text>
+          <Text style={styles.sectionHint}>
+            Add the DAO ids you want to verify against. Mobile opens Grape Verification directly for tracked spaces.
+          </Text>
+          <PaperTextInput
+            value={verificationSpaceInput}
+            onChangeText={setVerificationSpaceInput}
+            placeholder="Add Solana verification DAO id"
+            mode="outlined"
+            autoCapitalize="none"
+            autoCorrect={false}
+            style={styles.paperInput}
+            contentStyle={styles.paperInputContent}
+            outlineStyle={styles.paperOutline}
+            textColor={activeTheme.text}
+          />
+          <PaperButton
+            mode="contained"
+            style={styles.paperPrimaryButton}
+            buttonColor={activeTheme.primaryButton}
+            textColor={activeTheme.primaryButtonText}
+            disabled={verificationSaving || !verificationSpaceInput.trim()}
+            onPress={() => void handleAddVerificationSpace()}
+          >
+            {verificationSaving ? 'Saving...' : 'Add verification space'}
+          </PaperButton>
+          {verificationError ? <Text style={styles.errorText}>{verificationError}</Text> : null}
+          {walletState.trackedVerificationSpaceIds.length === 0 ? (
+            <Text style={styles.sectionHint}>No verification spaces tracked yet.</Text>
+          ) : (
+            <View style={styles.stack}>
+              {walletState.trackedVerificationSpaceIds.map((daoId) => (
+                <View key={daoId} style={styles.reputationSpaceRow}>
+                  <View style={styles.reputationSpaceCopy}>
+                    <Text style={styles.reputationSpaceTitle}>{shortenAddress(daoId)}</Text>
+                    <Text style={styles.reputationSpaceMono}>{daoId}</Text>
+                  </View>
+                  <View style={styles.reputationSpaceActions}>
+                    <Pressable
+                      style={styles.reputationOpenButton}
+                      onPress={() => void openVerificationSpace(daoId)}
+                    >
+                      <Feather name="external-link" size={16} color={activeTheme.text} />
+                    </Pressable>
+                    <Pressable
+                      style={styles.reputationRemoveButton}
+                      onPress={() => void handleRemoveVerificationSpace(daoId)}
+                    >
+                      <Feather name="trash-2" size={16} color={activeTheme.danger} />
+                    </Pressable>
+                  </View>
+                </View>
+              ))}
+            </View>
+          )}
         </View>
 
         <View style={styles.sectionCard}>
@@ -5258,6 +5394,9 @@ function createStyles(palette: MobileThemePalette) {
     flexDirection: 'row',
     gap: 10
   },
+  communityShortcutStack: {
+    gap: 8
+  },
   communityShortcutCard: {
     flex: 1,
     minWidth: 0,
@@ -5288,6 +5427,40 @@ function createStyles(palette: MobileThemePalette) {
     lineHeight: 18
   },
   communityShortcutMeta: {
+    color: palette.muted,
+    fontSize: 12,
+    fontWeight: '700'
+  },
+  communityInlineShortcut: {
+    minWidth: 0,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: palette.panelBorder,
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.08)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.72)'
+          : 'rgba(255,255,255,0.04)'
+  },
+  communityInlineShortcutLabel: {
+    color: palette.muted,
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.9,
+    textTransform: 'uppercase'
+  },
+  communityInlineShortcutValue: {
+    marginTop: 2,
+    color: palette.text,
+    fontSize: 15,
+    fontWeight: '900',
+    lineHeight: 18
+  },
+  communityInlineShortcutMeta: {
+    marginTop: 2,
     color: palette.muted,
     fontSize: 12,
     fontWeight: '700'

@@ -59,6 +59,7 @@ import type {
   WalletGovernanceResponse,
   WalletGovernanceVoteResponse,
   WalletReputationResponse,
+  WalletVerificationResponse,
   WalletStakeAccountsResponse,
   WalletStakeActionResponse,
   WalletStateResponse,
@@ -356,6 +357,25 @@ function formatVotingPower(rawAmount: bigint, decimals: number): string {
 
 function buildOgReputationSpaceUrl(daoId: string): string {
   return `https://reputation.governance.so/dao/${daoId}`;
+}
+
+function buildVerificationSpaceUrl(daoId: string): string {
+  return `https://verification.governance.so/?daoId=${encodeURIComponent(daoId)}`;
+}
+
+function formatVerificationPlatform(platform: WalletVerificationResponse['identities'][number]['platform']): string {
+  switch (platform) {
+    case 'discord':
+      return 'Discord';
+    case 'telegram':
+      return 'Telegram';
+    case 'twitter':
+      return 'Twitter';
+    case 'email':
+      return 'Email';
+    default:
+      return 'Unknown';
+  }
 }
 
 function formatWalletSourceLabel(
@@ -1057,6 +1077,19 @@ function PopupPage() {
   });
   const [reputationLoading, setReputationLoading] = useState(false);
   const [reputationError, setReputationError] = useState<string | null>(null);
+  const [verificationSpaceInput, setVerificationSpaceInput] = useState('');
+  const [verificationSpaceSaving, setVerificationSpaceSaving] = useState(false);
+  const [verificationSpaceError, setVerificationSpaceError] = useState<string | null>(null);
+  const [verification, setVerification] = useState<WalletVerificationResponse>({
+    trackedSpaces: [],
+    identities: [],
+    totalVerified: 0,
+    source: 'none',
+    network: 'mainnet-beta',
+    refreshedAt: Date.now()
+  });
+  const [verificationLoading, setVerificationLoading] = useState(false);
+  const [verificationError, setVerificationError] = useState<string | null>(null);
   const [governanceDaoInput, setGovernanceDaoInput] = useState('');
   const [governanceDaoSaving, setGovernanceDaoSaving] = useState(false);
   const [governanceDaoError, setGovernanceDaoError] = useState<string | null>(null);
@@ -1080,7 +1113,7 @@ function PopupPage() {
   const [governanceVoteResult, setGovernanceVoteResult] = useState<WalletGovernanceVoteResponse | null>(null);
   const [governancePassword, setGovernancePassword] = useState('');
   const [governanceShowFinalizing, setGovernanceShowFinalizing] = useState(false);
-  const [pendingHomeScrollTarget, setPendingHomeScrollTarget] = useState<'community' | 'governance' | null>(null);
+  const [pendingHomeScrollTarget, setPendingHomeScrollTarget] = useState<'community' | 'verification' | 'governance' | null>(null);
   const [activity, setActivity] = useState<WalletActivityItem[]>([]);
   const [activityLoading, setActivityLoading] = useState(false);
   const [activityError, setActivityError] = useState<string | null>(null);
@@ -1138,6 +1171,7 @@ function PopupPage() {
   const [activeApproval, setActiveApproval] = useState<ApprovalRecord | null>(null);
   const assetActionCardRef = useRef<HTMLDivElement | null>(null);
   const communitySectionRef = useRef<HTMLDivElement | null>(null);
+  const verificationSectionRef = useRef<HTMLDivElement | null>(null);
   const governanceSectionRef = useRef<HTMLDivElement | null>(null);
 
   const surface = document.body.dataset.surface ?? 'page';
@@ -1432,7 +1466,12 @@ function PopupPage() {
       return;
     }
 
-    const targetRef = pendingHomeScrollTarget === 'community' ? communitySectionRef : governanceSectionRef;
+    const targetRef =
+      pendingHomeScrollTarget === 'community'
+        ? communitySectionRef
+        : pendingHomeScrollTarget === 'verification'
+          ? verificationSectionRef
+          : governanceSectionRef;
     const frameId = window.requestAnimationFrame(() => {
       targetRef.current?.scrollIntoView({
         behavior: 'smooth',
@@ -1665,6 +1704,64 @@ function PopupPage() {
     state?.wallet.selectedChain,
     state?.wallet.selectedNetwork,
     state?.wallet.trackedGovernanceDaoIds,
+    state?.wallet.setup
+  ]);
+
+  useEffect(() => {
+    if (!state || state.wallet.setup !== 'ready' || state.session.locked || state.wallet.selectedChain !== 'solana') {
+      setVerification({
+        trackedSpaces: state?.wallet.trackedVerificationSpaceIds ?? [],
+        identities: [],
+        totalVerified: 0,
+        source: 'none',
+        network: state?.wallet.selectedNetwork ?? 'mainnet-beta',
+        refreshedAt: Date.now()
+      });
+      setVerificationError(null);
+      setVerificationLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setVerificationLoading(true);
+    void sendRuntimeMessage<WalletVerificationResponse>({ type: 'wallet_get_verification' })
+      .then((nextVerification) => {
+        if (cancelled) {
+          return;
+        }
+        setVerification(nextVerification);
+        setVerificationError(null);
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+        setVerification({
+          trackedSpaces: state.wallet.trackedVerificationSpaceIds,
+          identities: [],
+          totalVerified: 0,
+          source: 'none',
+          network: state.wallet.selectedNetwork,
+          refreshedAt: Date.now()
+        });
+        setVerificationError(error instanceof Error ? error.message : 'Unable to load verification status.');
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setVerificationLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    state?.activeWallet?.id,
+    state?.activeAccount?.publicKey,
+    state?.session.locked,
+    state?.wallet.selectedChain,
+    state?.wallet.selectedNetwork,
+    state?.wallet.trackedVerificationSpaceIds,
     state?.wallet.setup
   ]);
 
@@ -2425,6 +2522,7 @@ function PopupPage() {
       wallets: [],
       privacyMode: false,
       trackedReputationSpaceIds: [],
+      trackedVerificationSpaceIds: [],
       trackedGovernanceDaoIds: [],
       selectedChain: 'solana',
       selectedNetwork: 'mainnet-beta',
@@ -2452,6 +2550,17 @@ function PopupPage() {
   const isEthereumChain = selectedChain === 'ethereum';
   const selectedNetworkLabel = formatNetworkLabel(selectedChain, wallet.selectedNetwork);
   const totalEffectiveReputationPoints = reputation.spaces.reduce((sum, space) => sum + BigInt(space.effectivePoints), BigInt(0)).toString();
+  const verificationDaoNameMap = new Map<string, string>([
+    ...reputation.spaces
+      .filter((space) => !!space.name)
+      .map((space) => [space.daoId, space.name ?? formatAddress(space.daoId)] as const),
+    ...governance.daos.map((dao) => [dao.daoId, dao.realmName] as const)
+  ]);
+  const trackedVerificationDaoCount = new Set([
+    ...wallet.trackedVerificationSpaceIds,
+    ...verification.trackedSpaces
+  ]).size;
+  const verificationLinkedIdentityCount = verification.identities.length;
   const actionableGovernanceProposalCount = governance.proposals.filter((proposal) => proposal.canVote).length;
   const totalGovernanceDaoCount = new Set([...governance.discoveredDaos, ...governance.delegateDaos, ...governance.governedDaos, ...wallet.trackedGovernanceDaoIds]).size;
   const selectedNetworkCustomRpc =
@@ -2780,6 +2889,40 @@ function PopupPage() {
     await handleSaveReputationSpaces(wallet.trackedReputationSpaceIds.filter((entry) => entry !== daoId));
   }
 
+  async function handleSaveVerificationSpaces(daoIds: string[]) {
+    try {
+      setVerificationSpaceSaving(true);
+      setVerificationSpaceError(null);
+      await sendRuntimeMessage<WalletStateResponse>({
+        type: 'wallet_set_verification_spaces',
+        daoIds
+      });
+      await refresh();
+    } catch (error) {
+      setVerificationSpaceError(error instanceof Error ? error.message : 'Unable to update tracked verification spaces.');
+    } finally {
+      setVerificationSpaceSaving(false);
+    }
+  }
+
+  async function handleAddVerificationSpace() {
+    const nextDaoId = verificationSpaceInput.trim();
+    if (!nextDaoId) {
+      return;
+    }
+    if (wallet.trackedVerificationSpaceIds.includes(nextDaoId)) {
+      setVerificationSpaceError('That verification space is already tracked.');
+      return;
+    }
+
+    await handleSaveVerificationSpaces([...wallet.trackedVerificationSpaceIds, nextDaoId]);
+    setVerificationSpaceInput('');
+  }
+
+  async function handleRemoveVerificationSpace(daoId: string) {
+    await handleSaveVerificationSpaces(wallet.trackedVerificationSpaceIds.filter((entry) => entry !== daoId));
+  }
+
   async function handleSaveGovernanceDaos(daoIds: string[]) {
     try {
       setGovernanceDaoSaving(true);
@@ -2818,8 +2961,8 @@ function PopupPage() {
     await handleSaveGovernanceDaos(wallet.trackedGovernanceDaoIds.filter((entry) => entry !== daoId));
   }
 
-  function openHomeTabAndScroll(target: 'community' | 'governance') {
-    setHomeTab(target);
+  function openHomeTabAndScroll(target: 'community' | 'verification' | 'governance') {
+    setHomeTab(target === 'governance' ? 'governance' : 'community');
     setPendingHomeScrollTarget(target);
   }
 
@@ -3595,50 +3738,74 @@ function PopupPage() {
           </div>
 
           {isSolanaChain ? (
-            <div className="wallet-home-shortcuts">
+            <>
+              <div className="wallet-home-shortcuts">
+                <button
+                  type="button"
+                  className="wallet-shortcut-card"
+                  onClick={() => openHomeTabAndScroll('community')}
+                  aria-label="Open community reputation"
+                >
+                  <span className="wallet-shortcut-label">OG Reputation</span>
+                  <strong>
+                    {reputationLoading
+                      ? 'Loading...'
+                      : reputation.spaces.length > 0
+                        ? `${formatWholeNumberString(totalEffectiveReputationPoints)} pts`
+                        : wallet.trackedReputationSpaceIds.length > 0
+                          ? 'No points yet'
+                          : 'Add spaces'}
+                  </strong>
+                  <span className="wallet-shortcut-meta">
+                    {reputation.spaces.length} space{reputation.spaces.length === 1 ? '' : 's'}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="wallet-shortcut-card"
+                  onClick={() => openHomeTabAndScroll('governance')}
+                  aria-label="Open governance proposals"
+                >
+                  <span className="wallet-shortcut-label">Governance</span>
+                  <strong>
+                    {governanceLoading
+                      ? 'Loading...'
+                      : actionableGovernanceProposalCount > 0
+                        ? `${actionableGovernanceProposalCount} ready`
+                        : governance.proposals.length > 0
+                          ? `${governance.proposals.length} recent`
+                          : totalGovernanceDaoCount > 0
+                            ? 'No recent'
+                            : 'Scanning DAOs'}
+                  </strong>
+                  <span className="wallet-shortcut-meta">
+                    {totalGovernanceDaoCount} DAO{totalGovernanceDaoCount === 1 ? '' : 's'}
+                  </span>
+                </button>
+              </div>
               <button
                 type="button"
-                className="wallet-shortcut-card"
-                onClick={() => openHomeTabAndScroll('community')}
-                aria-label="Open community reputation"
+                className="wallet-inline-shortcut"
+                onClick={() => openHomeTabAndScroll('verification')}
+                aria-label="Open verification"
               >
-                <span className="wallet-shortcut-label">OG Reputation</span>
+                <span className="wallet-inline-shortcut-label">Verification</span>
                 <strong>
-                  {reputationLoading
+                  {verificationLoading
                     ? 'Loading...'
-                    : reputation.spaces.length > 0
-                      ? `${formatWholeNumberString(totalEffectiveReputationPoints)} pts`
-                      : wallet.trackedReputationSpaceIds.length > 0
-                        ? 'No points yet'
-                        : 'Add spaces'}
+                    : verification.totalVerified > 0
+                      ? `${verification.totalVerified} verified`
+                      : verificationLinkedIdentityCount > 0
+                        ? `${verificationLinkedIdentityCount} linked`
+                        : trackedVerificationDaoCount > 0
+                          ? 'Verify now'
+                          : 'Add spaces'}
                 </strong>
-                <span className="wallet-shortcut-meta">
-                  {reputation.spaces.length} space{reputation.spaces.length === 1 ? '' : 's'}
+                <span className="wallet-inline-shortcut-meta">
+                  {trackedVerificationDaoCount} space{trackedVerificationDaoCount === 1 ? '' : 's'}
                 </span>
               </button>
-              <button
-                type="button"
-                className="wallet-shortcut-card"
-                onClick={() => openHomeTabAndScroll('governance')}
-                aria-label="Open governance proposals"
-              >
-                <span className="wallet-shortcut-label">Governance</span>
-                <strong>
-                  {governanceLoading
-                    ? 'Loading...'
-                    : actionableGovernanceProposalCount > 0
-                      ? `${actionableGovernanceProposalCount} ready`
-                      : governance.proposals.length > 0
-                        ? `${governance.proposals.length} recent`
-                        : totalGovernanceDaoCount > 0
-                          ? 'No recent'
-                          : 'Scanning DAOs'}
-                </strong>
-                <span className="wallet-shortcut-meta">
-                  {totalGovernanceDaoCount} DAO{totalGovernanceDaoCount === 1 ? '' : 's'}
-                </span>
-              </button>
-            </div>
+            </>
           ) : null}
         </Card>
 
@@ -3816,6 +3983,116 @@ function PopupPage() {
                     <Button onClick={() => setView('settings')}>Add spaces</Button>
                   </div>
                 ) : null}
+
+                <div ref={verificationSectionRef} className="community-subsection">
+                  <div className="community-subsection-header">
+                    <div>
+                      <strong>Verification</strong>
+                      <p className="muted">
+                        Track which identities this wallet has linked in Grape Verification and jump directly into the
+                        verification dashboard for each community.
+                      </p>
+                    </div>
+                    <Button tone="secondary" onClick={() => setView('settings')}>
+                      Manage verification
+                    </Button>
+                  </div>
+
+                  {verificationLoading ? <p className="muted">Loading verification status…</p> : null}
+                  {!verificationLoading && verificationError ? <p className="danger-box">{verificationError}</p> : null}
+                  {!verificationLoading && !verificationError && trackedVerificationDaoCount > 0 ? (
+                    <div className="community-summary-grid">
+                      <div className="community-summary-card">
+                        <span className="muted">Tracked spaces</span>
+                        <strong>{trackedVerificationDaoCount}</strong>
+                      </div>
+                      <div className="community-summary-card">
+                        <span className="muted">Verified identities</span>
+                        <strong>{verification.totalVerified}</strong>
+                      </div>
+                      <div className="community-summary-card">
+                        <span className="muted">Linked identities</span>
+                        <strong>{verificationLinkedIdentityCount}</strong>
+                      </div>
+                      <div className="community-summary-card">
+                        <span className="muted">Needs verification</span>
+                        <strong>{Math.max(0, verificationLinkedIdentityCount - verification.totalVerified)}</strong>
+                      </div>
+                    </div>
+                  ) : null}
+                  {!verificationLoading && !verificationError && verification.identities.length > 0 ? (
+                    <div className="verification-list">
+                      {verification.identities.map((identity) => {
+                        const daoLabel = verificationDaoNameMap.get(identity.daoId) ?? `DAO ${formatAddress(identity.daoId)}`;
+                        const verifiedLabel = identity.verified ? 'Verified' : 'Linked';
+                        const linkedMeta =
+                          identity.linkedWalletCount > 1
+                            ? `${identity.linkedWalletCount} wallets linked`
+                            : '1 wallet linked';
+
+                        return (
+                          <div key={identity.linkId} className="verification-row">
+                            <div className="verification-copy">
+                              <strong>{daoLabel}</strong>
+                              <span>
+                                {formatVerificationPlatform(identity.platform)} • {verifiedLabel}
+                                {identity.expiresAt ? ` • expires ${formatRelativeTimeFromNow(identity.expiresAt)}` : ''}
+                              </span>
+                            </div>
+                            <div className="verification-actions">
+                              <StatusPill tone={identity.verified ? 'success' : 'warning'}>
+                                {formatVerificationPlatform(identity.platform)}
+                              </StatusPill>
+                              <span className="verification-meta">{linkedMeta}</span>
+                              <button
+                                type="button"
+                                className="grape-reputation-link"
+                                onClick={() => window.open(buildVerificationSpaceUrl(identity.daoId), '_blank', 'noopener,noreferrer')}
+                                aria-label={`Open ${daoLabel} verification`}
+                                title="Open verification dashboard"
+                              >
+                                <ExternalLink size={13} />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                  {!verificationLoading && !verificationError && trackedVerificationDaoCount > 0 && verification.identities.length === 0 ? (
+                    <div className="community-empty-state">
+                      <strong>No linked identities yet</strong>
+                      <p className="muted">
+                        This wallet is tracking verification spaces, but it has not linked a verified identity in those
+                        communities yet.
+                      </p>
+                      <Button
+                        onClick={() =>
+                          window.open(
+                            buildVerificationSpaceUrl(
+                              wallet.trackedVerificationSpaceIds[0] ?? verification.trackedSpaces[0] ?? ''
+                            ),
+                            '_blank',
+                            'noopener,noreferrer'
+                          )
+                        }
+                        disabled={(wallet.trackedVerificationSpaceIds[0] ?? verification.trackedSpaces[0] ?? '').length === 0}
+                      >
+                        Open verification
+                      </Button>
+                    </div>
+                  ) : null}
+                  {!verificationLoading && !verificationError && trackedVerificationDaoCount === 0 ? (
+                    <div className="community-empty-state">
+                      <strong>No verification spaces tracked</strong>
+                      <p className="muted">
+                        Add the DAO ids you want to verify against from Settings and Grape will show this wallet&apos;s
+                        linked verification status here.
+                      </p>
+                      <Button onClick={() => setView('settings')}>Add verification spaces</Button>
+                    </div>
+                  ) : null}
+                </div>
               </Card>
               </div>
             </Tabs.Content>
@@ -5048,6 +5325,56 @@ function PopupPage() {
               </>
             )}
             {reputationSpaceError ? <p className="danger-box">{reputationSpaceError}</p> : null}
+          </div>
+        </Card>
+        <Card title="Verification Spaces">
+          <div className="stack">
+            <p className="muted">
+              Add the DAO ids you want to verify against. Grape will read this wallet&apos;s linked verification
+              identities on-chain and send users to Grape Verification for the actual verify and manage flow.
+            </p>
+            {selectedChain !== 'solana' ? (
+              <p className="muted">Tracked verification spaces are currently supported for Solana wallets.</p>
+            ) : (
+              <>
+                <div className="inline wrap-actions">
+                  <Input
+                    value={verificationSpaceInput}
+                    onChange={(event) => setVerificationSpaceInput(event.target.value)}
+                    placeholder="Add verification space DAO id"
+                  />
+                  <Button
+                    onClick={() => void handleAddVerificationSpace()}
+                    disabled={verificationSpaceSaving || !verificationSpaceInput.trim()}
+                  >
+                    {verificationSpaceSaving ? 'Saving...' : 'Add space'}
+                  </Button>
+                </div>
+                {wallet.trackedVerificationSpaceIds.length > 0 ? (
+                  <div className="reputation-space-list">
+                    {wallet.trackedVerificationSpaceIds.map((daoId) => (
+                      <div key={daoId} className="reputation-space-row">
+                        <div className="stack compact-stack">
+                          <strong>{verificationDaoNameMap.get(daoId) ?? formatAddress(daoId)}</strong>
+                          <span className="muted mono settings-inline-value">{daoId}</span>
+                        </div>
+                        <div className="reputation-space-actions">
+                          <Button tone="secondary" onClick={() => window.open(buildVerificationSpaceUrl(daoId), '_blank', 'noopener,noreferrer')}>
+                            Open
+                          </Button>
+                          <Button tone="secondary" onClick={() => void handleRemoveVerificationSpace(daoId)} disabled={verificationSpaceSaving}>
+                            Remove
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="muted">No verification spaces are tracked yet.</p>
+                )}
+              </>
+            )}
+            {verificationSpaceError ? <p className="danger-box">{verificationSpaceError}</p> : null}
           </div>
         </Card>
         <Card title="Governance DAOs">

@@ -4,7 +4,7 @@ import { Button, Card, Input, KeyValueRow, PageShell, StatusPill, TextArea } fro
 
 import type { WalletExportResponse, WalletStateResponse } from '../../shared/models';
 
-import { createBiometricUnlock, isBiometricUnlockSupported } from '../../shared/biometric';
+import { createBiometricUnlock, isBiometricUnlockSupported, unlockWithBiometric } from '../../shared/biometric';
 import { sendRuntimeMessage } from '../../shared/chrome';
 import { applyDocumentTheme, THEMES } from '../../shared/theme';
 import { mountPage } from '../lib';
@@ -189,6 +189,31 @@ function OptionsPage() {
     } catch (error) {
       setExportedWallet(null);
       setExportError(error instanceof Error ? error.message : 'Unable to export wallet.');
+      setRevealedFields({ mnemonic: false, privateKey: false });
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  async function handleExportWithBiometric() {
+    if (!selectedWallet?.biometricUnlock) {
+      return;
+    }
+
+    try {
+      setExporting(true);
+      setExportError(null);
+      const unlockedPassword = await unlockWithBiometric(selectedWallet.biometricUnlock);
+      const nextExport = await sendRuntimeMessage<WalletExportResponse>({
+        type: 'wallet_export_secret',
+        password: unlockedPassword
+      });
+      setExportedWallet(nextExport);
+      setRevealedFields({ mnemonic: false, privateKey: false });
+      setExportPassword('');
+    } catch (error) {
+      setExportedWallet(null);
+      setExportError(error instanceof Error ? error.message : 'Unable to export wallet with device unlock.');
       setRevealedFields({ mnemonic: false, privateKey: false });
     } finally {
       setExporting(false);
@@ -467,6 +492,14 @@ function OptionsPage() {
             <KeyValueRow label="Selected wallet" value={selectedWallet.name} />
             <KeyValueRow label="Wallet type" value={formatWalletSourceLabel(selectedWallet.source, selectedWallet.signer?.kind)} />
             <KeyValueRow label="Public key" value={<span className="mono transfer-signature">{state.activeWallet?.publicKey ?? 'Unknown'}</span>} />
+            {biometricSupported && selectedWallet.biometricUnlock ? (
+              <div className="stack">
+                <p className="muted">This wallet can be exported after device unlock. Password entry remains available as fallback.</p>
+                <Button tone="secondary" onClick={() => void handleExportWithBiometric()} disabled={exporting}>
+                  {exporting ? 'Checking device...' : 'Verify with device'}
+                </Button>
+              </div>
+            ) : null}
             <label className="stack">
               <span className="muted">Password</span>
               <Input

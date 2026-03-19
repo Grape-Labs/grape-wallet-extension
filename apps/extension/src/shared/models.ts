@@ -127,6 +127,34 @@ export type WalletReputationResponse = {
   refreshedAt: number;
 };
 
+export type WalletVerificationPlatform = 'discord' | 'telegram' | 'twitter' | 'email' | 'unknown';
+
+export type WalletVerificationIdentity = {
+  daoId: string;
+  spaceId: string;
+  identityId: string;
+  linkId: string;
+  platform: WalletVerificationPlatform;
+  platformCode: number;
+  verified: boolean;
+  verifiedAt: number | null;
+  expiresAt: number | null;
+  attestedBy: string | null;
+  linkedAt: number | null;
+  linkedWalletCount: number;
+  currentWalletLinked: boolean;
+  walletHashHex: string;
+};
+
+export type WalletVerificationResponse = {
+  trackedSpaces: string[];
+  identities: WalletVerificationIdentity[];
+  totalVerified: number;
+  source: 'onchain' | 'none';
+  network: WalletState['selectedNetwork'];
+  refreshedAt: number;
+};
+
 export type WalletGovernanceProposalChoice = {
   rank: number;
   label: string;

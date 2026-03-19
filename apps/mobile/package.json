@@ -6,8 +6,12 @@
   "scripts": {
     "start": "expo start",
     "android": "expo run:android",
+    "ios": "expo run:ios",
     "apk": "eas build -p android --profile preview",
-    "aab": "eas build -p android --profile production"
+    "aab": "eas build -p android --profile production",
+    "ipa": "eas build -p ios --profile preview",
+    "ios-prod": "eas build -p ios --profile production",
+    "ios-sim": "eas build -p ios --profile simulator"
   },
   "dependencies": {
     "@grape/core": "workspace:*",

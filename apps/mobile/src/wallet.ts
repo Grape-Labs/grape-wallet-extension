@@ -65,6 +65,7 @@ export type MobileWalletState = {
   selectedTheme: GrapeTheme;
   selectedWalletIds: Partial<Record<GrapeChain, string>>;
   trackedReputationSpaceIds: string[];
+  trackedVerificationSpaceIds: string[];
   trackedGovernanceDaoIds: string[];
   wallets: MobileWallet[];
   passwordSalt: string;
@@ -223,6 +224,7 @@ export function createEmptyMobileWalletState(): MobileWalletState {
     selectedTheme: DEFAULT_THEME,
     selectedWalletIds: {},
     trackedReputationSpaceIds: [],
+    trackedVerificationSpaceIds: [],
     trackedGovernanceDaoIds: [],
     wallets: [],
     passwordSalt: '',
@@ -254,6 +256,7 @@ export async function loadMobileWalletState(): Promise<MobileWalletState> {
     wallets: Array.isArray(parsed.wallets) ? parsed.wallets : [],
     selectedWalletIds: parsed.selectedWalletIds ?? {},
     trackedReputationSpaceIds: Array.isArray(parsed.trackedReputationSpaceIds) ? parsed.trackedReputationSpaceIds : [],
+    trackedVerificationSpaceIds: Array.isArray(parsed.trackedVerificationSpaceIds) ? parsed.trackedVerificationSpaceIds : [],
     trackedGovernanceDaoIds: Array.isArray(parsed.trackedGovernanceDaoIds) ? parsed.trackedGovernanceDaoIds : [],
     activities: Array.isArray(parsed.activities) ? parsed.activities : []
   };
@@ -291,6 +294,7 @@ export async function createWalletSet(input: {
     selectedTheme: DEFAULT_THEME,
     selectedWalletIds: Object.fromEntries(wallets.map((wallet) => [wallet.chain, wallet.id])),
     trackedReputationSpaceIds: [],
+    trackedVerificationSpaceIds: [],
     trackedGovernanceDaoIds: [],
     wallets,
     passwordSalt,
@@ -359,6 +363,7 @@ export async function createPrivateKeyWallet(input: {
       [input.chain]: wallet.id
     },
     trackedReputationSpaceIds: [],
+    trackedVerificationSpaceIds: [],
     trackedGovernanceDaoIds: [],
     wallets: [wallet],
     passwordSalt,
@@ -841,6 +846,18 @@ export async function updateTrackedReputationSpaces(input: {
   const nextState = normalizeMobileWalletState({
     ...input.state,
     trackedReputationSpaceIds: input.daoIds
+  });
+  await persistMobileWalletState(nextState);
+  return nextState;
+}
+
+export async function updateTrackedVerificationSpaces(input: {
+  state: MobileWalletState;
+  daoIds: string[];
+}): Promise<MobileWalletState> {
+  const nextState = normalizeMobileWalletState({
+    ...input.state,
+    trackedVerificationSpaceIds: input.daoIds
   });
   await persistMobileWalletState(nextState);
   return nextState;
@@ -1651,6 +1668,7 @@ function normalizeMobileWalletState(state: MobileWalletState): MobileWalletState
     selectedChain,
     selectedWalletIds,
     trackedReputationSpaceIds: normalizeTrackedReputationSpaceIds(state.trackedReputationSpaceIds),
+    trackedVerificationSpaceIds: normalizeTrackedDaoIds(state.trackedVerificationSpaceIds),
     trackedGovernanceDaoIds: normalizeTrackedDaoIds(state.trackedGovernanceDaoIds)
   };
 }

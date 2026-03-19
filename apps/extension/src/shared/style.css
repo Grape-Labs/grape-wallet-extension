@@ -2238,6 +2238,46 @@ body[data-surface='popup'] .asset-panel-card {
   font-size: 0.72rem;
 }
 
+.wallet-inline-shortcut {
+  width: 100%;
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.035);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.wallet-inline-shortcut-label {
+  color: var(--muted);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  flex-shrink: 0;
+}
+
+.wallet-inline-shortcut strong {
+  min-width: 0;
+  font-size: 0.84rem;
+  line-height: 1.15;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wallet-inline-shortcut-meta {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.72rem;
+  flex-shrink: 0;
+}
+
 .wallet-community-copy {
   min-width: 0;
   max-width: 100%;
@@ -2387,6 +2427,22 @@ body[data-surface='popup'] .asset-panel-card {
   margin: 0;
 }
 
+.community-subsection {
+  display: grid;
+  gap: 10px;
+}
+
+.community-subsection-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.community-subsection-header p {
+  margin: 4px 0 0;
+}
+
 .grape-reputation-list {
   width: 100%;
   max-width: 100%;
@@ -2490,6 +2546,55 @@ body[data-surface='popup'] .asset-panel-card {
   background: rgba(255, 255, 255, 0.05);
   color: var(--text);
   cursor: pointer;
+}
+
+.verification-list {
+  display: grid;
+  gap: 10px;
+}
+
+.verification-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.verification-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.verification-copy strong {
+  font-size: 0.94rem;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.verification-copy span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.verification-actions {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.verification-meta {
+  color: var(--muted);
+  font-size: 0.72rem;
+  white-space: nowrap;
 }
 
 .wallet-governance-summary {
@@ -2709,6 +2814,11 @@ body[data-surface='popup'] .asset-panel-card {
     align-items: stretch;
   }
 
+  .community-subsection-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
   .governance-panel-description {
     max-width: none;
   }
@@ -2724,6 +2834,14 @@ body[data-surface='popup'] .asset-panel-card {
   .grape-reputation-points {
     justify-items: start;
     padding-left: 46px;
+  }
+
+  .verification-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .verification-actions {
+    justify-content: flex-start;
   }
 
   .governance-proposal-header {
