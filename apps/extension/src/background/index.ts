@@ -258,6 +258,7 @@ type GovernanceMembershipRecord = {
 type GovernanceProgramAccount = {
   pubkey: string;
   realm: string;
+  baseVotingTime: number | null;
 };
 
 type GovernanceProposalRecord = {
@@ -4409,14 +4410,21 @@ function shouldDisplayGovernanceProposal(input: {
   votingAt: number | null;
   maxVotingTime?: number | null;
 }) {
-  if (isActiveGovernanceProposalState(input.stateCode)) {
-    return true;
-  }
-
   const votingEndsAt =
     input.votingAt !== null && input.maxVotingTime !== null && input.maxVotingTime !== undefined
       ? input.votingAt + input.maxVotingTime
       : null;
+
+  if (input.stateCode === ProposalState.Voting) {
+    if (!votingEndsAt) {
+      return true;
+    }
+    return isRecentGovernanceProposal(votingEndsAt, 60 * 60 * 24 * 7);
+  }
+
+  if (isActiveGovernanceProposalState(input.stateCode)) {
+    return true;
+  }
 
   return isRecentGovernanceProposal(votingEndsAt ?? input.votingAt ?? input.draftAt);
 }
@@ -4601,12 +4609,13 @@ async function discoverGovernanceTreasuryDaosForNamespace(
   return Array.from(treasuryRealms);
 }
 
-function buildGovernanceDirectMemberQuery(namespace: string, owner: string): string {
+function buildGovernanceDirectMemberQuery(namespace: string, owner: string, offset = 0): string {
   const escapedOwner = escapeGraphqlString(owner);
   return `
     query GovernanceDirectMembers {
       ${namespace}_TokenOwnerRecordV2(
         limit: 1000,
+        offset: ${offset},
         where: { governingTokenOwner: {_eq: "${escapedOwner}"} }
       ) {
         pubkey
@@ -4618,6 +4627,7 @@ function buildGovernanceDirectMemberQuery(namespace: string, owner: string): str
       }
       ${namespace}_TokenOwnerRecordV1(
         limit: 1000,
+        offset: ${offset},
         where: { governingTokenOwner: {_eq: "${escapedOwner}"} }
       ) {
         pubkey
@@ -4669,7 +4679,7 @@ function buildGovernanceMembershipQuery(namespace: string, daoId: string, owner:
   return `
     query GovernanceMembership {
       ${namespace}_TokenOwnerRecordV2(
-        limit: 200,
+        limit: 1000,
         where: {
           realm: {_eq: "${escapedDaoId}"},
           _or: [
@@ -4685,13 +4695,83 @@ function buildGovernanceMembershipQuery(namespace: string, daoId: string, owner:
         governingTokenDepositAmount
       }
       ${namespace}_TokenOwnerRecordV1(
-        limit: 200,
+        limit: 1000,
         where: {
           realm: {_eq: "${escapedDaoId}"},
           _or: [
             { governingTokenOwner: {_eq: "${escapedOwner}"} },
             { governanceDelegate: {_eq: "${escapedOwner}"} }
           ]
+        }
+      ) {
+        pubkey
+        governingTokenMint
+        governingTokenOwner
+        governanceDelegate
+        governingTokenDepositAmount
+      }
+    }
+  `;
+}
+
+function buildGovernanceScopedDirectMembershipQuery(namespace: string, daoId: string, owner: string): string {
+  const escapedDaoId = escapeGraphqlString(daoId);
+  const escapedOwner = escapeGraphqlString(owner);
+  return `
+    query GovernanceScopedDirectMembership {
+      ${namespace}_TokenOwnerRecordV2(
+        limit: 1000,
+        where: {
+          realm: {_eq: "${escapedDaoId}"},
+          governingTokenOwner: {_eq: "${escapedOwner}"}
+        }
+      ) {
+        pubkey
+        governingTokenMint
+        governingTokenOwner
+        governanceDelegate
+        governingTokenDepositAmount
+      }
+      ${namespace}_TokenOwnerRecordV1(
+        limit: 1000,
+        where: {
+          realm: {_eq: "${escapedDaoId}"},
+          governingTokenOwner: {_eq: "${escapedOwner}"}
+        }
+      ) {
+        pubkey
+        governingTokenMint
+        governingTokenOwner
+        governanceDelegate
+        governingTokenDepositAmount
+      }
+    }
+  `;
+}
+
+function buildGovernanceScopedDelegateMembershipQuery(namespace: string, daoId: string, owner: string): string {
+  const escapedDaoId = escapeGraphqlString(daoId);
+  const escapedOwner = escapeGraphqlString(owner);
+  return `
+    query GovernanceScopedDelegateMembership {
+      ${namespace}_TokenOwnerRecordV2(
+        limit: 1000,
+        where: {
+          realm: {_eq: "${escapedDaoId}"},
+          governanceDelegate: {_eq: "${escapedOwner}"}
+        }
+      ) {
+        pubkey
+        governingTokenMint
+        governingTokenOwner
+        governanceDelegate
+        governingTokenDepositAmount
+      }
+      ${namespace}_TokenOwnerRecordV1(
+        limit: 1000,
+        where: {
+          realm: {_eq: "${escapedDaoId}"},
+          governanceDelegate: {_eq: "${escapedOwner}"}
         }
       ) {
         pubkey
@@ -4711,10 +4791,12 @@ function buildGovernanceAccountsQuery(namespace: string, daoId: string): string 
       ${namespace}_GovernanceV2(limit: 500, where: {realm: {_eq: "${escapedDaoId}"}}) {
         pubkey
         realm
+        config
       }
       ${namespace}_GovernanceV1(limit: 500, where: {realm: {_eq: "${escapedDaoId}"}}) {
         pubkey
         realm
+        config
       }
     }
   `;
@@ -4756,7 +4838,6 @@ function buildGovernanceProposalsQuery(namespace: string, governanceIds: string[
         descriptionLink
         draftAt
         votingAt
-        maxVotingTime
         name
         yesVotesCount
         noVotesCount
@@ -4779,6 +4860,13 @@ function buildGovernanceVoteRecordsQuery(namespace: string, owners: string[]): s
       }
     }
   `;
+}
+
+function buildEmptyGovernanceMembershipResponse(namespace: string): Record<string, unknown> {
+  return {
+    [`${namespace}_TokenOwnerRecordV2`]: [],
+    [`${namespace}_TokenOwnerRecordV1`]: []
+  };
 }
 
 function normalizeGovernanceRealmInfo(
@@ -4817,7 +4905,7 @@ function normalizeGovernanceMembershipRecords(
     ...(Array.isArray(data[`${namespace}_TokenOwnerRecordV1`]) ? (data[`${namespace}_TokenOwnerRecordV1`] as Array<Record<string, unknown>>) : [])
   ];
 
-  return rows
+  const normalized = rows
     .map((row) => {
       const pubkey = typeof row.pubkey === 'string' ? row.pubkey : null;
       const governingTokenMint = typeof row.governingTokenMint === 'string' ? row.governingTokenMint : null;
@@ -4835,6 +4923,8 @@ function normalizeGovernanceMembershipRecords(
       } satisfies GovernanceMembershipRecord;
     })
     .filter((entry): entry is GovernanceMembershipRecord => !!entry);
+
+  return Array.from(new Map(normalized.map((entry) => [entry.pubkey, entry] as const)).values());
 }
 
 function normalizeGovernanceOwnerDaoIds(
@@ -4893,15 +4983,38 @@ async function discoverGovernanceDaoOwnersForWallet(
       });
 
       try {
-        // Step 1: Run direct member query, delegate query (paginated), and governed query in parallel.
-        // Run all three discovery queries in parallel.
-        // Direct + delegate are split so a large delegate list (1000+ rows) doesn't crowd out
-        // the user's own direct memberships under Shyft's 1000-row cap.
-        // Delegate query only fetches ONE page — we just need realm IDs for discovery;
-        // actual delegated voting power is computed per-DAO in fetchGovernanceForDaoViaGraphql.
+        const loadPagedTokenOwnerRows = async (queryBuilder: (offset: number) => string) => {
+          const mergedV2: Array<Record<string, unknown>> = [];
+          const mergedV1: Array<Record<string, unknown>> = [];
+
+          for (let offset = 0; offset < 10000; offset += 1000) {
+            const page = await fetchGovernanceGraphql<Record<string, unknown>>(queryBuilder(offset));
+            const pageV2 = Array.isArray(page[`${namespace}_TokenOwnerRecordV2`])
+              ? (page[`${namespace}_TokenOwnerRecordV2`] as Array<Record<string, unknown>>)
+              : [];
+            const pageV1 = Array.isArray(page[`${namespace}_TokenOwnerRecordV1`])
+              ? (page[`${namespace}_TokenOwnerRecordV1`] as Array<Record<string, unknown>>)
+              : [];
+
+            mergedV2.push(...pageV2);
+            mergedV1.push(...pageV1);
+
+            if (pageV2.length < 1000 && pageV1.length < 1000) {
+              break;
+            }
+          }
+
+          return {
+            [`${namespace}_TokenOwnerRecordV2`]: mergedV2,
+            [`${namespace}_TokenOwnerRecordV1`]: mergedV1
+          } satisfies Record<string, unknown>;
+        };
+
+        // Direct + delegate are paginated independently so large delegate sets don't crowd out
+        // the wallet's own memberships under the indexer's page caps.
         const [directData, delegateData, governedData] = await Promise.all([
-          fetchGovernanceGraphql<Record<string, unknown>>(buildGovernanceDirectMemberQuery(namespace, ownerKey)),
-          fetchGovernanceGraphql<Record<string, unknown>>(buildGovernanceDelegateQuery(namespace, ownerKey)).catch(() => ({} as Record<string, unknown>)),
+          loadPagedTokenOwnerRows((offset) => buildGovernanceDirectMemberQuery(namespace, ownerKey, offset)),
+          loadPagedTokenOwnerRows((offset) => buildGovernanceDelegateQuery(namespace, ownerKey, offset)).catch(() => ({} as Record<string, unknown>)),
           fetchGovernanceGraphql<Record<string, unknown>>(buildGovernanceGovernedAccountQuery(namespace, ownerKey)).catch(() => ({} as Record<string, unknown>))
         ]);
 
@@ -5003,7 +5116,12 @@ function normalizeGovernanceAccounts(
     .map((row) => {
       const pubkey = typeof row.pubkey === 'string' ? row.pubkey : null;
       const realm = typeof row.realm === 'string' ? row.realm : null;
-      return pubkey && realm ? ({ pubkey, realm } satisfies GovernanceProgramAccount) : null;
+      const baseVotingTimeRaw = (row.config as Record<string, unknown> | undefined)?.baseVotingTime;
+      return pubkey && realm ? ({
+        pubkey,
+        realm,
+        baseVotingTime: parseGovernanceNumber(baseVotingTimeRaw)
+      } satisfies GovernanceProgramAccount) : null;
     })
     .filter((entry): entry is GovernanceProgramAccount => !!entry);
 }
@@ -5263,7 +5381,8 @@ async function fetchGovernanceForDaoViaGraphql(
   daoId: string,
   governanceOwner: GovernanceOwner,
   isDelegateDao = false,
-  isNonMemberDao = false
+  isNonMemberDao = false,
+  supplementalMemberships?: GovernanceMembershipRecord[]
 ): Promise<{
   source: 'shyft';
   member: boolean;
@@ -5274,21 +5393,32 @@ async function fetchGovernanceForDaoViaGraphql(
   const namespace = governanceOwner.name;
   const ownerKey = owner.toBase58();
 
-  const [realmData, membershipData, governanceData] = await Promise.all([
+  const [realmData, directMembershipData, delegateMembershipData, governanceData] = await Promise.all([
     fetchGovernanceGraphql<Record<string, unknown>>(buildGovernanceRealmQuery(namespace, daoId)),
-    fetchGovernanceGraphql<Record<string, unknown>>(buildGovernanceMembershipQuery(namespace, daoId, ownerKey)),
+    fetchGovernanceGraphql<Record<string, unknown>>(buildGovernanceScopedDirectMembershipQuery(namespace, daoId, ownerKey)),
+    fetchGovernanceGraphql<Record<string, unknown>>(buildGovernanceScopedDelegateMembershipQuery(namespace, daoId, ownerKey)).catch(
+      () => buildEmptyGovernanceMembershipResponse(namespace)
+    ),
     fetchGovernanceGraphql<Record<string, unknown>>(buildGovernanceAccountsQuery(namespace, daoId))
   ]);
 
   const realm = normalizeGovernanceRealmInfo(realmData, namespace, daoId);
-  const membershipRecords = normalizeGovernanceMembershipRecords(membershipData, namespace);
+  const membershipRecords = Array.from(
+    new Map(
+      [
+        ...normalizeGovernanceMembershipRecords(directMembershipData, namespace),
+        ...normalizeGovernanceMembershipRecords(delegateMembershipData, namespace),
+        ...(supplementalMemberships ?? [])
+      ].map((entry) => [entry.pubkey, entry] as const)
+    ).values()
+  );
   const governanceAccounts = normalizeGovernanceAccounts(governanceData, namespace);
 
-  // For non-member DAOs (treasury wallets, governed accounts, manually tracked realms),
-  // fetch proposals even without a Token Owner Record so the wallet can observe the DAO.
+  // Once a DAO is discovered for the wallet, still fetch its proposals even if the
+  // realm-scoped membership query is incomplete. Delegate-only council/community cases
+  // can otherwise lose proposals entirely while membership resolution catches up.
   const hasMembership = membershipRecords.length > 0;
-  const canFetchProposals = hasMembership || isNonMemberDao || isDelegateDao;
-  if (!realm || governanceAccounts.length === 0 || !canFetchProposals) {
+  if (!realm || governanceAccounts.length === 0) {
     // Still surface a daoSummary so DAOs with deposits but no governance accounts show in the UI
     const earlyDaoSummary = realm && membershipRecords.length > 0
       ? {
@@ -5304,7 +5434,7 @@ async function fetchGovernanceForDaoViaGraphql(
   const delegatorAddresses = membershipRecords
     .filter((r) => r.governanceDelegate === ownerKey && r.governingTokenOwner !== ownerKey)
     .map((r) => r.governingTokenOwner);
-  const voteQueryAddresses = [ownerKey, ...delegatorAddresses];
+  const voteQueryAddresses = Array.from(new Set([ownerKey, ...delegatorAddresses]));
 
   const [proposalData, voteData] = await Promise.all([
     fetchGovernanceGraphql<Record<string, unknown>>(
@@ -5318,6 +5448,7 @@ async function fetchGovernanceForDaoViaGraphql(
 
   const proposalRows = normalizeGovernanceProposalRows(proposalData, namespace);
   const votedOwnersByProposal = normalizeGovernanceVoteOwnersByProposal(voteData, namespace);
+  const governanceConfigById = new Map(governanceAccounts.map((entry) => [entry.pubkey, entry] as const));
 
   const proposals = proposalRows
     .map((proposal) => {
@@ -5329,9 +5460,14 @@ async function fetchGovernanceForDaoViaGraphql(
         votedOwners
       );
       const membership = resolveGovernanceProposalMembership(proposal.governingTokenMint, ownerKey, membershipRecords);
+      const governanceConfig = governanceConfigById.get(proposal.governance);
+      const resolvedVotingTime =
+        proposal.maxVotingTime !== null && proposal.maxVotingTime !== undefined
+          ? proposal.maxVotingTime
+          : governanceConfig?.baseVotingTime ?? null;
       const votingEndsAt =
-        proposal.votingAt !== null && proposal.maxVotingTime !== null
-          ? proposal.votingAt + proposal.maxVotingTime
+        proposal.votingAt !== null && resolvedVotingTime !== null
+          ? proposal.votingAt + resolvedVotingTime
           : null;
       const hasVoted = voteSources.some((source) => source.hasVoted);
       // isDelegate: wallet is acting as a delegate for another wallet's TOR
@@ -5412,9 +5548,12 @@ async function fetchGovernanceForDaoViaRpc(
   const realmPk = new PublicKey(daoId);
   const ownerKey = owner.toBase58();
 
-  const [realmAccount, tokenOwnerRecords, governanceAccounts, voteRecords] = await Promise.all([
+  const [realmAccount, tokenOwnerRecords, realmScopedTokenOwnerRecords, governanceAccounts, voteRecords] = await Promise.all([
     getRealm(connection, realmPk),
     skipTorFetch ? Promise.resolve([]) : getTokenOwnerRecordsByOwner(connection, programId, owner).catch(() => []),
+    getGovernanceAccounts(connection, programId, TokenOwnerRecord, [
+      new MemcmpFilter(1, realmPk.toBuffer())
+    ]).catch(() => []),
     getAllGovernances(connection, programId, realmPk).catch(() => []),
     (async () => {
       const delegatorKeys = Array.from(
@@ -5434,22 +5573,34 @@ async function fetchGovernanceForDaoViaRpc(
     })()
   ]);
 
-  const realmTokenOwnerRecords = skipTorFetch
+  const directRealmTokenOwnerRecords = skipTorFetch
     ? []
     : tokenOwnerRecords.filter((entry) => entry.account.realm.toBase58() === daoId);
+  const delegatedRealmTokenOwnerRecords = realmScopedTokenOwnerRecords.filter((entry) => {
+    const governingTokenOwner = entry.account.governingTokenOwner.toBase58();
+    const governanceDelegate = entry.account.governanceDelegate?.toBase58() ?? null;
+    return governingTokenOwner === ownerKey || governanceDelegate === ownerKey;
+  });
+  const realmTokenOwnerRecords = [...directRealmTokenOwnerRecords, ...delegatedRealmTokenOwnerRecords]
+    .filter((entry, index, allEntries) => allEntries.findIndex((candidate) => candidate.pubkey.equals(entry.pubkey)) === index);
 
   // Use direct TOR records if found; otherwise fall back to preloaded memberships (delegate case)
   // For non-member DAOs (treasury wallets), skip membership check and fetch proposals directly
   let effectiveMemberships: GovernanceMembershipRecord[];
   let isDelegateViaRpc = false;
   if (realmTokenOwnerRecords.length > 0) {
-    effectiveMemberships = realmTokenOwnerRecords.map((entry) => ({
+    const rpcMemberships = realmTokenOwnerRecords.map((entry) => ({
       pubkey: entry.pubkey.toBase58(),
       governingTokenMint: entry.account.governingTokenMint.toBase58(),
       governingTokenOwner: entry.account.governingTokenOwner.toBase58(),
       governanceDelegate: entry.account.governanceDelegate?.toBase58() ?? null,
       governingTokenDepositAmount: entry.account.governingTokenDepositAmount.toString()
     } satisfies GovernanceMembershipRecord));
+    effectiveMemberships = Array.from(
+      new Map(
+        [...rpcMemberships, ...(preloadedMemberships ?? [])].map((entry) => [entry.pubkey, entry] as const)
+      ).values()
+    );
   } else if (preloadedMemberships && preloadedMemberships.length > 0) {
     effectiveMemberships = preloadedMemberships;
     // Only treat as delegate when the preloaded records are NOT owned by this wallet
@@ -5665,64 +5816,45 @@ async function fetchGovernanceForWallet(
   const results = await Promise.all(
     uniqueDaoIds.map(async (daoId) => {
       const discovered = discoveredDaoOwnerMap.get(daoId);
-      const governanceOwner = discovered?.owner ?? (await resolveGovernanceOwnerByRealm(daoId));
-      const isDelegateDao = discovered?.isDelegate === true;
-      // Non-member: treasury/governed wallet, OR manually tracked but not discovered
-      const isNonMemberDao = discovered?.isNonMember === true || (!discovered && uniqueTrackedDaoIds.includes(daoId));
-      // Pre-fetched TORs for this realm (from the global getTokenOwnerRecordsByOwner call)
-      const preloadedRpcTors = rpcTorsByRealm.get(daoId);
-      try {
-        const graphqlResult = await fetchGovernanceForDaoViaGraphql(owner, daoId, governanceOwner, isDelegateDao, isNonMemberDao);
-        // Always supplement with RPC when Shyft has no voting proposals — Shyft's index can be
-        // stale or incomplete, returning only old proposals while an active vote is missed.
-        const graphqlHasVoting = graphqlResult.proposals.some((p) => p.stateCode === ProposalState.Voting);
-        if (graphqlResult.proposals.length === 0 || !graphqlHasVoting) {
-          try {
-            // RPC fallback/supplement for proposals. Prefer graphql daoSummary (has delegate data);
-            // use RPC daoSummary only when graphql returned null.
-            // When graphql found memberships, pass them so RPC skips re-fetching.
-            // When graphql found nothing but we have globally pre-fetched TORs, use those
-            // and skip the per-DAO TOR fetch (already done globally).
-            const graphqlHasMemberships = graphqlResult.membershipRecords.length > 0;
-            const membershipsForRpc = graphqlHasMemberships ? graphqlResult.membershipRecords : preloadedRpcTors;
-            const skipTorFetch = !graphqlHasMemberships && !!preloadedRpcTors;
-            const rpcResult = await fetchGovernanceForDaoViaRpc(
-              connection, owner, daoId, governanceOwner,
-              membershipsForRpc, isNonMemberDao, skipTorFetch
-            );
-            if (graphqlResult.proposals.length === 0) {
-              return { ...rpcResult, daoSummary: graphqlResult.daoSummary ?? rpcResult.daoSummary };
-            }
-            // Merge: add any RPC voting proposals not already returned by Shyft
-            const knownIds = new Set(graphqlResult.proposals.map((p) => p.proposalId));
-            const extraVoting = rpcResult.proposals.filter(
-              (p) => p.stateCode === ProposalState.Voting && !knownIds.has(p.proposalId)
-            );
-            return {
-              ...graphqlResult,
-              proposals: [...graphqlResult.proposals, ...extraVoting],
-              daoSummary: graphqlResult.daoSummary ?? rpcResult.daoSummary
-            };
-          } catch {
-            return graphqlResult;
-          }
-        }
-        return graphqlResult;
-      } catch {
+        const governanceOwner = discovered?.owner ?? (await resolveGovernanceOwnerByRealm(daoId));
+        const isDelegateDao = discovered?.isDelegate === true;
+        // Non-member: treasury/governed wallet, OR manually tracked but not discovered
+        const isNonMemberDao = discovered?.isNonMember === true || (!discovered && uniqueTrackedDaoIds.includes(daoId));
+        // Pre-fetched TORs for this realm (from the global getTokenOwnerRecordsByOwner call)
+        const preloadedRpcTors = rpcTorsByRealm.get(daoId);
         try {
-          return await fetchGovernanceForDaoViaRpc(
-            connection, owner, daoId, governanceOwner,
-            preloadedRpcTors, isNonMemberDao,
-            !!preloadedRpcTors // skipTorFetch when we have preloaded
-          );
-        } catch {
-          return {
-            source: 'none' as const,
-            member: false,
-            proposals: [],
-            daoSummary: null
-          };
-        }
+        return await fetchGovernanceForDaoViaGraphql(
+          owner,
+          daoId,
+          governanceOwner,
+          isDelegateDao,
+          isNonMemberDao,
+          preloadedRpcTors
+        );
+      } catch {
+        const fallbackRealm = preloadedRpcTors && preloadedRpcTors.length > 0
+          ? await resolveGovernanceRealmInfo(connection, daoId, governanceOwner).catch(() => null)
+          : null;
+        const fallbackDaoSummary = fallbackRealm && preloadedRpcTors && preloadedRpcTors.length > 0
+          ? {
+              ...buildGovernanceDaoSummary(
+                daoId,
+                fallbackRealm.name,
+                fallbackRealm.communityMint,
+                owner.toBase58(),
+                preloadedRpcTors,
+                isNonMemberDao,
+                isDelegateDao
+              ),
+              councilMint: fallbackRealm.councilMint
+            }
+          : null;
+        return {
+          source: 'none' as const,
+          member: (preloadedRpcTors?.length ?? 0) > 0,
+          proposals: [],
+          daoSummary: fallbackDaoSummary
+        };
       }
     })
   );

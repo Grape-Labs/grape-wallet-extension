@@ -173,21 +173,35 @@ function formatGovernanceVoteSourceLabel(
 function formatRelativeTimeFromNow(targetUnixSeconds: number, nowUnixSeconds = Math.floor(Date.now() / 1000)) {
   const deltaSeconds = Math.trunc(targetUnixSeconds - nowUnixSeconds);
   const absSeconds = Math.abs(deltaSeconds);
-  const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+  const safeFormat = (value: number, unit: Intl.RelativeTimeFormatUnit) => {
+    try {
+      if (typeof Intl !== 'undefined' && typeof Intl.RelativeTimeFormat === 'function') {
+        const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+        return rtf.format(value, unit);
+      }
+    } catch {
+      // Fall back below for Android/Hermes builds without full Intl support.
+    }
+
+    const absValue = Math.abs(value);
+    const label = absValue === 1 ? unit.slice(0, -1) : unit;
+    if (value === 0) return 'now';
+    return value > 0 ? `in ${absValue} ${label}` : `${absValue} ${label} ago`;
+  };
 
   if (absSeconds < 60) {
-    return rtf.format(deltaSeconds, 'second');
+    return safeFormat(deltaSeconds, 'second');
   }
   if (absSeconds < 3600) {
-    return rtf.format(Math.trunc(deltaSeconds / 60), 'minute');
+    return safeFormat(Math.trunc(deltaSeconds / 60), 'minute');
   }
   if (absSeconds < 86400) {
-    return rtf.format(Math.trunc(deltaSeconds / 3600), 'hour');
+    return safeFormat(Math.trunc(deltaSeconds / 3600), 'hour');
   }
   if (absSeconds < 604800) {
-    return rtf.format(Math.trunc(deltaSeconds / 86400), 'day');
+    return safeFormat(Math.trunc(deltaSeconds / 86400), 'day');
   }
-  return rtf.format(Math.trunc(deltaSeconds / 604800), 'week');
+  return safeFormat(Math.trunc(deltaSeconds / 604800), 'week');
 }
 
 function getGovernanceProposalTimeMeta(
@@ -376,6 +390,7 @@ export default function App() {
   const [governanceVotingProposalId, setGovernanceVotingProposalId] = useState<string | null>(null);
   const [governanceVoteError, setGovernanceVoteError] = useState<string | null>(null);
   const [governanceVoteResult, setGovernanceVoteResult] = useState<MobileGovernanceVoteResponse | null>(null);
+  const [governanceShowFinalizing, setGovernanceShowFinalizing] = useState(false);
   const [exportPassword, setExportPassword] = useState('');
   const [exportLoading, setExportLoading] = useState(false);
   const [exportReveal, setExportReveal] = useState(false);
@@ -1669,6 +1684,150 @@ export default function App() {
     }
   }
 
+  function renderMobileGovernanceProposalCard(
+    proposal: MobileGovernanceResponse['proposals'][number],
+    nowUnixSeconds: number
+  ) {
+    const timeMeta = getGovernanceProposalTimeMeta(proposal, nowUnixSeconds);
+    const canVoteNow = proposal.canVote && timeMeta.votingWindowOpen;
+    const proposalVoteSources = proposal.voteSources ?? [];
+    const availableVoteSources = proposalVoteSources.filter((source) => !source.hasVoted);
+    const hasProposalVoteSources = proposalVoteSources.length > 0;
+    const hasDelegatedProposalVoteSource = availableVoteSources.some((source) => source.isDelegate);
+    const proposalUrl = buildGovernanceProposalUrl(proposal.daoId, proposal.proposalId);
+    const inactiveVotingPowerMessage =
+      !timeMeta.votingWindowOpen && timeMeta.noteText
+        ? timeMeta.noteText
+        : proposal.hasVoted && availableVoteSources.length === 0
+          ? 'This wallet already voted on the active proposal.'
+          : availableVoteSources.length > 0
+            ? hasDelegatedProposalVoteSource
+              ? 'This wallet has delegated voting power available for this proposal.'
+              : 'This wallet has voting power available for this proposal.'
+            : hasProposalVoteSources
+              ? 'This wallet has a proposal voter record, but that voting power is not currently available.'
+              : proposal.votingPowerType === 'unknown'
+                ? 'This wallet has governance power in this DAO, but the proposal voting class could not be resolved yet.'
+                : 'This wallet is tracking the DAO, but it does not currently have voting power for this proposal.';
+
+    return (
+      <View key={proposal.proposalId} style={styles.sectionCard}>
+        <View style={styles.governanceProposalHeader}>
+          <View style={styles.governanceProposalCopy}>
+            <Text style={styles.governanceProposalTitle}>{proposal.proposalName}</Text>
+            <View style={styles.governanceProposalBadges}>
+              <View style={styles.governanceStatusPill}>
+                <Text style={styles.governanceStatusPillText}>{formatGovernanceVotingPowerType(proposal.votingPowerType)}</Text>
+              </View>
+              {proposal.isDelegate ? (
+                <View style={styles.governanceStatusPill}>
+                  <Text style={styles.governanceStatusPillText}>Delegate</Text>
+                </View>
+              ) : null}
+              <View
+                style={[
+                  styles.governanceStatusPill,
+                  timeMeta.badgeSuccess ? styles.governanceStatusPillSuccess : null
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.governanceStatusPillText,
+                    timeMeta.badgeSuccess ? styles.governanceStatusPillTextSuccess : null
+                  ]}
+                >
+                  {timeMeta.badgeLabel}
+                </Text>
+              </View>
+              {timeMeta.votingWindowOpen && timeMeta.metaText ? (
+                <View style={styles.governanceStatusPill}>
+                  <Text style={styles.governanceStatusPillText}>{timeMeta.metaText}</Text>
+                </View>
+              ) : null}
+              <Pressable
+                style={styles.governanceOpenButton}
+                onPress={() => void Linking.openURL(proposalUrl)}
+              >
+                <Text style={styles.governanceOpenButtonText}>Open</Text>
+                <Feather name="external-link" size={16} color={activeTheme.text} />
+              </Pressable>
+            </View>
+            <Text style={styles.sectionHint}>
+              {proposal.realmName} • {proposal.state}
+              {timeMeta.metaText ? ` • ${timeMeta.metaText}` : ''}
+              {proposal.votingEndsAt ? ` • ${new Date(proposal.votingEndsAt * 1000).toLocaleString()}` : ''}
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.governanceMetricsRow}>
+          <Text style={styles.governanceMetricText}>Yes {formatWholeNumberString(proposal.yesVotes)}</Text>
+          {BigInt(proposal.noVotes) > BigInt(0) ? (
+            <Text style={styles.governanceMetricText}>No {formatWholeNumberString(proposal.noVotes)}</Text>
+          ) : null}
+          {BigInt(proposal.denyVotes) > BigInt(0) ? (
+            <Text style={styles.governanceMetricText}>Deny {formatWholeNumberString(proposal.denyVotes)}</Text>
+          ) : null}
+        </View>
+
+        {canVoteNow ? (
+          <View style={styles.governanceVoteActions}>
+            {proposal.choices.map((choice) => (
+              <Pressable
+                key={`${proposal.proposalId}:${choice.rank}`}
+                style={styles.governanceVoteButton}
+                disabled={governanceVotingProposalId === proposal.proposalId}
+                onPress={() =>
+                  void handleGovernanceVote({
+                    daoId: proposal.daoId,
+                    governanceId: proposal.governanceId,
+                    proposalId: proposal.proposalId,
+                    proposalOwnerRecordId: proposal.proposalOwnerRecordId,
+                    tokenOwnerRecordId: proposal.tokenOwnerRecordId,
+                    governingTokenMint: proposal.governingTokenMint,
+                    voteKind: 'approve',
+                    choiceRank: choice.rank,
+                    voteSources: proposal.voteSources
+                  })
+                }
+              >
+                <Text style={styles.governanceVoteButtonText}>
+                  {governanceVotingProposalId === proposal.proposalId ? 'Submitting...' : choice.label}
+                </Text>
+              </Pressable>
+            ))}
+            {proposal.hasDenyOption ? (
+              <Pressable
+                style={styles.governanceVoteButtonSecondary}
+                disabled={governanceVotingProposalId === proposal.proposalId}
+                onPress={() =>
+                  void handleGovernanceVote({
+                    daoId: proposal.daoId,
+                    governanceId: proposal.governanceId,
+                    proposalId: proposal.proposalId,
+                    proposalOwnerRecordId: proposal.proposalOwnerRecordId,
+                    tokenOwnerRecordId: proposal.tokenOwnerRecordId,
+                    governingTokenMint: proposal.governingTokenMint,
+                    voteKind: 'deny',
+                    voteSources: proposal.voteSources
+                  })
+                }
+              >
+                <Text style={styles.governanceVoteButtonSecondaryText}>
+                  {governanceVotingProposalId === proposal.proposalId ? 'Submitting...' : 'Deny'}
+                </Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : (
+          <Text style={styles.sectionHint}>
+            {inactiveVotingPowerMessage}
+          </Text>
+        )}
+      </View>
+    );
+  }
+
   async function handleDeleteWallet(wallet: MobileWallet) {
     Alert.alert('Delete wallet', `Remove ${wallet.name} from Grape on this device?`, [
       {
@@ -2607,144 +2766,49 @@ export default function App() {
           </View>
         ) : null}
 
-        {!governanceLoading && !governanceError
-          ? governance.proposals.map((proposal) => {
-              const nowUnixSeconds = Math.floor(Date.now() / 1000);
-              const timeMeta = getGovernanceProposalTimeMeta(proposal, nowUnixSeconds);
-              const canVoteNow = proposal.canVote && timeMeta.votingWindowOpen;
-              const proposalVoteSources = proposal.voteSources ?? [];
-              const availableVoteSources = proposalVoteSources.filter((source) => !source.hasVoted);
-              const hasProposalVoteSources = proposalVoteSources.length > 0;
-              const hasDelegatedProposalVoteSource = availableVoteSources.some((source) => source.isDelegate);
-              const proposalUrl = buildGovernanceProposalUrl(proposal.daoId, proposal.proposalId);
-              const inactiveVotingPowerMessage =
-                !timeMeta.votingWindowOpen && timeMeta.noteText
-                  ? timeMeta.noteText
-                  : proposal.hasVoted && availableVoteSources.length === 0
-                    ? 'This wallet already voted on the active proposal.'
-                    : availableVoteSources.length > 0
-                      ? hasDelegatedProposalVoteSource
-                        ? 'This wallet has delegated voting power available for this proposal.'
-                        : 'This wallet has voting power available for this proposal.'
-                      : hasProposalVoteSources
-                        ? 'This wallet has a proposal voter record, but that voting power is not currently available.'
-                        : proposal.votingPowerType === 'unknown'
-                          ? 'This wallet has governance power in this DAO, but the proposal voting class could not be resolved yet.'
-                          : 'This wallet is tracking the DAO, but it does not currently have voting power for this proposal.';
+        {!governanceLoading && !governanceError ? (() => {
+          const nowUnixSeconds = Math.floor(Date.now() / 1000);
+          const activeProposals = governance.proposals.filter((proposal) => {
+            const timeMeta = getGovernanceProposalTimeMeta(proposal, nowUnixSeconds);
+            return proposal.stateCode === 2 && timeMeta.votingWindowOpen;
+          });
+          const finalizingProposals = governance.proposals.filter((proposal) => {
+            const timeMeta = getGovernanceProposalTimeMeta(proposal, nowUnixSeconds);
+            return proposal.stateCode === 2 && !timeMeta.votingWindowOpen;
+          });
 
-              return (
-              <View key={proposal.proposalId} style={styles.sectionCard}>
-                <View style={styles.governanceProposalHeader}>
-                  <View style={styles.governanceProposalCopy}>
-                    <Text style={styles.governanceProposalTitle}>{proposal.proposalName}</Text>
-                    <View style={styles.governanceProposalBadges}>
-                      <View style={styles.governanceStatusPill}>
-                        <Text style={styles.governanceStatusPillText}>{formatGovernanceVotingPowerType(proposal.votingPowerType)}</Text>
-                      </View>
-                      {proposal.isDelegate ? (
-                        <View style={styles.governanceStatusPill}>
-                          <Text style={styles.governanceStatusPillText}>Delegate</Text>
-                        </View>
-                      ) : null}
-                      <View
-                        style={[
-                          styles.governanceStatusPill,
-                          timeMeta.badgeSuccess ? styles.governanceStatusPillSuccess : null
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            styles.governanceStatusPillText,
-                            timeMeta.badgeSuccess ? styles.governanceStatusPillTextSuccess : null
-                          ]}
-                        >
-                          {timeMeta.badgeLabel}
-                        </Text>
-                      </View>
-                      <Pressable
-                        style={styles.governanceOpenButton}
-                        onPress={() => void Linking.openURL(proposalUrl)}
-                      >
-                        <Text style={styles.governanceOpenButtonText}>Open</Text>
-                        <Feather name="external-link" size={16} color={activeTheme.text} />
-                      </Pressable>
+          return (
+            <>
+              {activeProposals.map((proposal) => renderMobileGovernanceProposalCard(proposal, nowUnixSeconds))}
+              {finalizingProposals.length > 0 ? (
+                <View style={styles.sectionCard}>
+                  <Pressable
+                    style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}
+                    onPress={() => setGovernanceShowFinalizing((current) => !current)}
+                  >
+                    <View style={{ flex: 1, gap: 4 }}>
+                      <Text style={styles.sectionTitle}>Needs finalization</Text>
+                      <Text style={styles.sectionHint}>
+                        Voting has ended on {finalizingProposals.length} proposal{finalizingProposals.length === 1 ? '' : 's'}.
+                      </Text>
                     </View>
-                    <Text style={styles.sectionHint}>
-                      {proposal.realmName} • {proposal.state}
-                      {timeMeta.metaText ? ` • ${timeMeta.metaText}` : ''}
-                      {proposal.votingEndsAt ? ` • ${new Date(proposal.votingEndsAt * 1000).toLocaleString()}` : ''}
-                    </Text>
-                  </View>
-                </View>
-
-                <View style={styles.governanceMetricsRow}>
-                  <Text style={styles.governanceMetricText}>Yes {formatWholeNumberString(proposal.yesVotes)}</Text>
-                  {BigInt(proposal.noVotes) > BigInt(0) ? (
-                    <Text style={styles.governanceMetricText}>No {formatWholeNumberString(proposal.noVotes)}</Text>
-                  ) : null}
-                  {BigInt(proposal.denyVotes) > BigInt(0) ? (
-                    <Text style={styles.governanceMetricText}>Deny {formatWholeNumberString(proposal.denyVotes)}</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                      <View style={styles.governanceStatusPill}>
+                        <Text style={styles.governanceStatusPillText}>{finalizingProposals.length}</Text>
+                      </View>
+                      <Feather name={governanceShowFinalizing ? 'chevron-down' : 'chevron-right'} size={18} color={activeTheme.muted} />
+                    </View>
+                  </Pressable>
+                  {governanceShowFinalizing ? (
+                    <View style={{ marginTop: 12, gap: 12 }}>
+                      {finalizingProposals.map((proposal) => renderMobileGovernanceProposalCard(proposal, nowUnixSeconds))}
+                    </View>
                   ) : null}
                 </View>
-
-                {canVoteNow ? (
-                  <View style={styles.governanceVoteActions}>
-                    {proposal.choices.map((choice) => (
-                      <Pressable
-                        key={`${proposal.proposalId}:${choice.rank}`}
-                        style={styles.governanceVoteButton}
-                        disabled={governanceVotingProposalId === proposal.proposalId}
-                        onPress={() =>
-                          void handleGovernanceVote({
-                            daoId: proposal.daoId,
-                            governanceId: proposal.governanceId,
-                            proposalId: proposal.proposalId,
-                            proposalOwnerRecordId: proposal.proposalOwnerRecordId,
-                            tokenOwnerRecordId: proposal.tokenOwnerRecordId,
-                            governingTokenMint: proposal.governingTokenMint,
-                            voteKind: 'approve',
-                            choiceRank: choice.rank,
-                            voteSources: proposal.voteSources
-                          })
-                        }
-                      >
-                        <Text style={styles.governanceVoteButtonText}>
-                          {governanceVotingProposalId === proposal.proposalId ? 'Submitting...' : choice.label}
-                        </Text>
-                      </Pressable>
-                    ))}
-                    {proposal.hasDenyOption ? (
-                      <Pressable
-                        style={styles.governanceVoteButtonSecondary}
-                        disabled={governanceVotingProposalId === proposal.proposalId}
-                        onPress={() =>
-                          void handleGovernanceVote({
-                            daoId: proposal.daoId,
-                            governanceId: proposal.governanceId,
-                            proposalId: proposal.proposalId,
-                            proposalOwnerRecordId: proposal.proposalOwnerRecordId,
-                            tokenOwnerRecordId: proposal.tokenOwnerRecordId,
-                            governingTokenMint: proposal.governingTokenMint,
-                            voteKind: 'deny',
-                            voteSources: proposal.voteSources
-                          })
-                        }
-                      >
-                        <Text style={styles.governanceVoteButtonSecondaryText}>
-                          {governanceVotingProposalId === proposal.proposalId ? 'Submitting...' : 'Deny'}
-                        </Text>
-                      </Pressable>
-                    ) : null}
-                  </View>
-                ) : (
-                  <Text style={styles.sectionHint}>
-                    {inactiveVotingPowerMessage}
-                  </Text>
-                )}
-              </View>
-              );
-            })
-          : null}
+              ) : null}
+            </>
+          );
+        })() : null}
       </View>
     );
   }

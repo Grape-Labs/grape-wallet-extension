@@ -2313,6 +2313,47 @@ body[data-surface='popup'] .asset-panel-card {
   color: rgba(255, 243, 240, 0.8);
 }
 
+.governance-empty-subtle {
+  margin-top: 10px;
+}
+
+.governance-proposal-section {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.governance-finalizing-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.035);
+  color: inherit;
+  text-align: left;
+}
+
+.governance-finalizing-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.governance-finalizing-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.governance-finalizing-list {
+  margin-top: -2px;
+}
+
 .community-summary-grid {
   width: 100%;
   display: grid;

@@ -1079,6 +1079,7 @@ function PopupPage() {
   const [governanceVoteError, setGovernanceVoteError] = useState<string | null>(null);
   const [governanceVoteResult, setGovernanceVoteResult] = useState<WalletGovernanceVoteResponse | null>(null);
   const [governancePassword, setGovernancePassword] = useState('');
+  const [governanceShowFinalizing, setGovernanceShowFinalizing] = useState(false);
   const [pendingHomeScrollTarget, setPendingHomeScrollTarget] = useState<'community' | 'governance' | null>(null);
   const [activity, setActivity] = useState<WalletActivityItem[]>([]);
   const [activityLoading, setActivityLoading] = useState(false);
@@ -2895,6 +2896,145 @@ function PopupPage() {
     }
   }
 
+  function renderGovernanceProposalCard(
+    proposal: WalletGovernanceResponse['proposals'][number],
+    nowUnixSeconds: number
+  ) {
+    const daoSummary = governance.daos.find((dao) => dao.daoId === proposal.daoId) ?? null;
+    const hasCommunityPower = daoSummary
+      ? BigInt(daoSummary.communityVotingPower ?? '0') > 0n || BigInt(daoSummary.delegateCommunityVotingPower ?? '0') > 0n
+      : false;
+    const hasCouncilPower = daoSummary
+      ? BigInt(daoSummary.councilVotingPower ?? '0') > 0n || BigInt(daoSummary.delegateCouncilVotingPower ?? '0') > 0n
+      : false;
+    const hasDaoVotingPower = hasCommunityPower || hasCouncilPower;
+    const proposalVoteSources = proposal.voteSources ?? [];
+    const availableVoteSources = proposalVoteSources.filter((source) => !source.hasVoted);
+    const hasProposalVoteSources = proposalVoteSources.length > 0;
+    const hasDelegatedProposalVoteSource = availableVoteSources.some((source) => source.isDelegate);
+    const timeMeta = getGovernanceProposalTimeMeta(proposal, nowUnixSeconds);
+    const canVoteNow = proposal.canVote && timeMeta.votingWindowOpen;
+    const proposalUrl = buildGovernanceProposalUrl(proposal.daoId, proposal.proposalId);
+    const inactiveVotingPowerMessage =
+      !timeMeta.votingWindowOpen && timeMeta.noteText
+        ? timeMeta.noteText
+        : proposal.hasVoted && availableVoteSources.length === 0
+          ? 'This wallet already voted on the active proposal.'
+          : availableVoteSources.length > 0
+            ? hasDelegatedProposalVoteSource
+              ? 'This wallet has delegated voting power available for this proposal.'
+              : 'This wallet has voting power available for this proposal.'
+          : proposal.votingPowerType === 'community' && hasCouncilPower && !hasCommunityPower
+            ? 'This is a Community proposal. This wallet currently has Council voting power in this DAO.'
+          : proposal.votingPowerType === 'council' && hasCommunityPower && !hasCouncilPower
+            ? 'This is a Council proposal. This wallet currently has Community voting power in this DAO.'
+            : hasProposalVoteSources
+              ? 'This wallet has a proposal voter record, but that voting power is not currently available.'
+            : proposal.votingPowerType === 'unknown' && (hasCommunityPower || hasCouncilPower)
+              ? 'This wallet has DAO voting power, but the proposal voting class could not be resolved yet.'
+              : hasDaoVotingPower
+                ? 'This wallet has governance power in this DAO, but the matching voter record for this proposal is not available yet.'
+                : 'This wallet is tracking the DAO, but it does not currently have voting power for this proposal.';
+
+    return (
+      <div key={proposal.proposalId} className="governance-proposal-card">
+        <div className="governance-proposal-header">
+          <div className="governance-proposal-copy">
+            <strong className="governance-proposal-title">{proposal.proposalName}</strong>
+            <div className="governance-proposal-badges">
+              <StatusPill tone="neutral">{formatGovernanceVotingPowerType(proposal.votingPowerType)}</StatusPill>
+              {proposal.isDelegate ? (
+                <StatusPill tone="neutral">Delegate</StatusPill>
+              ) : null}
+              <StatusPill tone={timeMeta.badgeTone}>
+                {timeMeta.badgeLabel}
+              </StatusPill>
+              {timeMeta.votingWindowOpen && timeMeta.metaText ? (
+                <StatusPill tone="neutral">{timeMeta.metaText}</StatusPill>
+              ) : null}
+              <button
+                type="button"
+                className="governance-proposal-link"
+                onClick={() => window.open(proposalUrl, '_blank', 'noopener,noreferrer')}
+                aria-label={`Open ${proposal.proposalName} on governance.so`}
+                title="Open on governance.so"
+              >
+                <span>Open</span>
+                <ExternalLink size={13} />
+              </button>
+            </div>
+            <span className="governance-proposal-meta">
+              {proposal.realmName} • {proposal.state}
+              {timeMeta.metaText ? ` • ${timeMeta.metaText}` : ''}
+              {proposal.votingEndsAt ? ` • ${new Date(proposal.votingEndsAt * 1000).toLocaleString()}` : ''}
+            </span>
+          </div>
+        </div>
+        <div className="governance-proposal-metrics">
+          <span>Yes {formatWholeNumberString(proposal.yesVotes)}</span>
+          {BigInt(proposal.noVotes) > BigInt(0) ? <span>No {formatWholeNumberString(proposal.noVotes)}</span> : null}
+          {BigInt(proposal.denyVotes) > BigInt(0) ? <span>Deny {formatWholeNumberString(proposal.denyVotes)}</span> : null}
+        </div>
+        {canVoteNow ? (
+          <div className="governance-vote-actions">
+            {proposal.choices.map((choice) => (
+              <Button
+                key={`${proposal.proposalId}:${choice.rank}`}
+                tone="secondary"
+                disabled={
+                  governanceVotingProposalId === proposal.proposalId ||
+                  (!canUseUnlockedSigner && !governancePassword.trim())
+                }
+                onClick={() =>
+                  void handleGovernanceVote({
+                    daoId: proposal.daoId,
+                    governanceId: proposal.governanceId,
+                    proposalId: proposal.proposalId,
+                    proposalOwnerRecordId: proposal.proposalOwnerRecordId,
+                    tokenOwnerRecordId: proposal.tokenOwnerRecordId,
+                    governingTokenMint: proposal.governingTokenMint,
+                    voteKind: 'approve',
+                    choiceRank: choice.rank,
+                    voteSources: proposal.voteSources
+                  })
+                }
+              >
+                {governanceVotingProposalId === proposal.proposalId ? 'Submitting…' : choice.label}
+              </Button>
+            ))}
+            {proposal.hasDenyOption ? (
+              <Button
+                tone="secondary"
+                disabled={
+                  governanceVotingProposalId === proposal.proposalId ||
+                  (!canUseUnlockedSigner && !governancePassword.trim())
+                }
+                onClick={() =>
+                  void handleGovernanceVote({
+                    daoId: proposal.daoId,
+                    governanceId: proposal.governanceId,
+                    proposalId: proposal.proposalId,
+                    proposalOwnerRecordId: proposal.proposalOwnerRecordId,
+                    tokenOwnerRecordId: proposal.tokenOwnerRecordId,
+                    governingTokenMint: proposal.governingTokenMint,
+                    voteKind: 'deny',
+                    voteSources: proposal.voteSources
+                  })
+                }
+              >
+                {governanceVotingProposalId === proposal.proposalId ? 'Submitting…' : 'Deny'}
+              </Button>
+            ) : null}
+          </div>
+        ) : (
+          <p className="muted governance-proposal-note">
+            {inactiveVotingPowerMessage}
+          </p>
+        )}
+      </div>
+    );
+  }
+
   async function handleUnlockInline() {
     try {
       setUnlocking(true);
@@ -3707,10 +3847,16 @@ function PopupPage() {
                 {!governanceLoading && governanceError ? <p className="danger-box">{governanceError}</p> : null}
                 {(() => {
                   if (governanceLoading || governanceError) return null;
-                  const activeProposals = governance.proposals.filter(
-                    (p) => p.stateCode === 2
-                  );
-                  if (activeProposals.length === 0) {
+                  const nowUnixSeconds = Math.floor(Date.now() / 1000);
+                  const activeProposals = governance.proposals.filter((proposal) => {
+                    const timeMeta = getGovernanceProposalTimeMeta(proposal, nowUnixSeconds);
+                    return proposal.stateCode === 2 && timeMeta.votingWindowOpen;
+                  });
+                  const finalizingProposals = governance.proposals.filter((proposal) => {
+                    const timeMeta = getGovernanceProposalTimeMeta(proposal, nowUnixSeconds);
+                    return proposal.stateCode === 2 && !timeMeta.votingWindowOpen;
+                  });
+                  if (activeProposals.length === 0 && finalizingProposals.length === 0) {
                     return (
                       <div className="community-empty-state">
                         <strong>No active votes</strong>
@@ -3723,7 +3869,7 @@ function PopupPage() {
                   }
                   return (
                     <>
-                      {!canUseUnlockedSigner ? (
+                      {activeProposals.length > 0 ? (!canUseUnlockedSigner ? (
                         <label className="stack">
                           <span className="muted">Password</span>
                           <div className="send-input-shell send-input-shell-sign">
@@ -3749,142 +3895,43 @@ function PopupPage() {
                         </label>
                       ) : (
                         <p className="muted">Wallet is already unlocked. You can sign governance votes without re-entering your password.</p>
-                      )}
-                      <div className="governance-proposal-list">
-                        {activeProposals.map((proposal) => {
-                        const nowUnixSeconds = Math.floor(Date.now() / 1000);
-                        const daoSummary = governance.daos.find((dao) => dao.daoId === proposal.daoId) ?? null;
-                        const hasCommunityPower = daoSummary
-                          ? BigInt(daoSummary.communityVotingPower ?? '0') > 0n || BigInt(daoSummary.delegateCommunityVotingPower ?? '0') > 0n
-                          : false;
-                        const hasCouncilPower = daoSummary
-                          ? BigInt(daoSummary.councilVotingPower ?? '0') > 0n || BigInt(daoSummary.delegateCouncilVotingPower ?? '0') > 0n
-                          : false;
-                        const hasDaoVotingPower = hasCommunityPower || hasCouncilPower;
-                        const proposalVoteSources = proposal.voteSources ?? [];
-                        const availableVoteSources = proposalVoteSources.filter((source) => !source.hasVoted);
-                        const hasProposalVoteSources = proposalVoteSources.length > 0;
-                        const hasDelegatedProposalVoteSource = availableVoteSources.some((source) => source.isDelegate);
-                        const timeMeta = getGovernanceProposalTimeMeta(proposal, nowUnixSeconds);
-                        const canVoteNow = proposal.canVote && timeMeta.votingWindowOpen;
-                        const proposalUrl = buildGovernanceProposalUrl(proposal.daoId, proposal.proposalId);
-                        const inactiveVotingPowerMessage =
-                          !timeMeta.votingWindowOpen && timeMeta.noteText
-                            ? timeMeta.noteText
-                            : proposal.hasVoted && availableVoteSources.length === 0
-                              ? 'This wallet already voted on the active proposal.'
-                              : availableVoteSources.length > 0
-                                ? hasDelegatedProposalVoteSource
-                                  ? 'This wallet has delegated voting power available for this proposal.'
-                                  : 'This wallet has voting power available for this proposal.'
-                              : proposal.votingPowerType === 'community' && hasCouncilPower && !hasCommunityPower
-                                ? 'This is a Community proposal. This wallet currently has Council voting power in this DAO.'
-                              : proposal.votingPowerType === 'council' && hasCommunityPower && !hasCouncilPower
-                                ? 'This is a Council proposal. This wallet currently has Community voting power in this DAO.'
-                                : hasProposalVoteSources
-                                  ? 'This wallet has a proposal voter record, but that voting power is not currently available.'
-                                : proposal.votingPowerType === 'unknown' && (hasCommunityPower || hasCouncilPower)
-                                  ? 'This wallet has DAO voting power, but the proposal voting class could not be resolved yet.'
-                                  : hasDaoVotingPower
-                                    ? 'This wallet has governance power in this DAO, but the matching voter record for this proposal is not available yet.'
-                                    : 'This wallet is tracking the DAO, but it does not currently have voting power for this proposal.';
-
-                        return (
-                        <div key={proposal.proposalId} className="governance-proposal-card">
-                          <div className="governance-proposal-header">
-                            <div className="governance-proposal-copy">
-                              <strong className="governance-proposal-title">{proposal.proposalName}</strong>
-                              <div className="governance-proposal-badges">
-                                <StatusPill tone="neutral">{formatGovernanceVotingPowerType(proposal.votingPowerType)}</StatusPill>
-                                {proposal.isDelegate ? (
-                                  <StatusPill tone="neutral">Delegate</StatusPill>
-                                ) : null}
-                                <StatusPill tone={timeMeta.badgeTone}>
-                                  {timeMeta.badgeLabel}
-                                </StatusPill>
-                                <button
-                                  type="button"
-                                  className="governance-proposal-link"
-                                  onClick={() => window.open(proposalUrl, '_blank', 'noopener,noreferrer')}
-                                  aria-label={`Open ${proposal.proposalName} on governance.so`}
-                                  title="Open on governance.so"
-                                >
-                                  <span>Open</span>
-                                  <ExternalLink size={13} />
-                                </button>
-                              </div>
-                              <span className="governance-proposal-meta">
-                                {proposal.realmName} • {proposal.state}
-                                {timeMeta.metaText ? ` • ${timeMeta.metaText}` : ''}
-                                {proposal.votingEndsAt ? ` • ${new Date(proposal.votingEndsAt * 1000).toLocaleString()}` : ''}
-                              </span>
-                            </div>
-                          </div>
-                          <div className="governance-proposal-metrics">
-                            <span>Yes {formatWholeNumberString(proposal.yesVotes)}</span>
-                            {BigInt(proposal.noVotes) > BigInt(0) ? <span>No {formatWholeNumberString(proposal.noVotes)}</span> : null}
-                            {BigInt(proposal.denyVotes) > BigInt(0) ? <span>Deny {formatWholeNumberString(proposal.denyVotes)}</span> : null}
-                          </div>
-                          {canVoteNow ? (
-                            <div className="governance-vote-actions">
-                              {proposal.choices.map((choice) => (
-                                <Button
-                                  key={`${proposal.proposalId}:${choice.rank}`}
-                                  tone="secondary"
-                                  disabled={
-                                    governanceVotingProposalId === proposal.proposalId ||
-                                    (!canUseUnlockedSigner && !governancePassword.trim())
-                                  }
-                                  onClick={() =>
-                                    void handleGovernanceVote({
-                                      daoId: proposal.daoId,
-                                      governanceId: proposal.governanceId,
-                                      proposalId: proposal.proposalId,
-                                      proposalOwnerRecordId: proposal.proposalOwnerRecordId,
-                                      tokenOwnerRecordId: proposal.tokenOwnerRecordId,
-                                      governingTokenMint: proposal.governingTokenMint,
-                                      voteKind: 'approve',
-                                      choiceRank: choice.rank,
-                                      voteSources: proposal.voteSources
-                                    })
-                                  }
-                                >
-                                  {governanceVotingProposalId === proposal.proposalId ? 'Submitting…' : choice.label}
-                                </Button>
-                              ))}
-                              {proposal.hasDenyOption ? (
-                                <Button
-                                  tone="secondary"
-                                  disabled={
-                                    governanceVotingProposalId === proposal.proposalId ||
-                                    (!canUseUnlockedSigner && !governancePassword.trim())
-                                  }
-                                  onClick={() =>
-                                    void handleGovernanceVote({
-                                      daoId: proposal.daoId,
-                                      governanceId: proposal.governanceId,
-                                      proposalId: proposal.proposalId,
-                                      proposalOwnerRecordId: proposal.proposalOwnerRecordId,
-                                      tokenOwnerRecordId: proposal.tokenOwnerRecordId,
-                                      governingTokenMint: proposal.governingTokenMint,
-                                      voteKind: 'deny',
-                                      voteSources: proposal.voteSources
-                                    })
-                                  }
-                                >
-                                  {governanceVotingProposalId === proposal.proposalId ? 'Submitting…' : 'Deny'}
-                                </Button>
-                              ) : null}
-                            </div>
-                          ) : (
-                            <p className="muted governance-proposal-note">
-                              {inactiveVotingPowerMessage}
-                            </p>
-                          )}
+                      )) : null}
+                      {activeProposals.length > 0 ? (
+                        <div className="governance-proposal-list">
+                          {activeProposals.map((proposal) => renderGovernanceProposalCard(proposal, nowUnixSeconds))}
                         </div>
-                        );
-                        })}
-                      </div>
+                      ) : (
+                        <div className="community-empty-state governance-empty-subtle">
+                          <strong>No open votes</strong>
+                          <p className="muted">There are no proposals with an open voting window right now.</p>
+                        </div>
+                      )}
+                      {finalizingProposals.length > 0 ? (
+                        <div className="governance-proposal-section">
+                          <button
+                            type="button"
+                            className="governance-finalizing-toggle"
+                            onClick={() => setGovernanceShowFinalizing((current) => !current)}
+                            aria-expanded={governanceShowFinalizing}
+                          >
+                            <span className="governance-finalizing-copy">
+                              <strong>Needs finalization</strong>
+                              <span className="muted">
+                                Voting has ended on {finalizingProposals.length} proposal{finalizingProposals.length === 1 ? '' : 's'}.
+                              </span>
+                            </span>
+                            <span className="governance-finalizing-meta">
+                              <StatusPill tone="warning">{finalizingProposals.length}</StatusPill>
+                              {governanceShowFinalizing ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                            </span>
+                          </button>
+                          {governanceShowFinalizing ? (
+                            <div className="governance-proposal-list governance-finalizing-list">
+                              {finalizingProposals.map((proposal) => renderGovernanceProposalCard(proposal, nowUnixSeconds))}
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </>
                   );
                 })()}
