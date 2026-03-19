@@ -3866,17 +3866,24 @@ function getSurfacePriority(page: string): number {
       return 3;
     case 'popup':
       return 2;
-    case 'wallet':
-      return 1;
     default:
       return 0;
   }
 }
 
+function canHostInlineApprovalSurface(page: string): boolean {
+  return page === 'popup' || page === 'sidepanel';
+}
+
 function getPreferredApprovalSurface(): ActiveWalletSurface | undefined {
   const now = Date.now();
   return [...activeWalletSurfacePorts.values()]
-    .filter((surface) => surface.visible && now - surface.lastSeenAt <= SURFACE_STALE_MS)
+    .filter(
+      (surface) =>
+        canHostInlineApprovalSurface(surface.page) &&
+        surface.visible &&
+        now - surface.lastSeenAt <= SURFACE_STALE_MS
+    )
     .sort((left, right) => getSurfacePriority(right.page) - getSurfacePriority(left.page))[0];
 }
 
