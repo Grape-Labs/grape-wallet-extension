@@ -32,6 +32,7 @@ import {
   verifyVaultPassword
 } from '@grape/core';
 import {
+  ASSOCIATED_TOKEN_PROGRAM_ID,
   buildBurnSplTokenTransaction,
   buildCloseTokenAccountTransaction,
   buildSolTransferTransaction,
@@ -3083,17 +3084,33 @@ class WalletController {
               programId: input.asset.programId
             });
 
+      const [balanceLamports, feeLamports] = await Promise.all([
+        connection.getBalance(owner, 'confirmed'),
+        estimateLegacyTransactionFee(connection, transaction)
+      ]);
       if (input.asset.kind === 'sol') {
-        const [balanceLamports, feeLamports] = await Promise.all([
-          connection.getBalance(owner, 'confirmed'),
-          estimateLegacyTransactionFee(connection, transaction)
-        ]);
         const transferLamports = parseDecimalAmount(input.amount, 9);
         const requiredLamports = transferLamports + BigInt(feeLamports);
         if (BigInt(balanceLamports) < requiredLamports) {
           throw new RpcError(
             'INSUFFICIENT_FUNDS',
             `Not enough SOL. You need ${(Number(requiredLamports) / 1_000_000_000).toFixed(9)} SOL including network fee, but only ${(balanceLamports / 1_000_000_000).toFixed(9)} SOL is available.`
+          );
+        }
+      } else {
+        const createsRecipientTokenAccount = transaction.instructions.some((instruction) =>
+          instruction.programId.equals(ASSOCIATED_TOKEN_PROGRAM_ID)
+        );
+        const ataRentLamports = createsRecipientTokenAccount
+          ? await connection.getMinimumBalanceForRentExemption(165)
+          : 0;
+        const requiredLamports = BigInt(feeLamports + ataRentLamports);
+        if (BigInt(balanceLamports) < requiredLamports) {
+          throw new RpcError(
+            'INSUFFICIENT_FUNDS',
+            createsRecipientTokenAccount
+              ? `Not enough SOL. You need ${(Number(requiredLamports) / 1_000_000_000).toFixed(9)} SOL for network fees and recipient token account creation, but only ${(balanceLamports / 1_000_000_000).toFixed(9)} SOL is available.`
+              : `Not enough SOL. You need at least ${(Number(requiredLamports) / 1_000_000_000).toFixed(9)} SOL for network fees, but only ${(balanceLamports / 1_000_000_000).toFixed(9)} SOL is available.`
           );
         }
       }

@@ -122,6 +122,8 @@ const COMMON_SWAP_TOKENS = [
   { mint: 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN', symbol: 'JUP' },
   { mint: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263', symbol: 'BONK' }
 ] as const;
+const SOLANA_SEND_FEE_RESERVE_SOL = 0.00001;
+const SOLANA_TOKEN_SEND_RESERVE_SOL = 0.0021;
 
 type SwapOutputOption = {
   mint: string;
@@ -4675,6 +4677,19 @@ function PopupPage() {
               ? 'Token unavailable'
               : 'Enter contract'
         : selectedAsset?.balance ?? 'Unavailable';
+    const solanaNativeBalance = typeof assets.lamports === 'number' ? assets.lamports / 1_000_000_000 : 0;
+    const solanaGasWarning =
+      wallet.selectedChain !== 'solana' || !selectedAsset || isCollectibleSend
+        ? null
+        : selectedAsset.asset.kind === 'spl-token'
+          ? solanaNativeBalance < SOLANA_TOKEN_SEND_RESERVE_SOL
+            ? 'This wallet may not have enough SOL for network fees and recipient token account creation.'
+            : null
+          : selectedAsset.asset.kind === 'sol' && Number.isFinite(selectedAmountNumber) && selectedAmountNumber > 0
+            ? solanaNativeBalance <= selectedAmountNumber + SOLANA_SEND_FEE_RESERVE_SOL
+              ? 'Leave some SOL in the wallet for network fees.'
+              : null
+            : null;
 
     function handleMaxAmount() {
       if (isCollectibleSend) {
@@ -4901,6 +4916,7 @@ function PopupPage() {
           </div>
         </Card>
 
+        {solanaGasWarning ? <p className="warning-box">{solanaGasWarning}</p> : null}
         {sendError ? <p className="danger-box">{sendError}</p> : null}
         {surfaceError ? <p className="danger-box">{surfaceError}</p> : null}
 

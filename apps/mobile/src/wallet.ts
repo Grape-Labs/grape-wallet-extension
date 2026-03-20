@@ -1274,7 +1274,13 @@ export async function sendWalletAsset(input: {
     case 'solana': {
       const { resolveSolanaVaultSecret } = loadSolanaDeriveModule();
       const { signAndSendTransaction } = loadSolanaSigningModule();
-      const { buildSolTransferTransaction, buildSplTokenTransferTransaction } = loadSolanaTransfersModule();
+      const {
+        ASSOCIATED_TOKEN_PROGRAM_ID,
+        buildSolTransferTransaction,
+        buildSplTokenTransferTransaction,
+        estimateLegacyTransactionFee,
+        parseDecimalAmount
+      } = loadSolanaTransfersModule();
       const web3 = loadSolanaWeb3Module();
       const { Connection, PublicKey } = web3;
       const connection = new Connection(getMobileSolanaRpcUrl(DEFAULT_SOLANA_NETWORK), 'confirmed');
@@ -1296,6 +1302,32 @@ export async function sendWalletAsset(input: {
               recipient: input.recipient,
               amount: input.amount
             });
+      const [balanceLamports, feeLamports] = await Promise.all([
+        connection.getBalance(owner, 'confirmed'),
+        estimateLegacyTransactionFee(connection, transaction)
+      ]);
+      const createsRecipientTokenAccount = transaction.instructions.some((instruction) =>
+        instruction.programId.equals(ASSOCIATED_TOKEN_PROGRAM_ID)
+      );
+      const ataRentLamports = createsRecipientTokenAccount
+        ? await connection.getMinimumBalanceForRentExemption(165)
+        : 0;
+      const requiredLamports =
+        input.asset.tokenType === 'spl'
+          ? BigInt(feeLamports + ataRentLamports)
+          : parseDecimalAmount(input.amount, 9) + BigInt(feeLamports);
+      if (BigInt(balanceLamports) < requiredLamports) {
+        if (input.asset.tokenType === 'spl') {
+          throw new Error(
+            createsRecipientTokenAccount
+              ? `Not enough SOL. You need ${(Number(requiredLamports) / 1_000_000_000).toFixed(9)} SOL for network fees and recipient token account creation, but only ${(balanceLamports / 1_000_000_000).toFixed(9)} SOL is available.`
+              : `Not enough SOL. You need at least ${(Number(requiredLamports) / 1_000_000_000).toFixed(9)} SOL for network fees, but only ${(balanceLamports / 1_000_000_000).toFixed(9)} SOL is available.`
+          );
+        }
+        throw new Error(
+          `Not enough SOL. You need ${(Number(requiredLamports) / 1_000_000_000).toFixed(9)} SOL including network fee, but only ${(balanceLamports / 1_000_000_000).toFixed(9)} SOL is available.`
+        );
+      }
       return signAndSendTransaction(transaction, keypair, connection);
     }
     case 'sui': {

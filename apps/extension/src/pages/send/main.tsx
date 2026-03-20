@@ -20,6 +20,9 @@ type AssetOption =
       asset: { kind: 'spl-token'; mint: string; decimals: number; programId: string };
     };
 
+const SOLANA_SEND_FEE_RESERVE_SOL = 0.00001;
+const SOLANA_TOKEN_SEND_RESERVE_SOL = 0.0021;
+
 function formatNativeBalance(amount: number | null, decimals: number, symbol: string): string {
   if (amount === null) {
     return 'Unavailable';
@@ -161,6 +164,20 @@ function SendPage() {
   }, [assets, state?.wallet.selectedChain]);
 
   const selectedAsset = assetOptions.find((option) => option.id === assetId) ?? assetOptions[0];
+  const selectedAmountNumber = Number(amount || '0');
+  const nativeSolBalance = typeof assets.lamports === 'number' ? assets.lamports / 1_000_000_000 : 0;
+  const solanaGasWarning =
+    state?.wallet.selectedChain !== 'solana' || !selectedAsset
+      ? null
+      : selectedAsset.asset.kind === 'spl-token'
+        ? nativeSolBalance < SOLANA_TOKEN_SEND_RESERVE_SOL
+          ? 'This wallet may not have enough SOL for network fees and recipient token account creation.'
+          : null
+        : selectedAsset.asset.kind === 'sol' && Number.isFinite(selectedAmountNumber) && selectedAmountNumber > 0
+          ? nativeSolBalance <= selectedAmountNumber + SOLANA_SEND_FEE_RESERVE_SOL
+            ? 'Leave some SOL in the wallet for network fees.'
+            : null
+          : null;
 
   useEffect(() => {
     const requestedAsset = searchParams.get('asset');
@@ -406,6 +423,7 @@ function SendPage() {
           </div>
         )}
         <p className="muted">If the recipient token account does not exist, Grape creates it automatically for token transfers.</p>
+        {solanaGasWarning ? <p className="warning-box">{solanaGasWarning}</p> : null}
       </Card>
 
       {result ? (
