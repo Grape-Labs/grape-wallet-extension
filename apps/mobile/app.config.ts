@@ -8,15 +8,27 @@ const config: ExpoConfig = {
   orientation: 'portrait',
   userInterfaceStyle: 'dark',
   assetBundlePatterns: ['**/*'],
+  plugins: [
+    [
+      'expo-camera',
+      {
+        cameraPermission: 'Allow Grape to use the camera to scan wallet restore QR codes.'
+      }
+    ]
+  ],
   android: {
     package: 'xyz.grape.wallet',
+    permissions: ['android.permission.CAMERA'],
     adaptiveIcon: {
       foregroundImage: './assets/icon-android-foreground.png',
       backgroundColor: '#100312'
     }
   },
   ios: {
-    bundleIdentifier: 'xyz.grape.wallet'
+    bundleIdentifier: 'xyz.grape.wallet',
+    infoPlist: {
+      NSCameraUsageDescription: 'Allow Grape to use the camera to scan wallet restore QR codes.'
+    }
   },
   extra: {
     eas: {

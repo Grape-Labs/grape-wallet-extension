@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
+import QRCode from 'qrcode';
 
 import { Button, Card, Input, KeyValueRow, PageShell, StatusPill, TextArea } from '@grape/ui';
 
-import type { WalletExportResponse, WalletStateResponse } from '../../shared/models';
+import type { WalletDeviceLinkSessionResponse, WalletExportResponse, WalletStateResponse } from '../../shared/models';
 
 import { createBiometricUnlock, isBiometricUnlockSupported, unlockWithBiometric } from '../../shared/biometric';
 import { sendRuntimeMessage } from '../../shared/chrome';
@@ -48,6 +49,12 @@ function OptionsPage() {
   const [customRpcInput, setCustomRpcInput] = useState('');
   const [customRpcLoading, setCustomRpcLoading] = useState(false);
   const [customRpcError, setCustomRpcError] = useState<string | null>(null);
+  const [deviceLinkSessions, setDeviceLinkSessions] = useState<WalletDeviceLinkSessionResponse[]>([]);
+  const [deviceLinkLoading, setDeviceLinkLoading] = useState(false);
+  const [deviceLinkPassword, setDeviceLinkPassword] = useState('');
+  const [deviceLinkError, setDeviceLinkError] = useState<string | null>(null);
+  const [deviceLinkQr, setDeviceLinkQr] = useState<string | null>(null);
+  const [copiedDeviceLinkField, setCopiedDeviceLinkField] = useState<'code' | 'payload' | null>(null);
   const [revealedFields, setRevealedFields] = useState<{ mnemonic: boolean; privateKey: boolean }>({
     mnemonic: false,
     privateKey: false
@@ -58,8 +65,12 @@ function OptionsPage() {
     try {
       setLoading(true);
       setLoadError(null);
-      const nextState = await sendRuntimeMessage<WalletStateResponse>({ type: 'wallet_get_state' });
+      const [nextState, nextDeviceLinkSessions] = await Promise.all([
+        sendRuntimeMessage<WalletStateResponse>({ type: 'wallet_get_state' }),
+        sendRuntimeMessage<WalletDeviceLinkSessionResponse[]>({ type: 'wallet_list_device_link_sessions' })
+      ]);
       setState(nextState);
+      setDeviceLinkSessions(nextDeviceLinkSessions);
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : 'Unable to load settings.');
     } finally {
@@ -91,6 +102,22 @@ function OptionsPage() {
     setCopiedField(null);
     setRevealedFields({ mnemonic: false, privateKey: false });
   }, [state?.activeWallet?.id]);
+
+  useEffect(() => {
+    const activeSession = deviceLinkSessions.find((session) => session.status === 'ready');
+    if (!activeSession) {
+      setDeviceLinkQr(null);
+      return;
+    }
+
+    void QRCode.toDataURL(activeSession.qrPayload, {
+      errorCorrectionLevel: 'M',
+      margin: 1,
+      width: 256
+    })
+      .then((value) => setDeviceLinkQr(value))
+      .catch(() => setDeviceLinkQr(null));
+  }, [deviceLinkSessions]);
 
   useEffect(() => {
     applyDocumentTheme(state?.wallet.selectedTheme);
@@ -151,10 +178,13 @@ function OptionsPage() {
     state.wallet.wallets.find((wallet) => wallet.chain === state.wallet.selectedChain) ??
     state.wallet.wallets[0];
   const exportIsAvailable = selectedWallet?.signer?.kind === 'software';
+  const deviceLinkIsAvailable = selectedWallet?.signer?.kind === 'software';
+  const activeDeviceLinkSession = deviceLinkSessions.find((session) => session.status === 'ready') ?? null;
   const exportPayload = exportedWallet
     ? JSON.stringify(
         {
           walletName: exportedWallet.walletName,
+          chain: exportedWallet.chain,
           publicKey: exportedWallet.publicKey,
           derivationPath: exportedWallet.derivationPath,
           kind: exportedWallet.kind,
@@ -290,6 +320,62 @@ function OptionsPage() {
       setCustomRpcError(error instanceof Error ? error.message : 'Unable to update custom RPC.');
     } finally {
       setCustomRpcLoading(false);
+    }
+  }
+
+  async function handleCreateDeviceLink(password?: string) {
+    try {
+      setDeviceLinkLoading(true);
+      setDeviceLinkError(null);
+      await sendRuntimeMessage<WalletDeviceLinkSessionResponse>({
+        type: 'wallet_create_device_link_session',
+        password: password?.trim() || undefined
+      });
+      setDeviceLinkPassword('');
+      setCopiedDeviceLinkField(null);
+      setDeviceLinkSessions(await sendRuntimeMessage<WalletDeviceLinkSessionResponse[]>({ type: 'wallet_list_device_link_sessions' }));
+    } catch (error) {
+      setDeviceLinkError(error instanceof Error ? error.message : 'Unable to create device link.');
+    } finally {
+      setDeviceLinkLoading(false);
+    }
+  }
+
+  async function handleCreateDeviceLinkWithBiometric() {
+    if (!selectedWallet?.biometricUnlock) {
+      return;
+    }
+
+    try {
+      setDeviceLinkLoading(true);
+      setDeviceLinkError(null);
+      const unlockedPassword = await unlockWithBiometric(selectedWallet.biometricUnlock);
+      await handleCreateDeviceLink(unlockedPassword);
+    } catch (error) {
+      setDeviceLinkError(error instanceof Error ? error.message : 'Unable to verify with device.');
+      setDeviceLinkLoading(false);
+    }
+  }
+
+  async function handleCopyDeviceLink(kind: 'code' | 'payload', value: string) {
+    await navigator.clipboard.writeText(value);
+    setCopiedDeviceLinkField(kind);
+    window.setTimeout(() => setCopiedDeviceLinkField(null), 1200);
+  }
+
+  async function handleDeleteDeviceLink(sessionId: string) {
+    try {
+      setDeviceLinkLoading(true);
+      setDeviceLinkError(null);
+      const nextSessions = await sendRuntimeMessage<WalletDeviceLinkSessionResponse[]>({
+        type: 'wallet_delete_device_link_session',
+        sessionId
+      });
+      setDeviceLinkSessions(nextSessions);
+    } catch (error) {
+      setDeviceLinkError(error instanceof Error ? error.message : 'Unable to revoke device link.');
+    } finally {
+      setDeviceLinkLoading(false);
     }
   }
 
@@ -591,6 +677,82 @@ function OptionsPage() {
                 <Button tone="secondary" onClick={handleDownloadExport}>
                   Download JSON export
                 </Button>
+              </div>
+            ) : null}
+          </div>
+        )}
+      </Card>
+
+      <Card title="Link new device">
+        {!selectedWallet ? (
+          <p className="muted">Create or import a wallet before linking another device.</p>
+        ) : !deviceLinkIsAvailable ? (
+          <div className="stack">
+            <p className="warning-box">Only software wallets can be linked with a QR handoff right now.</p>
+            <KeyValueRow label="Selected wallet" value={selectedWallet.name} />
+            <KeyValueRow label="Wallet type" value={formatWalletSourceLabel(selectedWallet.source, selectedWallet.signer?.kind)} />
+          </div>
+        ) : (
+          <div className="stack">
+            <p className="muted">
+              Create a short-lived restore handoff for another Grape device. The restore payload is encrypted, and the pairing code is required to unlock it.
+            </p>
+            <KeyValueRow label="Selected wallet" value={selectedWallet.name} />
+            <KeyValueRow label="Public key" value={<span className="mono transfer-signature">{state.activeWallet?.publicKey ?? 'Unknown'}</span>} />
+            {biometricSupported && selectedWallet.biometricUnlock ? (
+              <Button tone="secondary" onClick={() => void handleCreateDeviceLinkWithBiometric()} disabled={deviceLinkLoading}>
+                {deviceLinkLoading ? 'Checking device...' : 'Verify with device'}
+              </Button>
+            ) : null}
+            <label className="stack">
+              <span className="muted">Password</span>
+              <Input
+                type="password"
+                value={deviceLinkPassword}
+                onChange={(event) => setDeviceLinkPassword(event.target.value)}
+                placeholder="Verify password to create link"
+              />
+            </label>
+            <Button onClick={() => void handleCreateDeviceLink(deviceLinkPassword)} disabled={deviceLinkLoading || !deviceLinkPassword.trim()}>
+              {deviceLinkLoading ? 'Creating link...' : 'Link new device'}
+            </Button>
+            {deviceLinkError ? <p className="danger-box">{deviceLinkError}</p> : null}
+
+            {activeDeviceLinkSession ? (
+              <div className="stack">
+                <p className="warning-box">
+                  This handoff expires automatically. Treat the QR and pairing code like sensitive recovery material until it is used or revoked.
+                </p>
+                <KeyValueRow label="Expires" value={new Date(activeDeviceLinkSession.expiresAt).toLocaleString()} />
+                <div className="space-between" style={{ alignItems: 'center', gap: '12px' }}>
+                  <strong>Pairing code</strong>
+                  <div className="inline">
+                    <Button
+                      tone="secondary"
+                      className="mini-button"
+                      onClick={() => void handleCopyDeviceLink('code', activeDeviceLinkSession.pairingCode)}
+                    >
+                      {copiedDeviceLinkField === 'code' ? 'Copied' : 'Copy code'}
+                    </Button>
+                    <Button
+                      tone="danger"
+                      className="mini-button"
+                      onClick={() => void handleDeleteDeviceLink(activeDeviceLinkSession.id)}
+                      disabled={deviceLinkLoading}
+                    >
+                      Revoke
+                    </Button>
+                  </div>
+                </div>
+                <TextArea readOnly value={activeDeviceLinkSession.pairingCode} />
+                {deviceLinkQr ? <img className="receive-qr" src={deviceLinkQr} alt="Device link QR code" /> : null}
+                <div className="stack">
+                  <span className="muted">Restore payload</span>
+                  <TextArea readOnly value={activeDeviceLinkSession.qrPayload} />
+                  <Button tone="secondary" onClick={() => void handleCopyDeviceLink('payload', activeDeviceLinkSession.qrPayload)}>
+                    {copiedDeviceLinkField === 'payload' ? 'Copied' : 'Copy restore payload'}
+                  </Button>
+                </div>
               </div>
             ) : null}
           </div>

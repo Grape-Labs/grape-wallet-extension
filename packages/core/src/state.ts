@@ -4,7 +4,8 @@ export const STORAGE_KEYS = {
   state: 'grape:state',
   permissions: 'grape:permissions',
   approvals: 'grape:approvals',
-  session: 'grape:session'
+  session: 'grape:session',
+  deviceLinkSessions: 'grape:device-link-sessions'
 } as const;
 
 export type WalletSetupState = 'empty' | 'ready';

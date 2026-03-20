@@ -56,6 +56,7 @@ import type {
   WalletBridgeExecuteResponse,
   WalletBridgeQuoteResponse,
   GovernanceDaoSummary,
+  GovernanceEligibleDao,
   WalletGovernanceResponse,
   WalletGovernanceVoteResponse,
   WalletReputationResponse,
@@ -233,6 +234,29 @@ function formatAddress(address: string | undefined): string {
   return `${address.slice(0, 4)}...${address.slice(-4)}`;
 }
 
+function normalizeScannedRecipientInput(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return '';
+  }
+
+  const compact = trimmed.replace(/\s+/g, '');
+  const schemeMatch = compact.match(/^([a-z0-9+.-]+):(.*)$/i);
+  if (!schemeMatch) {
+    return compact;
+  }
+
+  const [, scheme, remainder] = schemeMatch;
+  const normalizedScheme = scheme.toLowerCase();
+  if (!['solana', 'ethereum', 'evm', 'monad', 'sui'].includes(normalizedScheme)) {
+    return compact;
+  }
+
+  const withoutSlashes = remainder.replace(/^\/\//, '').replace(/^\/+/, '');
+  const address = withoutSlashes.split(/[/?#]/)[0]?.trim();
+  return address || compact;
+}
+
 function formatWholeNumberString(value: string | null | undefined): string {
   if (!value) {
     return '0';
@@ -263,6 +287,10 @@ function formatGovernanceVotingPowerType(
 
 function buildGovernanceProposalUrl(daoId: string, proposalId: string): string {
   return `https://governance.so/proposal/${daoId}/${proposalId}`;
+}
+
+function buildGovernanceDaoUrl(daoId: string): string {
+  return `https://www.governance.so/dao/${daoId}`;
 }
 
 function formatGovernanceVoteSourceLabel(
@@ -1021,6 +1049,9 @@ function PopupPage() {
   const [sendError, setSendError] = useState<string | null>(null);
   const [sendResult, setSendResult] = useState<SendTransferResponse | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [recipientScannerVisible, setRecipientScannerVisible] = useState(false);
+  const [recipientScannerLoading, setRecipientScannerLoading] = useState(false);
+  const [recipientScannerError, setRecipientScannerError] = useState<string | null>(null);
   const [surfaceError, setSurfaceError] = useState<string | null>(null);
   const [unlockPassword, setUnlockPassword] = useState('');
   const [unlockError, setUnlockError] = useState<string | null>(null);
@@ -1054,6 +1085,7 @@ function PopupPage() {
   const [quotingSwap, setQuotingSwap] = useState(false);
   const [submittingSwap, setSubmittingSwap] = useState(false);
   const swapQuoteRequestRef = useRef(0);
+  const recipientScannerVideoRef = useRef<HTMLVideoElement | null>(null);
   const [bridgeDestinationChain, setBridgeDestinationChain] = useState<WalletStateResponse['wallet']['selectedChain'] | null>(null);
   const [bridgeDestinationWalletId, setBridgeDestinationWalletId] = useState('');
   const [bridgeAmount, setBridgeAmount] = useState('');
@@ -1107,6 +1139,10 @@ function PopupPage() {
   });
   const [governanceLoading, setGovernanceLoading] = useState(false);
   const [governanceError, setGovernanceError] = useState<string | null>(null);
+  const [governanceEligibility, setGovernanceEligibility] = useState<GovernanceEligibleDao[]>([]);
+  const [governanceEligibilityLoading, setGovernanceEligibilityLoading] = useState(false);
+  const [governanceEligibilityError, setGovernanceEligibilityError] = useState<string | null>(null);
+  const [governanceEligibilityScanned, setGovernanceEligibilityScanned] = useState(false);
   const [expandedDaoIds, setExpandedDaoIds] = useState<Set<string>>(new Set());
   const [governanceVotingProposalId, setGovernanceVotingProposalId] = useState<string | null>(null);
   const [governanceVoteError, setGovernanceVoteError] = useState<string | null>(null);
@@ -1708,6 +1744,20 @@ function PopupPage() {
   ]);
 
   useEffect(() => {
+    setGovernanceEligibility([]);
+    setGovernanceEligibilityError(null);
+    setGovernanceEligibilityScanned(false);
+    setGovernanceEligibilityLoading(false);
+  }, [
+    state?.activeWallet?.id,
+    state?.activeAccount?.publicKey,
+    state?.session.locked,
+    state?.wallet.selectedChain,
+    state?.wallet.selectedNetwork,
+    state?.wallet.setup
+  ]);
+
+  useEffect(() => {
     if (!state || state.wallet.setup !== 'ready' || state.session.locked || state.wallet.selectedChain !== 'solana') {
       setVerification({
         trackedSpaces: state?.wallet.trackedVerificationSpaceIds ?? [],
@@ -2259,6 +2309,105 @@ function PopupPage() {
     }, 1200);
   }
 
+  useEffect(() => {
+    if (!recipientScannerVisible) {
+      return;
+    }
+
+    let active = true;
+    let frameId = 0;
+    let stream: MediaStream | null = null;
+
+    const startScanner = async () => {
+      const video = recipientScannerVideoRef.current;
+      if (!video) {
+        return;
+      }
+
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error('Camera scanning is not available in this browser.');
+      }
+
+      const detectorCtor = (
+        window as Window & {
+          BarcodeDetector?: new (options?: { formats?: string[] }) => {
+            detect: (source: CanvasImageSource) => Promise<Array<{ rawValue?: string }>>;
+          };
+        }
+      ).BarcodeDetector;
+      if (!detectorCtor) {
+        throw new Error('QR scanning is not available in this browser.');
+      }
+
+      setRecipientScannerError(null);
+      setRecipientScannerLoading(true);
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: 'environment'
+        },
+        audio: false
+      });
+
+      video.srcObject = stream;
+      video.setAttribute('playsinline', 'true');
+      await video.play();
+      const detector = new detectorCtor({ formats: ['qr_code'] });
+
+      const scanFrame = async () => {
+        if (!active) {
+          return;
+        }
+
+        if (video.readyState >= 2) {
+          const codes = await detector.detect(video).catch(() => []);
+          const match = codes.find((entry) => typeof entry.rawValue === 'string' && entry.rawValue.trim().length > 0);
+          if (match?.rawValue) {
+            const normalized = normalizeScannedRecipientInput(match.rawValue);
+            if (normalized) {
+              setRecipient(normalized);
+              setRecipientScannerVisible(false);
+              setRecipientScannerError(null);
+              return;
+            }
+          }
+        }
+
+        frameId = window.requestAnimationFrame(() => {
+          void scanFrame();
+        });
+      };
+
+      setRecipientScannerLoading(false);
+      void scanFrame();
+    };
+
+    void startScanner().catch((nextError) => {
+      if (active) {
+        setRecipientScannerLoading(false);
+        setRecipientScannerVisible(false);
+        const message = nextError instanceof Error ? nextError.message : 'Unable to start QR scanning.';
+        setRecipientScannerError(message);
+        setSendError(message);
+      }
+    });
+
+    return () => {
+      active = false;
+      setRecipientScannerLoading(false);
+      if (frameId) {
+        window.cancelAnimationFrame(frameId);
+      }
+      if (stream) {
+        stream.getTracks().forEach((track) => track.stop());
+      }
+      const video = recipientScannerVideoRef.current;
+      if (video) {
+        video.pause();
+        video.srcObject = null;
+      }
+    };
+  }, [recipientScannerVisible]);
+
   async function refreshAssetDetails(nextToken: Pick<TokenHolding, 'mint' | 'accountAddress' | 'programId'>) {
     try {
       setAssetDetailsLoading(true);
@@ -2322,9 +2471,26 @@ function PopupPage() {
   function openSend(nextAssetId = 'sol') {
     setAssetId(nextAssetId);
     setSendAssetPickerOpen(false);
+    setRecipientScannerVisible(false);
+    setRecipientScannerError(null);
     setSendError(null);
     setSendResult(null);
     setView('send');
+  }
+
+  async function handleOpenRecipientScanner() {
+    setSendError(null);
+    if (isPopupSurface) {
+      await openExtensionPage(`send.html?${new URLSearchParams({
+        ...(assetId && assetId !== 'sol' ? { asset: assetId } : {}),
+        scan: '1'
+      }).toString()}`);
+      window.close();
+      return;
+    }
+
+    setRecipientScannerError(null);
+    setRecipientScannerVisible((current) => !current);
   }
 
   function openSendForCollectible(item: CollectibleItem) {
@@ -2338,6 +2504,8 @@ function PopupPage() {
     setRecipient('');
     setPassword('');
     setSendAssetPickerOpen(false);
+    setRecipientScannerVisible(false);
+    setRecipientScannerError(null);
     setSendError(null);
     setSendResult(null);
     setView('send');
@@ -2504,6 +2672,8 @@ function PopupPage() {
       setRecipient('');
       setAmount('');
       setPassword('');
+      setRecipientScannerVisible(false);
+      setRecipientScannerError(null);
     } catch (nextError) {
       setSendError(nextError instanceof Error ? nextError.message : 'Unable to send transfer.');
     } finally {
@@ -2959,6 +3129,24 @@ function PopupPage() {
 
   async function handleRemoveGovernanceDao(daoId: string) {
     await handleSaveGovernanceDaos(wallet.trackedGovernanceDaoIds.filter((entry) => entry !== daoId));
+  }
+
+  async function handleScanGovernanceEligibility() {
+    try {
+      setGovernanceEligibilityLoading(true);
+      setGovernanceEligibilityError(null);
+      const nextEligibility = await sendRuntimeMessage<GovernanceEligibleDao[]>({
+        type: 'wallet_scan_governance_eligibility'
+      });
+      setGovernanceEligibility(nextEligibility);
+      setGovernanceEligibilityScanned(true);
+    } catch (error) {
+      setGovernanceEligibility([]);
+      setGovernanceEligibilityScanned(true);
+      setGovernanceEligibilityError(error instanceof Error ? error.message : 'Unable to scan wallet holdings for governance eligibility.');
+    } finally {
+      setGovernanceEligibilityLoading(false);
+    }
   }
 
   function openHomeTabAndScroll(target: 'community' | 'verification' | 'governance') {
@@ -4647,6 +4835,20 @@ function PopupPage() {
                   className="send-recipient-input"
                 />
               </div>
+              <div className="send-inline-actions">
+                <Button tone="secondary" onClick={() => void handleOpenRecipientScanner()}>
+                  {recipientScannerVisible && !isPopupSurface ? 'Close scanner' : 'Scan QR'}
+                </Button>
+              </div>
+              {recipientScannerVisible ? (
+                <div className="device-link-scanner">
+                  <video ref={recipientScannerVideoRef} className="device-link-scanner-video" muted />
+                  <p className="device-link-scanner-copy">
+                    {recipientScannerLoading ? 'Opening camera...' : 'Point the camera at a wallet QR to fill the recipient.'}
+                  </p>
+                  {recipientScannerError ? <p className="danger-box">{recipientScannerError}</p> : null}
+                </div>
+              ) : null}
             </div>
 
             {recentRecipients.length > 0 ? (
@@ -5030,6 +5232,13 @@ function PopupPage() {
   }
 
   function renderSettings() {
+    const participatingGovernanceDaoIds = new Set([
+      ...governance.discoveredDaos,
+      ...governance.delegateDaos,
+      ...governance.governedDaos,
+      ...wallet.trackedGovernanceDaoIds
+    ]);
+
     return (
       <>
         <Card title="Wallet">
@@ -5387,6 +5596,65 @@ function PopupPage() {
               <p className="muted">Governance proposal tracking is currently supported for Solana wallets.</p>
             ) : (
               <>
+                <div className="stack">
+                  <div className="inline wrap-actions" style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <div className="stack compact-stack" style={{ flex: 1 }}>
+                      <strong>Scan wallet holdings</strong>
+                      <p className="muted" style={{ margin: 0 }}>
+                        Find DAOs where this wallet holds more than 0 of the community or council token, then jump
+                        straight to deposit.
+                      </p>
+                    </div>
+                    <Button onClick={() => void handleScanGovernanceEligibility()} disabled={governanceEligibilityLoading}>
+                      {governanceEligibilityLoading ? 'Scanning...' : 'Scan'}
+                    </Button>
+                  </div>
+                  {governanceEligibility.length > 0 ? (
+                    <div className="reputation-space-list">
+                      {governanceEligibility.map((dao) => {
+                        const isParticipating = participatingGovernanceDaoIds.has(dao.daoId);
+                        const matchedLabels = [
+                          dao.matchesCommunity ? `Community: ${dao.communityAmountLabel ?? 'Eligible'}` : null,
+                          dao.matchesCouncil ? `Council: ${dao.councilAmountLabel ?? 'Eligible'}` : null
+                        ].filter((value): value is string => !!value);
+                        return (
+                          <div key={`eligible:${dao.daoId}`} className="reputation-space-row">
+                            <div className="stack compact-stack">
+                              <div className="inline wrap-actions">
+                                <strong>{dao.realmName}</strong>
+                                {dao.matchesCommunity ? <StatusPill tone="neutral">Community</StatusPill> : null}
+                                {dao.matchesCouncil ? <StatusPill tone="neutral">Council</StatusPill> : null}
+                                {isParticipating ? <StatusPill tone="success">Participating</StatusPill> : null}
+                              </div>
+                              <span className="muted mono settings-inline-value">{dao.daoId}</span>
+                              <span className="muted">{matchedLabels.join(' • ')}</span>
+                            </div>
+                            <div className="reputation-space-actions">
+                              {!isParticipating ? (
+                                <Button
+                                  tone="secondary"
+                                  onClick={() => void handleSaveGovernanceDaos([...wallet.trackedGovernanceDaoIds, dao.daoId])}
+                                  disabled={governanceDaoSaving}
+                                >
+                                  Track
+                                </Button>
+                              ) : null}
+                              <Button
+                                tone="secondary"
+                                onClick={() => window.open(buildGovernanceDaoUrl(dao.daoId), '_blank', 'noopener,noreferrer')}
+                              >
+                                Deposit
+                              </Button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : governanceEligibilityScanned && !governanceEligibilityLoading && !governanceEligibilityError ? (
+                    <p className="muted">No eligible governance DAOs were found from this wallet&apos;s positive token balances.</p>
+                  ) : null}
+                  {governanceEligibilityError ? <p className="danger-box">{governanceEligibilityError}</p> : null}
+                </div>
                 {governance.daos.length > 0 ? (
                   <div className="stack">
                     <strong>DAO Memberships</strong>

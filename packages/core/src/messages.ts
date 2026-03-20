@@ -327,6 +327,9 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     type: z.literal('wallet_get_governance')
   }),
   z.object({
+    type: z.literal('wallet_scan_governance_eligibility')
+  }),
+  z.object({
     type: z.literal('wallet_get_activity'),
     limit: z.number().int().min(1).max(100).optional()
   }),
@@ -437,6 +440,23 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('wallet_export_secret'),
     password: z.string().min(1)
+  }),
+  z.object({
+    type: z.literal('wallet_create_device_link_session'),
+    password: z.string().min(1).optional()
+  }),
+  z.object({
+    type: z.literal('wallet_list_device_link_sessions')
+  }),
+  z.object({
+    type: z.literal('wallet_delete_device_link_session'),
+    sessionId: z.string().min(1)
+  }),
+  z.object({
+    type: z.literal('wallet_import_device_link'),
+    payload: z.string().min(1),
+    pairingCode: z.string().min(4),
+    password: z.string().min(8)
   }),
   z.object({
     type: z.literal('wallet_list_permissions')

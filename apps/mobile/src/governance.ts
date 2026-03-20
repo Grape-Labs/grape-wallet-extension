@@ -93,19 +93,13 @@ export type MobileGovernanceProposal = {
   denyVotes: string;
 };
 
-type StaticGovernanceRealmOverride = {
-  owner: string;
-  namespace: string;
-  realmName: string;
-  communityMint: string;
-  councilMint: string | null;
-  governanceIds: string[];
-  proposals: GovernanceProposalRecord[];
-};
-
 export type MobileGovernanceResponse = {
   trackedDaos: string[];
   discoveredDaos: string[];
+  daos: Array<{
+    daoId: string;
+    realmName: string;
+  }>;
   memberDaos: number;
   proposals: MobileGovernanceProposal[];
   source: 'shyft' | 'rpc' | 'none';
@@ -122,7 +116,26 @@ export type MobileGovernanceVoteResponse = {
   network: 'mainnet-beta' | 'devnet';
 };
 
+export type MobileGovernanceEligibleHolding = {
+  mint: string;
+  amountUi: number;
+  amountLabel?: string;
+  symbol?: string;
+  name?: string;
+  logoUri?: string;
+};
+
+export type MobileGovernanceEligibleDao = {
+  daoId: string;
+  realmName: string;
+  communityMint: string;
+  councilMint: string | null;
+  communityHolding: MobileGovernanceEligibleHolding | null;
+  councilHolding: MobileGovernanceEligibleHolding | null;
+};
+
 const GOVERNANCE_OWNERS: GovernanceOwner[] = [
+  { owner: DEFAULT_GOVERNANCE_PROGRAM_ID, name: DEFAULT_GOVERNANCE_PROGRAM_ID, dao: 'By2sVGZXwfQq6rAiAM3rNPJ9iQfb5e2QhnF4YjJ4Bip' },
   { owner: 'GovMaiHfpVPw8BAM1mbdzgmSZYDw2tdP32J2fapoQoYs', name: 'Marinade_DAO', dao: '899YG3yk4F66ZgbNWLHriZHTXSKk9e1kvsKEquW7L6Mo' },
   { owner: 'GqTPL6qRf5aUuqscLh8Rg2HTxPUXfhhAXDptTLhp1t2J', name: 'Mango', dao: 'DPiH3H3c7t47BMxqTxLsuPQpEC6Kne8GA9VXbxpnZxFE' },
   { owner: 'GovHgfDPyQ1GwazJTDY2avSVY8GGcpmCapmmCsymRaGe', name: 'Psy_Finance', dao: 'FiG6YoqWnVzUmxFNukcRVXZC51HvLr6mts8nxcm7ScR8' },
@@ -143,39 +156,14 @@ const GOVERNANCE_OWNERS: GovernanceOwner[] = [
   { owner: 'jtogvBNH3WBSWDYD5FJfQP2ZxNTuf82zL8GkEhPeaJx', name: 'Jito', dao: 'jjCAwuuNpJCNMLAanpwgJZ6cdXzLPXe2GfD6TaDQBXt' }
 ];
 
-const STATIC_GOVERNANCE_REALM_OVERRIDES: Record<string, StaticGovernanceRealmOverride> = {
-  BVfB1PfxCdcKozoQQ5kvC9waUY527bZuwJVyT7Qvf8N2: {
-    owner: DEFAULT_GOVERNANCE_PROGRAM_ID,
-    namespace: DEFAULT_GOVERNANCE_PROGRAM_ID,
-    realmName: 'CollabX',
-    communityMint: 'R77jhFXbFhfu6Gg1xNHsUqeLZcAv34Mg9AowHsRY4pc',
-    councilMint: '8mA46snco3asWLjxWjF59skixp1QQHiejpqGkCWKscGn',
-    governanceIds: [
-      'GdLEESzMSWuyPsvvx46jN6UKnfpFG57LzwtZVWhNqXEN',
-      'CCdapb7GtJnXt3fSBXqMEiwwGxjPCjVoTrhHkaGTqAho'
-    ],
-    proposals: [
-      {
-        pubkey: 'EowJ89LdRh9uPBKoMBLKoA8qr8y8kRhNbbBrhwvkdmPU',
-        governance: 'GdLEESzMSWuyPsvvx46jN6UKnfpFG57LzwtZVWhNqXEN',
-        governingTokenMint: '8mA46snco3asWLjxWjF59skixp1QQHiejpqGkCWKscGn',
-        tokenOwnerRecord: 'FYsr8MBC4mgcttEuc8sdtsBgbnfMoBwedWXsjyss8tnb',
-        state: 2,
-        descriptionLink: 'Launching Grape Wallet with Push Notifications',
-        name: 'Launching Grape Wallet',
-        draftAt: 1773702284,
-        votingAt: 1773702312,
-        maxVotingTime: null,
-        yesVotes: '0',
-        noVotes: '0',
-        abstainVotes: '0',
-        denyVotes: '0',
-        options: [{ rank: 0, label: 'Approve', voteWeight: '0', voteResult: null }],
-        hasDenyOption: true
-      }
-    ]
-  }
-};
+const GOVERNANCE_REALM_DIRECTORY_CACHE_TTL_MS = 15 * 60 * 1000;
+const GOVERNANCE_REALM_DIRECTORY_PAGE_SIZE = 1000;
+let governanceRealmDirectoryCache:
+  | {
+      expiresAt: number;
+      realms: GovernanceRealmInfo[];
+    }
+  | null = null;
 
 function loadSolanaWeb3Module() {
   return require('@solana/web3.js') as typeof import('@solana/web3.js');
@@ -195,15 +183,6 @@ function getNetworkLabel() {
 }
 
 function findGovernanceOwnerByDao(daoId: string): GovernanceOwner {
-  const override = STATIC_GOVERNANCE_REALM_OVERRIDES[daoId];
-  if (override) {
-    return {
-      owner: override.owner,
-      name: override.namespace,
-      dao: daoId
-    };
-  }
-
   return (
     GOVERNANCE_OWNERS.find((entry) => entry.dao === daoId) ?? {
       owner: DEFAULT_GOVERNANCE_PROGRAM_ID,
@@ -438,6 +417,25 @@ function buildGovernanceRealmQuery(namespace: string, daoId: string) {
         config
       }
       ${namespace}_RealmV1(where: {pubkey: {_eq: "${escapedDaoId}"}}) {
+        pubkey
+        name
+        communityMint
+        config
+      }
+    }
+  `;
+}
+
+function buildGovernanceRealmDirectoryQuery(namespace: string, offset = 0) {
+  return `
+    query GovernanceRealmDirectory {
+      ${namespace}_RealmV2(limit: ${GOVERNANCE_REALM_DIRECTORY_PAGE_SIZE}, offset: ${offset}) {
+        pubkey
+        name
+        communityMint
+        config
+      }
+      ${namespace}_RealmV1(limit: ${GOVERNANCE_REALM_DIRECTORY_PAGE_SIZE}, offset: ${offset}) {
         pubkey
         name
         communityMint
@@ -729,6 +727,136 @@ function normalizeGovernanceRealmInfo(data: Record<string, unknown>, namespace: 
         ? ((row.config as Record<string, unknown>).councilMint as string)
         : null
   };
+}
+
+function normalizeGovernanceRealmDirectoryEntries(data: Record<string, unknown>, namespace: string): GovernanceRealmInfo[] {
+  const v2 = Array.isArray(data[`${namespace}_RealmV2`]) ? (data[`${namespace}_RealmV2`] as Array<Record<string, unknown>>) : [];
+  const v1 = Array.isArray(data[`${namespace}_RealmV1`]) ? (data[`${namespace}_RealmV1`] as Array<Record<string, unknown>>) : [];
+  const rows = [...v2, ...v1];
+
+  const normalized = rows
+    .map((row) => {
+      const daoId = typeof row.pubkey === 'string' ? row.pubkey : null;
+      const communityMint = typeof row.communityMint === 'string' ? row.communityMint : null;
+      if (!daoId || !communityMint) {
+        return null;
+      }
+
+      return {
+        daoId,
+        name: typeof row.name === 'string' && row.name.trim() ? row.name.trim() : `DAO ${daoId.slice(0, 4)}`,
+        communityMint,
+        councilMint:
+          typeof (row.config as Record<string, unknown> | undefined)?.councilMint === 'string'
+            ? ((row.config as Record<string, unknown>).councilMint as string)
+            : null
+      } satisfies GovernanceRealmInfo;
+    })
+    .filter((entry): entry is GovernanceRealmInfo => !!entry);
+
+  return Array.from(new Map(normalized.map((entry) => [entry.daoId, entry] as const)).values());
+}
+
+async function fetchGovernanceRealmDirectory(): Promise<GovernanceRealmInfo[]> {
+  if (governanceRealmDirectoryCache && governanceRealmDirectoryCache.expiresAt > Date.now()) {
+    return governanceRealmDirectoryCache.realms;
+  }
+
+  const realms = (
+    await Promise.all(
+      getGovernanceNamespaces().map(async ({ namespace }) => {
+        const collected: GovernanceRealmInfo[] = [];
+        let offset = 0;
+
+        while (true) {
+          let page: Record<string, unknown>;
+          try {
+            page = await fetchGovernanceGraphql<Record<string, unknown>>(buildGovernanceRealmDirectoryQuery(namespace, offset));
+          } catch {
+            break;
+          }
+
+          const pageV2 = Array.isArray(page[`${namespace}_RealmV2`]) ? (page[`${namespace}_RealmV2`] as Array<Record<string, unknown>>) : [];
+          const pageV1 = Array.isArray(page[`${namespace}_RealmV1`]) ? (page[`${namespace}_RealmV1`] as Array<Record<string, unknown>>) : [];
+          const pageRealms = normalizeGovernanceRealmDirectoryEntries(page, namespace);
+          collected.push(...pageRealms);
+
+          if (pageV2.length < GOVERNANCE_REALM_DIRECTORY_PAGE_SIZE && pageV1.length < GOVERNANCE_REALM_DIRECTORY_PAGE_SIZE) {
+            break;
+          }
+          offset += GOVERNANCE_REALM_DIRECTORY_PAGE_SIZE;
+        }
+
+        return collected;
+      })
+    )
+  )
+    .flat()
+    .filter((entry, index, list) => list.findIndex((candidate) => candidate.daoId === entry.daoId) === index);
+
+  governanceRealmDirectoryCache = {
+    expiresAt: Date.now() + GOVERNANCE_REALM_DIRECTORY_CACHE_TTL_MS,
+    realms
+  };
+
+  return realms;
+}
+
+export async function scanMobileGovernanceDaoEligibility(
+  holdings: MobileGovernanceEligibleHolding[]
+): Promise<MobileGovernanceEligibleDao[]> {
+  const normalizedHoldings = holdings
+    .map((holding) => ({
+      ...holding,
+      mint: holding.mint.trim()
+    }))
+    .filter((holding) => !!holding.mint && Number.isFinite(holding.amountUi) && holding.amountUi > 0);
+
+  if (normalizedHoldings.length === 0) {
+    return [];
+  }
+
+  const holdingByMint = new Map<string, MobileGovernanceEligibleHolding>();
+  for (const holding of normalizedHoldings) {
+    if (!holdingByMint.has(holding.mint)) {
+      holdingByMint.set(holding.mint, holding);
+    }
+  }
+
+  const realms = await fetchGovernanceRealmDirectory();
+  return realms
+    .map((realm) => {
+      const communityHolding = holdingByMint.get(realm.communityMint) ?? null;
+      const councilHolding = realm.councilMint ? holdingByMint.get(realm.councilMint) ?? null : null;
+      if (!communityHolding && !councilHolding) {
+        return null;
+      }
+
+      return {
+        daoId: realm.daoId,
+        realmName: realm.name,
+        communityMint: realm.communityMint,
+        councilMint: realm.councilMint,
+        communityHolding,
+        councilHolding
+      } satisfies MobileGovernanceEligibleDao;
+    })
+    .filter((entry): entry is MobileGovernanceEligibleDao => !!entry)
+    .sort((left, right) => {
+      const leftScore = (left.communityHolding ? 1 : 0) + (left.councilHolding ? 1 : 0);
+      const rightScore = (right.communityHolding ? 1 : 0) + (right.councilHolding ? 1 : 0);
+      if (leftScore !== rightScore) {
+        return rightScore - leftScore;
+      }
+
+      const leftAmount = (left.communityHolding?.amountUi ?? 0) + (left.councilHolding?.amountUi ?? 0);
+      const rightAmount = (right.communityHolding?.amountUi ?? 0) + (right.councilHolding?.amountUi ?? 0);
+      if (leftAmount !== rightAmount) {
+        return rightAmount - leftAmount;
+      }
+
+      return left.realmName.localeCompare(right.realmName);
+    });
 }
 
 function normalizeGovernanceMembershipRecords(data: Record<string, unknown>, namespace: string): GovernanceMembershipRecord[] {
@@ -1107,59 +1235,6 @@ function buildGovernanceProposalVoteSources(
     });
 }
 
-function buildStaticGovernanceProposal(
-  daoId: string,
-  override: StaticGovernanceRealmOverride,
-  proposal: GovernanceProposalRecord,
-  ownerAddress: string,
-  memberships: GovernanceMembershipRecord[]
-): MobileGovernanceProposal {
-  const voteSources = buildGovernanceProposalVoteSources(
-    proposal.governingTokenMint,
-    ownerAddress,
-    memberships,
-    new Set<string>()
-  );
-  const membership = resolveGovernanceProposalMembership(proposal.governingTokenMint, ownerAddress, memberships);
-  const votingEndsAt =
-    proposal.votingAt !== null && proposal.maxVotingTime !== null ? proposal.votingAt + proposal.maxVotingTime : null;
-  const isDelegate = membership !== null && membership.governingTokenOwner !== ownerAddress;
-
-  return {
-    daoId,
-    realmName: override.realmName,
-    governanceProgramId: override.owner,
-    governanceId: proposal.governance,
-    proposalId: proposal.pubkey,
-    proposalName: proposal.name,
-    descriptionLink: proposal.descriptionLink,
-    state: formatProposalStateLabel(proposal.state),
-    stateCode: proposal.state,
-    draftAt: proposal.draftAt,
-    votingAt: proposal.votingAt,
-    votingEndsAt,
-    governingTokenMint: proposal.governingTokenMint,
-    proposalOwnerRecordId: proposal.tokenOwnerRecord,
-    tokenOwnerRecordId: membership?.pubkey ?? null,
-    canVote: proposal.state === loadSplGovernanceModule().ProposalState.Voting && voteSources.some((source) => !source.hasVoted),
-    hasVoted: voteSources.some((source) => source.hasVoted),
-    hasDenyOption: proposal.hasDenyOption,
-    isDelegate,
-    votingPowerType: getGovernanceProposalVotingPowerType(
-      proposal.governingTokenMint,
-      override.councilMint,
-      membership,
-      ownerAddress
-    ),
-    voteSources,
-    choices: proposal.options,
-    yesVotes: proposal.yesVotes,
-    noVotes: proposal.noVotes,
-    abstainVotes: proposal.abstainVotes,
-    denyVotes: proposal.denyVotes
-  };
-}
-
 async function fetchGovernanceForDaoViaGraphql(
   ownerAddress: string,
   daoId: string,
@@ -1167,7 +1242,6 @@ async function fetchGovernanceForDaoViaGraphql(
 ) {
   const governanceOwner = findGovernanceOwnerByDao(daoId);
   const namespace = governanceOwner.name;
-  const override = STATIC_GOVERNANCE_REALM_OVERRIDES[daoId];
 
   const [realmData, directMembershipData, delegateMembershipData, governanceData] = await Promise.all([
     fetchGovernanceGraphql<Record<string, unknown>>(buildGovernanceRealmQuery(namespace, daoId)),
@@ -1178,15 +1252,7 @@ async function fetchGovernanceForDaoViaGraphql(
     fetchGovernanceGraphql<Record<string, unknown>>(buildGovernanceAccountsQuery(namespace, daoId))
   ]);
 
-  const realm = normalizeGovernanceRealmInfo(realmData, namespace, daoId) ??
-    (override
-      ? {
-          daoId,
-          name: override.realmName,
-          communityMint: override.communityMint,
-          councilMint: override.councilMint
-        }
-      : null);
+  const realm = normalizeGovernanceRealmInfo(realmData, namespace, daoId);
   const membershipRecords = Array.from(
     new Map(
       [
@@ -1202,7 +1268,13 @@ async function fetchGovernanceForDaoViaGraphql(
       ? governanceAccounts
       : override.governanceIds.map((pubkey) => ({ pubkey, realm: daoId, baseVotingTime: null } satisfies GovernanceProgramAccount));
   if (!realm || effectiveGovernanceAccounts.length === 0) {
-    return { source: 'shyft' as const, member: membershipRecords.length > 0, proposals: [] as MobileGovernanceProposal[] };
+    return {
+      daoId,
+      realmName: realm?.name ?? daoId,
+      source: 'shyft' as const,
+      member: membershipRecords.length > 0,
+      proposals: [] as MobileGovernanceProposal[]
+    };
   }
 
   const delegatorAddresses = membershipRecords
@@ -1285,6 +1357,8 @@ async function fetchGovernanceForDaoViaGraphql(
     .sort((left, right) => (right.votingAt ?? right.draftAt ?? 0) - (left.votingAt ?? left.draftAt ?? 0));
 
   return {
+    daoId,
+    realmName: realm.name,
     source: 'shyft' as const,
     member: membershipRecords.length > 0,
     proposals
@@ -1312,7 +1386,13 @@ async function fetchGovernanceForDaoViaRpc(ownerAddress: string, daoId: string) 
     ...delegatedTokenOwnerRecords.filter((entry) => entry.account.realm.toBase58() === daoId)
   ].filter((entry, index, allEntries) => allEntries.findIndex((candidate) => candidate.pubkey.equals(entry.pubkey)) === index);
   if (realmTokenOwnerRecords.length === 0 || governanceAccounts.length === 0) {
-    return { source: 'rpc' as const, member: realmTokenOwnerRecords.length > 0, proposals: [] as MobileGovernanceProposal[] };
+    return {
+      daoId,
+      realmName: realmAccount.account.name,
+      source: 'rpc' as const,
+      member: realmTokenOwnerRecords.length > 0,
+      proposals: [] as MobileGovernanceProposal[]
+    };
   }
 
   const proposalBatches = await getAllProposals(connection, programId, realmPk).catch(() => []);
@@ -1343,6 +1423,8 @@ async function fetchGovernanceForDaoViaRpc(ownerAddress: string, daoId: string) 
   }
 
   return {
+    daoId,
+    realmName: realmAccount.account.name,
     source: 'rpc' as const,
     member: realmTokenOwnerRecords.length > 0,
     proposals: proposals
@@ -1413,8 +1495,7 @@ export async function fetchMobileGovernanceForWallet(ownerAddress: string, track
   const discoveredDaoIds = Array.from(
     new Set([
       ...(await discoverGovernanceDaosForWallet(ownerAddress)),
-      ...supplementalMembershipsByRealm.keys(),
-      ...Object.keys(STATIC_GOVERNANCE_REALM_OVERRIDES)
+      ...supplementalMembershipsByRealm.keys()
     ])
   );
   const uniqueDaoIds = Array.from(new Set([...discoveredDaoIds, ...uniqueTrackedDaoIds]));
@@ -1423,6 +1504,7 @@ export async function fetchMobileGovernanceForWallet(ownerAddress: string, track
     return {
       trackedDaos: uniqueTrackedDaoIds,
       discoveredDaos: [],
+      daos: [],
       memberDaos: 0,
       proposals: [],
       source: 'none',
@@ -1441,6 +1523,8 @@ export async function fetchMobileGovernanceForWallet(ownerAddress: string, track
         );
       } catch {
         return {
+          daoId,
+          realmName: daoId,
           source: 'none' as const,
           member: false,
           proposals: [] as MobileGovernanceProposal[]
@@ -1450,34 +1534,21 @@ export async function fetchMobileGovernanceForWallet(ownerAddress: string, track
   );
 
   const proposals = limitGovernanceProposalsForDisplay(results.flatMap((entry) => entry.proposals));
-  for (const [daoId, override] of Object.entries(STATIC_GOVERNANCE_REALM_OVERRIDES)) {
-    const latestStaticProposal = override.proposals[0];
-    if (!latestStaticProposal) {
-      continue;
-    }
-    if (proposals.some((proposal) => proposal.proposalId === latestStaticProposal.pubkey)) {
-      continue;
-    }
-    const matchingResult = results.find((entry) => entry.proposals.some((proposal) => proposal.daoId === daoId));
-    const knownMemberships = matchingResult
-      ? matchingResult.proposals
-          .flatMap((proposal) => proposal.voteSources ?? [])
-          .map((source) => ({
-            pubkey: source.tokenOwnerRecordId,
-            governingTokenMint: latestStaticProposal.governingTokenMint,
-            governingTokenOwner: source.governingTokenOwner,
-            governanceDelegate: source.isDelegate ? ownerAddress : null,
-            governingTokenDepositAmount: '1'
-          } satisfies GovernanceMembershipRecord))
-      : [];
-    proposals.unshift(buildStaticGovernanceProposal(daoId, override, latestStaticProposal, ownerAddress, knownMemberships));
-  }
   const memberDaos = results.filter((entry) => entry.member).length;
   const source = results.some((entry) => entry.source === 'shyft') ? 'shyft' : 'none';
+  const daos: MobileGovernanceResponse['daos'] = results
+    .filter((entry) => entry.member)
+    .map((entry) => ({
+      daoId: entry.proposals[0]?.daoId ?? entry.daoId,
+      realmName: entry.realmName ?? entry.proposals[0]?.realmName ?? entry.daoId
+    }))
+    .filter((entry, index, all) => all.findIndex((candidate) => candidate.daoId === entry.daoId) === index)
+    .sort((left, right) => left.realmName.localeCompare(right.realmName));
 
   return {
     trackedDaos: uniqueTrackedDaoIds,
     discoveredDaos: discoveredDaoIds,
+    daos,
     memberDaos,
     proposals,
     source,

@@ -1,6 +1,7 @@
 import type {
   ApprovalKind,
   ApprovalState,
+  DeviceLinkSessionRecord,
   OriginPermission,
   PageOrigin,
   ProviderRequest,
@@ -218,6 +219,25 @@ export type GovernanceDaoSummary = {
   delegateCount: number;
 };
 
+export type GovernanceEligibleHolding = {
+  mint: string;
+  amount: string;
+  rawAmount: string;
+  decimals: number;
+  symbol?: string;
+  name?: string;
+  logoUri?: string;
+};
+
+export type GovernanceEligibleDao = {
+  daoId: string;
+  realmName: string;
+  communityMint: string;
+  councilMint: string | null;
+  communityHolding: GovernanceEligibleHolding | null;
+  councilHolding: GovernanceEligibleHolding | null;
+};
+
 export type WalletGovernanceResponse = {
   trackedDaos: string[];
   discoveredDaos: string[];
@@ -296,12 +316,15 @@ export type TokenActionResponse = {
 export type WalletExportResponse = {
   walletId: string;
   walletName: string;
+  chain: WalletState['selectedChain'];
   publicKey: string;
   derivationPath: string;
   kind: 'mnemonic' | 'private-key';
   privateKeyBase58: string;
   mnemonic?: string;
 };
+
+export type WalletDeviceLinkSessionResponse = DeviceLinkSessionRecord;
 
 export type WalletSwapQuoteResponse = {
   inputMint: string;

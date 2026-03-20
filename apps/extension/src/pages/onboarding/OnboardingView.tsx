@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { PublicKey } from '@solana/web3.js';
+import { parseDeviceLinkPayloadText } from '@grape/core';
 
 import { Button, Card, Input, MnemonicGrid, PageShell, TextArea } from '@grape/ui';
 import { importEthereumPrivateKey, validateEthereumAddress, validateEthereumPrivateKey } from '@grape/ethereum';
@@ -30,7 +31,7 @@ type OnboardingViewProps = {
 };
 
 type SetupTrack = 'easy' | 'advanced';
-type EasySetupMethod = 'passkey' | 'approval' | 'import';
+type EasySetupMethod = 'passkey' | 'approval' | 'restore' | 'import';
 type EasyRecoveryMode = 'passkey-only' | 'passkey-phrase' | 'trusted-recovery';
 type SetupMode = 'create' | 'import';
 type ImportMethod = 'mnemonic' | 'private-key' | 'watch-only' | 'ledger';
@@ -146,6 +147,10 @@ export function OnboardingView(props: OnboardingViewProps) {
   const [showAdvancedCustody, setShowAdvancedCustody] = useState(false);
   const [password, setPassword] = useState('');
   const [passwordConfirm, setPasswordConfirm] = useState('');
+  const [restorePayload, setRestorePayload] = useState('');
+  const [restorePairingCode, setRestorePairingCode] = useState('');
+  const [restoreScannerVisible, setRestoreScannerVisible] = useState(false);
+  const [restoreScannerLoading, setRestoreScannerLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [biometricSupported, setBiometricSupported] = useState(false);
@@ -153,6 +158,7 @@ export function OnboardingView(props: OnboardingViewProps) {
   const [hasPasswordProtectedWallet, setHasPasswordProtectedWallet] = useState(false);
   const [easyRecoveryMode, setEasyRecoveryMode] = useState<EasyRecoveryMode>('passkey-phrase');
   const [confirmPasskeyOnlyAccess, setConfirmPasskeyOnlyAccess] = useState(false);
+  const restoreScannerVideoRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
     setGeneratedMnemonic(generateWalletMnemonic(mnemonicLength));
@@ -186,6 +192,91 @@ export function OnboardingView(props: OnboardingViewProps) {
     })();
   }, []);
 
+  useEffect(() => {
+    if (!restoreScannerVisible) {
+      return;
+    }
+
+    let active = true;
+    let frameId = 0;
+    let stream: MediaStream | null = null;
+
+    const startScanner = async () => {
+      const video = restoreScannerVideoRef.current;
+      if (!video) {
+        return;
+      }
+
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error('Camera scanning is not available in this browser.');
+      }
+
+      const detectorCtor = (window as Window & { BarcodeDetector?: new (options?: { formats?: string[] }) => { detect: (source: CanvasImageSource) => Promise<Array<{ rawValue?: string }>> } }).BarcodeDetector;
+      if (!detectorCtor) {
+        throw new Error('QR scanning is not available in this browser. Paste the restore payload instead.');
+      }
+
+      setRestoreScannerLoading(true);
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: 'environment'
+        },
+        audio: false
+      });
+
+      video.srcObject = stream;
+      video.setAttribute('playsinline', 'true');
+      await video.play();
+      const detector = new detectorCtor({ formats: ['qr_code'] });
+
+      const scanFrame = async () => {
+        if (!active) {
+          return;
+        }
+        if (video.readyState >= 2) {
+          const codes = await detector.detect(video).catch(() => []);
+          const match = codes.find((entry) => typeof entry.rawValue === 'string' && entry.rawValue.trim().length > 0);
+          if (match?.rawValue) {
+            setRestorePayload(match.rawValue.trim());
+            setRestoreScannerVisible(false);
+            setError(null);
+            return;
+          }
+        }
+        frameId = window.requestAnimationFrame(() => {
+          void scanFrame();
+        });
+      };
+
+      setRestoreScannerLoading(false);
+      void scanFrame();
+    };
+
+    void startScanner().catch((nextError) => {
+      if (active) {
+        setRestoreScannerLoading(false);
+        setRestoreScannerVisible(false);
+        setError(nextError instanceof Error ? nextError.message : 'Unable to start QR scanning.');
+      }
+    });
+
+    return () => {
+      active = false;
+      setRestoreScannerLoading(false);
+      if (frameId) {
+        window.cancelAnimationFrame(frameId);
+      }
+      if (stream) {
+        stream.getTracks().forEach((track) => track.stop());
+      }
+      const video = restoreScannerVideoRef.current;
+      if (video) {
+        video.pause();
+        video.srcObject = null;
+      }
+    };
+  }, [restoreScannerVisible]);
+
   const mnemonic = useMemo(
     () => normalizeMnemonic(mode === 'create' || importMethod === 'mnemonic' ? (mode === 'create' ? generatedMnemonic : importMnemonic) : ''),
     [generatedMnemonic, importMnemonic, importMethod, mode]
@@ -193,12 +284,25 @@ export function OnboardingView(props: OnboardingViewProps) {
   const isEasyTrack = setupTrack === 'easy';
   const isEasyPasskeyPath = isEasyTrack && easySetupMethod === 'passkey';
   const isEasyApprovalPath = isEasyTrack && easySetupMethod === 'approval';
+  const isEasyRestorePath = isEasyTrack && easySetupMethod === 'restore';
   const isComingSoonEasyPath = isEasyApprovalPath;
   const needsExistingWalletPasswordForPasskey = isEasyPasskeyPath && hasPasswordProtectedWallet;
+  const parsedRestorePayload = useMemo(() => {
+    if (!restorePayload.trim()) {
+      return null;
+    }
+    try {
+      return parseDeviceLinkPayloadText(restorePayload);
+    } catch {
+      return null;
+    }
+  }, [restorePayload]);
 
   const isRecoveryStepValid =
     isEasyPasskeyPath
       ? biometricSupported && easyRecoveryMode !== 'trusted-recovery'
+      : isEasyRestorePath
+        ? !!parsedRestorePayload && restorePairingCode.trim().length >= 4
       : mode === 'create'
       ? confirmBackup && validateWalletMnemonic(mnemonic)
       : importMethod === 'mnemonic'
@@ -209,7 +313,9 @@ export function OnboardingView(props: OnboardingViewProps) {
             ? validateWatchOnlyAddress(watchOnlyChain, watchOnlyPublicKey)
             : ledgerSelectedAccounts.length > 0;
 
-  const requiresPassword = !isEasyPasskeyPath && (mode === 'create' || importMethod === 'mnemonic' || importMethod === 'private-key' || importMethod === 'ledger');
+  const requiresPassword =
+    isEasyRestorePath ||
+    (!isEasyPasskeyPath && (mode === 'create' || importMethod === 'mnemonic' || importMethod === 'private-key' || importMethod === 'ledger'));
   const isPasswordStepValid = !requiresPassword || (!submitting && password.length >= 8 && password === passwordConfirm);
   const isFinalStepValid = isEasyPasskeyPath
     ? biometricSupported &&
@@ -287,6 +393,10 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
         }
       }
 
+      if (isEasyRestorePath && !parsedRestorePayload) {
+        throw new Error('Paste a valid restore payload from your existing Grape device.');
+      }
+
       const setupPassword = isEasyPasskeyPath ? generateSetupPassword() : password;
       let pendingBiometricConfig: Awaited<ReturnType<typeof createBiometricUnlock>> | null = null;
 
@@ -295,7 +405,14 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
         pendingBiometricConfig = await createBiometricUnlock('pending-easy-setup', passkeyPassword);
       }
 
-      if (mode === 'create') {
+      if (isEasyRestorePath) {
+        await sendRuntimeMessage<WalletStateResponse>({
+          type: 'wallet_import_device_link',
+          payload: restorePayload.trim(),
+          pairingCode: restorePairingCode.trim(),
+          password: setupPassword
+        });
+      } else if (mode === 'create') {
         const account = deriveSolanaAccount0(mnemonic);
         await sendRuntimeMessage<WalletStateResponse>({
           type: 'wallet_create',
@@ -432,6 +549,22 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
               </button>
               <button
                 type="button"
+                className={`choice-card ${isEasyRestorePath ? 'active' : ''}`.trim()}
+                onClick={() => {
+                  setSetupTrack('easy');
+                  setEasySetupMethod('restore');
+                  setMode('import');
+                  setImportMethod('mnemonic');
+                  setConfirmBackup(false);
+                  setConfirmPasskeyOnlyAccess(false);
+                  setError(null);
+                }}
+              >
+                <strong>Restore from Grape</strong>
+                <span className="muted">Move your wallet from another Grape device with a short-lived QR handoff and pairing code.</span>
+              </button>
+              <button
+                type="button"
                 className={`choice-card ${isEasyTrack && easySetupMethod === 'import' ? 'active' : ''}`.trim()}
                 onClick={() => {
                   setSetupTrack('easy');
@@ -512,6 +645,8 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
               ? 'Create with passkey'
               : isEasyApprovalPath
                 ? 'Create from existing wallet approval'
+                : isEasyRestorePath
+                  ? 'Restore from Grape'
                 : mode === 'create'
                   ? 'Back up recovery phrase'
                   : isEasyTrack
@@ -587,6 +722,58 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
                   <span className="muted">Passkey + trusted-device/account recovery</span>
                 </div>
               </div>
+            </div>
+          ) : isEasyRestorePath ? (
+            <div className="stack">
+              <p className="muted">
+                On your existing device, open Settings, choose <strong>Link new device</strong>, then paste the restore payload here and enter the pairing code shown next to the QR.
+              </p>
+              <label className="stack">
+                <div className="space-between" style={{ alignItems: 'center', gap: '12px' }}>
+                  <span className="muted">Restore payload</span>
+                  <Button
+                    tone="secondary"
+                    onClick={() => {
+                      setRestoreScannerVisible((currentValue) => !currentValue);
+                      setError(null);
+                    }}
+                  >
+                    {restoreScannerVisible ? 'Close scanner' : 'Scan QR'}
+                  </Button>
+                </div>
+                <TextArea
+                  value={restorePayload}
+                  onChange={(event) => setRestorePayload(event.target.value)}
+                  placeholder="Paste the restore payload from your other Grape device"
+                />
+              </label>
+              {restoreScannerVisible ? (
+                <div className="device-link-scanner">
+                  <video ref={restoreScannerVideoRef} className="device-link-scanner-video" muted />
+                  <div className="device-link-scanner-copy">
+                    <span>{restoreScannerLoading ? 'Starting camera…' : 'Point the camera at the Grape restore QR.'}</span>
+                  </div>
+                </div>
+              ) : null}
+              <label className="stack">
+                <span className="muted">Pairing code</span>
+                <Input
+                  value={restorePairingCode}
+                  onChange={(event) => setRestorePairingCode(event.target.value.toUpperCase())}
+                  placeholder="ABCD-EFGH"
+                />
+              </label>
+              {parsedRestorePayload ? (
+                <div className="choice-card active">
+                  <strong>{parsedRestorePayload.walletName}</strong>
+                  <span className="muted">
+                    {getChainLabel(parsedRestorePayload.chain as ImportChain)} • {formatAddress(parsedRestorePayload.publicKey)}
+                  </span>
+                  <span className="muted">Expires {new Date(parsedRestorePayload.expiresAt).toLocaleString()}</span>
+                </div>
+              ) : restorePayload.trim() ? (
+                <p className="warning-box">The restore payload could not be parsed yet. Copy it again from the existing Grape device.</p>
+              ) : null}
             </div>
           ) : mode === 'create' ? (
             <div className="stack">
@@ -890,7 +1077,7 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
     }
 
     return (
-      <Card title={isEasyPasskeyPath ? 'Finish passkey setup' : requiresPassword ? 'Set password' : 'Watch-only ready'}>
+      <Card title={isEasyPasskeyPath ? 'Finish passkey setup' : isEasyRestorePath ? 'Protect restored wallet' : requiresPassword ? 'Set password' : 'Watch-only ready'}>
         <div className="stack">
           {isEasyPasskeyPath ? (
             <>
@@ -942,7 +1129,9 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
               <p className="muted">
                 {isAppendFlow
                   ? 'Use your existing wallet password so this wallet can be unlocked alongside the others.'
-                  : 'Use at least 8 characters. You will use this password to unlock and approve signing.'}
+                  : isEasyRestorePath
+                    ? 'Use at least 8 characters. This password protects the restored wallet on this device.'
+                    : 'Use at least 8 characters. You will use this password to unlock and approve signing.'}
               </p>
             </>
           ) : (
@@ -1001,6 +1190,10 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
                       : easyRecoveryMode === 'trusted-recovery'
                         ? 'Trusted-device or account recovery is not available yet.'
                         : 'Choose a supported recovery model to continue.'
+                    : isEasyRestorePath
+                      ? !parsedRestorePayload
+                        ? 'Paste a valid restore payload from your existing Grape device.'
+                        : 'Enter the pairing code from your existing Grape device.'
                     : mode === 'create'
                     ? 'Confirm that you backed up the recovery phrase.'
                     : importMethod === 'mnemonic'
@@ -1036,6 +1229,8 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
             ? 'Setting up...'
             : isEasyPasskeyPath
               ? 'Create with passkey'
+              : isEasyRestorePath
+                ? 'Restore wallet'
               : mode === 'create'
               ? 'Create wallet'
               : importMethod === 'ledger' && ledgerSelectedAccounts.length > 1
@@ -1059,6 +1254,8 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
                   ? 'Review passkey recovery options'
                   : isEasyApprovalPath
                     ? 'Review wallet-approved recovery options'
+                    : isEasyRestorePath
+                      ? 'Enter restore handoff'
                     : mode === 'create'
                       ? 'Save your recovery phrase'
                       : importMethod === 'mnemonic'

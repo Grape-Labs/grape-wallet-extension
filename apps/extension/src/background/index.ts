@@ -1,9 +1,16 @@
 import {
   createEmptyWalletState,
   createInitialSessionState,
+  createDeviceLinkPayloadText,
   createVaultRecord,
   createPendingApproval,
+  decryptText,
+  encryptText,
   getSelectedWallet,
+  parseDeviceLinkPayloadText,
+  type DeviceLinkHandoffPayload,
+  type DeviceLinkPreferencesSnapshot,
+  type DeviceLinkSessionRecord,
   type GrapeChain,
   grantPermissions,
   hasPermission,
@@ -37,6 +44,7 @@ import {
   exportSolanaSoftwareWalletSecret,
   getAssociatedTokenAddress,
   deriveSolanaAccount0,
+  importSolanaPrivateKey,
   resolveSolanaVaultSecret,
   parseDecimalAmount,
   TOKEN_AUTHORITY_TYPES,
@@ -84,6 +92,7 @@ import {
   createSuiClient,
   deriveSuiAccount0,
   getSuiHoldings,
+  importSuiPrivateKey,
   resolveSuiVaultSecret,
   sendSui,
   sendSuiCoin,
@@ -95,6 +104,7 @@ import {
   deriveMonadAccount0,
   getMonadHoldings,
   getMonadTokenPreview,
+  importMonadPrivateKey,
   resolveMonadVaultSecret,
   sendMonad,
   sendMonadToken,
@@ -107,6 +117,7 @@ import {
   deriveEthereumAccount0,
   getEthereumHoldings,
   getEthereumTokenPreview,
+  importEthereumPrivateKey,
   resolveEthereumVaultSecret,
   sendEthereum,
   sendEthereumToken,
@@ -126,6 +137,7 @@ import type {
   TokenHolding,
   WalletAssetsResponse,
   WalletBridgeQuoteResponse,
+  GovernanceEligibleDao,
   WalletGovernanceResponse,
   WalletGovernanceVoteResponse,
   WalletReputationResponse,
@@ -152,6 +164,11 @@ import {
 } from '../shared/shyft';
 
 const approvalsStorage = new ChromeStorageArea<Record<string, ApprovalRecord>>(chrome.storage.local, STORAGE_KEYS.approvals, {});
+const deviceLinkStorage = new ChromeStorageArea<Record<string, DeviceLinkSessionRecord>>(
+  chrome.storage.local,
+  STORAGE_KEYS.deviceLinkSessions,
+  {}
+);
 const assetCacheStorage = new ChromeStorageArea<Record<string, { cachedAt: number; data: WalletAssetsResponse }>>(
   chrome.storage.session,
   'grape:asset-cache',
@@ -184,6 +201,7 @@ const INCIDENT_BATCH_SIZE = 6;
 const ASSET_CACHE_TTL_MS = 45_000;
 const REPUTATION_CACHE_TTL_MS = 120_000;
 const STAKE_RETRY_ATTEMPTS = 3;
+const DEVICE_LINK_TTL_MS = 10 * 60 * 1000;
 
 function tryParseSolanaPublicKey(value: string): PublicKey | null {
   try {
@@ -335,6 +353,15 @@ const GOVERNANCE_OWNERS: GovernanceOwner[] = [
   { owner: 'jdaoDN37BrVRvxuXSeyR7xE5Z9CAoQApexGrQJbnj6V', name: 'JungleDeFi_DAO', dao: '5g94Ver64ruf9CGBL3k2oQGdKCUt4QKjN7NQojSrHAwH' },
   { owner: 'jtogvBNH3WBSWDYD5FJfQP2ZxNTuf82zL8GkEhPeaJx', name: 'Jito', dao: 'jjCAwuuNpJCNMLAanpwgJZ6cdXzLPXe2GfD6TaDQBXt' }
 ];
+
+const GOVERNANCE_REALM_DIRECTORY_CACHE_TTL_MS = 15 * 60 * 1000;
+const GOVERNANCE_REALM_DIRECTORY_PAGE_SIZE = 1000;
+let governanceRealmDirectoryCache:
+  | {
+      expiresAt: number;
+      realms: GovernanceRealmInfo[];
+    }
+  | null = null;
 
 type UnlockedSecretCache = Record<string, {
   secret: VaultSecret;
@@ -1180,6 +1207,7 @@ class WalletController {
       permissionsStorage.set({ origins: {} }),
       sessionStorage.set(createInitialSessionState()),
       approvalsStorage.set({}),
+      deviceLinkStorage.set({}),
       assetCacheStorage.set({})
     ]);
 
@@ -2013,6 +2041,92 @@ class WalletController {
     return this.refreshGovernanceCache(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey);
   }
 
+  async scanGovernanceEligibility(): Promise<GovernanceEligibleDao[]> {
+    const { selectedWallet } = await this.ensureReadyWallet();
+    if (selectedWallet.chain !== 'solana') {
+      return [];
+    }
+
+    const assets = await this.getAssets({ staleWhileRevalidate: true });
+    const holdingByMint = new Map<string, {
+      mint: string;
+      amount: string;
+      rawAmount: string;
+      decimals: number;
+      symbol?: string;
+      name?: string;
+      logoUri?: string;
+    }>();
+
+    for (const token of assets.tokens) {
+      const mint = token.mint?.trim();
+      if (!mint) {
+        continue;
+      }
+
+      let hasPositiveBalance = false;
+      try {
+        hasPositiveBalance = BigInt(token.rawAmount ?? '0') > 0n;
+      } catch {
+        const parsed = Number(token.amount ?? 0);
+        hasPositiveBalance = Number.isFinite(parsed) && parsed > 0;
+      }
+
+      if (!hasPositiveBalance || holdingByMint.has(mint)) {
+        continue;
+      }
+
+      holdingByMint.set(mint, {
+        mint,
+        amount: token.amount,
+        rawAmount: token.rawAmount,
+        decimals: token.decimals,
+        symbol: token.symbol,
+        name: token.name,
+        logoUri: token.logoUri
+      });
+    }
+
+    if (holdingByMint.size === 0) {
+      return [];
+    }
+
+    const realms = await fetchGovernanceRealmDirectory();
+    return realms
+      .map((realm) => {
+        const communityHolding = holdingByMint.get(realm.communityMint) ?? null;
+        const councilHolding = realm.councilMint ? holdingByMint.get(realm.councilMint) ?? null : null;
+        if (!communityHolding && !councilHolding) {
+          return null;
+        }
+
+        return {
+          daoId: realm.daoId,
+          realmName: realm.name,
+          communityMint: realm.communityMint,
+          councilMint: realm.councilMint,
+          communityHolding,
+          councilHolding
+        } satisfies GovernanceEligibleDao;
+      })
+      .filter((entry): entry is GovernanceEligibleDao => !!entry)
+      .sort((left, right) => {
+        const leftScore = (left.communityHolding ? 1 : 0) + (left.councilHolding ? 1 : 0);
+        const rightScore = (right.communityHolding ? 1 : 0) + (right.councilHolding ? 1 : 0);
+        if (leftScore !== rightScore) {
+          return rightScore - leftScore;
+        }
+
+        const leftAmount = Number(left.communityHolding?.amount ?? 0) + Number(left.councilHolding?.amount ?? 0);
+        const rightAmount = Number(right.communityHolding?.amount ?? 0) + Number(right.councilHolding?.amount ?? 0);
+        if (Number.isFinite(leftAmount) && Number.isFinite(rightAmount) && leftAmount !== rightAmount) {
+          return rightAmount - leftAmount;
+        }
+
+        return left.realmName.localeCompare(right.realmName);
+      });
+  }
+
   async castGovernanceVote(input: {
     daoId: string;
     governanceId: string;
@@ -2401,23 +2515,254 @@ class WalletController {
     return this.getStateResponse();
   }
 
-  async exportWalletSecret(password: string) {
+  private getDeviceLinkPreferencesSnapshot(walletState: Awaited<ReturnType<WalletController['getWalletState']>>): DeviceLinkPreferencesSnapshot {
+    return {
+      trackedReputationSpaceIds: [...walletState.trackedReputationSpaceIds],
+      trackedVerificationSpaceIds: [...walletState.trackedVerificationSpaceIds],
+      trackedGovernanceDaoIds: [...walletState.trackedGovernanceDaoIds],
+      selectedChain: walletState.selectedChain,
+      selectedNetwork: walletState.selectedNetwork,
+      selectedTheme: walletState.selectedTheme,
+      privacyMode: walletState.privacyMode
+    };
+  }
+
+  private applyDeviceLinkPreferences(
+    walletState: Awaited<ReturnType<WalletController['getWalletState']>>,
+    preferences: DeviceLinkPreferencesSnapshot
+  ) {
+    return {
+      ...walletState,
+      trackedReputationSpaceIds: Array.from(new Set([...walletState.trackedReputationSpaceIds, ...preferences.trackedReputationSpaceIds])),
+      trackedVerificationSpaceIds: Array.from(new Set([...walletState.trackedVerificationSpaceIds, ...preferences.trackedVerificationSpaceIds])),
+      trackedGovernanceDaoIds: Array.from(new Set([...walletState.trackedGovernanceDaoIds, ...preferences.trackedGovernanceDaoIds])),
+      selectedChain: preferences.selectedChain,
+      selectedNetwork: preferences.selectedNetwork,
+      selectedTheme: preferences.selectedTheme,
+      privacyMode: preferences.privacyMode
+    };
+  }
+
+  private normalizePairingCode(input: string) {
+    return input.trim().toUpperCase().replace(/[^A-Z2-7]/g, '');
+  }
+
+  private createPairingCode() {
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    const bytes = crypto.getRandomValues(new Uint8Array(8));
+    const raw = Array.from(bytes, (value) => alphabet[value % alphabet.length]).join('');
+    return `${raw.slice(0, 4)}-${raw.slice(4, 8)}`;
+  }
+
+  private resolvePublicKeyFromSecret(secret: VaultSecret, chain: GrapeChain): string {
+    if (secret.kind === 'mnemonic') {
+      switch (chain) {
+        case 'solana':
+          return deriveSolanaAccount0(secret.mnemonic).publicKey;
+        case 'sui':
+          return deriveSuiAccount0(secret.mnemonic).address;
+        case 'monad':
+          return deriveMonadAccount0(secret.mnemonic).address;
+        case 'ethereum':
+          return deriveEthereumAccount0(secret.mnemonic).address;
+      }
+    }
+
+    if (secret.kind === 'private-key') {
+      switch (chain) {
+        case 'solana':
+          return importSolanaPrivateKey(secret.secretKey).publicKey;
+        case 'sui':
+          return importSuiPrivateKey(secret.secretKey).address;
+        case 'monad':
+          return importMonadPrivateKey(secret.secretKey).address;
+        case 'ethereum':
+          return importEthereumPrivateKey(secret.secretKey).address;
+      }
+    }
+
+    throw new RpcError('EXPORT_UNAVAILABLE', 'This wallet secret cannot be linked to another device.');
+  }
+
+  private async getLinkableWalletSecret(password?: string) {
     const { walletState, selectedWallet } = await this.ensureReadyWallet();
     const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
     if (!activeAccount) {
       throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
     }
-
-    if (selectedWallet.signer.kind !== 'software') {
-      throw new RpcError('EXPORT_UNAVAILABLE', 'Only software wallets can be exported from Grape.');
-    }
-    if (!selectedWallet.vault) {
-      throw new RpcError('EXPORT_UNAVAILABLE', 'This wallet does not have an exportable local vault.');
+    if (selectedWallet.signer.kind !== 'software' || !selectedWallet.vault) {
+      throw new RpcError('EXPORT_UNAVAILABLE', 'Only software wallets can be linked to another device.');
     }
 
-    const secret = await unlockVaultRecord(selectedWallet.vault, password).catch(() => {
-      throw new RpcError('INVALID_PASSWORD', 'Password is incorrect.');
+    const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, password);
+    const resolvedPublicKey = this.resolvePublicKeyFromSecret(secret, selectedWallet.chain);
+    if (resolvedPublicKey !== activeAccount.publicKey) {
+      throw new RpcError('EXPORT_FAILED', 'The selected wallet secret does not match the active account.');
+    }
+
+    return {
+      walletState,
+      selectedWallet,
+      activeAccount,
+      secret
+    };
+  }
+
+  async createDeviceLinkSession(password?: string) {
+    const { walletState, selectedWallet, activeAccount, secret } = await this.getLinkableWalletSecret(password);
+    const sessionId = crypto.randomUUID();
+    const createdAt = Date.now();
+    const expiresAt = createdAt + DEVICE_LINK_TTL_MS;
+    const pairingCode = this.createPairingCode();
+    const handoffPayload: DeviceLinkHandoffPayload = {
+      version: 1,
+      type: 'grape-device-link',
+      sessionId,
+      createdAt,
+      expiresAt,
+      wallet: {
+        walletName: selectedWallet.name,
+        chain: selectedWallet.chain,
+        publicKey: activeAccount.publicKey,
+        derivationPath: activeAccount.derivationPath,
+        source: secret.kind === 'mnemonic'
+          ? selectedWallet.source === 'created'
+            ? 'created'
+            : 'imported-mnemonic'
+          : 'imported-private-key',
+        secret
+      },
+      preferences: this.getDeviceLinkPreferencesSnapshot(walletState)
+    };
+    const handoff = await encryptText(JSON.stringify(handoffPayload), this.normalizePairingCode(pairingCode));
+    const envelope = {
+      version: 1 as const,
+      type: 'grape-device-link-qr' as const,
+      sessionId,
+      createdAt,
+      expiresAt,
+      walletName: selectedWallet.name,
+      chain: selectedWallet.chain,
+      publicKey: activeAccount.publicKey,
+      handoff
+    };
+    const record: DeviceLinkSessionRecord = {
+      id: sessionId,
+      walletId: selectedWallet.id,
+      walletName: selectedWallet.name,
+      chain: selectedWallet.chain,
+      publicKey: activeAccount.publicKey,
+      pairingCode,
+      createdAt,
+      expiresAt,
+      qrPayload: createDeviceLinkPayloadText(envelope),
+      envelope,
+      status: 'ready'
+    };
+
+    const sessions = await deviceLinkStorage.get();
+    const nextSessions = Object.fromEntries(
+      Object.values(sessions)
+        .filter((entry) => entry.expiresAt > createdAt && entry.status === 'ready')
+        .map((entry) => [entry.id, entry])
+    ) as Record<string, DeviceLinkSessionRecord>;
+    nextSessions[record.id] = record;
+    await deviceLinkStorage.set(nextSessions);
+    return record;
+  }
+
+  async listDeviceLinkSessions() {
+    const now = Date.now();
+    const sessions = await deviceLinkStorage.get();
+    let changed = false;
+    const nextSessions: Record<string, DeviceLinkSessionRecord> = {};
+
+    for (const entry of Object.values(sessions)) {
+      const status = entry.expiresAt <= now ? 'expired' : entry.status;
+      if (status !== entry.status) {
+        changed = true;
+      }
+      if (status === 'revoked') {
+        continue;
+      }
+      nextSessions[entry.id] = {
+        ...entry,
+        status
+      };
+    }
+
+    if (changed) {
+      await deviceLinkStorage.set(nextSessions);
+    }
+
+    return Object.values(nextSessions).sort((left, right) => right.createdAt - left.createdAt);
+  }
+
+  async deleteDeviceLinkSession(sessionId: string) {
+    const sessions = await deviceLinkStorage.get();
+    if (!sessions[sessionId]) {
+      return this.listDeviceLinkSessions();
+    }
+    const nextSessions = {
+      ...sessions
+    };
+    delete nextSessions[sessionId];
+    await deviceLinkStorage.set(nextSessions);
+    return this.listDeviceLinkSessions();
+  }
+
+  async importDeviceLink(input: { payload: string; pairingCode: string; password: string }) {
+    const envelope = parseDeviceLinkPayloadText(input.payload);
+    if (envelope.expiresAt <= Date.now()) {
+      throw new RpcError('DEVICE_LINK_EXPIRED', 'This restore payload has expired. Create a new link from your existing device.');
+    }
+
+    const pairingCode = this.normalizePairingCode(input.pairingCode);
+    const rawPayload = await decryptText(envelope.handoff, pairingCode).catch(() => {
+      throw new RpcError('INVALID_PAIRING_CODE', 'Pairing code is incorrect.');
     });
+    const payload = JSON.parse(rawPayload) as DeviceLinkHandoffPayload;
+
+    if (
+      payload.version !== 1 ||
+      payload.type !== 'grape-device-link' ||
+      payload.sessionId !== envelope.sessionId ||
+      payload.expiresAt <= Date.now()
+    ) {
+      throw new RpcError('DEVICE_LINK_INVALID', 'Restore payload is invalid or expired.');
+    }
+
+    if (payload.wallet.secret.kind === 'mnemonic') {
+      await this.createMnemonicWalletSet(
+        payload.wallet.secret.mnemonic,
+        input.password,
+        payload.wallet.source === 'created' ? 'created' : 'imported-mnemonic'
+      );
+    } else if (payload.wallet.secret.kind === 'private-key') {
+      await this.createWallet(
+        payload.wallet.secret,
+        input.password,
+        payload.wallet.publicKey,
+        payload.wallet.chain,
+        { kind: 'software' },
+        'imported-private-key'
+      );
+    } else {
+      throw new RpcError('DEVICE_LINK_INVALID', 'Restore payload contains an unsupported wallet secret.');
+    }
+
+    const currentState = await this.getWalletState();
+    const nextState = this.applyDeviceLinkPreferences(currentState, payload.preferences);
+    await walletStateStorage.set(nextState);
+    await this.setSessionState({ locked: false, lastActivityAt: Date.now() });
+    return this.getStateResponse();
+  }
+
+  async exportWalletSecret(password: string) {
+    const { selectedWallet, activeAccount, secret } = await this.getLinkableWalletSecret(password);
+    if (selectedWallet.chain !== 'solana') {
+      throw new RpcError('EXPORT_UNAVAILABLE', 'Secret export is currently available for Solana software wallets only.');
+    }
     const exported = exportSolanaSoftwareWalletSecret(secret);
 
     if (exported.publicKey !== activeAccount.publicKey) {
@@ -2427,6 +2772,7 @@ class WalletController {
     return {
       walletId: selectedWallet.id,
       walletName: selectedWallet.name,
+      chain: selectedWallet.chain,
       publicKey: exported.publicKey,
       derivationPath: exported.derivationPath,
       kind: exported.kind,
@@ -4685,6 +5031,69 @@ function getGovernanceNamespaces(): Array<{ namespace: string; programId: string
   });
 }
 
+async function fetchGovernanceRealmDirectory(): Promise<GovernanceRealmInfo[]> {
+  if (governanceRealmDirectoryCache && governanceRealmDirectoryCache.expiresAt > Date.now()) {
+    return governanceRealmDirectoryCache.realms;
+  }
+
+  const realms = (
+    await Promise.all(
+      getGovernanceNamespaces().map(async ({ namespace }) => {
+        let offset = 0;
+        const collected: GovernanceRealmInfo[] = [];
+
+        while (offset < 10000) {
+          let page: Record<string, unknown>;
+          try {
+            page = await fetchGovernanceGraphql<Record<string, unknown>>(buildGovernanceRealmDirectoryQuery(namespace, offset));
+          } catch {
+            break;
+          }
+
+          const pageV2 = Array.isArray(page[`${namespace}_RealmV2`]) ? (page[`${namespace}_RealmV2`] as Array<Record<string, unknown>>) : [];
+          const pageV1 = Array.isArray(page[`${namespace}_RealmV1`]) ? (page[`${namespace}_RealmV1`] as Array<Record<string, unknown>>) : [];
+
+          collected.push(
+            ...[...pageV2, ...pageV1]
+              .map((row) => {
+                const daoId = typeof row.pubkey === 'string' ? row.pubkey.trim() : '';
+                if (!daoId) {
+                  return null;
+                }
+
+                return normalizeGovernanceRealmInfo(
+                  {
+                    [`${namespace}_RealmV2`]: [row]
+                  },
+                  namespace,
+                  daoId
+                );
+              })
+              .filter((entry): entry is GovernanceRealmInfo => !!entry)
+          );
+
+          if (pageV2.length < GOVERNANCE_REALM_DIRECTORY_PAGE_SIZE && pageV1.length < GOVERNANCE_REALM_DIRECTORY_PAGE_SIZE) {
+            break;
+          }
+
+          offset += GOVERNANCE_REALM_DIRECTORY_PAGE_SIZE;
+        }
+
+        return collected;
+      })
+    )
+  )
+    .flat()
+    .filter((entry, index, list) => list.findIndex((candidate) => candidate.daoId === entry.daoId) === index);
+
+  governanceRealmDirectoryCache = {
+    expiresAt: Date.now() + GOVERNANCE_REALM_DIRECTORY_CACHE_TTL_MS,
+    realms
+  };
+
+  return realms;
+}
+
 function escapeGraphqlString(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
@@ -5253,6 +5662,25 @@ function buildGovernanceVoteRecordsQuery(namespace: string, owners: string[]): s
       ${namespace}_VoteRecordV1(limit: 5000, where: {governingTokenOwner: {_in: [${ownerList}]}}) {
         proposal
         governingTokenOwner
+      }
+    }
+  `;
+}
+
+function buildGovernanceRealmDirectoryQuery(namespace: string, offset = 0) {
+  return `
+    query GovernanceRealmDirectory {
+      ${namespace}_RealmV2(limit: ${GOVERNANCE_REALM_DIRECTORY_PAGE_SIZE}, offset: ${offset}) {
+        pubkey
+        name
+        communityMint
+        config
+      }
+      ${namespace}_RealmV1(limit: ${GOVERNANCE_REALM_DIRECTORY_PAGE_SIZE}, offset: ${offset}) {
+        pubkey
+        name
+        communityMint
+        config
       }
     }
   `;
@@ -6652,6 +7080,9 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
         case 'wallet_get_governance':
           sendResponse(await controller.getGovernance());
           break;
+        case 'wallet_scan_governance_eligibility':
+          sendResponse(await controller.scanGovernanceEligibility());
+          break;
         case 'wallet_get_activity':
           sendResponse(await controller.getActivity(message.limit));
           break;
@@ -6787,6 +7218,24 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
           break;
         case 'wallet_export_secret':
           sendResponse(await controller.exportWalletSecret(message.password));
+          break;
+        case 'wallet_create_device_link_session':
+          sendResponse(await controller.createDeviceLinkSession(message.password));
+          break;
+        case 'wallet_list_device_link_sessions':
+          sendResponse(await controller.listDeviceLinkSessions());
+          break;
+        case 'wallet_delete_device_link_session':
+          sendResponse(await controller.deleteDeviceLinkSession(message.sessionId));
+          break;
+        case 'wallet_import_device_link':
+          sendResponse(
+            await controller.importDeviceLink({
+              payload: message.payload,
+              pairingCode: message.pairingCode,
+              password: message.password
+            })
+          );
           break;
         case 'wallet_list_permissions':
           sendResponse((await controller.getStateResponse()).permissions);

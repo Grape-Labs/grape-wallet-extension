@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { Button, Card, Input, KeyValueRow, PageShell, StatusPill } from '@grape/ui';
 
 import type { SendTransferResponse, TokenHolding, WalletAssetsResponse, WalletStateResponse } from '../../shared/models';
 
 import { sendRuntimeMessage } from '../../shared/chrome';
+import { isBiometricUnlockSupported, unlockWithBiometric } from '../../shared/biometric';
 import { mountPage } from '../lib';
 
 type AssetOption =
@@ -47,8 +48,32 @@ function formatAddress(address: string | undefined): string {
   return `${address.slice(0, 4)}...${address.slice(-4)}`;
 }
 
+function normalizeScannedRecipientInput(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return '';
+  }
+
+  const compact = trimmed.replace(/\s+/g, '');
+  const schemeMatch = compact.match(/^([a-z0-9+.-]+):(.*)$/i);
+  if (!schemeMatch) {
+    return compact;
+  }
+
+  const [, scheme, remainder] = schemeMatch;
+  const normalizedScheme = scheme.toLowerCase();
+  if (!['solana', 'ethereum', 'evm', 'monad', 'sui'].includes(normalizedScheme)) {
+    return compact;
+  }
+
+  const withoutSlashes = remainder.replace(/^\/\//, '').replace(/^\/+/, '');
+  const address = withoutSlashes.split(/[/?#]/)[0]?.trim();
+  return address || compact;
+}
+
 function SendPage() {
   const searchParams = useMemo(() => new URLSearchParams(window.location.search), []);
+  const shouldAutoScan = searchParams.get('scan') === '1';
   const [state, setState] = useState<WalletStateResponse | null>(null);
   const [assets, setAssets] = useState<WalletAssetsResponse>({
     lamports: null,
@@ -61,6 +86,12 @@ function SendPage() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<SendTransferResponse | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [biometricSupported, setBiometricSupported] = useState(false);
+  const [biometricUnlocking, setBiometricUnlocking] = useState(false);
+  const [recipientScannerVisible, setRecipientScannerVisible] = useState(false);
+  const [recipientScannerLoading, setRecipientScannerLoading] = useState(false);
+  const [recipientScannerError, setRecipientScannerError] = useState<string | null>(null);
+  const recipientScannerVideoRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
     void (async () => {
@@ -69,6 +100,11 @@ function SendPage() {
       if (nextState.wallet.setup === 'ready') {
         const nextAssets = await sendRuntimeMessage<WalletAssetsResponse>({ type: 'wallet_get_assets' });
         setAssets(nextAssets);
+      }
+      try {
+        setBiometricSupported(await isBiometricUnlockSupported());
+      } catch {
+        setBiometricSupported(false);
       }
     })();
   }, []);
@@ -153,6 +189,143 @@ function SendPage() {
     }
   }, [assetOptions, searchParams]);
 
+  useEffect(() => {
+    if (shouldAutoScan) {
+      setRecipientScannerVisible(true);
+      setError(null);
+    }
+  }, [shouldAutoScan]);
+
+  async function handleBiometricUnlockForSigning() {
+    if (!state?.wallet.wallets.length) {
+      return;
+    }
+
+    const selectedWallet =
+      state.wallet.wallets.find((entry) => entry.id === state.wallet.selectedWalletIdByChain?.[state.wallet.selectedChain]) ??
+      state.wallet.wallets.find((entry) => entry.chain === state.wallet.selectedChain) ??
+      state.wallet.wallets[0];
+    if (!selectedWallet?.biometricUnlock) {
+      return;
+    }
+
+    try {
+      setBiometricUnlocking(true);
+      setError(null);
+      const unlockedPassword = await unlockWithBiometric(selectedWallet.biometricUnlock);
+      await sendRuntimeMessage<WalletStateResponse>({
+        type: 'wallet_unlock',
+        password: unlockedPassword
+      });
+      setPassword('');
+      const nextState = await sendRuntimeMessage<WalletStateResponse>({ type: 'wallet_get_state' });
+      setState(nextState);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : 'Unable to unlock with device.');
+    } finally {
+      setBiometricUnlocking(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!recipientScannerVisible) {
+      return;
+    }
+
+    let active = true;
+    let frameId = 0;
+    let stream: MediaStream | null = null;
+
+    const startScanner = async () => {
+      const video = recipientScannerVideoRef.current;
+      if (!video) {
+        return;
+      }
+
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error('Camera scanning is not available in this browser.');
+      }
+
+      const detectorCtor = (
+        window as Window & {
+          BarcodeDetector?: new (options?: { formats?: string[] }) => {
+            detect: (source: CanvasImageSource) => Promise<Array<{ rawValue?: string }>>;
+          };
+        }
+      ).BarcodeDetector;
+      if (!detectorCtor) {
+        throw new Error('QR scanning is not available in this browser.');
+      }
+
+      setRecipientScannerError(null);
+      setRecipientScannerLoading(true);
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: 'environment'
+        },
+        audio: false
+      });
+
+      video.srcObject = stream;
+      video.setAttribute('playsinline', 'true');
+      await video.play();
+      const detector = new detectorCtor({ formats: ['qr_code'] });
+
+      const scanFrame = async () => {
+        if (!active) {
+          return;
+        }
+
+        if (video.readyState >= 2) {
+          const codes = await detector.detect(video).catch(() => []);
+          const match = codes.find((entry) => typeof entry.rawValue === 'string' && entry.rawValue.trim().length > 0);
+          if (match?.rawValue) {
+            const normalized = normalizeScannedRecipientInput(match.rawValue);
+            if (normalized) {
+              setRecipient(normalized);
+              setRecipientScannerVisible(false);
+              setRecipientScannerError(null);
+              return;
+            }
+          }
+        }
+
+        frameId = window.requestAnimationFrame(() => {
+          void scanFrame();
+        });
+      };
+
+      setRecipientScannerLoading(false);
+      void scanFrame();
+    };
+
+    void startScanner().catch((nextError) => {
+      if (active) {
+        setRecipientScannerLoading(false);
+        setRecipientScannerVisible(false);
+        const message = nextError instanceof Error ? nextError.message : 'Unable to start QR scanning.';
+        setRecipientScannerError(message);
+        setError(message);
+      }
+    });
+
+    return () => {
+      active = false;
+      setRecipientScannerLoading(false);
+      if (frameId) {
+        window.cancelAnimationFrame(frameId);
+      }
+      if (stream) {
+        stream.getTracks().forEach((track) => track.stop());
+      }
+      const video = recipientScannerVideoRef.current;
+      if (video) {
+        video.pause();
+        video.srcObject = null;
+      }
+    };
+  }, [recipientScannerVisible]);
+
   if (!state) {
     return null;
   }
@@ -188,6 +361,20 @@ function SendPage() {
         <label className="stack">
           <span className="muted">To</span>
           <Input value={recipient} onChange={(event) => setRecipient(event.target.value)} placeholder="Recipient public key" />
+          <div className="send-inline-actions">
+            <Button tone="secondary" onClick={() => setRecipientScannerVisible((current) => !current)}>
+              {recipientScannerVisible ? 'Close scanner' : 'Scan QR'}
+            </Button>
+          </div>
+          {recipientScannerVisible ? (
+            <div className="device-link-scanner">
+              <video ref={recipientScannerVideoRef} className="device-link-scanner-video" muted />
+              <p className="device-link-scanner-copy">
+                {recipientScannerLoading ? 'Opening camera...' : 'Point the camera at a wallet QR to fill the recipient.'}
+              </p>
+              {recipientScannerError ? <p className="danger-box">{recipientScannerError}</p> : null}
+            </div>
+          ) : null}
         </label>
         <label className="stack">
           <span className="muted">Amount</span>
@@ -199,15 +386,24 @@ function SendPage() {
         {canUseUnlockedSigner ? (
           <p className="muted">Wallet is already unlocked. You can send without re-entering your password.</p>
         ) : (
-          <label className="stack">
-            <span className="muted">Password</span>
-            <Input
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              placeholder="Enter password to sign and send"
-            />
-          </label>
+          <div className="stack">
+            <label className="stack">
+              <span className="muted">Password</span>
+              <Input
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                placeholder="Enter password to sign and send"
+              />
+            </label>
+            {biometricSupported && state.activeWallet?.biometricEnabled ? (
+              <div className="send-inline-actions">
+                <Button tone="secondary" onClick={() => void handleBiometricUnlockForSigning()} disabled={biometricUnlocking}>
+                  {biometricUnlocking ? 'Unlocking...' : 'Use device'}
+                </Button>
+              </div>
+            ) : null}
+          </div>
         )}
         <p className="muted">If the recipient token account does not exist, Grape creates it automatically for token transfers.</p>
       </Card>
@@ -264,6 +460,8 @@ function SendPage() {
               setRecipient('');
               setAmount('');
               setPassword('');
+              setRecipientScannerVisible(false);
+              setRecipientScannerError(null);
             } catch (nextError) {
               setError(nextError instanceof Error ? nextError.message : 'Unable to send transfer.');
             } finally {
