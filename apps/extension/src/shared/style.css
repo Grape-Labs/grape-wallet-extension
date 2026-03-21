@@ -4051,6 +4051,10 @@ body[data-surface='popup'] .token-list {
   padding-right: 8px;
 }
 
+.send-input-shell-action {
+  padding-right: 8px;
+}
+
 .biometric-inline-button {
   width: 34px;
   height: 34px;
@@ -4697,12 +4701,14 @@ body[data-surface='popup'] .token-change {
 }
 
 .receive-qr {
-  width: 220px;
-  height: 220px;
-  border-radius: 24px;
+  width: min(100%, 340px);
+  height: auto;
+  aspect-ratio: 1;
+  border-radius: 28px;
   border: 1px solid var(--theme-divider);
-  padding: 12px;
-  background: color-mix(in srgb, var(--theme-card-bg) 88%, black 12%);
+  padding: 18px;
+  background: #ffffff;
+  object-fit: contain;
 }
 
 .device-link-scanner {
@@ -4761,6 +4767,36 @@ body[data-surface='popup'] .token-change {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.settings-section-card .card-body {
+  gap: 14px;
+}
+
+.settings-section-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.settings-section-toggle-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.settings-section-summary {
+  color: var(--theme-muted);
+  font-size: 0.84rem;
+  line-height: 1.35;
 }
 
 .bottom-nav {

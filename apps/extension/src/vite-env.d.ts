@@ -4,6 +4,7 @@ interface ImportMetaEnv {
   readonly VITE_GRAPE_MAINNET_RPC_URL?: string;
   readonly VITE_GRAPE_JUP_API_KEY?: string;
   readonly VITE_GRAPE_SHYFT_API_KEY?: string;
+  readonly VITE_GRAPE_PASSKEY_WEB_ORIGIN?: string;
 }
 
 interface ImportMeta {

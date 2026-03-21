@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { QrCode } from 'lucide-react';
 
 import { Button, Card, Input, KeyValueRow, PageShell, StatusPill } from '@grape/ui';
 
@@ -377,11 +378,17 @@ function SendPage() {
         </label>
         <label className="stack">
           <span className="muted">To</span>
-          <Input value={recipient} onChange={(event) => setRecipient(event.target.value)} placeholder="Recipient public key" />
-          <div className="send-inline-actions">
-            <Button tone="secondary" onClick={() => setRecipientScannerVisible((current) => !current)}>
-              {recipientScannerVisible ? 'Close scanner' : 'Scan QR'}
-            </Button>
+          <div className="send-input-shell send-input-shell-action">
+            <Input value={recipient} onChange={(event) => setRecipient(event.target.value)} placeholder="Recipient public key" className="send-recipient-input" />
+            <button
+              type="button"
+              className="biometric-inline-button"
+              onClick={() => setRecipientScannerVisible((current) => !current)}
+              aria-label={recipientScannerVisible ? 'Close recipient QR scanner' : 'Scan recipient QR'}
+              title={recipientScannerVisible ? 'Close scanner' : 'Scan recipient QR'}
+            >
+              <QrCode size={16} />
+            </button>
           </div>
           {recipientScannerVisible ? (
             <div className="device-link-scanner">

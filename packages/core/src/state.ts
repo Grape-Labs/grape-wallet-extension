@@ -57,13 +57,22 @@ export type WalletRecipient = {
   lastUsedAt: number;
 };
 
-export type BiometricUnlockConfig = {
-  credentialId: string;
-  credentialIdB64Url: string;
-  keySalt: string;
-  wrappedPassword: EncryptedPayload;
-  createdAt: number;
-};
+export type BiometricUnlockConfig =
+  | {
+      mode?: 'wrapped-password';
+      credentialId: string;
+      credentialIdB64Url: string;
+      keySalt: string;
+      wrappedPassword: EncryptedPayload;
+      createdAt: number;
+    }
+  | {
+      mode: 'deterministic-passkey';
+      credentialId: string;
+      credentialIdB64Url: string;
+      rpId?: string;
+      createdAt: number;
+    };
 
 export type WalletSigner =
   | {

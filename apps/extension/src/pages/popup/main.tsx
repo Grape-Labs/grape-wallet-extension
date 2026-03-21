@@ -1151,6 +1151,9 @@ function PopupPage() {
   const [governanceVoteResult, setGovernanceVoteResult] = useState<WalletGovernanceVoteResponse | null>(null);
   const [governancePassword, setGovernancePassword] = useState('');
   const [governanceShowFinalizing, setGovernanceShowFinalizing] = useState(false);
+  const [expandedSettingsSections, setExpandedSettingsSections] = useState<Set<'wallet' | 'reputation' | 'verification' | 'governance'>>(
+    new Set(['wallet'])
+  );
   const [pendingHomeScrollTarget, setPendingHomeScrollTarget] = useState<'community' | 'verification' | 'governance' | null>(null);
   const [activity, setActivity] = useState<WalletActivityItem[]>([]);
   const [activityLoading, setActivityLoading] = useState(false);
@@ -4842,18 +4845,22 @@ function PopupPage() {
 
             <div className="send-field-group">
               <label className="send-field-label">Recipient</label>
-              <div className="send-input-shell">
+              <div className="send-input-shell send-input-shell-action">
                 <Input
                   value={recipient}
                   onChange={(event) => setRecipient(event.target.value)}
                   placeholder="Search or paste"
                   className="send-recipient-input"
                 />
-              </div>
-              <div className="send-inline-actions">
-                <Button tone="secondary" onClick={() => void handleOpenRecipientScanner()}>
-                  {recipientScannerVisible && !isPopupSurface ? 'Close scanner' : 'Scan QR'}
-                </Button>
+                <button
+                  type="button"
+                  className="biometric-inline-button"
+                  onClick={() => void handleOpenRecipientScanner()}
+                  aria-label={recipientScannerVisible && !isPopupSurface ? 'Close recipient QR scanner' : 'Scan recipient QR'}
+                  title={recipientScannerVisible && !isPopupSurface ? 'Close scanner' : 'Scan recipient QR'}
+                >
+                  <QrCode size={16} />
+                </button>
               </div>
               {recipientScannerVisible ? (
                 <div className="device-link-scanner">
@@ -5254,10 +5261,53 @@ function PopupPage() {
       ...governance.governedDaos,
       ...wallet.trackedGovernanceDaoIds
     ]);
+    const trackedReputationCount = wallet.trackedReputationSpaceIds.length;
+    const trackedVerificationCount = wallet.trackedVerificationSpaceIds.length;
+    const trackedGovernanceCount = wallet.trackedGovernanceDaoIds.length;
+
+    const toggleSettingsSection = (section: 'wallet' | 'reputation' | 'verification' | 'governance') => {
+      setExpandedSettingsSections((previous) => {
+        const next = new Set(previous);
+        if (next.has(section)) {
+          next.delete(section);
+        } else {
+          next.add(section);
+        }
+        return next;
+      });
+    };
+
+    const renderSettingsSection = (props: {
+      section: 'wallet' | 'reputation' | 'verification' | 'governance';
+      title: string;
+      summary: string;
+      error?: string | null;
+      children: ReactNode;
+    }) => {
+      const isExpanded = expandedSettingsSections.has(props.section);
+
+      return (
+        <Card className="settings-section-card">
+          <button type="button" className="settings-section-toggle" onClick={() => toggleSettingsSection(props.section)}>
+            <div className="settings-section-toggle-copy">
+              <strong>{props.title}</strong>
+              <span className="settings-section-summary">{props.summary}</span>
+            </div>
+            {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+          </button>
+          {isExpanded ? props.children : null}
+          {props.error ? <p className="danger-box">{props.error}</p> : null}
+        </Card>
+      );
+    };
 
     return (
       <>
-        <Card title="Wallet">
+        {renderSettingsSection({
+          section: 'wallet',
+          title: 'Wallet',
+          summary: `${selectedNetworkLabel} • ${permissions.length} connected site${permissions.length === 1 ? '' : 's'}`,
+          children: (
           <div className="stack">
             <label className="stack">
               <span className="muted">Chain</span>
@@ -5504,8 +5554,14 @@ function PopupPage() {
               </Button>
             </div>
           </div>
-        </Card>
-        <Card title="OG Reputation Spaces">
+          )
+        })}
+        {renderSettingsSection({
+          section: 'reputation',
+          title: 'OG Reputation Spaces',
+          summary: trackedReputationCount > 0 ? `${trackedReputationCount} tracked` : 'No spaces tracked',
+          error: reputationSpaceError,
+          children: (
           <div className="stack">
             <p className="muted">
               Add the reputation spaces this wallet is part of, and Grape will track the wallet&apos;s points in each
@@ -5549,10 +5605,15 @@ function PopupPage() {
                 )}
               </>
             )}
-            {reputationSpaceError ? <p className="danger-box">{reputationSpaceError}</p> : null}
           </div>
-        </Card>
-        <Card title="Verification Spaces">
+          )
+        })}
+        {renderSettingsSection({
+          section: 'verification',
+          title: 'Verification Spaces',
+          summary: trackedVerificationCount > 0 ? `${trackedVerificationCount} tracked` : 'No spaces tracked',
+          error: verificationSpaceError,
+          children: (
           <div className="stack">
             <p className="muted">
               Add the DAO ids you want to verify against. Grape will read this wallet&apos;s linked verification
@@ -5599,10 +5660,20 @@ function PopupPage() {
                 )}
               </>
             )}
-            {verificationSpaceError ? <p className="danger-box">{verificationSpaceError}</p> : null}
           </div>
-        </Card>
-        <Card title="Governance DAOs">
+          )
+        })}
+        {renderSettingsSection({
+          section: 'governance',
+          title: 'Governance DAOs',
+          summary:
+            participatingGovernanceDaoIds.size > 0
+              ? `${participatingGovernanceDaoIds.size} participating • ${trackedGovernanceCount} tracked`
+              : trackedGovernanceCount > 0
+                ? `${trackedGovernanceCount} tracked`
+                : 'No DAOs detected',
+          error: governanceDaoError,
+          children: (
           <div className="stack">
             <p className="muted">
               Grape auto-detects the Solana DAOs this wallet participates in from governance membership records. You
@@ -5810,9 +5881,9 @@ function PopupPage() {
                 )}
               </>
             )}
-            {governanceDaoError ? <p className="danger-box">{governanceDaoError}</p> : null}
           </div>
-        </Card>
+          )
+        })}
       </>
     );
   }

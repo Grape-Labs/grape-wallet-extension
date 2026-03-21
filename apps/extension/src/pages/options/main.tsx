@@ -111,9 +111,13 @@ function OptionsPage() {
     }
 
     void QRCode.toDataURL(activeSession.qrPayload, {
-      errorCorrectionLevel: 'M',
-      margin: 1,
-      width: 256
+      errorCorrectionLevel: 'L',
+      margin: 2,
+      width: 420,
+      color: {
+        dark: '#101114',
+        light: '#ffffff'
+      }
     })
       .then((value) => setDeviceLinkQr(value))
       .catch(() => setDeviceLinkQr(null));

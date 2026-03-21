@@ -47,6 +47,8 @@ import type {
   MobileGovernanceVoteResponse
 } from './governance';
 import type { MobileReputationResponse } from './reputation';
+import type { MobilePasskeyWalletConfig } from './passkeys';
+import { GRAPE_PASSKEY_WALLET_SPEC_VERSION } from '../../../packages/core/src/passkeys';
 
 export type MobileWalletSource = 'created' | 'imported-mnemonic' | 'imported-private-key';
 
@@ -86,6 +88,7 @@ export type MobileWalletState = {
   wallets: MobileWallet[];
   passwordSalt: string;
   passwordHash: string;
+  passkeyWallet?: MobilePasskeyWalletConfig;
   privacyMode: boolean;
   biometricEnabled: boolean;
   activities: MobileActivity[];
@@ -257,6 +260,7 @@ export function createEmptyMobileWalletState(): MobileWalletState {
     wallets: [],
     passwordSalt: '',
     passwordHash: '',
+    passkeyWallet: undefined,
     privacyMode: false,
     biometricEnabled: false,
     activities: []
@@ -302,6 +306,7 @@ export async function createWalletSet(input: {
   mnemonic: string;
   password: string;
   source: MobileWalletSource;
+  passkeyWallet?: MobilePasskeyWalletConfig;
 }): Promise<MobileWalletState> {
   const mnemonic = input.mnemonic.trim();
   if (!validateWalletMnemonic(mnemonic)) {
@@ -329,6 +334,7 @@ export async function createWalletSet(input: {
     wallets,
     passwordSalt,
     passwordHash,
+    passkeyWallet: input.passkeyWallet,
     privacyMode: false,
     biometricEnabled: false,
     activities: []
@@ -403,6 +409,7 @@ export async function createPrivateKeyWallet(input: {
     wallets: [wallet],
     passwordSalt,
     passwordHash,
+    passkeyWallet: undefined,
     privacyMode: false,
     biometricEnabled: false,
     activities: []
@@ -2183,10 +2190,37 @@ function normalizeMobileWalletState(state: MobileWalletState): MobileWalletState
     wallets,
     selectedChain,
     selectedWalletIds,
+    passkeyWallet: normalizePasskeyWalletConfig(state.passkeyWallet),
     trustedDappOrigins: normalizeTrustedDappOrigins(state.trustedDappOrigins),
     trackedReputationSpaceIds: normalizeTrackedReputationSpaceIds(state.trackedReputationSpaceIds),
     trackedVerificationSpaceIds: normalizeTrackedDaoIds(state.trackedVerificationSpaceIds),
     trackedGovernanceDaoIds: normalizeTrackedDaoIds(state.trackedGovernanceDaoIds)
+  };
+}
+
+function normalizePasskeyWalletConfig(value: MobilePasskeyWalletConfig | null | undefined): MobilePasskeyWalletConfig | undefined {
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+
+  const candidate = value as Partial<MobilePasskeyWalletConfig>;
+  if (
+    candidate.mode !== 'deterministic-passkey' ||
+    candidate.version !== GRAPE_PASSKEY_WALLET_SPEC_VERSION ||
+    typeof candidate.credentialId !== 'string' ||
+    typeof candidate.rpId !== 'string' ||
+    typeof candidate.createdAt !== 'number'
+  ) {
+    return undefined;
+  }
+
+  return {
+    mode: 'deterministic-passkey',
+    version: GRAPE_PASSKEY_WALLET_SPEC_VERSION,
+    credentialId: candidate.credentialId,
+    credentialIdB64Url: typeof candidate.credentialIdB64Url === 'string' && candidate.credentialIdB64Url ? candidate.credentialIdB64Url : undefined,
+    rpId: candidate.rpId,
+    createdAt: candidate.createdAt
   };
 }
 

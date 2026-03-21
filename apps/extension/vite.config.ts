@@ -57,7 +57,7 @@ function createManifestPlugin(mainnetRpcUrl: string): Plugin {
         side_panel: {
           default_path: 'sidepanel.html'
         },
-        permissions: ['storage', 'sidePanel'],
+        permissions: ['storage', 'sidePanel', 'identity'],
         host_permissions: [
           toHostPermission(mainnetRpcUrl),
           'https://api.mainnet-beta.solana.com/*',

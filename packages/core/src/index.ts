@@ -4,6 +4,8 @@ export * from './device-link';
 export * from './encoding';
 export * from './errors';
 export * from './messages';
+export * from './passkey-handoff';
+export * from './passkeys';
 export * from './permissions';
 export * from './state';
 export * from './storage';

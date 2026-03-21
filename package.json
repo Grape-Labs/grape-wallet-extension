@@ -4,8 +4,10 @@
   "version": "0.3.0",
   "packageManager": "pnpm@10.6.3",
   "scripts": {
-    "build": "pnpm --filter @grape/core build && pnpm --filter @grape/solana build && pnpm --filter @grape/sui build && pnpm --filter @grape/monad build && pnpm --filter @grape/ethereum build && pnpm --filter @grape/ui build && pnpm --filter @grape/wallet-adapter build && pnpm --filter @grape/extension build",
+    "build": "pnpm --filter @grape/core build && pnpm --filter @grape/solana build && pnpm --filter @grape/sui build && pnpm --filter @grape/monad build && pnpm --filter @grape/ethereum build && pnpm --filter @grape/ui build && pnpm --filter @grape/wallet-adapter build && pnpm --filter @grape/extension build && pnpm --filter @grape/passkey-web build",
     "dev": "pnpm --filter @grape/extension dev",
+    "passkey-web:dev": "pnpm --filter @grape/passkey-web dev",
+    "passkey-web:build": "pnpm --filter @grape/passkey-web build",
     "mobile:start": "pnpm --filter @grape/mobile start",
     "mobile:android": "pnpm --filter @grape/mobile android",
     "mobile:ios": "pnpm --filter @grape/mobile ios",

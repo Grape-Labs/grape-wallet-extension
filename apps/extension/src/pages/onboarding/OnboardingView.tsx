@@ -7,11 +7,12 @@ import { importEthereumPrivateKey, validateEthereumAddress, validateEthereumPriv
 import { importMonadPrivateKey, validateMonadAddress, validateMonadPrivateKey } from '@grape/monad';
 import { importSuiPrivateKey, validateSuiAddress, validateSuiPrivateKey } from '@grape/sui';
 import {
-  createBiometricUnlock,
-  isBiometricUnlockSupported,
+  createDeterministicPasskeyWalletSetup,
+  isDeterministicPasskeyWalletSupported,
 } from '../../shared/biometric';
 import {
   deriveSolanaAccount0,
+  entropyToWalletMnemonic,
   generateWalletMnemonic,
   importSolanaPrivateKey,
   normalizeMnemonic,
@@ -47,6 +48,7 @@ type LedgerCandidate = {
 };
 
 const LEDGER_ACCOUNT_SCAN_BATCH_SIZE = 16;
+const PASSKEY_WALLET_SETUP_ENABLED = false;
 
 function getLedgerCandidateKey(account: Pick<LedgerCandidate, 'publicKey' | 'derivationPath'>) {
   return `${account.publicKey}:${account.derivationPath}`;
@@ -121,6 +123,20 @@ function generateSetupPassword() {
   return `${crypto.randomUUID()}-${crypto.randomUUID()}`;
 }
 
+function normalizeScannedRestorePayloadInput(input: string) {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return '';
+  }
+  if (trimmed.startsWith('grape-link:{') || trimmed.startsWith('{')) {
+    return trimmed;
+  }
+  if (trimmed.startsWith('grape-link:')) {
+    return `grape-link:${trimmed.slice('grape-link:'.length).replace(/\s+/g, '')}`;
+  }
+  return trimmed.replace(/\s+/g, '');
+}
+
 export function OnboardingView(props: OnboardingViewProps) {
   const searchParams = useMemo(() => new URLSearchParams(window.location.search), []);
   const isAppendFlow = searchParams.get('append') === '1';
@@ -156,7 +172,7 @@ export function OnboardingView(props: OnboardingViewProps) {
   const [biometricSupported, setBiometricSupported] = useState(false);
   const [existingWalletCount, setExistingWalletCount] = useState(0);
   const [hasPasswordProtectedWallet, setHasPasswordProtectedWallet] = useState(false);
-  const [easyRecoveryMode, setEasyRecoveryMode] = useState<EasyRecoveryMode>('passkey-phrase');
+  const [easyRecoveryMode, setEasyRecoveryMode] = useState<EasyRecoveryMode>('passkey-only');
   const [confirmPasskeyOnlyAccess, setConfirmPasskeyOnlyAccess] = useState(false);
   const restoreScannerVideoRef = useRef<HTMLVideoElement | null>(null);
 
@@ -173,6 +189,12 @@ export function OnboardingView(props: OnboardingViewProps) {
   }, [requestedMode]);
 
   useEffect(() => {
+    if (!PASSKEY_WALLET_SETUP_ENABLED && easySetupMethod === 'passkey') {
+      setEasySetupMethod('import');
+    }
+  }, [easySetupMethod]);
+
+  useEffect(() => {
     void (async () => {
       try {
         const state = await sendRuntimeMessage<WalletStateResponse>({ type: 'wallet_get_state' });
@@ -184,8 +206,12 @@ export function OnboardingView(props: OnboardingViewProps) {
         setExistingWalletCount(0);
         setHasPasswordProtectedWallet(false);
       }
+      if (!PASSKEY_WALLET_SETUP_ENABLED) {
+        setBiometricSupported(false);
+        return;
+      }
       try {
-        setBiometricSupported(await isBiometricUnlockSupported());
+        setBiometricSupported(await isDeterministicPasskeyWalletSupported());
       } catch {
         setBiometricSupported(false);
       }
@@ -237,10 +263,16 @@ export function OnboardingView(props: OnboardingViewProps) {
           const codes = await detector.detect(video).catch(() => []);
           const match = codes.find((entry) => typeof entry.rawValue === 'string' && entry.rawValue.trim().length > 0);
           if (match?.rawValue) {
-            setRestorePayload(match.rawValue.trim());
-            setRestoreScannerVisible(false);
-            setError(null);
-            return;
+            const normalizedPayload = normalizeScannedRestorePayloadInput(match.rawValue);
+            try {
+              parseDeviceLinkPayloadText(normalizedPayload);
+              setRestorePayload(normalizedPayload);
+              setRestoreScannerVisible(false);
+              setError(null);
+              return;
+            } catch {
+              setError('The scanned QR is not a valid Grape restore payload.');
+            }
           }
         }
         frameId = window.requestAnimationFrame(() => {
@@ -300,7 +332,7 @@ export function OnboardingView(props: OnboardingViewProps) {
 
   const isRecoveryStepValid =
     isEasyPasskeyPath
-      ? biometricSupported && easyRecoveryMode !== 'trusted-recovery'
+      ? biometricSupported && easyRecoveryMode === 'passkey-only'
       : isEasyRestorePath
         ? !!parsedRestorePayload && restorePairingCode.trim().length >= 4
       : mode === 'create'
@@ -319,8 +351,9 @@ export function OnboardingView(props: OnboardingViewProps) {
   const isPasswordStepValid = !requiresPassword || (!submitting && password.length >= 8 && password === passwordConfirm);
   const isFinalStepValid = isEasyPasskeyPath
     ? biometricSupported &&
-      (!needsExistingWalletPasswordForPasskey || password.trim().length >= 8) &&
-      easyRecoveryMode !== 'trusted-recovery'
+      !needsExistingWalletPasswordForPasskey &&
+      easyRecoveryMode === 'passkey-only' &&
+      confirmPasskeyOnlyAccess
     : isPasswordStepValid;
 
 async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
@@ -357,15 +390,15 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
       setError(null);
 
       if (isEasyPasskeyPath && !biometricSupported) {
-        throw new Error('Passkey setup is not available on this device.');
+        throw new Error('Passkey wallet creation is temporarily hidden in this build.');
       }
 
-      if (isEasyPasskeyPath && easyRecoveryMode === 'trusted-recovery') {
-        throw new Error('Trusted-device or account recovery is not available yet.');
+      if (isEasyPasskeyPath && easyRecoveryMode !== 'passkey-only') {
+        throw new Error('Deterministic passkey wallets currently support passkey-only recovery only.');
       }
 
-      if (needsExistingWalletPasswordForPasskey && password.trim().length < 8) {
-        throw new Error('Enter your existing Grape password to add this passkey wallet.');
+      if (needsExistingWalletPasswordForPasskey) {
+        throw new Error('Adding a deterministic passkey wallet to an existing password wallet set is not supported yet.');
       }
 
       if (!isEasyPasskeyPath && mode === 'create' && !validateWalletMnemonic(mnemonic)) {
@@ -385,10 +418,7 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
       }
 
       if (isEasyPasskeyPath) {
-        if (easyRecoveryMode === 'passkey-phrase' && !confirmBackup) {
-          throw new Error('Confirm that you backed up the recovery phrase.');
-        }
-        if (easyRecoveryMode === 'passkey-only' && !confirmPasskeyOnlyAccess) {
+        if (!confirmPasskeyOnlyAccess) {
           throw new Error('Confirm that you understand passkey-only access has no recovery fallback.');
         }
       }
@@ -398,12 +428,9 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
       }
 
       const setupPassword = isEasyPasskeyPath ? generateSetupPassword() : password;
-      let pendingBiometricConfig: Awaited<ReturnType<typeof createBiometricUnlock>> | null = null;
-
-      if (isEasyPasskeyPath) {
-        const passkeyPassword = needsExistingWalletPasswordForPasskey ? password : setupPassword;
-        pendingBiometricConfig = await createBiometricUnlock('pending-easy-setup', passkeyPassword);
-      }
+      const pendingPasskeySetup = isEasyPasskeyPath ? await createDeterministicPasskeyWalletSetup() : null;
+      const walletMnemonic = pendingPasskeySetup ? entropyToWalletMnemonic(pendingPasskeySetup.mnemonicEntropy) : mnemonic;
+      const walletPassword = pendingPasskeySetup ? pendingPasskeySetup.vaultPassword : setupPassword;
 
       if (isEasyRestorePath) {
         await sendRuntimeMessage<WalletStateResponse>({
@@ -413,23 +440,25 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
           password: setupPassword
         });
       } else if (mode === 'create') {
-        const account = deriveSolanaAccount0(mnemonic);
+        const account = deriveSolanaAccount0(walletMnemonic);
         await sendRuntimeMessage<WalletStateResponse>({
           type: 'wallet_create',
-          mnemonic,
-          password: isEasyPasskeyPath && needsExistingWalletPasswordForPasskey ? password : setupPassword,
-          publicKey: account.publicKey
+          mnemonic: walletMnemonic,
+          password: walletPassword,
+          publicKey: account.publicKey,
+          biometricUnlockConfig: pendingPasskeySetup?.config
         });
       } else if (importMethod === 'mnemonic') {
         if (!validateWalletMnemonic(mnemonic)) {
           throw new Error('Enter a valid 12-word or 24-word recovery phrase.');
         }
-        const account = deriveSolanaAccount0(mnemonic);
+        const account = deriveSolanaAccount0(walletMnemonic);
         await sendRuntimeMessage<WalletStateResponse>({
           type: 'wallet_import',
-          mnemonic,
-          password: isEasyPasskeyPath && needsExistingWalletPasswordForPasskey ? password : setupPassword,
-          publicKey: account.publicKey
+          mnemonic: walletMnemonic,
+          password: walletPassword,
+          publicKey: account.publicKey,
+          biometricUnlockConfig: pendingPasskeySetup?.config
         });
       } else {
         if (importMethod === 'private-key') {
@@ -476,13 +505,6 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
         }
       }
 
-      if (isEasyPasskeyPath) {
-        await sendRuntimeMessage({
-          type: 'wallet_set_biometric_unlock',
-          config: pendingBiometricConfig
-        });
-      }
-
       if (props.onComplete) {
         await props.onComplete();
       } else {
@@ -506,47 +528,6 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
                 <strong>Easy setup</strong>
                 <span className="section-label">Recommended</span>
               </div>
-              <button
-                type="button"
-                className={`choice-card ${isEasyPasskeyPath ? 'active' : ''}`.trim()}
-                onClick={() => {
-                  setSetupTrack('easy');
-                  setEasySetupMethod('passkey');
-                  setMode('create');
-                  setImportMethod('mnemonic');
-                  setEasyRecoveryMode('passkey-phrase');
-                  setConfirmBackup(false);
-                  setConfirmPasskeyOnlyAccess(false);
-                  setError(null);
-                }}
-              >
-                <div className="space-between" style={{ alignItems: 'flex-start', gap: '12px' }}>
-                  <strong>Create with passkey</strong>
-                  <span className="section-label">Device unlock</span>
-                </div>
-                <span className="muted">Use the device security users already trust, with recovery options made explicit before they commit.</span>
-              </button>
-              <button
-                type="button"
-                className={`choice-card ${isEasyApprovalPath ? 'active' : ''}`.trim()}
-                onClick={() => {
-                  setSetupTrack('easy');
-                  setEasySetupMethod('approval');
-                  setMode('create');
-                  setImportMethod('mnemonic');
-                  setError(null);
-                }}
-              >
-                <div className="space-between" style={{ alignItems: 'flex-start', gap: '12px' }}>
-                  <strong>Create from existing wallet approval</strong>
-                  <span className="section-label">{existingWalletCount > 0 ? 'Coming next' : 'Needs wallet'}</span>
-                </div>
-                <span className="muted">
-                  {existingWalletCount > 0
-                    ? 'Approve setup from an existing wallet instead of forcing raw secret management on day one.'
-                    : 'This path becomes available after you already have at least one wallet in Grape.'}
-                </span>
-              </button>
               <button
                 type="button"
                 className={`choice-card ${isEasyRestorePath ? 'active' : ''}`.trim()}
@@ -579,14 +560,27 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
                 <strong>Import seed / private key</strong>
                 <span className="muted">Use an existing recovery phrase or private key when you need the fastest live path right now.</span>
               </button>
-              <div className="warning-box">
-                <strong>Recovery options for easy setup</strong>
-                <div className="stack" style={{ marginTop: '10px' }}>
-                  <span>Passkey only</span>
-                  <span>Passkey + recovery phrase</span>
-                  <span>Passkey + trusted-device/account recovery</span>
+              <button
+                type="button"
+                className={`choice-card ${isEasyApprovalPath ? 'active' : ''}`.trim()}
+                onClick={() => {
+                  setSetupTrack('easy');
+                  setEasySetupMethod('approval');
+                  setMode('create');
+                  setImportMethod('mnemonic');
+                  setError(null);
+                }}
+              >
+                <div className="space-between" style={{ alignItems: 'flex-start', gap: '12px' }}>
+                  <strong>Create from existing wallet approval</strong>
+                  <span className="section-label">{existingWalletCount > 0 ? 'Coming next' : 'Needs wallet'}</span>
                 </div>
-              </div>
+                <span className="muted">
+                  {existingWalletCount > 0
+                    ? 'Approve setup from an existing wallet instead of forcing raw secret management on day one.'
+                    : 'This path becomes available after you already have at least one wallet in Grape.'}
+                </span>
+              </button>
             </div>
             <div className="stack">
               <div className="space-between" style={{ alignItems: 'center' }}>
@@ -657,23 +651,10 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
           {isEasyPasskeyPath ? (
             <div className="stack">
               {!biometricSupported ? (
-                <p className="danger-box">This device does not support secure passkey unlock. Use seed/private key import or advanced custody instead.</p>
+                <p className="danger-box">Passkey setup is not available on this device or in this extension build.</p>
               ) : null}
-              <p className="muted">Choose how this passkey-backed wallet should recover if the device is lost.</p>
+              <p className="muted">This wallet will be derived directly from a WebAuthn PRF output under the shared Grape RP. Grape will open a secure wallet.grape.app window to create and verify the passkey.</p>
               <div className="stack">
-                <button
-                  type="button"
-                  className={`choice-card ${easyRecoveryMode === 'passkey-phrase' ? 'active' : ''}`.trim()}
-                  onClick={() => {
-                    setEasyRecoveryMode('passkey-phrase');
-                    setConfirmBackup(false);
-                    setConfirmPasskeyOnlyAccess(false);
-                    setError(null);
-                  }}
-                >
-                  <strong>Passkey + recovery phrase</strong>
-                  <span className="muted">Recommended. Device unlock for daily use, with a seed phrase fallback you keep offline.</span>
-                </button>
                 <button
                   type="button"
                   className={`choice-card ${easyRecoveryMode === 'passkey-only' ? 'active' : ''}`.trim()}
@@ -685,24 +666,9 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
                   }}
                 >
                   <strong>Passkey only</strong>
-                  <span className="muted">Fastest setup. If the passkey is lost and not synced elsewhere, this wallet can be lost permanently.</span>
+                  <span className="muted">The same passkey deterministically recreates the same wallet. If the passkey is lost and not synced elsewhere, the wallet can be lost permanently.</span>
                 </button>
-                <button
-                  type="button"
-                  className={`choice-card ${easyRecoveryMode === 'trusted-recovery' ? 'active' : ''}`.trim()}
-                  onClick={() => {
-                    setEasyRecoveryMode('trusted-recovery');
-                    setConfirmBackup(false);
-                    setConfirmPasskeyOnlyAccess(false);
-                    setError(null);
-                  }}
-                >
-                  <div className="space-between" style={{ alignItems: 'flex-start', gap: '12px' }}>
-                    <strong>Passkey + trusted-device/account recovery</strong>
-                    <span className="section-label">Coming next</span>
-                  </div>
-                  <span className="muted">A trusted recovery model needs additional custody and approval infrastructure.</span>
-                </button>
+                <p className="warning-box">Recovery phrase and trusted recovery are disabled for deterministic passkey wallets until a separate recovery design is implemented.</p>
               </div>
             </div>
           ) : isComingSoonEasyPath ? (
@@ -743,7 +709,7 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
                 </div>
                 <TextArea
                   value={restorePayload}
-                  onChange={(event) => setRestorePayload(event.target.value)}
+                  onChange={(event) => setRestorePayload(normalizeScannedRestorePayloadInput(event.target.value))}
                   placeholder="Paste the restore payload from your other Grape device"
                 />
               </label>
@@ -1081,28 +1047,11 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
         <div className="stack">
           {isEasyPasskeyPath ? (
             <>
-              <p className="muted">Grape will create the wallet, protect it with a hidden local password, then bind device unlock to this wallet immediately.</p>
+              <p className="muted">Grape will derive both the wallet seed and the local vault password from the same passkey PRF output. There is no separate hidden password or displayed recovery phrase in this mode.</p>
+              <p className="muted">The passkey prompt runs on wallet.grape.app, then returns the encrypted result back to the extension.</p>
               {needsExistingWalletPasswordForPasskey ? (
-                <label className="stack">
-                  <span className="muted">Existing Grape password</span>
-                  <Input
-                    type="password"
-                    value={password}
-                    onChange={(event) => setPassword(event.target.value)}
-                    placeholder="Enter the password already used by your other wallets"
-                  />
-                </label>
-              ) : null}
-              {easyRecoveryMode === 'passkey-phrase' ? (
-                <>
-                  <p className="warning-box">This recovery phrase is shown once. Save it somewhere offline before you finish.</p>
-                  <MnemonicGrid words={generatedMnemonic.split(' ')} />
-                  <label className="inline checkbox-row">
-                    <input type="checkbox" checked={confirmBackup} onChange={(event) => setConfirmBackup(event.target.checked)} />
-                    <span>I saved this recovery phrase.</span>
-                  </label>
-                </>
-              ) : easyRecoveryMode === 'passkey-only' ? (
+                <p className="warning-box">Adding a deterministic passkey wallet to an existing password-protected wallet set is not supported yet.</p>
+              ) : (
                 <label className="inline checkbox-row">
                   <input
                     type="checkbox"
@@ -1111,10 +1060,8 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
                   />
                   <span>I understand that losing this passkey may permanently lock me out of this wallet.</span>
                 </label>
-              ) : (
-                <p className="warning-box">Trusted-device or account recovery is not available yet. Choose passkey only or passkey plus recovery phrase.</p>
               )}
-              {!biometricSupported ? <p className="danger-box">Passkey setup is not available on this device.</p> : null}
+              {!biometricSupported ? <p className="danger-box">Passkey setup is not available on this device or in this extension build.</p> : null}
             </>
           ) : requiresPassword ? (
             <>
@@ -1187,9 +1134,7 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
                   isEasyPasskeyPath
                     ? !biometricSupported
                       ? 'Passkey setup is not available on this device.'
-                      : easyRecoveryMode === 'trusted-recovery'
-                        ? 'Trusted-device or account recovery is not available yet.'
-                        : 'Choose a supported recovery model to continue.'
+                      : 'Choose passkey only to continue.'
                     : isEasyRestorePath
                       ? !parsedRestorePayload
                         ? 'Paste a valid restore payload from your existing Grape device.'
@@ -1305,7 +1250,7 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
             ? 'Create another wallet set and add it to Grape.'
             : 'Add another wallet with the setup path that fits your recovery model.'
           : setupTrack === 'easy'
-            ? 'Start with passkey-oriented onboarding or import a seed/private key, then reveal advanced custody only when you actually need it.'
+            ? 'Start with restore or import first, then reveal advanced custody only when you actually need it.'
             : mode === 'create'
               ? 'Create a new wallet for Grape-supported chains in a few clear steps.'
               : 'Import your wallet with a recovery phrase, private key, watch-only address, or Ledger.'

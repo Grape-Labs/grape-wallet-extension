@@ -521,6 +521,7 @@ class WalletController {
     signer: import('@grape/core').WalletSigner;
     source: import('@grape/core').WalletProfile['source'];
     derivationPath: string;
+    biometricUnlock?: import('@grape/core').BiometricUnlockConfig;
   }) {
     const walletId = `wallet-${crypto.randomUUID()}`;
     const account = {
@@ -535,6 +536,7 @@ class WalletController {
       name: input.name,
       chain: input.chain,
       vault: input.signer.kind === 'watch-only' ? undefined : await createVaultRecord(input.secret, input.password ?? ''),
+      biometricUnlock: input.biometricUnlock,
       signer: input.signer,
       source: input.source,
       accounts: [account],
@@ -1061,7 +1063,8 @@ class WalletController {
   async createMnemonicWalletSet(
     mnemonic: string,
     password: string,
-    source: 'created' | 'imported-mnemonic'
+    source: 'created' | 'imported-mnemonic',
+    biometricUnlock?: import('@grape/core').BiometricUnlockConfig
   ) {
     const current = await this.getWalletState();
     const nextWalletNumber = this.getNextWalletNumber(current);
@@ -1090,7 +1093,8 @@ class WalletController {
         publicKey: solanaAccount.publicKey,
         signer,
         source,
-        derivationPath: solanaAccount.derivationPath
+        derivationPath: solanaAccount.derivationPath,
+        biometricUnlock
       }),
       this.buildWalletProfile({
         name: `Wallet ${nextWalletNumber}`,
@@ -1100,7 +1104,8 @@ class WalletController {
         publicKey: suiAccount.address,
         signer,
         source,
-        derivationPath: suiAccount.derivationPath
+        derivationPath: suiAccount.derivationPath,
+        biometricUnlock
       }),
       this.buildWalletProfile({
         name: `Wallet ${nextWalletNumber}`,
@@ -1110,7 +1115,8 @@ class WalletController {
         publicKey: monadAccount.address,
         signer,
         source,
-        derivationPath: monadAccount.derivationPath
+        derivationPath: monadAccount.derivationPath,
+        biometricUnlock
       }),
       this.buildWalletProfile({
         name: `Wallet ${nextWalletNumber}`,
@@ -1120,7 +1126,8 @@ class WalletController {
         publicKey: ethereumAccount.address,
         signer,
         source,
-        derivationPath: ethereumAccount.derivationPath
+        derivationPath: ethereumAccount.derivationPath,
+        biometricUnlock
       })
     ]);
 
@@ -6958,11 +6965,11 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
           sendResponse(await controller.getStateResponse());
           break;
         case 'wallet_create':
-          await controller.createMnemonicWalletSet(message.mnemonic, message.password, 'created');
+          await controller.createMnemonicWalletSet(message.mnemonic, message.password, 'created', message.biometricUnlockConfig);
           sendResponse(await controller.getStateResponse());
           break;
         case 'wallet_import':
-          await controller.createMnemonicWalletSet(message.mnemonic, message.password, 'imported-mnemonic');
+          await controller.createMnemonicWalletSet(message.mnemonic, message.password, 'imported-mnemonic', message.biometricUnlockConfig);
           sendResponse(await controller.getStateResponse());
           break;
         case 'wallet_import_private_key':

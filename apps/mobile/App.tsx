@@ -39,7 +39,7 @@ import {
   TextInput as PaperTextInput
 } from 'react-native-paper';
 
-import { DEFAULT_THEME, type GrapeTheme } from '@grape/core';
+import { DEFAULT_THEME, parseDeviceLinkPayloadText, type GrapeTheme } from '@grape/core';
 import { chains, getMobileTheme, mobileThemes, type MobileThemePalette } from './src/theme';
 import {
   addWalletSet,
@@ -93,7 +93,13 @@ import type {
 } from './src/governance';
 import { scanMobileGovernanceDaoEligibility } from './src/governance';
 import type { MobileReputationResponse } from './src/reputation';
-import type { WalletMnemonicLength } from '../../packages/solana/src/mnemonic';
+import {
+  createMobileDeterministicPasskeyWalletSetup,
+  getMobileDeterministicPasskeyWalletSupportStatus,
+  getMobileDeterministicPasskeyWalletUnavailableMessage,
+  getMobileDeterministicPasskeyWalletPassword
+} from './src/passkeys';
+import { entropyToWalletMnemonic, type WalletMnemonicLength } from '../../packages/solana/src/mnemonic';
 
 const GRAPE_LOGO_IMAGE = require('./assets/grape_logo_white.png');
 const THEME_BACKGROUND_ASSETS: Partial<Record<GrapeTheme, number>> = {
@@ -132,6 +138,7 @@ type DiscoverApproval = {
 const GRAPE_DISCOVER_DEFAULT_URL = 'https://governance.so';
 const SOLANA_SEND_FEE_RESERVE_SOL = 0.00001;
 const SOLANA_TOKEN_SEND_RESERVE_SOL = 0.0021;
+const PASSKEY_WALLET_CREATION_ENABLED = false;
 const GRAPE_DISCOVER_WALLET_ICON =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAYAAAGVn0euAAAABGdBTUEAALGPC/xhBQAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAAYKADAAQAAAABAAAAYAAAAACpM19OAAABnWlUWHRYTUw6Y29tLmFkb2JlLnhtcAAAAAAAPHg6eG1wbWV0YSB4bWxuczp4PSJhZG9iZTpuczptZXRhLyIgeDp4bXB0az0iWE1QIENvcmUgNi4wLjAiPgogICA8cmRmOlJERiB4bWxuczpyZGY9Imh0dHA6Ly93d3cudzMub3JnLzE5OTkvMDIvMjItcmRmLXN5bnRheC1ucyMiPgogICAgICA8cmRmOkRlc2NyaXB0aW9uIHJkZjphYm91dD0iIgogICAgICAgICAgICB4bWxuczpleGlmPSJodHRwOi8vbnMuYWRvYmUuY29tL2V4aWYvMS4wLyI+CiAgICAgICAgIDxleGlmOlBpeGVsWERpbWVuc2lvbj41MTI8L2V4aWY6UGl4ZWxYRGltZW5zaW9uPgogICAgICAgICA8ZXhpZjpQaXhlbFlEaW1lbnNpb24+NTEyPC9leGlmOlBpeGVsWURpbWVuc2lvbj4KICAgICAgPC9yZGY6RGVzY3JpcHRpb24+CiAgIDwvcmRmOlJERj4KPC94OnhtcG1ldGE+CrgvSFcAABjESURBVHgB7V0HlCRHee6eDXenfEI5HJYQIJTRI5xlJcIDwxPBCCGULNmEBxJIFjbPzwbx1pb0wM9EG2xLYMmERzgJBSQOnYIXUBZnnYRY6Y69uLe3t2lmZ6ZnplNV//7+nq3emp7uSTu7dyddv7dbVX+qv6qrq6v/+v8aw5jPRbiYX6UNZZVF8KBOwEzqemxqan8dF+ULjryOC5YfPMDEFRHcw+Uxi97Aac1le/QjBjAhp55PT3MavzIKIPzgUZXntK/XeAunSgDn6y6FdJ3gLkaOjlaO4VTBOV9zMcKx6DOc0irq4YQJVFpDrArjG+kwzguPQhWlT1mFS0xZmhRByc3Jf3Qm6J0NpSsJ7na6kPMtEYeEkiQV6L1imi5XQuafbnLdUzcTvZolCQrKukRdNVNH6PkaItOM6KI7zcRlT35/S4mOWE20ZNoR54POLAtarQuK8hMlOk0Vhgp0MOdVLTKgGhVDurItbwSiILmHcHl+8BKnFUf+G6dKWF06Olp8FQMdW/5HHTIJwNL0Kz9OxyXRhTDfpi+nItMQAwZlVA1ega5Io4vgXoXCBycCtJIhQQ7X0gptDU2F6Elm9PFcnT842FuDnE8hTRsnCNbO+PKLSbKZZ8IVH0rCtQVLqzxNSM3YVkQspOTLz0+W6AzO+zLIPj9Oh3GeaRwRrB7K2Su4zNeLU3SkJ2mI80pGagqaQCGfeIKWuR79typbLt1cLFI4khkWF5i1xIc9ojMUfWrKjHyN59xTmGjDhuIhXFYMpZK4Si97XrCWy75P6xRN0xQPaUkRFafpRLdCf6/Kvhv8SuVVqleoYE1TZuJLJ0wqx2E6fcOx7eaND2AUHKgzUECeXuY8T3RxWFtlzGg+BNe1RNj0eFuCGhGjAqHjG3WLTtdWfmiA+qVF17bFtMuIh133ZO4GvopS/ldXFWGhmNiGldBpIS5nmConpVNCXIq/TyThamB4BYoRz3tzDXC2kFbJTt8/Lw1XJ6cR4Ywnr2V8/PID2lknqFMAHodoMmxFRuJ0zYwlP3hwR9l7YzUvv1bw6Uuc50fWlfTjgkuXcLngyc/agm7hfNJVV0HRlf/CXTCaN686ZGnv7Zy3neA+IzD+yHkIMafK7kCPabylWs70llz/lllcUh21MJ1QzzOVXnYE3bmj6Lxe59bxOrwmrxPpeSbSy3peCUiCpc6m09N0tBKaLforl/T2nK7KmDszeLk8pwS2NZtOTdFRzMiX0iwISOIFFC0hGee61U8XValOr/hS0zhxszLe0+8rlejSJIF1oyiJqBlMlIzne8ioueENecrQSAraxESsvbqwrvx3lec0mO02zjcUmITEi/33zDi0ivoVHkXplulmVfadYA3TlKcpce5SdKkpM+vIeJlxSTCdp+17UNpMh+sC5pX3LPndYPZrkzXFS/7WwKMXldYqnVclbpYujgtyc3TZLGx+yxWlWbwChifBFL2etn0PmNmfoHfJkvFtXdC886yxl6XrgjLd36r2XGnLLeAJLRMYk2LG+EJbk9u8m7YnCVgzPr4vPjjLfAsaXVYQ/Hy+7ZqRsnsrVHwdHagUHvP9dzVTrhIEjzG9FwS5ZrRx/O1btixVdcVxHZXHHXEBCywHwb3tClCKuEGwdcz2z0njz7riQkFkKfqsEH+VRrvocFbKDWhjScgfiiCA6aP28nGXij599b6xsX0WXblWKoTSocat0HZC0/I0Z7nyxtq+q5bwqeJ7MtiYhKv4wV09sx/PSfgSTIpJcBgCK8YAtaxbw4YPbqHUh6riyi+zAo4frEkSopSbLPpn6/i1Y7QP4/je6HCVz7vyHxjv+sHvFKzjVGDVxsKSBDAcyteY4RWd5cirGT85Q+HXkYJzih52GafD4vmKQ59nmpEJ5zVxnF5u5TbN6AzxfG/GXBGHcRlfDn/kdMlS4yRO9QuqF7m8evXwkouwK6DjVL4nY5zMeVlZ0tj4rxgapdwTfBXL9IFCyf/zaglDICAbf4/jLuUVTAjaruVHfT94SpU5lcHsU815SS94Yu75QTkfKi1pkmlLFfm5Rnq1hRsepiWsMAvGZ0zNmFaCGMeXKuvpxETpcMahgeHHho5TecgP7dLlsrxBwbqasgLYqhlJEsqWdMaXCsnfZ55LobkziVfBhoZoP5bhedTdpaiqQEosRnGpskoHB6nXteWPGIepJcAW2b2b1lKNgRIN/EaIRi/7+KxwCvQexa9S36GfM01+wjlewbqeYkdtR6iIxB5NgcKZhsuVvPiIqsyaobcxTL98l1YPr6YlTJMdpgPQiOcZj29Tz6vIbyva/AQ1nHVUHfNOrWl6O1fKPZsmTCmVhmc402Dsy0Y0C4KTDn2LK9/0UK5mqOiVMR7D4gEdFs9LtzprxeGLUmYFeczHKxMOPRjiYv9KE3MbjMzjzdAVTILP7Z/GZSxaGXfihZierFDdLrq9mV4dp+MyNp4X7oFtpxesZ+lQVkiW6OuN+JgGxo7pRjTt4FpZSrQkr3epEa7n8aK1mzFggRoZtJrRLioeb4l7uYdFme6MVzw5WH1JMZ4M6o7FJ15Jt8qBU7V/hcpq/8TO+pdXt+rcK2dvDyxmD2Sl/Cfs8ha04c3r4KFR8t+xmHq0XVee5E260mn59dTAT6aFWjeRvWLEt89tgbR1EnzEDiuFYfb72zgnFvuH2FS1yDHduBDhbmCcrpWyqqcV2pZoYCr8HQuFXXR7M4ZNRK9VCmwmOr0ZfRwPC+A9zI998NviuI7K474fLpvZgtaqgKFC4WDViFZ5mA777M8yH9ua2uFrSFu1q9V/hTVkAjLry79TjUBvfvWpLB2QxPNimY6sSPkzRYuOipxmkujbhrFgeIXe3TYjGJRSraZ5X36hk3oa8wwMdLzgs0XwECu/0xNXwcCLyan24rsL+FPTPr2zsRK7CDvlio+yytPlZDePbqjVce+2VLnZE1rnfDNzXEv0HRC11YBxl04tC3k7e4QU/VqrmSXoIjjv3QmPkB9N2f7bWJc+aSznNCDDLrhygPng/PfNDdOV0JuBcdtL7qm2kN8F7n44U1/NsK5fA7D7wM4fGmRrRzEMWZ78YRymymU/uEPl46kX0BZl5I3jrG4/zKoCuEK+NFWmM9ktEr11PR5CTNnVq+TRNzZW6NjRovM6WKxXKzin/LDmKuKSp2BexN05X8hgXOFhQn+B3THXT5WPwt2Jpl54TN7UlTuBCsKXCzY4vhQXqJQYmpzcL46btqsOX+jluhcgOiJ0eCk69UsSlqPksj02LrftMguD4akSZyzYVYeAkkPXx3FchsV6J/MOYvjF8QxHw6w4XJV3Wu5JTGNjeCpYR+kIzHwsqOzW+wd7gh5lXJpgxkHJGrdHpp0uuicyruTUTgJxOUzDmytxeLzccBY6Yrkfvv6FzGyMM+KuHBGH1ZXJqBs+PWbmMKZzPNpcRx8DZExjWQxUV2zYgB07+rYwR39P8L44p2mYofHq2WHr0DiOy3xvMhmjDpctO+sZv++Snvc9sZ0aKoiHfyfTzuviW8mXLgS9959V6Nx/168GLFx00aoehBhsmMNUc8Wy+BjLmMp7b4rjsDMzs3WqfKSqAyELA0xTduhTCtZxWqrQ37AwVDLFQpAWucwX8i9hCymcUbiMYcUzZnTx9hJ2ZEYVAD7dW1We5YD+SaTR+yVfoncWyvQeRdOx0nFGXUkWjh2UZ+I0cNWLXmjYSwt7W6eBslmlGDuv67hsliKHXkUDF8Hojui0Heexb/VFFg5FnCQh5TJ9ivEVbFYk4dHT4ctrdHTOnV+n43035gedvb3Js6HztZxn30SuAIq+P4kJnoKhgkk4hjGvEEG4C9mIhunS8EnwhrOQztDfb5zF5XLZ+F8drvKZHiPVX28AsTdMJ6X5G0WflKL3R5LgjWAtN0C6Qbjh3Ndn1IxfJTwIDE/l4+mAYQYMy5h0TBynl+FqFq5edVjX8rxzyLcXO5C/iAuFs+kFeDZCfx8Mpa12ia7UaXjHknn5Qi/PuDbdPjhQH2bEeMjp7jexrghXwJe+kwiF6nyAqlTVdZBToW+qcjwtWxSt/30vCJ3A2fNWr7OreVZcKYHdye/wFimXpUfPqX1h3koV2FJVdCq1Z+h8pYxr0UUKjkjKT7EbMJd5C1fRLFjKrsCqck6xC/nLpMpca84MmYQfHJzzjQvlwB05iW7BYBir4cdMWgWeRZ9kxdw8XZxKU5LhVi3vOafRLBiclcMtT92sw1brb5kGb4DU7aQJuEozTUdxkbMta3kaTewJeK8kwgHEe2F2I89MfTH15YzwrY5lc7hBmCarEXxeDcj0m6nzunSNJ7liuHdfmKbAvscb4Yzj28YjaTQLBufddb79mF2u0Ctxx+lUhscv0D+s03Ged/mZLg5ftLJS0psRf8mV2tP0DgVjT30OAYfit0QwUX1J8dKCPfsZzl7+i6ZwvCJ2E1DK6Sm7FcRphR08rdNwnt0U4nS7omyilx9XyrlT4rI0JRQNJmCfQx/S6HYJnP0fWMFGlbMfBdOwX0UjunZw85qF9IrMXuNVejkpL/LGEwxfcqLRNWNv1xoAC1DTVWTvgUYYPC23GhNJDdylMGFV47Q4ACZNEUya8LJvPMzSeBcczh4orFx4raF94xXCkyX0SGSPljhutymLHF2u2oBIgftQfq+coesw62AjHxeOpthtlE1ThF1qVCP0lF1w0nh2S7g3SqdzqLmYoks47Hy3VHKvUnt7IIw0X9xuIMN80bFXLF/ae7wv6bgDzZ79YIU3LJiVMA2P5Hrk1keM/k3Xmqa7uIq9TGvb6nlnlkj+GC4cqdYjfbLV82wzgKPP4xNC/MXLtHsW5gnYRnQ8Fsu3YfPovHjHYSWUhwV1LTynng4yxHtNCDsk6u8194Od5nV9Zs+b+k3zrXhrHBXn9Qzanjfkxw83+x6M4xa6/ATRsjOIHltmmmdiLWEjoPS8Ff39848R66biGx3nBOwVbdZHMdwTnLyUNz8BD65268ImWS8HhSKQdKxGJuwI8Mf7QLvyOqV/1rIO5RNblA4YL+Utrntip/IWhA8HoH1HKcgpOm3LZtc9rVuVrSM6CL6Aa/Q67ICe4fjsbtURl8ODBnXeqdeJ8OjxzbZdZ6+I8y5aGZ6ifQjki+wRUDbAmT5XLpQCI657Ct4nM6pTMBqL8CG+/qVi9Ty7+da7zXVPsqS8Ne5YhPeRzEl5zXzlx/lTTcZxwrQyXBnv3afHDLcsoaQ7LsyVx/Sbz6XRdwOOs932PfEwY22/adRNA7wLJ8jYKgx6Hl4iLxgmDcMfJttPPYX9eg2vIIx9MqZcvo9p8m7kSb1m5rReg07pNc1Ecwq8EddlA/nZo/v6unfqVzc6QckY97yVmG6ewRz56Db49yj4QqfsFSaCuehZxOzUuDeoJ6TdFB3+IvutDlca76R2q33zfgK6pUgncgq+/OcDejM3MK8kI/9/JeOEtx5gZgeJlp7gGsfu0yOO6yPzGGGaR+IErP3xvWGKwPCX9mamPJKTODx2W8nwt71+2bIxnJjX0BraiX4ve56cT3+mj/AdZbFwO8sL1Jtds+gukH4NxWawNQ1X4OjabcMCIw0XKTNp+2fD3f5+/gbQR6ieB86z4T89bVc3trci+AHeul/jMwN1unjelcFzRY/+Gk5HZtETV2p4CdxIoxcBDmedLPn0rdHZ+T1n0zk44e+XTfSsVATdPV7xVi5S93VWzSCccnG68m1ah0RZNFDiyJUcbD9ZvDixcmztQodhmqdJuFeHJ0C0xlWlYh7czEmW0SofjrkQrCPryjon8VmevIX93zvrpQXiypb8d7NjsVKYRyEc8b++KVd7GINe/TBOSUHn5BUPp+ixR+InN+o8nM/Z4jIsL0OPPJ0XN3Yq7zbe65wuy2t0HugpLZ9uHpqkOnd1Ve8wwpVKrvxX3JyIlds6XfJ3j0CZmbJ4f6QZMjhECHtG6S4p3LBxiw5Dh00oPnTo6PZK9VBK1fBGKc42j7b7WUZ+1g24EU+2Ij6i6uO04smfNKJPwlV8qongyJXFBUl0iwZjZ210XmQjQaTGQ61UjjiA76nOAP/Mdi2Gphn/jE3nK15OcW5R06/Tp4azByDIYkTxQc86R8Vm9Sq8Ho2CqWq4mcO64luQFM67Z+BxjJ7NAqaHZhXdDtc4RLFEMXDqhxya8Sm8ZdONqiNR9zQ/TQqXluKY17MiJcGctejDabTN4Djc/GKt/gChQuFefTO+NPy8lqGW6/kGGUIJhym5qcVz22/+xMPXH6wD1QubMIkmAIWPp1hqznlbE+2Hw18PitPEy0uW9FrQM9qR7uuVTXniMlR5ad+cLzE8DPxi0di1G0cI0/iVGhFwRZ/YiDP4lbJJ6WSBXuu4wV2Kh1PXCzY6XvCgjUAxjNY/TeJjGL8QrbL8NE5lilYovgiyvqDHbUfealXoQ+unaP8kfugZWVLhWlxCnS/hbxP+1rmC7sARap+ZaHKoy9gYHYLVVbRMRjseSKprUWHDO+lQzOPhCU/cmZgWyggbeYeuRN6it4NmM+NbvSCnhHiZa7YiagOdFzqFtMrLdOicO3gwcMwNOjw6dLIVGdggGp6Z8c+Lt0Edx8Uy0J6xnVb3nLT0utrO4yCyfoTQ1Jx/hFWbsG35UzwVNUtGdEa2jHkc8/DJ+HZYypWtwrl4GF0r0FmfxBHc0fshqbNcN7inUPDfPbR9boNnaKhwcD7vvwshOzVPVpwfYT8bEGxy9fi4fdyqVUOhqwafkJgr0am2TTexbjoPymNow/+gLa4OR1sf6kpEZNs93YSBf6MIyj2sK6vy6NihkZFy3TZjksjJSToCjY9s/hh5vmU1XuPrctBp1cPhZivHjfkJfyjqNGl5PkqddVV66ykCxgbHxuwVaby7DZxHMzqwpJR3nOCO1pUjk0eY4uUbwfJa5a9Y9FHFy6llNV+mJsnGTfuZksNtQVDbsUl0uyWsrEVp4HVZzLXRgRjpJ6PBvmq8U0kOjk5ruNBetjg1kN2aOzK5Z3fQsdA9MmNwm9LqnA98XsvQtIr7+jLRMg/GyrzorQ8fTuOFzR6bVUY0XQg/M55GG4cPGAMZLA2jkDOEsE0iBE2zl8Y50ssyb8zA0hotefU2pXPtJhhMA7Wf/VZ6rEZcZbyQ+zlkTj0BOAtzzfBTycfHxHm57Dr0FcWLJ8nK5fyzeV5X52km8STBijPig0oOp9ymJLrdEgZ9TQSRRevuAC/RUjb9YHY7R2d7TvCo3uC0PML61pcK4tJ4w628uBhTzktpfDocdL+uFOmsuAxVtqZwKKq28pn9zYyOpjIlc9FTXlpyJF+s4esr2bmGVwry+jlDxhwlfpNxKxp9n1uiHyC9AzFpf5j79Jqjc8r0PfzVGOYYy7S4UX8A7yrI+D7SX0DmljnO2RzsE9DhOtU5xQn/LIRO1txEbgO3RdHscak16Z+LKWWqrvExAOJHf7xl3Uz07khq6ACOXMevudyAm6abdqqSAGMc0yTxKtjMFjrIrcydehVTIyqyzngyz1F8e3ya/z0tRwzrjQEOYtBM6zxapxv+xGRCy/Mj9Brw2aq3MLqfaXeO5+BhdHJOyWCdWDcbOrKuCdW+PEBekT6mGo1xLHn+b7dlOIj6B0oGOm1ibAMlBvI3k2tN0rno+OhpYt2a8XQb3/Bx7XZlLC/TZ7xZyQ18Y9vmh43nVLm1lMze/swbFC2iYn931OvN1LhlRZeU7nhyeh3ODNymcLpuCrbQ6aLfAByOv101CsF9hx+90mUPtTYuE6c6G5OKIdNLx3Pwqyq3kx7xxkMOgw6R9VbXrR05exTt1Ho6CquayM6DyPrBVjqQ+AU8Qx8UFbob004YVqqmIZ5EIHMSsu51p+lDqy5qvmrhlzXXrWSwTqzbHtWZnSqLYMqzOGA4arygrD2Z/C5wpsQFiONtuopSslQq/WDayVHini3XhZs4Z/mELqxTp+3ZI/kKQ3Qwws2fVR2mUozKX3t5+oQ97r8dMfeI9Zi7UN7MP2Y3tpbqjmhgGOOYZo4DT4ZLIz4+rPCC/Ti8lAZ1HOdZB9Zlj+zEbihdxmOPaaWhHR+dujW3qXUzsL2JVuDUypqbF+94rpPr7kYbXjYyEC6d8bbTW3jUqg5D5w/B72JJu43cgs1/3ITIrs8yWTbX0a6sVxS9N0Gn4yMLxoTq5U3TVZ12AH595Colh2Wy7E5lLRRfZPZdqAraldvXj8BBzewFW3LkddGurIzmsQETtxHKblfIK40eP4XVh6kj+skaeIU+g5PC2jaGEQxoIe/sIxDKhOxXWn921F5vnFZiypjzNXUQJtTGngCBFiueddr0I1hmR8q8UpncYToZ6/8a512M6N+iI9+a1ic4oGIlaGr2FVgGy0rj2Qtv0gMyR5/Gs1DjFqJGdsMUPMzbRPxedKs9kH+UluPwm8/hwIPn8BUbfUWrm8AwxjEN07Yqdy/d3h7Y2wO7sgf+H7nH/6XkToLfAAAAAElFTkSuQmCC";
 const GRAPE_DISCOVER_WALLET_ICON_JS = JSON.stringify(GRAPE_DISCOVER_WALLET_ICON);
@@ -833,6 +840,27 @@ function normalizeScannedRecipientInput(input: string) {
   return address || compact;
 }
 
+function normalizeScannedRestorePayloadInput(input: string) {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return '';
+  }
+  if (trimmed.startsWith('grape-link:{') || trimmed.startsWith('{')) {
+    return trimmed;
+  }
+  if (trimmed.startsWith('grape-link:')) {
+    return `grape-link:${trimmed.slice('grape-link:'.length).replace(/\s+/g, '')}`;
+  }
+  return trimmed.replace(/\s+/g, '');
+}
+
+function formatShortAddress(address: string) {
+  if (!address) {
+    return 'Unknown';
+  }
+  return `${address.slice(0, 4)}...${address.slice(-4)}`;
+}
+
 function parseOriginFromUrl(value: string) {
   try {
     return new URL(value).origin.toLowerCase();
@@ -851,7 +879,7 @@ export default function App() {
   const [mnemonicLength, setMnemonicLength] = useState<WalletMnemonicLength>(12);
   const [generatedMnemonic, setGeneratedMnemonic] = useState(() => createWalletMnemonic(12));
   const [importKind, setImportKind] = useState<ImportKind>('mnemonic');
-  const [passkeyRecoveryMode, setPasskeyRecoveryMode] = useState<PasskeyRecoveryMode>('passkey-phrase');
+  const [passkeyRecoveryMode, setPasskeyRecoveryMode] = useState<PasskeyRecoveryMode>('passkey-only');
   const [importMnemonic, setImportMnemonic] = useState('');
   const [importPrivateKey, setImportPrivateKey] = useState('');
   const [importPrivateKeyChain, setImportPrivateKeyChain] = useState<MobileWalletState['selectedChain']>('solana');
@@ -873,6 +901,7 @@ export default function App() {
   const [sendLoading, setSendLoading] = useState(false);
   const [unlocked, setUnlocked] = useState(false);
   const [walletListExpanded, setWalletListExpanded] = useState(false);
+  const [chainPickerVisible, setChainPickerVisible] = useState(false);
   const [sendScreenVisible, setSendScreenVisible] = useState(false);
   const [sendAssetId, setSendAssetId] = useState<string | null>(null);
   const [sendAssetPickerVisible, setSendAssetPickerVisible] = useState(false);
@@ -900,6 +929,8 @@ export default function App() {
   const [bridgeError, setBridgeError] = useState<string | null>(null);
   const [walletComposerVisible, setWalletComposerVisible] = useState(false);
   const [biometricAvailable, setBiometricAvailable] = useState(false);
+  const [passkeyAvailable, setPasskeyAvailable] = useState(false);
+  const [passkeyUnavailableMessage, setPasskeyUnavailableMessage] = useState<string | null>(null);
   const [biometricLoading, setBiometricLoading] = useState(false);
   const [reputation, setReputation] = useState<MobileReputationResponse>({
     spaces: [],
@@ -938,12 +969,19 @@ export default function App() {
   const [governanceEligibilityError, setGovernanceEligibilityError] = useState<string | null>(null);
   const [governanceEligibilityScanned, setGovernanceEligibilityScanned] = useState(false);
   const [exportPassword, setExportPassword] = useState('');
+
+  useEffect(() => {
+    if (!PASSKEY_WALLET_CREATION_ENABLED && setupMode === 'passkey') {
+      setSetupMode('create');
+    }
+  }, [setupMode]);
   const [exportLoading, setExportLoading] = useState(false);
   const [exportReveal, setExportReveal] = useState(false);
   const [exportedPrivateKey, setExportedPrivateKey] = useState<string | null>(null);
   const [exportVerifiedWalletId, setExportVerifiedWalletId] = useState<string | null>(null);
   const [deviceLinkSession, setDeviceLinkSession] = useState<MobileDeviceLinkSession | null>(null);
   const [deviceLinkLoading, setDeviceLinkLoading] = useState(false);
+  const [expandedSettingsSections, setExpandedSettingsSections] = useState<Set<string>>(() => new Set(['current-wallet']));
   const [qrScannerVisible, setQrScannerVisible] = useState(false);
   const [qrScannerTarget, setQrScannerTarget] = useState<'restore' | 'send' | null>(null);
   const [discoverUrlInput, setDiscoverUrlInput] = useState(GRAPE_DISCOVER_DEFAULT_URL);
@@ -959,6 +997,16 @@ export default function App() {
   const [discoverApproval, setDiscoverApproval] = useState<DiscoverApproval | null>(null);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const discoverWebViewRef = useRef<WebView>(null);
+  const parsedRestorePayload = useMemo(() => {
+    if (!restorePayload.trim()) {
+      return null;
+    }
+    try {
+      return parseDeviceLinkPayloadText(restorePayload);
+    } catch {
+      return null;
+    }
+  }, [restorePayload]);
 
   const selectedWallet = useMemo(() => getSelectedWallet(walletState), [walletState]);
   const discoverWallet = useMemo(
@@ -977,6 +1025,7 @@ export default function App() {
   const contentMaxWidth = isWide ? 680 : 560;
   const screenPadding = isCompact ? 10 : 12;
   const footerInset = isCompact ? 16 : 20;
+  const deviceLinkQrSize = Math.max(240, Math.min(width - 120, 320));
   const paperTheme = useMemo(
     () => ({
         ...MD3DarkTheme,
@@ -1010,6 +1059,10 @@ export default function App() {
     () => dedupeVisibleWallets(walletState.wallets.filter((wallet) => wallet.chain === walletState.selectedChain)),
     [walletState.selectedChain, walletState.wallets]
   );
+  const availableChains = useMemo(
+    () => chains.filter((item) => walletState.wallets.some((wallet) => wallet.chain === item.id)),
+    [walletState.wallets]
+  );
   const walletsByChain = useMemo(
     () =>
       chains
@@ -1022,10 +1075,15 @@ export default function App() {
   );
   const filteredActivity = useMemo(
     () => {
-      const local = walletState.activities.filter((activity) => activity.chain === walletState.selectedChain);
+      if (!selectedWallet) {
+        return [];
+      }
+
+      const local = walletState.activities.filter((activity) => activity.walletId === selectedWallet.id);
+      const remote = remoteActivity.filter((activity) => activity.walletId === selectedWallet.id);
       const merged = new Map<string, MobileActivity>();
 
-      [...remoteActivity, ...local].forEach((activity) => {
+      [...remote, ...local].forEach((activity) => {
         const key = activity.signature || activity.id;
         if (!merged.has(key)) {
           merged.set(key, activity);
@@ -1034,7 +1092,7 @@ export default function App() {
 
       return [...merged.values()].sort((left, right) => right.timestamp - left.timestamp);
     },
-    [remoteActivity, walletState.activities, walletState.selectedChain]
+    [remoteActivity, selectedWallet, walletState.activities]
   );
   const headlineAsset = assets[0];
   const holdingsSummary = assets.length === 0 ? '--' : headlineAsset?.amountLabel ?? '--';
@@ -1174,10 +1232,11 @@ export default function App() {
 
     async function checkBiometricAvailability() {
       try {
-        const [hasHardware, supported, enrolled] = await Promise.all([
+        const [hasHardware, supported, enrolled, nativePasskeyStatus] = await Promise.all([
           LocalAuthentication.hasHardwareAsync(),
           LocalAuthentication.supportedAuthenticationTypesAsync(),
-          LocalAuthentication.isEnrolledAsync()
+          LocalAuthentication.isEnrolledAsync(),
+          getMobileDeterministicPasskeyWalletSupportStatus()
         ]);
 
         if (!mounted) {
@@ -1185,9 +1244,13 @@ export default function App() {
         }
 
         setBiometricAvailable(hasHardware && enrolled && supported.length > 0);
+        setPasskeyAvailable(nativePasskeyStatus.supported);
+        setPasskeyUnavailableMessage(getMobileDeterministicPasskeyWalletUnavailableMessage(nativePasskeyStatus));
       } catch {
         if (mounted) {
           setBiometricAvailable(false);
+          setPasskeyAvailable(false);
+          setPasskeyUnavailableMessage('Unable to determine whether native passkey support is available on this device.');
         }
       }
     }
@@ -1434,6 +1497,35 @@ export default function App() {
   useEffect(() => {
     let mounted = true;
 
+    async function refreshActivityForTab() {
+      if (!unlocked || !selectedWallet || mainTab !== 'activity') {
+        return;
+      }
+
+      setActivityLoading(true);
+      try {
+        const nextActivity = await loadWalletActivity(selectedWallet).catch(() => []);
+        if (!mounted) {
+          return;
+        }
+
+        setRemoteActivity(nextActivity);
+      } finally {
+        if (mounted) {
+          setActivityLoading(false);
+        }
+      }
+    }
+
+    void refreshActivityForTab();
+    return () => {
+      mounted = false;
+    };
+  }, [mainTab, selectedWallet, unlocked]);
+
+  useEffect(() => {
+    let mounted = true;
+
     async function refreshWalletReputation() {
       if (!unlocked || !selectedWallet || selectedWallet.chain !== 'solana') {
         if (mounted) {
@@ -1606,6 +1698,14 @@ export default function App() {
     setGovernanceEligibilityError(null);
     setGovernanceEligibilityScanned(false);
   }, [selectedWallet?.id]);
+
+  async function deriveCurrentPasskeyWalletPassword() {
+    if (!walletState.passkeyWallet) {
+      throw new Error('This mobile wallet set is not backed by a deterministic passkey.');
+    }
+
+    return getMobileDeterministicPasskeyWalletPassword(walletState.passkeyWallet);
+  }
 
   async function saveState(nextState: MobileWalletState) {
     setWalletState(nextState);
@@ -1909,54 +2009,34 @@ export default function App() {
   }
 
   async function handleCreatePasskeyWallet() {
-    if (!biometricAvailable) {
-      setError('This device does not support secure passkey unlock yet.');
+    if (!PASSKEY_WALLET_CREATION_ENABLED) {
+      setError('Passkey wallet creation is temporarily hidden in this build.');
       return;
     }
-    if (passkeyRecoveryMode === 'trusted-recovery') {
-      setError('Trusted-device or account recovery is not available yet. Choose passkey only or passkey plus recovery phrase.');
+    if (!passkeyAvailable) {
+      setError(passkeyUnavailableMessage ?? 'Native passkey wallet support is not available on this device.');
       return;
     }
-    if (passkeyRecoveryMode === 'passkey-phrase' && !confirmBackedUp) {
-      setError('Confirm that you backed up the recovery phrase.');
+    if (passkeyRecoveryMode !== 'passkey-only') {
+      setError('Deterministic passkey wallets currently support passkey-only recovery only.');
       return;
     }
     if (passkeyRecoveryMode === 'passkey-only' && !confirmPasskeyOnlyAccess) {
       setError('Confirm that you understand passkey-only access has no recovery fallback.');
       return;
     }
-    if (setupPassword.length < 8) {
-      setError('Use a password with at least 8 characters.');
-      return;
-    }
-    if (setupPassword !== setupPasswordConfirm) {
-      setError('Passwords do not match.');
-      return;
-    }
 
     setSubmitLoading(true);
     setBiometricLoading(true);
     try {
-      const authResult = await LocalAuthentication.authenticateAsync({
-        promptMessage: 'Create Grape passkey wallet',
-        fallbackLabel: 'Use password',
-        disableDeviceFallback: false
-      });
-
-      if (!authResult.success) {
-        setError('Passkey setup was cancelled.');
-        return;
-      }
-
+      const passkeySetup = await createMobileDeterministicPasskeyWalletSetup();
       const nextState = await createWalletSet({
-        mnemonic: generatedMnemonic,
-        password: setupPassword,
-        source: 'created'
+        mnemonic: entropyToWalletMnemonic(passkeySetup.mnemonicEntropy),
+        password: passkeySetup.vaultPassword,
+        source: 'created',
+        passkeyWallet: passkeySetup.config
       });
-      await saveState({
-        ...nextState,
-        biometricEnabled: true
-      });
+      setWalletState(nextState);
       setUnlocked(true);
       setScreen('ready');
       setMainTab('home');
@@ -1972,6 +2052,10 @@ export default function App() {
   async function handleImportWallet() {
     if (importKind === 'restore' && !restorePayload.trim()) {
       setError('Restore payload is required.');
+      return;
+    }
+    if (importKind === 'restore' && !parsedRestorePayload) {
+      setError('Scan or paste a valid Grape restore payload.');
       return;
     }
     if (importKind === 'restore' && !restorePairingCode.trim()) {
@@ -2028,23 +2112,13 @@ export default function App() {
       return;
     }
 
-    if (setupMode === 'passkey' && !biometricAvailable) {
-      setError('This device does not support secure passkey unlock yet.');
+    if (setupMode === 'passkey' && !passkeyAvailable) {
+      setError(passkeyUnavailableMessage ?? 'Native passkey wallet support is not available on this device.');
       return;
     }
 
-    if (setupMode === 'passkey' && passkeyRecoveryMode === 'trusted-recovery') {
-      setError('Trusted-device or account recovery is not available yet. Choose passkey only or passkey plus recovery phrase.');
-      return;
-    }
-
-    if (setupMode === 'passkey' && passkeyRecoveryMode === 'passkey-phrase' && !confirmBackedUp) {
-      setError('Confirm that you backed up the recovery phrase.');
-      return;
-    }
-
-    if (setupMode === 'passkey' && passkeyRecoveryMode === 'passkey-only' && !confirmPasskeyOnlyAccess) {
-      setError('Confirm that you understand passkey-only access has no recovery fallback.');
+    if (setupMode === 'passkey') {
+      setError('Passkey wallet creation is temporarily hidden in this build.');
       return;
     }
 
@@ -2055,6 +2129,11 @@ export default function App() {
 
     if (setupMode === 'import' && importKind === 'restore' && !restorePayload.trim()) {
       setError('Restore payload is required.');
+      return;
+    }
+
+    if (setupMode === 'import' && importKind === 'restore' && !parsedRestorePayload) {
+      setError('Scan or paste a valid Grape restore payload.');
       return;
     }
 
@@ -2077,33 +2156,6 @@ export default function App() {
           mnemonic: generatedMnemonic,
           source: 'created'
         });
-      } else if (setupMode === 'passkey') {
-        setBiometricLoading(true);
-        try {
-          const authResult = await LocalAuthentication.authenticateAsync({
-            promptMessage: 'Create Grape passkey wallet',
-            fallbackLabel: 'Use password',
-            disableDeviceFallback: false
-          });
-
-          if (!authResult.success) {
-            setError('Passkey setup was cancelled.');
-            return;
-          }
-
-          const addedState = await addWalletSet({
-            state: walletState,
-            mnemonic: generatedMnemonic,
-            source: 'created'
-          });
-          nextState = {
-            ...addedState,
-            biometricEnabled: true
-          };
-          await persistMobileWalletState(nextState);
-        } finally {
-          setBiometricLoading(false);
-        }
       } else if (importKind === 'restore') {
         nextState = await importMobileDeviceLink({
           state: walletState,
@@ -2133,7 +2185,7 @@ export default function App() {
       setRestorePairingCode('');
       setConfirmBackedUp(false);
       setConfirmPasskeyOnlyAccess(false);
-      setPasskeyRecoveryMode('passkey-phrase');
+      setPasskeyRecoveryMode('passkey-only');
       setGeneratedMnemonic(createWalletMnemonic(mnemonicLength));
       setError(null);
     } catch (unknownError) {
@@ -2144,6 +2196,11 @@ export default function App() {
   }
 
   async function handleUnlock() {
+    if (walletState.passkeyWallet) {
+      await handlePasskeyUnlock();
+      return;
+    }
+
     if (!walletState.passwordHash) {
       setScreen('setup');
       return;
@@ -2168,12 +2225,38 @@ export default function App() {
     }
   }
 
+  async function handlePasskeyUnlock() {
+    if (!walletState.passkeyWallet || submitLoading || biometricLoading) {
+      return;
+    }
+
+    setError(null);
+    setBiometricLoading(true);
+
+    try {
+      const password = await deriveCurrentPasskeyWalletPassword();
+      const valid = await unlockMobileWalletState(walletState, password);
+      if (!valid) {
+        throw new Error('The passkey-derived wallet secret did not match this local wallet state.');
+      }
+
+      setUnlocked(true);
+      setUnlockPassword('');
+      setScreen('ready');
+    } catch (unknownError) {
+      setError(unknownError instanceof Error ? unknownError.message : 'Unable to unlock wallet with passkey.');
+    } finally {
+      setBiometricLoading(false);
+    }
+  }
+
   async function handleSelectChain(chain: MobileWalletState['selectedChain']) {
     const nextState = {
       ...walletState,
       selectedChain: chain
     };
     await saveState(nextState);
+    setChainPickerVisible(false);
     setWalletListExpanded(false);
     setSendScreenVisible(false);
     setSwapScreenVisible(false);
@@ -2191,6 +2274,7 @@ export default function App() {
       }
     };
     await saveState(nextState);
+    setChainPickerVisible(false);
     setWalletListExpanded(false);
     setSendScreenVisible(false);
     setSwapScreenVisible(false);
@@ -2968,6 +3052,10 @@ export default function App() {
     if (!selectedWallet) {
       return;
     }
+    if (walletState.passkeyWallet) {
+      setError('This wallet set does not use a user-entered password. Verify with the passkey instead.');
+      return;
+    }
 
     setExportLoading(true);
     setError(null);
@@ -2987,6 +3075,36 @@ export default function App() {
       setExportReveal(false);
       setError(unknownError instanceof Error ? unknownError.message : 'Unable to verify password for export.');
     } finally {
+      setExportLoading(false);
+    }
+  }
+
+  async function handleVerifyExportWithPasskey() {
+    if (!selectedWallet || !walletState.passkeyWallet || exportLoading || biometricLoading) {
+      return;
+    }
+
+    setExportLoading(true);
+    setError(null);
+    setBiometricLoading(true);
+    try {
+      const password = await deriveCurrentPasskeyWalletPassword();
+      const exported = await exportMobileWalletPrivateKey({
+        state: walletState,
+        wallet: selectedWallet,
+        password
+      });
+      setExportVerifiedWalletId(selectedWallet.id);
+      setExportedPrivateKey(exported.privateKey);
+      setExportReveal(true);
+      setExportPassword('');
+    } catch (unknownError) {
+      setExportVerifiedWalletId(null);
+      setExportedPrivateKey(null);
+      setExportReveal(false);
+      setError(unknownError instanceof Error ? unknownError.message : 'Unable to verify export with passkey.');
+    } finally {
+      setBiometricLoading(false);
       setExportLoading(false);
     }
   }
@@ -3034,6 +3152,10 @@ export default function App() {
     if (!selectedWallet || !exportPassword.trim()) {
       return;
     }
+    if (walletState.passkeyWallet) {
+      setError('This wallet set does not use a user-entered password. Verify with the passkey instead.');
+      return;
+    }
 
     setDeviceLinkLoading(true);
     setError(null);
@@ -3049,6 +3171,32 @@ export default function App() {
       setDeviceLinkSession(null);
       setError(unknownError instanceof Error ? unknownError.message : 'Unable to create device link.');
     } finally {
+      setDeviceLinkLoading(false);
+    }
+  }
+
+  async function handleCreateDeviceLinkWithPasskey() {
+    if (!selectedWallet || !walletState.passkeyWallet || deviceLinkLoading || biometricLoading) {
+      return;
+    }
+
+    setDeviceLinkLoading(true);
+    setError(null);
+    setBiometricLoading(true);
+    try {
+      const password = await deriveCurrentPasskeyWalletPassword();
+      const session = await createMobileDeviceLinkSession({
+        state: walletState,
+        wallet: selectedWallet,
+        password
+      });
+      setDeviceLinkSession(session);
+      setExportPassword('');
+    } catch (unknownError) {
+      setDeviceLinkSession(null);
+      setError(unknownError instanceof Error ? unknownError.message : 'Unable to create device link.');
+    } finally {
+      setBiometricLoading(false);
       setDeviceLinkLoading(false);
     }
   }
@@ -3115,8 +3263,15 @@ export default function App() {
 
   function handleQrScanned(value: string) {
     if (qrScannerTarget === 'restore') {
-      setRestorePayload(value);
-      setError(null);
+      const normalizedPayload = normalizeScannedRestorePayloadInput(value);
+      try {
+        parseDeviceLinkPayloadText(normalizedPayload);
+        setRestorePayload(normalizedPayload);
+        setError(null);
+      } catch {
+        setError('The scanned QR is not a valid Grape restore payload.');
+        return;
+      }
     } else if (qrScannerTarget === 'send') {
       const recipient = normalizeScannedRecipientInput(value);
       if (recipient) {
@@ -3362,28 +3517,6 @@ export default function App() {
         <Pressable
           style={[
             styles.setupOptionCard,
-            passkeyRecoveryMode === 'passkey-phrase' ? styles.setupOptionCardActive : null
-          ]}
-          onPress={() => {
-            setPasskeyRecoveryMode('passkey-phrase');
-            setConfirmBackedUp(false);
-            setConfirmPasskeyOnlyAccess(false);
-            setError(null);
-          }}
-        >
-          <Text
-            style={[
-              styles.setupOptionTitle,
-              passkeyRecoveryMode === 'passkey-phrase' ? styles.setupOptionTitleActive : null
-            ]}
-          >
-            Passkey + recovery phrase
-          </Text>
-          <Text style={styles.setupOptionMeta}>Recommended. Device unlock for daily use, with an offline seed phrase fallback.</Text>
-        </Pressable>
-        <Pressable
-          style={[
-            styles.setupOptionCard,
             passkeyRecoveryMode === 'passkey-only' ? styles.setupOptionCardActive : null
           ]}
           onPress={() => {
@@ -3401,35 +3534,9 @@ export default function App() {
           >
             Passkey only
           </Text>
-          <Text style={styles.setupOptionMeta}>Fastest setup. If the passkey is lost and not synced elsewhere, the wallet can be lost.</Text>
+          <Text style={styles.setupOptionMeta}>The same passkey deterministically recreates the same wallet. If the passkey is lost and not synced elsewhere, the wallet can be lost.</Text>
         </Pressable>
-        <Pressable
-          style={[
-            styles.setupOptionCard,
-            passkeyRecoveryMode === 'trusted-recovery' ? styles.setupOptionCardActive : null
-          ]}
-          onPress={() => {
-            setPasskeyRecoveryMode('trusted-recovery');
-            setConfirmBackedUp(false);
-            setConfirmPasskeyOnlyAccess(false);
-            setError(null);
-          }}
-        >
-          <View style={styles.setupOptionHeader}>
-            <Text
-              style={[
-                styles.setupOptionTitle,
-                passkeyRecoveryMode === 'trusted-recovery' ? styles.setupOptionTitleActive : null
-              ]}
-            >
-              Trusted recovery
-            </Text>
-            <View style={styles.setupOptionBadge}>
-              <Text style={styles.setupOptionBadgeText}>Coming next</Text>
-            </View>
-          </View>
-          <Text style={styles.setupOptionMeta}>Use another trusted device or account as recovery once that custody flow is live.</Text>
-        </Pressable>
+        <Text style={styles.sectionHint}>Recovery phrase and trusted recovery are disabled for deterministic passkey wallets until a separate recovery design ships.</Text>
       </View>
     );
   }
@@ -3458,29 +3565,6 @@ export default function App() {
             Create wallet
           </Text>
           <Text style={styles.setupOptionMeta}>Generate a fresh recovery phrase and derive your mobile wallets from it.</Text>
-        </Pressable>
-        <Pressable
-          style={[
-            styles.setupOptionCard,
-            setupMode === 'passkey' ? styles.setupOptionCardActive : null
-          ]}
-          onPress={() => {
-            setSetupMode('passkey');
-            setPasskeyRecoveryMode('passkey-phrase');
-            setConfirmBackedUp(false);
-            setConfirmPasskeyOnlyAccess(false);
-            setError(null);
-          }}
-        >
-          <Text
-            style={[
-              styles.setupOptionTitle,
-              setupMode === 'passkey' ? styles.setupOptionTitleActive : null
-            ]}
-          >
-            Create with passkey
-          </Text>
-          <Text style={styles.setupOptionMeta}>Use this device’s secure unlock for daily access, with recovery options made explicit first.</Text>
         </Pressable>
         <Pressable
           style={[
@@ -3543,7 +3627,7 @@ export default function App() {
               <Text style={styles.brand}>GRAPE</Text>
               <Text style={[styles.heroTitle, isCompact ? styles.heroTitleCompact : null]}>Set up your wallet</Text>
               <Text style={styles.heroCopy}>
-                Create with passkey, generate a new recovery phrase, or import an existing wallet. Recovery options stay explicit before you commit.
+                Generate a new recovery phrase or import an existing wallet. Recovery options stay explicit before you commit.
               </Text>
             </View>
 
@@ -3577,38 +3661,14 @@ export default function App() {
                 <>
                   <Text style={styles.sectionTitle}>Create with passkey</Text>
                   <Text style={styles.sectionHint}>
-                    Use this device&apos;s secure unlock for daily access, with recovery made explicit before the wallet is created.
+                    Derive this wallet directly from a native passkey. The same passkey recreates the same wallet from scratch.
                   </Text>
-                  {!biometricAvailable ? (
-                    <Text style={styles.errorText}>Secure device authentication is not available on this device yet.</Text>
-                  ) : null}
+                  {!passkeyAvailable && passkeyUnavailableMessage ? <Text style={styles.errorText}>{passkeyUnavailableMessage}</Text> : null}
                   {renderPasskeyRecoveryChoices()}
-                  {passkeyRecoveryMode === 'passkey-phrase' ? (
-                    <>
-                      <Text style={styles.sectionHint}>Recommended. Keep the recovery phrase offline in case the device is lost.</Text>
-                      <SegmentedButtons
-                        value={String(mnemonicLength)}
-                        onValueChange={(value) => setMnemonicLength(Number(value) as WalletMnemonicLength)}
-                        buttons={[
-                          { value: '12', label: '12 words' },
-                          { value: '24', label: '24 words' }
-                        ]}
-                        style={styles.paperSegments}
-                        density="small"
-                      />
-                      <View style={[styles.mnemonicCard, styles.formMnemonicCard]}>{renderMnemonicPills(generatedMnemonic)}</View>
-                      <PaperButton mode="outlined" style={styles.paperSecondaryButton} onPress={() => setGeneratedMnemonic(createWalletMnemonic(mnemonicLength))}>
-                        Generate a new phrase
-                      </PaperButton>
-                      <Pressable style={styles.checkboxRow} onPress={() => setConfirmBackedUp((value) => !value)}>
-                        <Checkbox status={confirmBackedUp ? 'checked' : 'unchecked'} color={activeTheme.grape} />
-                        <Text style={styles.checkboxLabel}>I backed up this recovery phrase.</Text>
-                      </Pressable>
-                    </>
-                  ) : passkeyRecoveryMode === 'passkey-only' ? (
+                  {passkeyRecoveryMode === 'passkey-only' ? (
                     <>
                       <Text style={styles.sectionHint}>
-                        Fastest setup. If this device passkey is lost and not synced elsewhere, the wallet can be lost permanently.
+                        No separate recovery phrase or user-entered password is created in this mode.
                       </Text>
                       <Pressable style={styles.checkboxRow} onPress={() => setConfirmPasskeyOnlyAccess((value) => !value)}>
                         <Checkbox status={confirmPasskeyOnlyAccess ? 'checked' : 'unchecked'} color={activeTheme.grape} />
@@ -3616,11 +3676,9 @@ export default function App() {
                       </Pressable>
                     </>
                   ) : (
-                    <Text style={styles.sectionHint}>
-                      Trusted-device or account recovery is coming next. Choose passkey only or passkey plus recovery phrase for now.
-                    </Text>
+                    <Text style={styles.sectionHint}>Choose passkey only to continue.</Text>
                   )}
-                  <Text style={styles.sectionHint}>Set a local password to encrypt the wallet vault and keep password fallback available on this device.</Text>
+                  <Text style={styles.sectionHint}>Biometric-only unlock remains a separate local convenience mode you can enable later in settings.</Text>
                 </>
               ) : (
                 <>
@@ -3688,7 +3746,7 @@ export default function App() {
                       </View>
                       <PaperTextInput
                         value={restorePayload}
-                        onChangeText={setRestorePayload}
+                        onChangeText={(value) => setRestorePayload(normalizeScannedRestorePayloadInput(value))}
                         placeholder="Paste restore payload"
                         mode="outlined"
                         multiline
@@ -3699,6 +3757,17 @@ export default function App() {
                         outlineStyle={styles.paperOutline}
                         textColor={activeTheme.text}
                       />
+                      {parsedRestorePayload ? (
+                        <View style={styles.exportSecretCard}>
+                          <Text style={styles.exportSecretLabel}>{parsedRestorePayload.walletName}</Text>
+                          <Text style={styles.sectionHint}>
+                            {chainMeta(parsedRestorePayload.chain).label} · {formatShortAddress(parsedRestorePayload.publicKey)}
+                          </Text>
+                          <Text style={styles.sectionHint}>Expires {new Date(parsedRestorePayload.expiresAt).toLocaleString()}</Text>
+                        </View>
+                      ) : restorePayload.trim() ? (
+                        <Text style={styles.sectionHint}>The restore payload could not be parsed yet. Scan again or copy it again from the existing Grape device.</Text>
+                      ) : null}
                       <PaperTextInput
                         value={restorePairingCode}
                         onChangeText={setRestorePairingCode}
@@ -3716,28 +3785,32 @@ export default function App() {
                 </>
               )}
 
-              <PaperTextInput
-                value={setupPassword}
-                onChangeText={setSetupPassword}
-                placeholder="Password"
-                secureTextEntry
-                mode="outlined"
-                style={styles.paperInput}
-                contentStyle={styles.paperInputContent}
-                outlineStyle={styles.paperOutline}
-                textColor={activeTheme.text}
-              />
-              <PaperTextInput
-                value={setupPasswordConfirm}
-                onChangeText={setSetupPasswordConfirm}
-                placeholder="Confirm password"
-                secureTextEntry
-                mode="outlined"
-                style={styles.paperInput}
-                contentStyle={styles.paperInputContent}
-                outlineStyle={styles.paperOutline}
-                textColor={activeTheme.text}
-              />
+              {setupMode !== 'passkey' ? (
+                <>
+                  <PaperTextInput
+                    value={setupPassword}
+                    onChangeText={setSetupPassword}
+                    placeholder="Password"
+                    secureTextEntry
+                    mode="outlined"
+                    style={styles.paperInput}
+                    contentStyle={styles.paperInputContent}
+                    outlineStyle={styles.paperOutline}
+                    textColor={activeTheme.text}
+                  />
+                  <PaperTextInput
+                    value={setupPasswordConfirm}
+                    onChangeText={setSetupPasswordConfirm}
+                    placeholder="Confirm password"
+                    secureTextEntry
+                    mode="outlined"
+                    style={styles.paperInput}
+                    contentStyle={styles.paperInputContent}
+                    outlineStyle={styles.paperOutline}
+                    textColor={activeTheme.text}
+                  />
+                </>
+              ) : null}
 
               {submitLoading
                 ? renderSetupProgress(
@@ -3833,39 +3906,61 @@ export default function App() {
             </Animated.View>
             <Text style={styles.brand}>GRAPE</Text>
             <Text style={[styles.lockedTitle, isCompact ? styles.lockedTitleCompact : null]}>Unlock your wallet</Text>
-            <Text style={styles.sectionHint}>Unlock once per session to use your multi-chain wallet on mobile.</Text>
-            <PaperTextInput
-              value={unlockPassword}
-              onChangeText={setUnlockPassword}
-              placeholder="Password"
-              secureTextEntry
-              mode="outlined"
-              style={styles.paperInput}
-              contentStyle={styles.paperInputContent}
-              outlineStyle={styles.paperOutline}
-              textColor={activeTheme.text}
-              right={
-                walletState.biometricEnabled && biometricAvailable ? (
-                  <PaperTextInput.Icon
-                    icon="fingerprint"
-                    onPress={() => void handleBiometricUnlock()}
-                    disabled={biometricLoading || submitLoading}
-                    forceTextInputFocus={false}
-                  />
-                ) : undefined
-              }
-            />
+            <Text style={styles.sectionHint}>
+              {walletState.passkeyWallet
+                ? 'Unlock once per session with the same passkey that deterministically recreates this wallet.'
+                : 'Unlock once per session to use your multi-chain wallet on mobile.'}
+            </Text>
+            {walletState.passkeyWallet ? (
+              <>
+                {!passkeyAvailable && passkeyUnavailableMessage ? <Text style={styles.errorText}>{passkeyUnavailableMessage}</Text> : null}
+                <PaperButton
+                  mode="contained"
+                  style={styles.paperPrimaryButton}
+                  buttonColor={activeTheme.primaryButton}
+                  textColor={activeTheme.primaryButtonText}
+                  disabled={biometricLoading || submitLoading || !passkeyAvailable}
+                  onPress={() => void handlePasskeyUnlock()}
+                >
+                  {biometricLoading ? 'Checking passkey...' : 'Unlock with passkey'}
+                </PaperButton>
+              </>
+            ) : (
+              <PaperTextInput
+                value={unlockPassword}
+                onChangeText={setUnlockPassword}
+                placeholder="Password"
+                secureTextEntry
+                mode="outlined"
+                style={styles.paperInput}
+                contentStyle={styles.paperInputContent}
+                outlineStyle={styles.paperOutline}
+                textColor={activeTheme.text}
+                right={
+                  walletState.biometricEnabled && biometricAvailable ? (
+                    <PaperTextInput.Icon
+                      icon="fingerprint"
+                      onPress={() => void handleBiometricUnlock()}
+                      disabled={biometricLoading || submitLoading}
+                      forceTextInputFocus={false}
+                    />
+                  ) : undefined
+                }
+              />
+            )}
             {error ? <Text style={styles.errorText}>{error}</Text> : null}
-            <PaperButton
-              mode="contained"
-              style={styles.paperPrimaryButton}
-              buttonColor={activeTheme.primaryButton}
-              textColor={activeTheme.primaryButtonText}
-              disabled={submitLoading}
-              onPress={() => void handleUnlock()}
-            >
-              {submitLoading ? 'Unlocking...' : 'Unlock'}
-            </PaperButton>
+            {!walletState.passkeyWallet ? (
+              <PaperButton
+                mode="contained"
+                style={styles.paperPrimaryButton}
+                buttonColor={activeTheme.primaryButton}
+                textColor={activeTheme.primaryButtonText}
+                disabled={submitLoading}
+                onPress={() => void handleUnlock()}
+              >
+                {submitLoading ? 'Unlocking...' : 'Unlock'}
+              </PaperButton>
+            ) : null}
           </Animated.View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -4020,9 +4115,18 @@ export default function App() {
     });
 
     if (selectedAsset) {
-      const assetSubtitle = getAssetSubtitle(selectedAsset, selectedChainMeta.label, selectedChainMeta.short);
+      const selectedAssetAddress = selectedAsset.address ?? '--';
+      const canSwapSelectedAsset = swappableAssets.some((asset) => asset.id === selectedAsset.id);
+      const metadataSourceLabel =
+        selectedAsset.metadataSource === 'shyft'
+          ? 'Shyft'
+          : selectedAsset.metadataSource === 'rpc'
+            ? 'RPC'
+            : 'Native';
+
       return (
-        <View style={styles.sectionCard}>
+        <View style={styles.stack}>
+          <View style={[styles.sectionCard, styles.assetDetailHeroCard]}>
             <Pressable style={styles.detailBackRow} onPress={() => setSelectedAssetId(null)}>
               <Feather name="chevron-left" size={18} color={activeTheme.text} />
               <Text style={styles.detailBackText}>Back to holdings</Text>
@@ -4030,7 +4134,7 @@ export default function App() {
 
             <View style={styles.assetDetailHeader}>
               <View style={styles.assetDetailGlyph}>
-                {renderAssetGlyph(selectedAsset, 56, styles.assetDetailGlyphText, styles.assetDetailGlyphImage)}
+                {renderAssetGlyph(selectedAsset, 68, styles.assetDetailGlyphText, styles.assetDetailGlyphImage)}
               </View>
               <View style={styles.assetDetailCopy}>
                 <Text style={styles.assetDetailName}>{selectedAsset.name}</Text>
@@ -4038,51 +4142,85 @@ export default function App() {
               </View>
             </View>
 
-            <View style={styles.assetDetailStats}>
-              <View style={styles.assetDetailStat}>
-                <Text style={styles.assetDetailLabel}>Holdings</Text>
-                <Text style={styles.assetDetailValue}>{maskValue(selectedAsset.amountLabel, walletState.privacyMode)}</Text>
-              </View>
+            <View style={styles.assetDetailAddressCard}>
+              <Text style={styles.assetDetailLabel}>Token address</Text>
+              <Text style={styles.assetDetailAddressValue}>{selectedAssetAddress}</Text>
+            </View>
+
+            <View style={styles.assetDetailBalanceBlock}>
+              <Text style={styles.assetDetailLabel}>Token amount in wallet</Text>
+              <Text style={styles.assetDetailBalance}>{maskValue(selectedAsset.amountLabel, walletState.privacyMode)}</Text>
               {selectedAsset.valueLabel ? (
-                <View style={styles.assetDetailStat}>
-                  <Text style={styles.assetDetailLabel}>Estimated value</Text>
-                  <Text style={styles.assetDetailValue}>{maskValue(selectedAsset.valueLabel, walletState.privacyMode)}</Text>
-                </View>
+                <Text style={styles.assetDetailBalanceMeta}>
+                  Estimated value {maskValue(selectedAsset.valueLabel, walletState.privacyMode)}
+                </Text>
               ) : null}
-              <View style={styles.assetDetailStat}>
+            </View>
+
+            <View style={styles.assetDetailActionsRow}>
+              <Pressable style={styles.assetDetailActionButton} onPress={() => openSendScreen(selectedAsset.id)}>
+                <MaterialCommunityIcons name="send-outline" size={22} color={activeTheme.text} />
+                <Text style={styles.assetDetailActionLabel}>Send</Text>
+              </Pressable>
+              <Pressable
+                style={canSwapSelectedAsset ? styles.assetDetailActionButton : styles.assetDetailActionButtonDisabled}
+                onPress={canSwapSelectedAsset ? () => openSwapScreen(selectedAsset.id) : undefined}
+              >
+                <MaterialCommunityIcons
+                  name="swap-horizontal"
+                  size={22}
+                  color={canSwapSelectedAsset ? activeTheme.text : activeTheme.muted}
+                />
+                <Text style={canSwapSelectedAsset ? styles.assetDetailActionLabel : styles.assetDetailActionLabelMuted}>Swap</Text>
+              </Pressable>
+            </View>
+          </View>
+
+          <View style={styles.sectionCard}>
+            <View style={styles.assetDetailSectionHeader}>
+              <Text style={styles.sectionTitle}>Token metadata</Text>
+              <Text style={styles.assetDetailSectionHint}>Chain, wallet, and token details</Text>
+            </View>
+
+            <View style={styles.assetDetailStats}>
+              <View style={styles.assetDetailMetaRow}>
                 <Text style={styles.assetDetailLabel}>Chain</Text>
                 <Text style={styles.assetDetailMeta}>{selectedChainMeta.label}</Text>
               </View>
-              {assetSubtitle ? (
-                <View style={styles.assetDetailStat}>
-                  <Text style={styles.assetDetailLabel}>Symbol</Text>
-                  <Text style={styles.assetDetailMeta}>{assetSubtitle}</Text>
-                </View>
-              ) : null}
-              <View style={styles.assetDetailStat}>
+              <View style={styles.assetDetailMetaRow}>
                 <Text style={styles.assetDetailLabel}>Wallet</Text>
                 <Text style={styles.assetDetailMeta}>{selectedWallet?.name ?? '--'}</Text>
               </View>
-              <View style={styles.assetDetailStat}>
-                <Text style={styles.assetDetailLabel}>Asset address</Text>
-                <Text style={styles.assetDetailMeta}>
-                  {selectedAsset.address ? shortenAddress(selectedAsset.address) : '--'}
-                </Text>
+              <View style={styles.assetDetailMetaRow}>
+                <Text style={styles.assetDetailLabel}>Symbol</Text>
+                <Text style={styles.assetDetailMeta}>{selectedAsset.symbol}</Text>
               </View>
-              <View style={styles.assetDetailStat}>
+              <View style={styles.assetDetailMetaRow}>
                 <Text style={styles.assetDetailLabel}>Metadata source</Text>
-                <Text style={styles.assetDetailMeta}>
-                  {selectedAsset.metadataSource === 'shyft'
-                    ? 'Shyft'
-                    : selectedAsset.metadataSource === 'rpc'
-                      ? 'RPC'
-                      : 'Native'}
-                </Text>
+                <Text style={styles.assetDetailMeta}>{metadataSourceLabel}</Text>
               </View>
+              {selectedAsset.tokenType ? (
+                <View style={styles.assetDetailMetaRow}>
+                  <Text style={styles.assetDetailLabel}>Token type</Text>
+                  <Text style={styles.assetDetailMeta}>{selectedAsset.tokenType}</Text>
+                </View>
+              ) : null}
               {typeof selectedAsset.decimals === 'number' ? (
-                <View style={styles.assetDetailStat}>
+                <View style={styles.assetDetailMetaRow}>
                   <Text style={styles.assetDetailLabel}>Decimals</Text>
                   <Text style={styles.assetDetailMeta}>{selectedAsset.decimals}</Text>
+                </View>
+              ) : null}
+              {selectedAsset.accountAddress ? (
+                <View style={styles.assetDetailStat}>
+                  <Text style={styles.assetDetailLabel}>Account address</Text>
+                  <Text style={styles.assetDetailMetaMono}>{selectedAsset.accountAddress}</Text>
+                </View>
+              ) : null}
+              {selectedAsset.programId ? (
+                <View style={styles.assetDetailStat}>
+                  <Text style={styles.assetDetailLabel}>Program ID</Text>
+                  <Text style={styles.assetDetailMetaMono}>{selectedAsset.programId}</Text>
                 </View>
               ) : null}
               {selectedAsset.description ? (
@@ -4092,15 +4230,7 @@ export default function App() {
                 </View>
               ) : null}
             </View>
-
-            <Pressable
-              style={styles.primaryButton}
-              onPress={() => {
-                openSendScreen(selectedAsset.id);
-              }}
-            >
-              <Text style={styles.primaryButtonText}>Send asset</Text>
-            </Pressable>
+          </View>
         </View>
       );
     }
@@ -4110,11 +4240,18 @@ export default function App() {
         <View style={styles.heroCard}>
           <View style={styles.cardTopRow}>
             <View style={styles.walletIdentity}>
-              <View style={[styles.walletAvatar, { borderColor: `${selectedChainMeta.accent}55`, backgroundColor: `${selectedChainMeta.accent}1f` }]}>
+              <Pressable
+                style={[styles.walletAvatar, styles.walletAvatarButton, { borderColor: `${selectedChainMeta.accent}55`, backgroundColor: `${selectedChainMeta.accent}1f` }]}
+                onPress={() => setChainPickerVisible(true)}
+              >
                 <Text style={[styles.walletAvatarText, { color: selectedChainMeta.accent }]}>{selectedChainMeta.short}</Text>
-              </View>
+                <View style={styles.walletAvatarSwitchBadge}>
+                  <Feather name="repeat" size={11} color={activeTheme.text} />
+                </View>
+              </Pressable>
               <View style={styles.walletIdentityCopy}>
                 <Text style={styles.cardName}>{selectedWallet?.name ?? '--'}</Text>
+                <Text style={styles.walletIdentityMeta}>{selectedChainMeta.label} · Tap icon to switch</Text>
               </View>
             </View>
             <Pressable style={styles.refreshChip} onPress={() => void handleRefreshAssets()}>
@@ -4174,28 +4311,6 @@ export default function App() {
             <MaterialCommunityIcons name="compass-outline" size={26} color={activeTheme.text} />
           </View>
         </Pressable>
-
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Chains</Text>
-            <Text style={styles.sectionHint}>One wallet set, four chains</Text>
-          </View>
-          <View style={styles.pillRow}>
-            {chains
-              .filter((item) => walletState.wallets.some((wallet) => wallet.chain === item.id))
-              .map((item) => (
-                <Pressable
-                  key={item.id}
-                  style={[styles.chainPill, walletState.selectedChain === item.id ? styles.chainPillActive : null]}
-                  onPress={() => void handleSelectChain(item.id)}
-                >
-                  <Text style={[styles.chainPillText, walletState.selectedChain === item.id ? styles.chainPillTextActive : null]}>
-                    {item.short}
-                  </Text>
-                </Pressable>
-              ))}
-          </View>
-        </View>
 
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
@@ -4646,29 +4761,25 @@ export default function App() {
               </Text>
             </View>
           ) : null}
-          <View style={styles.sendRecipientRow}>
-            <View style={styles.sendRecipientInputWrap}>
-              <PaperTextInput
-                value={sendRecipient}
-                onChangeText={setSendRecipient}
-                placeholder="Recipient"
-                autoCapitalize="none"
-                autoCorrect={false}
-                mode="outlined"
-                style={styles.paperInput}
-                contentStyle={styles.paperInputContent}
-                outlineStyle={styles.paperOutline}
-                textColor={activeTheme.text}
+          <PaperTextInput
+            value={sendRecipient}
+            onChangeText={setSendRecipient}
+            placeholder="Recipient"
+            autoCapitalize="none"
+            autoCorrect={false}
+            mode="outlined"
+            style={styles.paperInput}
+            contentStyle={styles.paperInputContent}
+            outlineStyle={styles.paperOutline}
+            textColor={activeTheme.text}
+            right={
+              <PaperTextInput.Icon
+                icon="qrcode-scan"
+                forceTextInputFocus={false}
+                onPress={() => void handleOpenQrScanner('send')}
               />
-            </View>
-            <PaperButton
-              mode="outlined"
-              style={[styles.paperSecondaryButton, styles.sendScanButton]}
-              onPress={() => void handleOpenQrScanner('send')}
-            >
-              Scan QR
-            </PaperButton>
-          </View>
+            }
+          />
           <PaperTextInput
             value={sendAmount}
             onChangeText={setSendAmount}
@@ -4993,101 +5104,173 @@ export default function App() {
   }
 
   function renderSettingsTab() {
+    const selectedThemeLabel = mobileThemes.find((theme) => theme.id === walletState.selectedTheme)?.label ?? 'Theme';
+    const verificationTrackedCount = walletState.trackedVerificationSpaceIds.length;
+    const reputationTrackedCount = walletState.trackedReputationSpaceIds.length;
+    const governanceTrackedCount = walletState.trackedGovernanceDaoIds.length;
+    const trustedAppsCount = walletState.trustedDappOrigins.length;
+    const participatingDaoCount = new Set([
+      ...governance.discoveredDaos,
+      ...governance.daos.map((dao) => dao.daoId),
+      ...walletState.trackedGovernanceDaoIds
+    ]).size;
+
+    const toggleSettingsSection = (section: string) => {
+      setExpandedSettingsSections((previous) => {
+        const next = new Set(previous);
+        if (next.has(section)) {
+          next.delete(section);
+        } else {
+          next.add(section);
+        }
+        return next;
+      });
+    };
+
+    const renderSettingsSection = (key: string, title: string, summary: string, children: any) => {
+      const expanded = expandedSettingsSections.has(key);
+
+      return (
+        <View style={styles.sectionCard}>
+          <Pressable style={styles.settingsSectionToggle} onPress={() => toggleSettingsSection(key)}>
+            <View style={styles.settingsSectionToggleCopy}>
+              <Text style={styles.sectionTitle}>{title}</Text>
+              <Text style={styles.settingsSectionSummary}>{summary}</Text>
+            </View>
+            <Feather name={expanded ? 'chevron-down' : 'chevron-right'} size={18} color={activeTheme.muted} />
+          </Pressable>
+          {expanded ? children : null}
+        </View>
+      );
+    };
+
     return (
       <View style={styles.stack}>
-        <View style={styles.sectionCard}>
-          <Text style={styles.sectionTitle}>Theme</Text>
-          <Text style={styles.sectionHint}>Match the same visual families and background graphics as the extension.</Text>
-          <View style={styles.themeGrid}>
-            {mobileThemes.map((theme) => {
-              const selected = walletState.selectedTheme === theme.id;
-              return (
-                <Pressable
-                  key={theme.id}
-                  style={[styles.themeChip, selected ? styles.themeChipActive : null]}
-                  onPress={() => void handleSetTheme(theme.id)}
-                >
-                  <Text style={[styles.themeChipText, selected ? styles.themeChipTextActive : null]}>{theme.label}</Text>
-                </Pressable>
-              );
-            })}
-          </View>
-        </View>
-
-        <View style={styles.sectionCard}>
-          <Text style={styles.sectionTitle}>Privacy</Text>
-          <View style={styles.settingsRow}>
-            <View style={styles.settingsCopy}>
-              <Text style={styles.settingsTitle}>Privacy mode</Text>
-              <Text style={styles.sectionHint}>Hide balances and wallet values on screen.</Text>
+        {renderSettingsSection(
+          'appearance',
+          'Appearance',
+          selectedThemeLabel,
+          <>
+            <Text style={styles.sectionHint}>Match the same visual families and background graphics as the extension.</Text>
+            <View style={styles.themeGrid}>
+              {mobileThemes.map((theme) => {
+                const selected = walletState.selectedTheme === theme.id;
+                return (
+                  <Pressable
+                    key={theme.id}
+                    style={[styles.themeChip, selected ? styles.themeChipActive : null]}
+                    onPress={() => void handleSetTheme(theme.id)}
+                  >
+                    <Text style={[styles.themeChipText, selected ? styles.themeChipTextActive : null]}>{theme.label}</Text>
+                  </Pressable>
+                );
+              })}
             </View>
-            <Switch
-              value={walletState.privacyMode}
-              onValueChange={(value) => void handleSetPrivacyMode(value)}
-              trackColor={{ true: activeTheme.primaryButton, false: 'rgba(255,255,255,0.16)' }}
-              thumbColor={walletState.privacyMode ? '#f7f2ff' : '#d0c0df'}
-            />
-          </View>
-          <View style={styles.settingsRow}>
-            <View style={styles.settingsCopy}>
-              <Text style={styles.settingsTitle}>Biometric unlock</Text>
-              <Text style={styles.sectionHint}>
-                {biometricAvailable ? 'Unlock the wallet with your device biometric if available.' : 'Biometric unlock is not available on this device.'}
-              </Text>
-            </View>
-            <Switch
-              value={walletState.biometricEnabled}
-              onValueChange={(value) => void handleSetBiometricEnabled(value)}
-              disabled={!biometricAvailable}
-              trackColor={{ true: activeTheme.primaryButton, false: 'rgba(255,255,255,0.16)' }}
-              thumbColor={walletState.biometricEnabled ? '#f7f2ff' : '#d0c0df'}
-            />
-          </View>
-        </View>
+          </>
+        )}
 
-        <View style={styles.sectionCard}>
-          <Text style={styles.sectionTitle}>Current wallet</Text>
-          <Text style={styles.sectionHint}>{selectedWallet?.name ?? '--'} · {selectedChainMeta.label}</Text>
+        {renderSettingsSection(
+          'privacy',
+          'Privacy & unlock',
+          `${walletState.privacyMode ? 'Privacy on' : 'Privacy off'} • ${
+            biometricAvailable
+              ? walletState.biometricEnabled
+                ? 'Biometric on'
+                : 'Biometric off'
+              : 'Biometric unavailable'
+          }`,
+          <>
+            <View style={styles.settingsRow}>
+              <View style={styles.settingsCopy}>
+                <Text style={styles.settingsTitle}>Privacy mode</Text>
+                <Text style={styles.sectionHint}>Hide balances and wallet values on screen.</Text>
+              </View>
+              <Switch
+                value={walletState.privacyMode}
+                onValueChange={(value) => void handleSetPrivacyMode(value)}
+                trackColor={{ true: activeTheme.primaryButton, false: 'rgba(255,255,255,0.16)' }}
+                thumbColor={walletState.privacyMode ? '#f7f2ff' : '#d0c0df'}
+              />
+            </View>
+            <View style={styles.settingsRow}>
+              <View style={styles.settingsCopy}>
+                <Text style={styles.settingsTitle}>Biometric unlock</Text>
+                <Text style={styles.sectionHint}>
+                  {biometricAvailable ? 'Unlock the wallet with your device biometric if available.' : 'Biometric unlock is not available on this device.'}
+                </Text>
+              </View>
+              <Switch
+                value={walletState.biometricEnabled}
+                onValueChange={(value) => void handleSetBiometricEnabled(value)}
+                disabled={!biometricAvailable}
+                trackColor={{ true: activeTheme.primaryButton, false: 'rgba(255,255,255,0.16)' }}
+                thumbColor={walletState.biometricEnabled ? '#f7f2ff' : '#d0c0df'}
+              />
+            </View>
+          </>
+        )}
+
+        {renderSettingsSection(
+          'current-wallet',
+          'Current wallet',
+          `${selectedWallet?.name ?? '--'} • ${selectedChainMeta.label}`,
           <Text style={styles.settingsMono}>{selectedWallet?.address ?? '--'}</Text>
-        </View>
+        )}
 
-        <View style={styles.sectionCard}>
-          <Text style={styles.sectionTitle}>Backup & export</Text>
-          <Text style={styles.sectionHint}>
-            Export the current wallet private key only if you have a secure destination. A successful password or biometric check reveals it immediately.
-          </Text>
-          <PaperTextInput
-            value={exportPassword}
-            onChangeText={setExportPassword}
-            placeholder="Password"
-            secureTextEntry
-            mode="outlined"
-            style={styles.paperInput}
-            contentStyle={styles.paperInputContent}
-            outlineStyle={styles.paperOutline}
-            textColor={activeTheme.text}
-            right={
-              walletState.biometricEnabled && biometricAvailable ? (
-                <PaperTextInput.Icon
-                  icon="fingerprint"
-                  onPress={() => void handleBiometricVerifyExport()}
-                  disabled={exportLoading || biometricLoading || !selectedWallet}
-                  forceTextInputFocus={false}
-                />
-              ) : undefined
-            }
-          />
+        {renderSettingsSection(
+          'backup',
+          'Backup & export',
+          exportedPrivateKey && exportVerifiedWalletId === selectedWallet?.id ? 'Verified for export' : 'Private key export',
+          <>
+            <Text style={styles.sectionHint}>
+              Export the current wallet private key only if you have a secure destination. A successful passkey, password, or biometric check reveals it immediately.
+            </Text>
+          {walletState.passkeyWallet ? (
+            <Text style={styles.sectionHint}>This wallet set uses a deterministic passkey instead of a user-entered password on this device.</Text>
+          ) : (
+            <PaperTextInput
+              value={exportPassword}
+              onChangeText={setExportPassword}
+              placeholder="Password"
+              secureTextEntry
+              mode="outlined"
+              style={styles.paperInput}
+              contentStyle={styles.paperInputContent}
+              outlineStyle={styles.paperOutline}
+              textColor={activeTheme.text}
+              right={
+                walletState.biometricEnabled && biometricAvailable ? (
+                  <PaperTextInput.Icon
+                    icon="fingerprint"
+                    onPress={() => void handleBiometricVerifyExport()}
+                    disabled={exportLoading || biometricLoading || !selectedWallet}
+                    forceTextInputFocus={false}
+                  />
+                ) : undefined
+              }
+            />
+          )}
           <View style={styles.walletToolsRow}>
             <PaperButton
               mode="contained"
               style={[styles.paperPrimaryButton, styles.walletToolButton]}
               buttonColor={activeTheme.primaryButton}
               textColor={activeTheme.primaryButtonText}
-              disabled={exportLoading || !exportPassword.trim() || !selectedWallet}
-              onPress={() => void handleVerifyExportPassword()}
+              disabled={exportLoading || !selectedWallet || (walletState.passkeyWallet ? !passkeyAvailable : !exportPassword.trim())}
+              onPress={() => void (walletState.passkeyWallet ? handleVerifyExportWithPasskey() : handleVerifyExportPassword())}
             >
-              {exportLoading ? 'Checking...' : 'Reveal with password'}
+              {exportLoading ? 'Checking...' : walletState.passkeyWallet ? 'Reveal with passkey' : 'Reveal with password'}
             </PaperButton>
+            {walletState.passkeyWallet && walletState.biometricEnabled && biometricAvailable ? (
+              <PaperButton
+                mode="outlined"
+                style={[styles.paperSecondaryButton, styles.walletToolButton]}
+                disabled={exportLoading || biometricLoading || !selectedWallet}
+                onPress={() => void handleBiometricVerifyExport()}
+              >
+                Verify with device
+              </PaperButton>
+            ) : null}
             <PaperButton
               mode="outlined"
               style={[styles.paperSecondaryButton, styles.walletToolButton]}
@@ -5105,23 +5288,27 @@ export default function App() {
                 : '••••••••••••••••••••••••••••••••'}
             </Text>
           </View>
-        </View>
+          </>
+        )}
 
-        <View style={styles.sectionCard}>
-          <Text style={styles.sectionTitle}>Link new device</Text>
-          <Text style={styles.sectionHint}>
-            Create a short-lived restore QR for another Grape device. The QR payload is encrypted, and the pairing code is required to unlock it.
-          </Text>
+        {renderSettingsSection(
+          'link-device',
+          'Link new device',
+          deviceLinkSession ? `Active link • expires ${new Date(deviceLinkSession.expiresAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : 'No active device link',
+          <>
+            <Text style={styles.sectionHint}>
+              Create a short-lived restore QR for another Grape device. The QR payload is encrypted, and the pairing code is required to unlock it.
+            </Text>
           <View style={styles.walletToolsRow}>
             <PaperButton
               mode="contained"
               style={[styles.paperPrimaryButton, styles.walletToolButton]}
               buttonColor={activeTheme.primaryButton}
               textColor={activeTheme.primaryButtonText}
-              disabled={deviceLinkLoading || !exportPassword.trim() || !selectedWallet}
-              onPress={() => void handleCreateDeviceLinkWithPassword()}
+              disabled={deviceLinkLoading || !selectedWallet || (walletState.passkeyWallet ? !passkeyAvailable : !exportPassword.trim())}
+              onPress={() => void (walletState.passkeyWallet ? handleCreateDeviceLinkWithPasskey() : handleCreateDeviceLinkWithPassword())}
             >
-              {deviceLinkLoading ? 'Creating...' : 'Link with password'}
+              {deviceLinkLoading ? 'Creating...' : walletState.passkeyWallet ? 'Link with passkey' : 'Link with password'}
             </PaperButton>
             {walletState.biometricEnabled && biometricAvailable ? (
               <PaperButton
@@ -5137,12 +5324,12 @@ export default function App() {
           {deviceLinkSession ? (
             <View style={styles.stack}>
               <View style={styles.qrCard}>
-                <View style={styles.qrSurface}>
+                <View style={[styles.qrSurface, { width: deviceLinkQrSize + 32, height: deviceLinkQrSize + 32 }]}>
                   <QRCode
                     value={deviceLinkSession.qrPayload}
-                    size={220}
-                    color="#ffffff"
-                    backgroundColor="transparent"
+                    size={deviceLinkQrSize}
+                    color="#101114"
+                    backgroundColor="#ffffff"
                   />
                 </View>
               </View>
@@ -5160,20 +5347,26 @@ export default function App() {
               </PaperButton>
             </View>
           ) : null}
-        </View>
+          </>
+        )}
 
-        <View style={styles.sectionCard}>
-          <Text style={styles.sectionTitle}>Network services</Text>
+        {renderSettingsSection(
+          'network',
+          'Network services',
+          'Environment-driven',
           <Text style={styles.sectionHint}>
             RPC, Shyft metadata, and Jupiter pricing can be supplied with EXPO_PUBLIC environment values.
           </Text>
-        </View>
+        )}
 
-        <View style={styles.sectionCard}>
-          <Text style={styles.sectionTitle}>Trusted apps</Text>
-          <Text style={styles.sectionHint}>
-            Grape Discover remembers sites you approved for connection. Remove any site to force a new connect prompt.
-          </Text>
+        {renderSettingsSection(
+          'trusted-apps',
+          'Trusted apps',
+          trustedAppsCount > 0 ? `${trustedAppsCount} trusted` : 'No trusted apps',
+          <>
+            <Text style={styles.sectionHint}>
+              Grape Discover remembers sites you approved for connection. Remove any site to force a new connect prompt.
+            </Text>
           {walletState.trustedDappOrigins.length === 0 ? (
             <Text style={styles.sectionHint}>No trusted apps yet.</Text>
           ) : (
@@ -5192,13 +5385,17 @@ export default function App() {
               ))}
             </View>
           )}
-        </View>
+          </>
+        )}
 
-        <View style={styles.sectionCard}>
-          <Text style={styles.sectionTitle}>Verification Spaces</Text>
-          <Text style={styles.sectionHint}>
-            Add the DAO ids you want to verify against. Mobile opens Grape Verification directly for tracked spaces.
-          </Text>
+        {renderSettingsSection(
+          'verification',
+          'Verification Spaces',
+          verificationTrackedCount > 0 ? `${verificationTrackedCount} tracked` : 'No spaces tracked',
+          <>
+            <Text style={styles.sectionHint}>
+              Add the DAO ids you want to verify against. Mobile opens Grape Verification directly for tracked spaces.
+            </Text>
           <PaperTextInput
             value={verificationSpaceInput}
             onChangeText={setVerificationSpaceInput}
@@ -5250,13 +5447,17 @@ export default function App() {
               ))}
             </View>
           )}
-        </View>
+          </>
+        )}
 
-        <View style={styles.sectionCard}>
-          <Text style={styles.sectionTitle}>Governance DAOs</Text>
-          <Text style={styles.sectionHint}>
-            Grape auto-detects the Solana DAOs this wallet participates in from governance membership records. You can also track extra realm ids here.
-          </Text>
+        {renderSettingsSection(
+          'governance',
+          'Governance DAOs',
+          participatingDaoCount > 0 ? `${participatingDaoCount} participating • ${governanceTrackedCount} tracked` : governanceTrackedCount > 0 ? `${governanceTrackedCount} tracked` : 'No DAOs tracked',
+          <>
+            <Text style={styles.sectionHint}>
+              Grape auto-detects the Solana DAOs this wallet participates in from governance membership records. You can also track extra realm ids here.
+            </Text>
           {selectedWallet?.chain !== 'solana' ? (
             <Text style={styles.sectionHint}>Governance proposal tracking is currently supported for Solana wallets.</Text>
           ) : (
@@ -5325,13 +5526,17 @@ export default function App() {
               {governanceError ? <Text style={styles.errorText}>{governanceError}</Text> : null}
             </>
           )}
-        </View>
+          </>
+        )}
 
-        <View style={styles.sectionCard}>
-          <Text style={styles.sectionTitle}>OG Reputation Spaces</Text>
-          <Text style={styles.sectionHint}>
-            Track Solana OG reputation by adding DAO space ids here. Home will then show the current wallet’s effective points per tracked space.
-          </Text>
+        {renderSettingsSection(
+          'reputation',
+          'OG Reputation Spaces',
+          reputationTrackedCount > 0 ? `${reputationTrackedCount} tracked` : 'No spaces tracked',
+          <>
+            <Text style={styles.sectionHint}>
+              Track Solana OG reputation by adding DAO space ids here. Home will then show the current wallet’s effective points per tracked space.
+            </Text>
           <PaperTextInput
             value={reputationSpaceInput}
             onChangeText={setReputationSpaceInput}
@@ -5383,11 +5588,16 @@ export default function App() {
               ))}
             </View>
           )}
-        </View>
+          </>
+        )}
 
-        <View style={styles.sectionCard}>
+        {renderSettingsSection(
+          'all-wallets',
+          'All wallets',
+          `${walletState.wallets.length} wallet${walletState.wallets.length === 1 ? '' : 's'}`,
+          <>
           <Pressable style={styles.sectionHeader} onPress={() => setWalletListExpanded((value) => !value)}>
-            <Text style={styles.sectionTitle}>All wallets</Text>
+            <Text style={styles.settingsTitle}>Wallet manager</Text>
             <Text style={styles.sectionHint}>{walletListExpanded ? 'Hide' : 'Show'}</Text>
           </Pressable>
 
@@ -5407,21 +5617,6 @@ export default function App() {
               <Text style={styles.setupOptionMeta}>Generate a fresh recovery phrase for a new wallet set.</Text>
             </Pressable>
             <Pressable
-              style={[styles.setupOptionCard, setupMode === 'passkey' && walletComposerVisible ? styles.setupOptionCardActive : null]}
-              onPress={() => {
-                setSetupMode('passkey');
-                setPasskeyRecoveryMode('passkey-phrase');
-                setConfirmBackedUp(false);
-                setConfirmPasskeyOnlyAccess(false);
-                setWalletComposerVisible((value) => !value || setupMode !== 'passkey');
-              }}
-            >
-              <Text style={[styles.setupOptionTitle, setupMode === 'passkey' && walletComposerVisible ? styles.setupOptionTitleActive : null]}>
-                Create with passkey
-              </Text>
-              <Text style={styles.setupOptionMeta}>Create a wallet and protect daily access with this device’s secure unlock.</Text>
-            </Pressable>
-            <Pressable
               style={[styles.setupOptionCard, setupMode === 'import' && walletComposerVisible ? styles.setupOptionCardActive : null]}
               onPress={() => {
                 setSetupMode('import');
@@ -5438,7 +5633,7 @@ export default function App() {
           </View>
 
           {walletComposerVisible ? (
-            <View style={[styles.sectionCardMuted, styles.formCard]}>
+            <View style={[styles.sectionCard, styles.formCard]}>
               <Text style={styles.sectionTitle}>
                 {setupMode === 'create' ? 'Create wallet' : setupMode === 'passkey' ? 'Create with passkey' : 'Import wallet'}
               </Text>
@@ -5446,7 +5641,7 @@ export default function App() {
                 {setupMode === 'create'
                   ? 'Create another wallet set from a fresh 12-word or 24-word recovery phrase.'
                   : setupMode === 'passkey'
-                    ? 'Create another wallet and protect daily access with this device’s secure unlock.'
+                    ? 'Deterministic passkey wallet creation is only available when starting a fresh wallet set.'
                   : 'Add another wallet using a recovery phrase or private key.'}
               </Text>
 
@@ -5471,42 +5666,17 @@ export default function App() {
               ) : setupMode === 'passkey' ? (
                 <>
                   <Text style={styles.sectionHint}>
-                    Use this device&apos;s secure unlock for daily access, with recovery made explicit before the wallet is created.
+                    Deterministic passkey wallet creation is only available when starting a fresh wallet set.
                   </Text>
-                  {!biometricAvailable ? (
-                    <Text style={styles.errorText}>Secure device authentication is not available on this device yet.</Text>
-                  ) : null}
+                  {!passkeyAvailable && passkeyUnavailableMessage ? <Text style={styles.errorText}>{passkeyUnavailableMessage}</Text> : null}
                   {renderPasskeyRecoveryChoices()}
-                  {passkeyRecoveryMode === 'passkey-phrase' ? (
-                    <>
-                      <SegmentedButtons
-                        value={String(mnemonicLength)}
-                        onValueChange={(value) => setMnemonicLength(Number(value) as WalletMnemonicLength)}
-                        buttons={[
-                          { value: '12', label: '12 words' },
-                          { value: '24', label: '24 words' }
-                        ]}
-                        style={styles.paperSegments}
-                        density="small"
-                      />
-                      <View style={[styles.mnemonicCard, styles.formMnemonicCard]}>{renderMnemonicPills(generatedMnemonic)}</View>
-                      <PaperButton mode="outlined" style={styles.paperSecondaryButton} onPress={() => setGeneratedMnemonic(createWalletMnemonic(mnemonicLength))}>
-                        Generate a new phrase
-                      </PaperButton>
-                      <Pressable style={styles.checkboxRow} onPress={() => setConfirmBackedUp((value) => !value)}>
-                        <Checkbox status={confirmBackedUp ? 'checked' : 'unchecked'} color={activeTheme.grape} />
-                        <Text style={styles.checkboxLabel}>I saved this phrase securely.</Text>
-                      </Pressable>
-                    </>
-                  ) : passkeyRecoveryMode === 'passkey-only' ? (
+                  {passkeyRecoveryMode === 'passkey-only' ? (
                     <Pressable style={styles.checkboxRow} onPress={() => setConfirmPasskeyOnlyAccess((value) => !value)}>
                       <Checkbox status={confirmPasskeyOnlyAccess ? 'checked' : 'unchecked'} color={activeTheme.grape} />
                       <Text style={styles.checkboxLabel}>I understand that losing this passkey may permanently lock me out of this wallet.</Text>
                     </Pressable>
                   ) : (
-                    <Text style={styles.sectionHint}>
-                      Trusted-device or account recovery is coming next. Choose passkey only or passkey plus recovery phrase for now.
-                    </Text>
+                    <Text style={styles.sectionHint}>Choose passkey only to continue.</Text>
                   )}
                 </>
               ) : (
@@ -5574,7 +5744,7 @@ export default function App() {
                       </View>
                       <PaperTextInput
                         value={restorePayload}
-                        onChangeText={setRestorePayload}
+                        onChangeText={(value) => setRestorePayload(normalizeScannedRestorePayloadInput(value))}
                         placeholder="Paste restore payload"
                         mode="outlined"
                         multiline
@@ -5585,6 +5755,17 @@ export default function App() {
                         outlineStyle={styles.paperOutline}
                         textColor={activeTheme.text}
                       />
+                      {parsedRestorePayload ? (
+                        <View style={styles.exportSecretCard}>
+                          <Text style={styles.exportSecretLabel}>{parsedRestorePayload.walletName}</Text>
+                          <Text style={styles.sectionHint}>
+                            {chainMeta(parsedRestorePayload.chain).label} · {formatShortAddress(parsedRestorePayload.publicKey)}
+                          </Text>
+                          <Text style={styles.sectionHint}>Expires {new Date(parsedRestorePayload.expiresAt).toLocaleString()}</Text>
+                        </View>
+                      ) : restorePayload.trim() ? (
+                        <Text style={styles.sectionHint}>The restore payload could not be parsed yet. Scan again or copy it again from the existing Grape device.</Text>
+                      ) : null}
                       <PaperTextInput
                         value={restorePairingCode}
                         onChangeText={setRestorePairingCode}
@@ -5602,28 +5783,32 @@ export default function App() {
                 </>
               )}
 
-              <PaperTextInput
-                value={setupPassword}
-                onChangeText={setSetupPassword}
-                placeholder="Password"
-                secureTextEntry
-                mode="outlined"
-                style={styles.paperInput}
-                contentStyle={styles.paperInputContent}
-                outlineStyle={styles.paperOutline}
-                textColor={activeTheme.text}
-              />
-              <PaperTextInput
-                value={setupPasswordConfirm}
-                onChangeText={setSetupPasswordConfirm}
-                placeholder="Confirm password"
-                secureTextEntry
-                mode="outlined"
-                style={styles.paperInput}
-                contentStyle={styles.paperInputContent}
-                outlineStyle={styles.paperOutline}
-                textColor={activeTheme.text}
-              />
+              {setupMode !== 'passkey' ? (
+                <>
+                  <PaperTextInput
+                    value={setupPassword}
+                    onChangeText={setSetupPassword}
+                    placeholder="Password"
+                    secureTextEntry
+                    mode="outlined"
+                    style={styles.paperInput}
+                    contentStyle={styles.paperInputContent}
+                    outlineStyle={styles.paperOutline}
+                    textColor={activeTheme.text}
+                  />
+                  <PaperTextInput
+                    value={setupPasswordConfirm}
+                    onChangeText={setSetupPasswordConfirm}
+                    placeholder="Confirm password"
+                    secureTextEntry
+                    mode="outlined"
+                    style={styles.paperInput}
+                    contentStyle={styles.paperInputContent}
+                    outlineStyle={styles.paperOutline}
+                    textColor={activeTheme.text}
+                  />
+                </>
+              ) : null}
 
               {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
@@ -5689,15 +5874,20 @@ export default function App() {
               })}
             </View>
           ) : null}
-        </View>
+          </>
+        )}
 
-        <View style={styles.sectionCard}>
-          <Text style={styles.sectionTitle}>Session</Text>
-          <Text style={styles.sectionHint}>Lock the app and require password unlock again.</Text>
-          <Pressable style={styles.secondaryButton} onPress={handleLock}>
-            <Text style={styles.secondaryButtonText}>Lock wallet</Text>
-          </Pressable>
-        </View>
+        {renderSettingsSection(
+          'session',
+          'Session',
+          unlocked ? 'Unlocked' : 'Locked',
+          <>
+            <Text style={styles.sectionHint}>Lock the app and require password unlock again.</Text>
+            <Pressable style={styles.secondaryButton} onPress={handleLock}>
+              <Text style={styles.secondaryButtonText}>Lock wallet</Text>
+            </Pressable>
+          </>
+        )}
       </View>
     );
   }
@@ -5810,6 +6000,48 @@ export default function App() {
         </View>
         )}
         <Portal>
+          <PaperModal
+            visible={chainPickerVisible}
+            onDismiss={() => setChainPickerVisible(false)}
+            contentContainerStyle={[styles.sendAssetPickerModal, styles.chainPickerModal]}
+          >
+            <View style={styles.sendAssetPickerHeader}>
+              <Text style={styles.sectionTitle}>Switch chain</Text>
+              <Text style={styles.sectionHint}>Choose which chain wallet to open from the top card.</Text>
+            </View>
+            <View style={styles.stack}>
+              {availableChains.map((chain) => {
+                const meta = chainMeta(chain.id);
+                const chainOptionWallets = dedupeVisibleWallets(walletState.wallets.filter((wallet) => wallet.chain === chain.id));
+                const activeWallet = getSelectedWallet(walletState, chain.id);
+                const active = walletState.selectedChain === chain.id;
+
+                return (
+                  <Pressable
+                    key={chain.id}
+                    style={[styles.chainPickerOption, active ? styles.chainPickerOptionActive : null]}
+                    onPress={() => void handleSelectChain(chain.id)}
+                  >
+                    <View style={[styles.chainPickerGlyph, { borderColor: `${meta.accent}55`, backgroundColor: `${meta.accent}18` }]}>
+                      <Text style={[styles.chainPickerGlyphText, { color: meta.accent }]}>{meta.short}</Text>
+                    </View>
+                    <View style={styles.chainPickerCopy}>
+                      <View style={styles.chainPickerTitleRow}>
+                        <Text style={styles.chainPickerTitle}>{meta.label}</Text>
+                        <Text style={styles.chainPickerMeta}>
+                          {chainOptionWallets.length} wallet{chainOptionWallets.length === 1 ? '' : 's'}
+                        </Text>
+                      </View>
+                      <Text style={styles.chainPickerAddress}>
+                        {activeWallet ? `${activeWallet.name} · ${shortenAddress(activeWallet.address)}` : 'No wallet selected'}
+                      </Text>
+                    </View>
+                    {active ? <Feather name="check" size={18} color={activeTheme.text} style={styles.rowCheckIcon} /> : null}
+                  </Pressable>
+                );
+              })}
+            </View>
+          </PaperModal>
           <PaperModal
             visible={!!discoverApproval}
             onDismiss={handleRejectDiscoverRequest}
@@ -6389,6 +6621,21 @@ function createStyles(palette: MobileThemePalette) {
     justifyContent: 'space-between',
     alignItems: 'center'
   },
+  settingsSectionToggle: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12
+  },
+  settingsSectionToggleCopy: {
+    flex: 1,
+    gap: 4
+  },
+  settingsSectionSummary: {
+    color: palette.muted,
+    fontSize: 14,
+    lineHeight: 20
+  },
   sectionTitle: {
     color: palette.text,
     fontSize: 20,
@@ -6613,6 +6860,22 @@ function createStyles(palette: MobileThemePalette) {
     justifyContent: 'center',
     borderWidth: 1
   },
+  walletAvatarButton: {
+    position: 'relative'
+  },
+  walletAvatarSwitchBadge: {
+    position: 'absolute',
+    right: -3,
+    bottom: -3,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: palette.panel,
+    backgroundColor: palette.bg
+  },
   walletAvatarText: {
     fontSize: 17,
     fontWeight: '900'
@@ -6620,6 +6883,11 @@ function createStyles(palette: MobileThemePalette) {
   walletIdentityCopy: {
     gap: 2,
     flex: 1
+  },
+  walletIdentityMeta: {
+    color: palette.muted,
+    fontSize: 13,
+    fontWeight: '600'
   },
   cardTopRow: {
     flexDirection: 'row',
@@ -6949,11 +7217,6 @@ function createStyles(palette: MobileThemePalette) {
     fontSize: 14,
     fontWeight: '700'
   },
-  pillRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8
-  },
   walletSwitchRow: {
     gap: 10,
     paddingRight: 6
@@ -6986,27 +7249,68 @@ function createStyles(palette: MobileThemePalette) {
   formPillRow: {
     gap: 10
   },
-  chainPill: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.06)'
-  },
-  chainPillActive: {
-    backgroundColor: 'rgba(255,255,255,0.12)'
-  },
-  chainPillText: {
-    color: palette.muted,
-    fontSize: 13,
-    fontWeight: '700'
-  },
-  chainPillTextActive: {
-    color: palette.text
-  },
   stack: {
     gap: 12
+  },
+  chainPickerOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    padding: 15,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: palette.panelBorder,
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.09)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.72)'
+          : 'rgba(255,255,255,0.05)'
+  },
+  chainPickerOptionActive: {
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.12)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.84)'
+          : 'rgba(255,255,255,0.1)'
+  },
+  chainPickerGlyph: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1
+  },
+  chainPickerGlyphText: {
+    fontSize: 15,
+    fontWeight: '900'
+  },
+  chainPickerCopy: {
+    flex: 1,
+    gap: 3
+  },
+  chainPickerTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10
+  },
+  chainPickerTitle: {
+    color: palette.text,
+    fontSize: 16,
+    fontWeight: '800'
+  },
+  chainPickerMeta: {
+    color: palette.muted,
+    fontSize: 12,
+    fontWeight: '700'
+  },
+  chainPickerAddress: {
+    color: palette.muted,
+    fontSize: 13,
+    fontWeight: '600'
   },
   walletRow: {
     flexDirection: 'row',
@@ -7256,6 +7560,14 @@ function createStyles(palette: MobileThemePalette) {
     backgroundColor: palette.panel,
     maxHeight: '76%'
   },
+  chainPickerModal: {
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(20, 24, 32, 0.94)'
+        : palette.id === 'champagne'
+          ? 'rgba(255, 248, 240, 0.96)'
+          : 'rgba(17, 10, 24, 0.94)'
+  },
   discoverApprovalModal: {
     backgroundColor:
       palette.id === 'apple'
@@ -7341,14 +7653,13 @@ function createStyles(palette: MobileThemePalette) {
     borderColor: palette.panelBorder
   },
   qrSurface: {
-    width: 236,
-    height: 236,
     borderRadius: 28,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(10, 7, 20, 0.9)',
+    backgroundColor: '#ffffff',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.06)'
+    borderColor: 'rgba(255,255,255,0.06)',
+    padding: 16
   },
   qrPlaceholder: {
     width: 220,
@@ -7447,10 +7758,56 @@ function createStyles(palette: MobileThemePalette) {
     fontSize: 12,
     fontWeight: '800'
   },
+  detailBackRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    alignSelf: 'flex-start'
+  },
+  detailBackText: {
+    color: palette.text,
+    fontSize: 14,
+    fontWeight: '700'
+  },
+  assetDetailHeroCard: {
+    gap: 18
+  },
+  assetDetailSectionHeader: {
+    gap: 2,
+    alignItems: 'flex-start'
+  },
+  assetDetailSectionHint: {
+    color: palette.muted,
+    fontSize: 11,
+    lineHeight: 14,
+    textAlign: 'left',
+    opacity: 0.72
+  },
   assetDetailHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 14
+  },
+  assetDetailGlyph: {
+    width: 72,
+    height: 72,
+    borderRadius: 24,
+    backgroundColor: '#090b14',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    overflow: 'hidden'
+  },
+  assetDetailGlyphImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 24
+  },
+  assetDetailGlyphText: {
+    color: palette.text,
+    fontSize: 22,
+    fontWeight: '800'
   },
   assetDetailCopy: {
     flex: 1,
@@ -7469,8 +7826,97 @@ function createStyles(palette: MobileThemePalette) {
   assetDetailStats: {
     gap: 12
   },
+  assetDetailAddressCard: {
+    gap: 8,
+    padding: 14,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: palette.panelBorder,
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.09)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.72)'
+          : 'rgba(255,255,255,0.05)'
+  },
+  assetDetailAddressValue: {
+    color: palette.text,
+    fontSize: 14,
+    lineHeight: 22,
+    fontWeight: '600',
+    fontFamily: 'Courier'
+  },
+  assetDetailBalanceBlock: {
+    gap: 6
+  },
+  assetDetailBalance: {
+    color: palette.text,
+    fontSize: 30,
+    fontWeight: '900',
+    letterSpacing: -0.3
+  },
+  assetDetailBalanceMeta: {
+    color: palette.muted,
+    fontSize: 14,
+    fontWeight: '600'
+  },
+  assetDetailActionsRow: {
+    flexDirection: 'row',
+    gap: 10
+  },
+  assetDetailActionButton: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    borderRadius: 22,
+    paddingVertical: 15,
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.09)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.68)'
+          : 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
+    borderColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.14)'
+        : palette.id === 'champagne'
+          ? 'rgba(128,93,36,0.08)'
+          : 'rgba(255,255,255,0.06)'
+  },
+  assetDetailActionButtonDisabled: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    borderRadius: 22,
+    paddingVertical: 15,
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.06)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.52)'
+          : 'rgba(255,255,255,0.03)'
+  },
+  assetDetailActionLabel: {
+    color: palette.text,
+    fontSize: 14,
+    fontWeight: '700'
+  },
+  assetDetailActionLabelMuted: {
+    color: palette.muted,
+    fontSize: 14,
+    fontWeight: '700'
+  },
   assetDetailStat: {
     gap: 4
+  },
+  assetDetailMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 16
   },
   assetDetailLabel: {
     color: palette.muted,
@@ -7489,6 +7935,12 @@ function createStyles(palette: MobileThemePalette) {
     fontSize: 15,
     lineHeight: 22,
     fontWeight: '600'
+  },
+  assetDetailMetaMono: {
+    color: palette.text,
+    fontSize: 14,
+    lineHeight: 22,
+    fontFamily: 'Courier'
   },
   settingsRow: {
     flexDirection: 'row',

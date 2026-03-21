@@ -44,6 +44,18 @@ export type DeviceLinkQrEnvelope = {
   handoff: EncryptedPayload;
 };
 
+type DeviceLinkQrEnvelopeCompact = {
+  v: 1;
+  t: 'grape-device-link-qr';
+  s: string;
+  c: number;
+  e: number;
+  n: string;
+  h: GrapeChain;
+  p: string;
+  d: EncryptedPayload;
+};
+
 export type DeviceLinkSessionStatus = 'ready' | 'revoked' | 'expired';
 
 export type DeviceLinkSessionRecord = {
@@ -63,7 +75,38 @@ export type DeviceLinkSessionRecord = {
 const DEVICE_LINK_PREFIX = 'grape-link:';
 
 export function createDeviceLinkPayloadText(envelope: DeviceLinkQrEnvelope): string {
-  return `${DEVICE_LINK_PREFIX}${bytesToBase64(utf8ToBytes(JSON.stringify(envelope)))}`;
+  const compactEnvelope: DeviceLinkQrEnvelopeCompact = {
+    v: envelope.version,
+    t: envelope.type,
+    s: envelope.sessionId,
+    c: envelope.createdAt,
+    e: envelope.expiresAt,
+    n: envelope.walletName,
+    h: envelope.chain,
+    p: envelope.publicKey,
+    d: envelope.handoff
+  };
+
+  return `${DEVICE_LINK_PREFIX}${JSON.stringify(compactEnvelope)}`;
+}
+
+function normalizeDeviceLinkEnvelope(input: Partial<DeviceLinkQrEnvelope> | Partial<DeviceLinkQrEnvelopeCompact>): Partial<DeviceLinkQrEnvelope> {
+  if ('version' in input || 'type' in input || 'sessionId' in input) {
+    return input as Partial<DeviceLinkQrEnvelope>;
+  }
+
+  const compact = input as Partial<DeviceLinkQrEnvelopeCompact>;
+  return {
+    version: compact.v,
+    type: compact.t,
+    sessionId: compact.s,
+    createdAt: compact.c,
+    expiresAt: compact.e,
+    walletName: compact.n,
+    chain: compact.h,
+    publicKey: compact.p,
+    handoff: compact.d
+  };
 }
 
 export function parseDeviceLinkPayloadText(input: string): DeviceLinkQrEnvelope {
@@ -74,9 +117,15 @@ export function parseDeviceLinkPayloadText(input: string): DeviceLinkQrEnvelope 
 
   const raw =
     trimmed.startsWith(DEVICE_LINK_PREFIX)
-      ? bytesToUtf8(base64ToBytes(trimmed.slice(DEVICE_LINK_PREFIX.length)))
+      ? (() => {
+          const encoded = trimmed.slice(DEVICE_LINK_PREFIX.length).trim();
+          if (encoded.startsWith('{')) {
+            return encoded;
+          }
+          return bytesToUtf8(base64ToBytes(encoded));
+        })()
       : trimmed;
-  const parsed = JSON.parse(raw) as Partial<DeviceLinkQrEnvelope>;
+  const parsed = normalizeDeviceLinkEnvelope(JSON.parse(raw) as Partial<DeviceLinkQrEnvelope> | Partial<DeviceLinkQrEnvelopeCompact>);
 
   if (
     parsed.version !== 1 ||

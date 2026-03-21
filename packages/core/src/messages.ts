@@ -162,13 +162,65 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     type: z.literal('wallet_create'),
     mnemonic: z.string(),
     password: z.string(),
-    publicKey: z.string()
+    publicKey: z.string(),
+    biometricUnlockConfig: z
+      .union([
+        z.object({
+          mode: z.literal('wrapped-password').optional(),
+          credentialId: z.string().min(1),
+          credentialIdB64Url: z.string().min(1),
+          keySalt: z.string().min(1),
+          wrappedPassword: z.object({
+            algorithm: z.literal('AES-GCM'),
+            kdf: z.literal('PBKDF2'),
+            iterations: z.number().int().positive(),
+            salt: z.string().min(1),
+            iv: z.string().min(1),
+            ciphertext: z.string().min(1)
+          }),
+          createdAt: z.number().int().positive()
+        }),
+        z.object({
+          mode: z.literal('deterministic-passkey'),
+          credentialId: z.string().min(1),
+          credentialIdB64Url: z.string().min(1),
+          rpId: z.string().min(1).optional(),
+          createdAt: z.number().int().positive()
+        })
+      ])
+      .optional()
   }),
   z.object({
     type: z.literal('wallet_import'),
     mnemonic: z.string(),
     password: z.string(),
-    publicKey: z.string()
+    publicKey: z.string(),
+    biometricUnlockConfig: z
+      .union([
+        z.object({
+          mode: z.literal('wrapped-password').optional(),
+          credentialId: z.string().min(1),
+          credentialIdB64Url: z.string().min(1),
+          keySalt: z.string().min(1),
+          wrappedPassword: z.object({
+            algorithm: z.literal('AES-GCM'),
+            kdf: z.literal('PBKDF2'),
+            iterations: z.number().int().positive(),
+            salt: z.string().min(1),
+            iv: z.string().min(1),
+            ciphertext: z.string().min(1)
+          }),
+          createdAt: z.number().int().positive()
+        }),
+        z.object({
+          mode: z.literal('deterministic-passkey'),
+          credentialId: z.string().min(1),
+          credentialIdB64Url: z.string().min(1),
+          rpId: z.string().min(1).optional(),
+          createdAt: z.number().int().positive()
+        })
+      ])
+      .optional()
   }),
   z.object({
     type: z.literal('wallet_import_private_key'),
@@ -294,20 +346,30 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('wallet_set_biometric_unlock'),
     config: z
-      .object({
-        credentialId: z.string().min(1),
-        credentialIdB64Url: z.string().min(1),
-        keySalt: z.string().min(1),
-        wrappedPassword: z.object({
-          algorithm: z.literal('AES-GCM'),
-          kdf: z.literal('PBKDF2'),
-          iterations: z.number().int().positive(),
-          salt: z.string().min(1),
-          iv: z.string().min(1),
-          ciphertext: z.string().min(1)
+      .union([
+        z.object({
+          mode: z.literal('wrapped-password').optional(),
+          credentialId: z.string().min(1),
+          credentialIdB64Url: z.string().min(1),
+          keySalt: z.string().min(1),
+          wrappedPassword: z.object({
+            algorithm: z.literal('AES-GCM'),
+            kdf: z.literal('PBKDF2'),
+            iterations: z.number().int().positive(),
+            salt: z.string().min(1),
+            iv: z.string().min(1),
+            ciphertext: z.string().min(1)
+          }),
+          createdAt: z.number().int().positive()
         }),
-        createdAt: z.number().int().positive()
-      })
+        z.object({
+          mode: z.literal('deterministic-passkey'),
+          credentialId: z.string().min(1),
+          credentialIdB64Url: z.string().min(1),
+          rpId: z.string().min(1).optional(),
+          createdAt: z.number().int().positive()
+        })
+      ])
       .nullable()
   }),
   z.object({

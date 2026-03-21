@@ -17,6 +17,7 @@
     "@babel/runtime": "^7.20.0",
     "@grape/core": "workspace:*",
     "@grape/ethereum": "workspace:*",
+    "@grape/mobile-passkeys": "workspace:*",
     "@grape/monad": "workspace:*",
     "@grape/solana": "workspace:*",
     "@grape/sui": "workspace:*",
