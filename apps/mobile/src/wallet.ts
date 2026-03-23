@@ -527,6 +527,15 @@ export async function loadWalletAssets(wallet: MobileWallet): Promise<MobileAsse
   }
 }
 
+export async function loadWalletAssetsFast(wallet: MobileWallet): Promise<MobileAsset[]> {
+  switch (wallet.chain) {
+    case 'solana':
+      return loadSolanaAssetsFast(wallet.address);
+    default:
+      return loadWalletAssets(wallet);
+  }
+}
+
 export async function loadWalletActivity(wallet: MobileWallet): Promise<MobileActivity[]> {
   switch (wallet.chain) {
     case 'solana': {
@@ -1986,6 +1995,14 @@ async function loadSolanaAssets(address: string): Promise<MobileAsset[]> {
 
   const connection = new Connection(getMobileSolanaRpcUrl(DEFAULT_SOLANA_NETWORK), 'confirmed');
   const owner = new PublicKey(address);
+  type SolanaRpcTokenEntry = {
+    mint: string;
+    amountLabel: string;
+    numericAmount: number;
+    accountAddress: string;
+    programId: string;
+    decimals?: number;
+  };
   const [lamports, shyftTokens, rpcTokenEntries] = await Promise.all([
     connection.getBalance(owner, 'confirmed').catch(() => 0),
     fetchMobileShyftWalletTokens(address, DEFAULT_SOLANA_NETWORK).catch(() => []),
@@ -1997,9 +2014,9 @@ async function loadSolanaAssets(address: string): Promise<MobileAsset[]> {
         programId: new PublicKey(SOLANA_TOKEN_2022_PROGRAM)
       })
     ])
-      .then(([legacyTokenAccounts, token2022Accounts]) =>
-        [...legacyTokenAccounts.value, ...token2022Accounts.value]
-          .map((account) => {
+      .then(([legacyTokenAccounts, token2022Accounts]) => {
+        const parsedEntries: SolanaRpcTokenEntry[] = [];
+        [...legacyTokenAccounts.value, ...token2022Accounts.value].forEach((account) => {
             const parsed = account.account.data.parsed.info as {
               mint: string;
               tokenAmount: { uiAmountString?: string; amount: string; uiAmount?: number; decimals?: number };
@@ -2007,28 +2024,21 @@ async function loadSolanaAssets(address: string): Promise<MobileAsset[]> {
             const amount = parsed.tokenAmount.uiAmountString ?? parsed.tokenAmount.amount;
             const numericAmount = Number(parsed.tokenAmount.uiAmount ?? amount);
             if (!amount || amount === '0' || numericAmount <= 0) {
-              return null;
+              return;
             }
 
-            return {
+            parsedEntries.push({
               mint: parsed.mint,
               amountLabel: amount,
               numericAmount,
               accountAddress: account.pubkey.toBase58(),
               programId: account.account.owner.toBase58(),
               decimals: parsed.tokenAmount.decimals
-            };
-          })
-          .filter((entry): entry is {
-            mint: string;
-            amountLabel: string;
-            numericAmount: number;
-            accountAddress: string;
-            programId: string;
-            decimals?: number;
-          } => !!entry)
-      )
-      .catch(() => [])
+            });
+          });
+        return parsedEntries;
+      })
+      .catch(() => [] as SolanaRpcTokenEntry[])
   ]);
 
   const mergedTokenEntries = new Map<
@@ -2101,7 +2111,10 @@ async function loadSolanaAssets(address: string): Promise<MobileAsset[]> {
     (left, right) => right.numericAmount - left.numericAmount
   );
 
-  const jupiterPrices = await fetchMobileJupiterPrices([JUPITER_SOL_MINT, ...tokenEntries.map((entry) => entry.mint)]).catch(() => ({}));
+  const jupiterPrices: Record<string, { usdPrice: number | null; priceChange24h: number | null }> =
+    await fetchMobileJupiterPrices([JUPITER_SOL_MINT, ...tokenEntries.map((entry) => entry.mint)]).catch(
+      () => ({})
+    );
   const solUsdPrice = jupiterPrices[JUPITER_SOL_MINT]?.usdPrice ?? null;
   const solAmount = lamports / 1_000_000_000;
   const assets: MobileAsset[] = [
@@ -2147,6 +2160,62 @@ async function loadSolanaAssets(address: string): Promise<MobileAsset[]> {
   mobileSolanaAssetCache.set(address, {
     expiresAt: Date.now() + (assets.length > 1 ? MOBILE_SOLANA_ASSET_CACHE_TTL_MS : 5_000),
     assets
+  });
+
+  return assets;
+}
+
+async function loadSolanaAssetsFast(address: string): Promise<MobileAsset[]> {
+  if (!isValidSolanaPublicKey(address)) {
+    console.warn('[Grape mobile] Skipping fast Solana asset load for invalid address', address);
+    return [];
+  }
+
+  const { Connection, PublicKey } = loadSolanaWeb3Module();
+  const connection = new Connection(getMobileSolanaRpcUrl(DEFAULT_SOLANA_NETWORK), 'confirmed');
+  const owner = new PublicKey(address);
+  const [lamports, shyftTokens] = await Promise.all([
+    connection.getBalance(owner, 'confirmed').catch(() => 0),
+    fetchMobileShyftWalletTokens(address, DEFAULT_SOLANA_NETWORK).catch(() => [])
+  ]);
+
+  const solAmount = lamports / 1_000_000_000;
+  const assets: MobileAsset[] = [
+    {
+      id: 'sol',
+      name: 'Solana',
+      symbol: 'SOL',
+      amountLabel: `${solAmount.toFixed(4).replace(/\.?0+$/, '')} SOL`,
+      amountUi: solAmount,
+      valueLabel: formatUsdValue(null),
+      logoUri: 'https://media.solana-cdn.com/image/width=100/https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/solana/info/logo.png',
+      chain: 'solana',
+      address: JUPITER_SOL_MINT,
+      metadataSource: 'native',
+      decimals: 9,
+      description: 'Native SOL balance on this wallet.',
+      tokenType: 'native'
+    }
+  ];
+
+  shyftTokens.forEach((token) => {
+    const mint = token.mint.trim();
+    const symbol = token.symbol || shortenAddress(mint);
+    assets.push({
+      id: mint,
+      name: token.name || shortenAddress(mint),
+      symbol,
+      amountLabel: token.balanceLabel ?? `${token.balanceUi ?? 0}`,
+      amountUi: token.balanceUi ?? 0,
+      valueLabel: formatUsdValue(null),
+      logoUri: token.logoUri,
+      chain: 'solana',
+      address: mint,
+      metadataSource: 'shyft',
+      decimals: token.decimals,
+      description: `Metadata powered by Shyft for ${symbol}.`,
+      tokenType: 'spl'
+    });
   });
 
   return assets;

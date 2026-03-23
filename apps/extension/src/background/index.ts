@@ -657,6 +657,77 @@ class WalletController {
     return result;
   }
 
+  private async refreshSolanaAssetsFast(
+    walletId: string,
+    network: 'mainnet-beta' | 'devnet',
+    publicKey: string,
+    walletState: Awaited<ReturnType<WalletController['getWalletState']>>
+  ): Promise<WalletAssetsResponse> {
+    const owner = tryParseSolanaPublicKey(publicKey);
+    if (!owner) {
+      const fallback: WalletAssetsResponse = {
+        lamports: 0,
+        tokens: [],
+        collections: [],
+        nativeName: 'Solana',
+        nativeSymbol: 'SOL',
+        nativeDecimals: 9,
+        totalUsdValue: null,
+        nativePriceUsd: null,
+        nativeValueUsd: null,
+        nativePriceChange24h: null,
+        stale: true
+      };
+
+      const cache = await assetCacheStorage.get();
+      cache[this.getAssetCacheKey(walletId, network, publicKey)] = {
+        cachedAt: Date.now(),
+        data: fallback
+      };
+      await assetCacheStorage.set(cache);
+      return fallback;
+    }
+
+    const connection = this.createConnection(network, walletState);
+    const [lamports, shyftMetadataResult] = await Promise.all([
+      connection.getBalance(owner),
+      hasShyftApiKey() ? fetchShyftWalletTokens(network, publicKey).catch(() => ({})) : Promise.resolve({})
+    ]);
+
+    const shyftMetadata = shyftMetadataResult as Record<string, { name?: string; symbol?: string; logoUri?: string }>;
+    const tokens = (await this.scanWalletTokenAccounts(connection, owner, shyftMetadata))
+      .filter((token) => Number(token.amount) > 0)
+      .map((token) => ({
+        ...token,
+        priceUsd: null,
+        valueUsd: null,
+        priceChange24h: null
+      }));
+
+    const result: WalletAssetsResponse = {
+      lamports,
+      tokens: sortWalletTokens(tokens),
+      collections: [],
+      nativeName: 'Solana',
+      nativeSymbol: 'SOL',
+      nativeDecimals: 9,
+      totalUsdValue: null,
+      nativePriceUsd: null,
+      nativeValueUsd: null,
+      nativePriceChange24h: null,
+      stale: true
+    };
+
+    const cache = await assetCacheStorage.get();
+    cache[this.getAssetCacheKey(walletId, network, publicKey)] = {
+      cachedAt: Date.now(),
+      data: result
+    };
+    await assetCacheStorage.set(cache);
+
+    return result;
+  }
+
   private async refreshAssetsCache(
     walletId: string,
     network: 'mainnet-beta' | 'devnet',
@@ -1745,11 +1816,14 @@ class WalletController {
     if (cached) {
       const stale = Date.now() - cached.cachedAt >= ASSET_CACHE_TTL_MS;
       if (!stale) {
+        if (cached.data.stale && options?.staleWhileRevalidate) {
+          void this.refreshAssetsCache(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey);
+        }
         return {
           ...cached.data,
           cachedAt: cached.cachedAt,
           fromCache: true,
-          stale: false
+          stale: !!cached.data.stale
         };
       }
 
@@ -1762,6 +1836,16 @@ class WalletController {
           stale: true
         };
       }
+    }
+
+    if (options?.staleWhileRevalidate && selectedWallet.chain === 'solana') {
+      const fastAssets = await this.refreshSolanaAssetsFast(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey, walletState);
+      void this.refreshAssetsCache(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey);
+      return {
+        ...fastAssets,
+        fromCache: false,
+        stale: true
+      };
     }
 
     return this.refreshAssetsCache(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey);

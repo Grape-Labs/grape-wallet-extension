@@ -316,7 +316,6 @@ export async function fetchMobileShyftWalletTokens(wallet: string, network: 'mai
   const url = new URL('https://api.shyft.to/sol/v1/wallet/all_tokens');
   url.searchParams.set('network', network);
   url.searchParams.set('wallet', wallet);
-  url.searchParams.set('wallet_address', wallet);
 
   const payload = (await fetchJsonWithRetry(
     url.toString(),
@@ -349,11 +348,11 @@ export async function fetchMobileShyftWalletTokens(wallet: string, network: 'mai
       ui_amount?: number | string;
     };
   }>;
-  return entries
-    .map((entry) => {
+  const normalizedEntries: MobileShyftWalletToken[] = [];
+  entries.forEach((entry) => {
       const mint = entry.address?.trim() || entry.token_address?.trim() || entry.mint?.trim();
       if (!mint) {
-        return null;
+        return;
       }
 
       const rawBalance =
@@ -373,7 +372,11 @@ export async function fetchMobileShyftWalletTokens(wallet: string, network: 'mai
       const decimals = typeof entry.info?.decimals === 'number' ? entry.info.decimals : undefined;
       const symbol = entry.info?.symbol?.trim() || entry.symbol?.trim() || undefined;
 
-      return {
+      if (balanceUi <= 0) {
+        return;
+      }
+
+      normalizedEntries.push({
         mint,
         name: entry.info?.name?.trim() || entry.name?.trim() || undefined,
         symbol,
@@ -381,10 +384,10 @@ export async function fetchMobileShyftWalletTokens(wallet: string, network: 'mai
         decimals,
         balanceUi,
         balanceLabel: symbol ? `${balanceUi} ${symbol}` : `${balanceUi}`
-      } satisfies MobileShyftWalletToken;
-    })
-    .filter((entry): entry is MobileShyftWalletToken => !!entry && (entry.balanceUi ?? 0) > 0)
-    .sort((left, right) => (right.balanceUi ?? 0) - (left.balanceUi ?? 0));
+      });
+    });
+
+  return normalizedEntries.sort((left, right) => (right.balanceUi ?? 0) - (left.balanceUi ?? 0));
 }
 
 type MobileLifiQuoteResponse = {

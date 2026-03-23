@@ -1214,6 +1214,8 @@ function PopupPage() {
   const communitySectionRef = useRef<HTMLDivElement | null>(null);
   const verificationSectionRef = useRef<HTMLDivElement | null>(null);
   const governanceSectionRef = useRef<HTMLDivElement | null>(null);
+  const assetRevalidateTimerRef = useRef<number | null>(null);
+  const assetRevalidateAttemptsRef = useRef(0);
 
   const surface = document.body.dataset.surface ?? 'page';
   const surfaceId = document.body.dataset.surfaceId ?? '';
@@ -1221,6 +1223,10 @@ function PopupPage() {
   const selectedChainValue = state?.wallet.selectedChain ?? 'solana';
 
   const refresh = async () => {
+    if (assetRevalidateTimerRef.current !== null) {
+      window.clearTimeout(assetRevalidateTimerRef.current);
+      assetRevalidateTimerRef.current = null;
+    }
     try {
       setSurfaceError(null);
       const nextState = await sendRuntimeMessage<WalletStateResponse>({ type: 'wallet_get_state' });
@@ -1233,6 +1239,15 @@ function PopupPage() {
             staleWhileRevalidate: true
           });
           setAssets(nextAssets);
+          if (nextAssets.stale && assetRevalidateAttemptsRef.current < 6) {
+            assetRevalidateAttemptsRef.current += 1;
+            assetRevalidateTimerRef.current = window.setTimeout(() => {
+              assetRevalidateTimerRef.current = null;
+              void refresh();
+            }, 900);
+          } else if (!nextAssets.stale) {
+            assetRevalidateAttemptsRef.current = 0;
+          }
         } finally {
           setAssetsLoading(false);
         }
@@ -1243,12 +1258,21 @@ function PopupPage() {
           collections: []
         });
         setAssetsLoading(false);
+        assetRevalidateAttemptsRef.current = 0;
       }
     } catch (error) {
       setAssetsLoading(false);
       setSurfaceError(error instanceof Error ? error.message : 'Unable to load wallet state.');
     }
   };
+
+  useEffect(() => {
+    return () => {
+      if (assetRevalidateTimerRef.current !== null) {
+        window.clearTimeout(assetRevalidateTimerRef.current);
+      }
+    };
+  }, []);
 
   const refreshStakeAccounts = async () => {
     if (!state || state.wallet.setup !== 'ready') {

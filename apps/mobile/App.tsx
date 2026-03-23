@@ -77,6 +77,7 @@ import {
   removeMobileWallet,
   loadWalletActivity,
   loadWalletAssets,
+  loadWalletAssetsFast,
   persistMobileWalletState,
   sendWalletAsset,
   updateTrackedGovernanceDaos,
@@ -1464,6 +1465,17 @@ export default function App() {
 
       setAssetsLoading(true);
       setActivityLoading(true);
+      if (selectedWallet.chain === 'solana') {
+        void loadWalletAssetsFast(selectedWallet)
+          .then((nextAssets) => {
+            if (!mounted) {
+              return;
+            }
+            setAssets(nextAssets);
+            setAssetsLoading(false);
+          })
+          .catch(() => {});
+      }
       try {
         const [nextAssets, nextActivity] = await Promise.all([
           loadWalletAssets(selectedWallet),
@@ -2289,6 +2301,14 @@ export default function App() {
     setAssetsLoading(true);
     setActivityLoading(true);
     setGovernanceLoading(selectedWallet.chain === 'solana');
+    if (selectedWallet.chain === 'solana') {
+      void loadWalletAssetsFast(selectedWallet)
+        .then((nextAssets) => {
+          setAssets(nextAssets);
+          setAssetsLoading(false);
+        })
+        .catch(() => {});
+    }
     try {
       const [nextAssets, nextActivity, nextReputation, nextGovernance] = await Promise.all([
         loadWalletAssets(selectedWallet),
