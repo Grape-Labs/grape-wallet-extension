@@ -1,5 +1,5 @@
 import { bytesToBase64, utf8ToBytes } from './encoding';
-import { getCryptoProvider, type CryptoProvider } from './crypto';
+import { getWebCryptoProvider, type WebCryptoProvider } from './crypto';
 
 export const GRAPE_PASSKEY_WALLET_SPEC_VERSION = 'grape-passkey-wallet-v1';
 export const GRAPE_PASSKEY_RP_NAME = 'Grape';
@@ -14,7 +14,7 @@ function asBufferSource(value: Uint8Array): BufferSource {
   return new Uint8Array(value) as unknown as BufferSource;
 }
 
-async function deriveHkdfBytes(inputKeyMaterial: Uint8Array, salt: Uint8Array, info: Uint8Array, length: number, cryptoProvider: CryptoProvider) {
+async function deriveHkdfBytes(inputKeyMaterial: Uint8Array, salt: Uint8Array, info: Uint8Array, length: number, cryptoProvider: WebCryptoProvider) {
   const imported = await cryptoProvider.subtle.importKey(
     'raw',
     asBufferSource(inputKeyMaterial),
@@ -42,7 +42,7 @@ export function getPasskeyWalletPrfInput(): Uint8Array {
 
 export async function derivePasskeyWalletMaterialFromPrf(
   prfOutput: Uint8Array,
-  cryptoProvider = getCryptoProvider()
+  cryptoProvider = getWebCryptoProvider()
 ): Promise<{
   mnemonicEntropy: Uint8Array;
   vaultPassword: string;

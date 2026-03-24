@@ -181,6 +181,8 @@ const mobileReputationCache = new Map<string, { expiresAt: number; data: MobileR
 const MOBILE_GOVERNANCE_CACHE_TTL_MS = 30_000;
 const mobileGovernanceCache = new Map<string, { expiresAt: number; data: MobileGovernanceResponse }>();
 const MOBILE_DEVICE_LINK_TTL_MS = 10 * 60 * 1000;
+const MOBILE_DEVICE_LINK_KDF_ITERATIONS = 20_000;
+const MOBILE_DEVICE_LINK_MAX_IMPORT_ITERATIONS = 50_000;
 
 function normalizeWalletAddressKey(chain: GrapeChain, address: string) {
   const trimmed = address.trim();
@@ -1595,7 +1597,7 @@ export async function createMobileDeviceLinkSession(input: {
     },
     preferences: getMobileDeviceLinkPreferencesSnapshot(input.state)
   };
-  const handoff = await encryptText(JSON.stringify(payload), normalizeDeviceLinkPairingCode(pairingCode));
+  const handoff = await encryptText(JSON.stringify(payload), normalizeDeviceLinkPairingCode(pairingCode), undefined, MOBILE_DEVICE_LINK_KDF_ITERATIONS);
   const envelope = {
     version: 1 as const,
     type: 'grape-device-link-qr' as const,
@@ -1633,9 +1635,12 @@ export async function importMobileDeviceLink(input: {
   if (envelope.expiresAt <= Date.now()) {
     throw new Error('This restore payload has expired. Create a new link from your existing device.');
   }
+  if (envelope.handoff.iterations > MOBILE_DEVICE_LINK_MAX_IMPORT_ITERATIONS) {
+    throw new Error('This restore payload was created by an older Grape build. Create a new link from the extension and try again.');
+  }
 
   const raw = await decryptText(envelope.handoff, normalizeDeviceLinkPairingCode(input.pairingCode)).catch(() => {
-    throw new Error('Pairing code is incorrect.');
+    throw new Error('Pairing code is incorrect, or the restore payload was scanned incorrectly. Try scanning again or paste the restore payload manually.');
   });
   const payload = JSON.parse(raw) as DeviceLinkHandoffPayload;
   if (

@@ -3,7 +3,7 @@ import type { ExpoConfig } from 'expo/config';
 const config: ExpoConfig = {
   name: 'Grape',
   slug: 'grape-wallet-mobile',
-  version: '0.3.0',
+  version: '0.4.0',
   icon: './assets/icon-app.png',
   orientation: 'portrait',
   userInterfaceStyle: 'dark',

@@ -3560,7 +3560,7 @@ function PopupPage() {
           </button>
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
-          <DropdownMenu.Content sideOffset={8} align="end" className="popup-menu-content">
+          <DropdownMenu.Content sideOffset={8} align="end" className="popup-menu-content wallet-switcher-menu">
             <div className="popup-menu-section">Grape</div>
             <DropdownMenu.Item
               className="wallet-menu-action"
@@ -3612,7 +3612,7 @@ function PopupPage() {
           </button>
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
-          <DropdownMenu.Content sideOffset={8} align="end" className="popup-menu-content">
+          <DropdownMenu.Content sideOffset={8} align="end" className="popup-menu-content wallet-switcher-menu">
             <DropdownMenu.Item
               className="wallet-menu-action"
               onSelect={() => {
@@ -3704,7 +3704,7 @@ function PopupPage() {
           </button>
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
-          <DropdownMenu.Content sideOffset={8} align="end" className="popup-menu-content">
+          <DropdownMenu.Content sideOffset={8} align="end" className="popup-menu-content wallet-switcher-menu">
             <div className="popup-menu-section">Wallets</div>
             {groupedWallets.map((group) => (
               <div key={group.key} className="wallet-menu-group">

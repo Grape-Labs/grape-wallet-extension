@@ -203,6 +203,7 @@ const ASSET_CACHE_TTL_MS = 45_000;
 const REPUTATION_CACHE_TTL_MS = 120_000;
 const STAKE_RETRY_ATTEMPTS = 3;
 const DEVICE_LINK_TTL_MS = 10 * 60 * 1000;
+const DEVICE_LINK_KDF_ITERATIONS = 20_000;
 
 function tryParseSolanaPublicKey(value: string): PublicKey | null {
   try {
@@ -2726,7 +2727,7 @@ class WalletController {
       },
       preferences: this.getDeviceLinkPreferencesSnapshot(walletState)
     };
-    const handoff = await encryptText(JSON.stringify(handoffPayload), this.normalizePairingCode(pairingCode));
+    const handoff = await encryptText(JSON.stringify(handoffPayload), this.normalizePairingCode(pairingCode), undefined, DEVICE_LINK_KDF_ITERATIONS);
     const envelope = {
       version: 1 as const,
       type: 'grape-device-link-qr' as const,
@@ -2811,7 +2812,7 @@ class WalletController {
 
     const pairingCode = this.normalizePairingCode(input.pairingCode);
     const rawPayload = await decryptText(envelope.handoff, pairingCode).catch(() => {
-      throw new RpcError('INVALID_PAIRING_CODE', 'Pairing code is incorrect.');
+      throw new RpcError('INVALID_PAIRING_CODE', 'Pairing code is incorrect, or the restore payload was scanned incorrectly. Try scanning again or paste the restore payload manually.');
     });
     const payload = JSON.parse(rawPayload) as DeviceLinkHandoffPayload;
 

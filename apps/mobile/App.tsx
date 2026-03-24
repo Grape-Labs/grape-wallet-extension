@@ -1,7 +1,7 @@
 import { StatusBar } from 'expo-status-bar';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as LocalAuthentication from 'expo-local-authentication';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
 import WebView from 'react-native-webview';
 import type { WebViewMessageEvent, WebViewNavigation } from 'react-native-webview';
 import {
@@ -139,6 +139,7 @@ type DiscoverApproval = {
 const GRAPE_DISCOVER_DEFAULT_URL = 'https://governance.so';
 const SOLANA_SEND_FEE_RESERVE_SOL = 0.00001;
 const SOLANA_TOKEN_SEND_RESERVE_SOL = 0.0021;
+const MOBILE_SWAP_SLIPPAGE_BPS = 50;
 const PASSKEY_WALLET_CREATION_ENABLED = false;
 const GRAPE_DISCOVER_WALLET_ICON =
   "data:image/png;base64,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";
@@ -733,6 +734,15 @@ function getAssetSubtitle(asset: MobileAsset, selectedChainLabel: string, select
   return asset.symbol;
 }
 
+function formatSwapAmountInput(amount: number) {
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return '';
+  }
+
+  const precision = amount >= 1_000 ? 2 : amount >= 1 ? 6 : 9;
+  return amount.toFixed(precision).replace(/\.?0+$/, '');
+}
+
 function isSvgUri(uri?: string) {
   return typeof uri === 'string' && uri.trim().toLowerCase().includes('.svg');
 }
@@ -855,6 +865,12 @@ function normalizeScannedRestorePayloadInput(input: string) {
   return trimmed.replace(/\s+/g, '');
 }
 
+function waitForNextFrame() {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}
+
 function formatShortAddress(address: string) {
   if (!address) {
     return 'Unknown';
@@ -897,6 +913,7 @@ export default function App() {
   const [assetsLoading, setAssetsLoading] = useState(false);
   const [activityLoading, setActivityLoading] = useState(false);
   const [submitLoading, setSubmitLoading] = useState(false);
+  const [submitStatus, setSubmitStatus] = useState<string | null>(null);
   const [sendRecipient, setSendRecipient] = useState('');
   const [sendAmount, setSendAmount] = useState('');
   const [sendLoading, setSendLoading] = useState(false);
@@ -982,7 +999,7 @@ export default function App() {
   const [exportVerifiedWalletId, setExportVerifiedWalletId] = useState<string | null>(null);
   const [deviceLinkSession, setDeviceLinkSession] = useState<MobileDeviceLinkSession | null>(null);
   const [deviceLinkLoading, setDeviceLinkLoading] = useState(false);
-  const [expandedSettingsSections, setExpandedSettingsSections] = useState<Set<string>>(() => new Set(['current-wallet']));
+  const [expandedSettingsSections, setExpandedSettingsSections] = useState<Set<string>>(() => new Set(['current-wallet', 'backup']));
   const [qrScannerVisible, setQrScannerVisible] = useState(false);
   const [qrScannerTarget, setQrScannerTarget] = useState<'restore' | 'send' | null>(null);
   const [discoverUrlInput, setDiscoverUrlInput] = useState(GRAPE_DISCOVER_DEFAULT_URL);
@@ -1201,6 +1218,37 @@ export default function App() {
 
     return bridgeDestinationWallets[0] ?? null;
   }, [bridgeDestinationWalletId, bridgeDestinationWallets]);
+
+  function resetSwapDraft() {
+    setSwapQuote(null);
+    setSwapSelectedRouteId(null);
+    setSwapError(null);
+  }
+
+  function handleSwapAmountChange(value: string) {
+    setSwapAmount(value);
+    resetSwapDraft();
+  }
+
+  function handleFlipSwapDirection() {
+    if (!selectedSwapInputAsset || !selectedSwapOutputAsset) {
+      return;
+    }
+
+    setSwapInputAssetId(selectedSwapOutputAsset.id);
+    setSwapOutputAssetId(selectedSwapInputAsset.id);
+    resetSwapDraft();
+  }
+
+  function setSwapAmountByRatio(ratio: number) {
+    const availableAmount = selectedSwapInputAsset?.amountUi ?? 0;
+    if (!(availableAmount > 0)) {
+      return;
+    }
+
+    setSwapAmount(formatSwapAmountInput(availableAmount * ratio));
+    resetSwapDraft();
+  }
 
   useEffect(() => {
     let mounted = true;
@@ -2002,7 +2050,9 @@ export default function App() {
     }
 
     setSubmitLoading(true);
+    setSubmitStatus('Creating your wallet…');
     try {
+      await waitForNextFrame();
       const nextState = await createWalletSet({
         mnemonic: generatedMnemonic,
         password: setupPassword,
@@ -2016,6 +2066,7 @@ export default function App() {
     } catch (unknownError) {
       setError(unknownError instanceof Error ? unknownError.message : 'Unable to create wallet.');
     } finally {
+      setSubmitStatus(null);
       setSubmitLoading(false);
     }
   }
@@ -2040,7 +2091,9 @@ export default function App() {
 
     setSubmitLoading(true);
     setBiometricLoading(true);
+    setSubmitStatus('Creating your passkey wallet…');
     try {
+      await waitForNextFrame();
       const passkeySetup = await createMobileDeterministicPasskeyWalletSetup();
       const nextState = await createWalletSet({
         mnemonic: entropyToWalletMnemonic(passkeySetup.mnemonicEntropy),
@@ -2056,6 +2109,7 @@ export default function App() {
     } catch (unknownError) {
       setError(unknownError instanceof Error ? unknownError.message : 'Unable to create passkey wallet.');
     } finally {
+      setSubmitStatus(null);
       setBiometricLoading(false);
       setSubmitLoading(false);
     }
@@ -2083,8 +2137,11 @@ export default function App() {
       return;
     }
 
+    let completed = false;
     setSubmitLoading(true);
+    setSubmitStatus(importKind === 'restore' ? 'Decrypting restore payload…' : 'Importing your wallet…');
     try {
+      await waitForNextFrame();
       const nextState =
         importKind === 'restore'
           ? await importMobileDeviceLink({
@@ -2104,17 +2161,25 @@ export default function App() {
               privateKey: importPrivateKey.trim(),
               password: setupPassword
             });
-      setWalletState(nextState);
-      setUnlocked(true);
-      setScreen('ready');
-      setMainTab('home');
-      setRestorePayload('');
-      setRestorePairingCode('');
-      setError(null);
+      completed = true;
+      setSubmitStatus(null);
+      setSubmitLoading(false);
+      startTransition(() => {
+        setWalletState(nextState);
+        setUnlocked(true);
+        setScreen('ready');
+        setMainTab('home');
+        setRestorePayload('');
+        setRestorePairingCode('');
+        setError(null);
+      });
     } catch (unknownError) {
       setError(unknownError instanceof Error ? unknownError.message : 'Unable to import wallet.');
     } finally {
-      setSubmitLoading(false);
+      if (!completed) {
+        setSubmitStatus(null);
+        setSubmitLoading(false);
+      }
     }
   }
 
@@ -2159,8 +2224,17 @@ export default function App() {
       return;
     }
 
+    let completed = false;
     setSubmitLoading(true);
+    setSubmitStatus(setupMode === 'create'
+      ? 'Creating your wallet…'
+      : setupMode === 'passkey'
+        ? 'Creating your passkey wallet…'
+        : importKind === 'restore'
+          ? 'Decrypting restore payload…'
+          : 'Importing your wallet…');
     try {
+      await waitForNextFrame();
       let nextState: MobileWalletState;
       if (setupMode === 'create') {
         nextState = await addWalletSet({
@@ -2188,22 +2262,30 @@ export default function App() {
         });
       }
 
-      setWalletState(nextState);
-      setWalletListExpanded(true);
-      setWalletComposerVisible(false);
-      setImportMnemonic('');
-      setImportPrivateKey('');
-      setRestorePayload('');
-      setRestorePairingCode('');
-      setConfirmBackedUp(false);
-      setConfirmPasskeyOnlyAccess(false);
-      setPasskeyRecoveryMode('passkey-only');
-      setGeneratedMnemonic(createWalletMnemonic(mnemonicLength));
-      setError(null);
+      completed = true;
+      setSubmitStatus(null);
+      setSubmitLoading(false);
+      startTransition(() => {
+        setWalletState(nextState);
+        setWalletListExpanded(true);
+        setWalletComposerVisible(false);
+        setImportMnemonic('');
+        setImportPrivateKey('');
+        setRestorePayload('');
+        setRestorePairingCode('');
+        setConfirmBackedUp(false);
+        setConfirmPasskeyOnlyAccess(false);
+        setPasskeyRecoveryMode('passkey-only');
+        setGeneratedMnemonic(createWalletMnemonic(mnemonicLength));
+        setError(null);
+      });
     } catch (unknownError) {
       setError(unknownError instanceof Error ? unknownError.message : 'Unable to add wallet.');
     } finally {
-      setSubmitLoading(false);
+      if (!completed) {
+        setSubmitStatus(null);
+        setSubmitLoading(false);
+      }
     }
   }
 
@@ -2431,7 +2513,7 @@ export default function App() {
         inputAsset: selectedSwapInputAsset,
         outputAsset: selectedSwapOutputAsset,
         amount: swapAmount.trim(),
-        slippageBps: 50
+        slippageBps: MOBILE_SWAP_SLIPPAGE_BPS
       });
       setSwapQuote(nextQuote);
       setSwapSelectedRouteId(nextQuote.selectedRouteId);
@@ -3833,13 +3915,7 @@ export default function App() {
               ) : null}
 
               {submitLoading
-                ? renderSetupProgress(
-                    setupMode === 'create'
-                      ? 'Creating your wallet…'
-                      : setupMode === 'passkey'
-                        ? 'Creating your passkey wallet…'
-                        : 'Importing your wallet…'
-                  )
+                ? renderSetupProgress(submitStatus ?? 'Working…')
                 : null}
 
               {error ? <Text style={styles.errorText}>{error}</Text> : null}
@@ -4856,12 +4932,10 @@ export default function App() {
     const selectedOutputSubtitle = selectedSwapOutputAsset
       ? getAssetSubtitle(selectedSwapOutputAsset, selectedChainMeta.label, selectedChainMeta.short)
       : null;
-    const routeOptions = (swapQuote?.routes ?? []).map((route) => ({
-      id: route.id,
-      label: route.label,
-      meta: `${route.outputAmountUi} ${selectedSwapOutputAsset?.symbol ?? ''}`.trim(),
-      helper: route.routeLabels.length > 0 ? route.routeLabels.join(' · ') : route.priceImpactPct ? `${route.priceImpactPct}% impact` : undefined
-    }));
+    const activeSwapRoute = swapQuote?.routes.find((route) => route.id === (swapSelectedRouteId ?? swapQuote.selectedRouteId)) ?? swapQuote?.routes[0] ?? null;
+    const quoteOutputValue = activeSwapRoute ? `${activeSwapRoute.outputAmountUi} ${selectedSwapOutputAsset?.symbol ?? ''}`.trim() : '0';
+    const availableInputAmount = selectedSwapInputAsset?.amountUi ?? 0;
+    const swapRatioOptions = [0.25, 0.5, 0.75, 1] as const;
 
     return (
       <View style={styles.stack}>
@@ -4874,60 +4948,120 @@ export default function App() {
           <Text style={styles.sectionHint}>Review multiple Jupiter routes, then swap between assets held in this Solana wallet.</Text>
         </View>
 
-        <View style={[styles.sectionCard, styles.formCard]}>
-          <Text style={styles.sectionTitle}>From</Text>
-          <Pressable style={styles.sendAssetSelectButton} onPress={() => setSwapInputPickerVisible(true)}>
-            {selectedSwapInputAsset ? (
-              <>
-                <View style={styles.sendSelectedAssetGlyph}>
-                  {renderAssetGlyph(selectedSwapInputAsset, 44, styles.assetGlyphText, styles.assetGlyphImage)}
+        <View style={[styles.sectionCard, styles.swapFlowCard]}>
+          <View style={styles.swapFlowShell}>
+            <View style={styles.swapLeg}>
+              <View style={styles.swapLegHeader}>
+                <Text style={styles.swapLegLabel}>Sell</Text>
+                <View style={styles.swapQuickRatios}>
+                  {swapRatioOptions.map((ratio) => {
+                    const disabled = availableInputAmount <= 0;
+                    return (
+                      <Pressable
+                        key={ratio}
+                        style={[styles.swapRatioChip, disabled ? styles.swapRatioChipDisabled : null]}
+                        disabled={disabled}
+                        onPress={() => setSwapAmountByRatio(ratio)}
+                      >
+                        <Text style={[styles.swapRatioChipText, disabled ? styles.swapRatioChipTextDisabled : null]}>
+                          {ratio === 1 ? 'Max' : `${Math.round(ratio * 100)}%`}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
                 </View>
-                <View style={styles.sendSelectedAssetCopy}>
-                  <Text style={styles.sendSelectedAssetName}>{selectedSwapInputAsset.name}</Text>
-                  <Text style={styles.sendSelectedAssetMeta}>{selectedInputSubtitle ?? selectedSwapInputAsset.symbol}</Text>
-                </View>
-                <View style={styles.assetValueStack}>
-                  <Text style={styles.assetValue}>{maskValue(selectedSwapInputAsset.amountLabel, walletState.privacyMode)}</Text>
-                  <Text style={styles.assetValueMeta}>Tap to switch</Text>
-                </View>
-              </>
-            ) : null}
-            <Feather name="chevron-down" size={18} color={activeTheme.muted} style={styles.rowChevronIcon} />
-          </Pressable>
-
-          <Text style={styles.sectionTitle}>To</Text>
-          <Pressable style={styles.sendAssetSelectButton} onPress={() => setSwapOutputPickerVisible(true)}>
-            {selectedSwapOutputAsset ? (
-              <>
-                <View style={styles.sendSelectedAssetGlyph}>
-                  {renderAssetGlyph(selectedSwapOutputAsset, 44, styles.assetGlyphText, styles.assetGlyphImage)}
-                </View>
-                <View style={styles.sendSelectedAssetCopy}>
-                  <Text style={styles.sendSelectedAssetName}>{selectedSwapOutputAsset.name}</Text>
-                  <Text style={styles.sendSelectedAssetMeta}>{selectedOutputSubtitle ?? selectedSwapOutputAsset.symbol}</Text>
-                </View>
-              </>
-            ) : (
-              <View style={styles.sendSelectedAssetCopy}>
-                <Text style={styles.sendSelectedAssetName}>Choose output asset</Text>
-                <Text style={styles.sendSelectedAssetMeta}>Select what you want to receive</Text>
               </View>
-            )}
-            <Feather name="chevron-down" size={18} color={activeTheme.muted} style={styles.rowChevronIcon} />
-          </Pressable>
 
-          <PaperTextInput
-            value={swapAmount}
-            onChangeText={setSwapAmount}
-            placeholder={selectedSwapInputAsset ? `Amount in ${selectedSwapInputAsset.symbol}` : 'Amount'}
-            keyboardType="decimal-pad"
-            mode="outlined"
-            style={styles.paperInput}
-            contentStyle={styles.paperInputContent}
-            outlineStyle={styles.paperOutline}
-            textColor={activeTheme.text}
-          />
-          {swapError ? <Text style={styles.errorText}>{swapError}</Text> : null}
+              <View style={styles.swapLegMain}>
+                <Pressable style={[styles.sendAssetSelectButton, styles.swapSelectShell]} onPress={() => setSwapInputPickerVisible(true)}>
+                  {selectedSwapInputAsset ? (
+                    <>
+                      <View style={styles.sendSelectedAssetGlyph}>
+                        {renderAssetGlyph(selectedSwapInputAsset, 44, styles.assetGlyphText, styles.assetGlyphImage)}
+                      </View>
+                      <View style={styles.sendSelectedAssetCopy}>
+                        <Text style={styles.sendSelectedAssetName}>{selectedSwapInputAsset.name}</Text>
+                        <Text style={styles.sendSelectedAssetMeta}>{selectedInputSubtitle ?? selectedSwapInputAsset.symbol}</Text>
+                      </View>
+                      <View style={styles.assetValueStack}>
+                        <Text style={styles.assetValue}>{maskValue(selectedSwapInputAsset.amountLabel, walletState.privacyMode)}</Text>
+                        <Text style={styles.assetValueMeta}>Tap to switch</Text>
+                      </View>
+                    </>
+                  ) : (
+                    <View style={styles.sendSelectedAssetCopy}>
+                      <Text style={styles.sendSelectedAssetName}>Choose input asset</Text>
+                      <Text style={styles.sendSelectedAssetMeta}>Select what you want to sell</Text>
+                    </View>
+                  )}
+                  <Feather name="chevron-down" size={18} color={activeTheme.muted} style={styles.rowChevronIcon} />
+                </Pressable>
+
+                <View style={styles.swapLegValueRow}>
+                  <TextInput
+                    value={swapAmount}
+                    onChangeText={handleSwapAmountChange}
+                    placeholder="0"
+                    placeholderTextColor={activeTheme.muted}
+                    keyboardType="decimal-pad"
+                    style={styles.swapLegAmountInput}
+                  />
+                </View>
+              </View>
+            </View>
+
+            <Pressable style={styles.swapFlipButton} onPress={handleFlipSwapDirection} disabled={!selectedSwapInputAsset || !selectedSwapOutputAsset}>
+              <MaterialCommunityIcons name="swap-vertical" size={18} color={activeTheme.text} />
+            </Pressable>
+
+            <View style={styles.swapLeg}>
+              <View style={styles.swapLegHeader}>
+                <Text style={styles.swapLegLabel}>Buy</Text>
+              </View>
+
+              <View style={styles.swapLegMain}>
+                <Pressable style={[styles.sendAssetSelectButton, styles.swapSelectShell]} onPress={() => setSwapOutputPickerVisible(true)}>
+                  {selectedSwapOutputAsset ? (
+                    <>
+                      <View style={styles.sendSelectedAssetGlyph}>
+                        {renderAssetGlyph(selectedSwapOutputAsset, 44, styles.assetGlyphText, styles.assetGlyphImage)}
+                      </View>
+                      <View style={styles.sendSelectedAssetCopy}>
+                        <Text style={styles.sendSelectedAssetName}>{selectedSwapOutputAsset.name}</Text>
+                        <Text style={styles.sendSelectedAssetMeta}>{selectedOutputSubtitle ?? selectedSwapOutputAsset.symbol}</Text>
+                      </View>
+                    </>
+                  ) : (
+                    <View style={styles.sendSelectedAssetCopy}>
+                      <Text style={styles.sendSelectedAssetName}>Choose output asset</Text>
+                      <Text style={styles.sendSelectedAssetMeta}>Select what you want to receive</Text>
+                    </View>
+                  )}
+                  <Feather name="chevron-down" size={18} color={activeTheme.muted} style={styles.rowChevronIcon} />
+                </Pressable>
+
+                <View style={styles.swapLegValueRow}>
+                  <Text style={[styles.swapLegQuote, !swapQuote ? styles.swapLegQuotePending : null]}>
+                    {swapQuote ? quoteOutputValue : selectedSwapOutputAsset?.symbol ? `0 ${selectedSwapOutputAsset.symbol}` : '0'}
+                  </Text>
+                </View>
+              </View>
+            </View>
+          </View>
+
+          <View style={styles.swapSettingsRow}>
+            <View style={styles.swapSlippageChip}>
+              <Text style={styles.swapSlippageLabel}>Slippage</Text>
+              <Text style={styles.swapSlippageValue}>{swapQuote?.slippageBps ?? MOBILE_SWAP_SLIPPAGE_BPS} bps</Text>
+            </View>
+          </View>
+
+          {swapError ? (
+            <View style={styles.inlineErrorCard}>
+              <Text style={styles.errorText}>{swapError}</Text>
+            </View>
+          ) : null}
+
           <PaperButton
             mode="contained"
             style={styles.paperPrimaryButton}
@@ -4942,9 +5076,53 @@ export default function App() {
 
         {swapQuote ? (
           <View style={[styles.sectionCard, styles.formCard]}>
-            <Text style={styles.sectionTitle}>Routes</Text>
+            <Text style={styles.sectionTitle}>Quote</Text>
             <Text style={styles.sectionHint}>Pick the route you want Grape to execute.</Text>
-            {renderRoutePicker(routeOptions, swapSelectedRouteId, setSwapSelectedRouteId)}
+            {swapQuote.routes.length > 1 ? (
+              <View style={styles.swapRoutePicker}>
+                {swapQuote.routes.map((route) => {
+                  const active = route.id === (swapSelectedRouteId ?? swapQuote.selectedRouteId);
+                  return (
+                    <Pressable
+                      key={route.id}
+                      style={[styles.swapRouteOption, active ? styles.swapRouteOptionActive : null]}
+                      onPress={() => setSwapSelectedRouteId(route.id)}
+                    >
+                      <View style={styles.swapRouteOptionCopy}>
+                        <Text style={styles.swapRouteOptionTitle}>{route.label}</Text>
+                        <Text style={styles.swapRouteOptionSubtitle}>
+                          {route.routeLabels.length > 0 ? route.routeLabels.join(' -> ') : 'Jupiter route'}
+                        </Text>
+                      </View>
+                      <View style={styles.swapRouteOptionMeta}>
+                        <Text style={styles.swapRouteOptionValue}>{route.outputAmountUi}</Text>
+                        <Text style={styles.swapRouteOptionImpact}>{route.priceImpactPct ?? 'Impact n/a'}</Text>
+                      </View>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            ) : null}
+            <View style={styles.swapSummaryCard}>
+              <View style={styles.swapSummaryRow}>
+                <Text style={styles.swapSummaryLabel}>Estimated output</Text>
+                <Text style={styles.swapSummaryValue}>{quoteOutputValue}</Text>
+              </View>
+              <View style={styles.swapSummaryRow}>
+                <Text style={styles.swapSummaryLabel}>Slippage</Text>
+                <Text style={styles.swapSummaryValue}>{swapQuote.slippageBps} bps</Text>
+              </View>
+              <View style={styles.swapSummaryRow}>
+                <Text style={styles.swapSummaryLabel}>Price impact</Text>
+                <Text style={styles.swapSummaryValue}>{activeSwapRoute?.priceImpactPct ?? 'Unavailable'}</Text>
+              </View>
+              <View style={styles.swapSummaryRow}>
+                <Text style={styles.swapSummaryLabel}>Route</Text>
+                <Text style={styles.swapSummaryValue}>
+                  {activeSwapRoute?.routeLabels.length ? activeSwapRoute.routeLabels.join(' -> ') : 'Jupiter route'}
+                </Text>
+              </View>
+            </View>
             <PaperButton
               mode="contained"
               style={styles.paperPrimaryButton}
@@ -5164,8 +5342,18 @@ export default function App() {
       );
     };
 
+    const renderSettingsGroupHeading = (eyebrow: string, title: string, summary: string) => (
+      <View style={styles.settingsGroupHeading}>
+        <Text style={styles.settingsGroupEyebrow}>{eyebrow}</Text>
+        <Text style={styles.sectionTitle}>{title}</Text>
+        <Text style={styles.sectionHint}>{summary}</Text>
+      </View>
+    );
+
     return (
       <View style={styles.stack}>
+        {renderSettingsGroupHeading('Wallet', 'Wallet & appearance', 'Theme, privacy, biometric unlock, and the currently selected wallet.')}
+
         {renderSettingsSection(
           'appearance',
           'Appearance',
@@ -5236,6 +5424,8 @@ export default function App() {
           `${selectedWallet?.name ?? '--'} • ${selectedChainMeta.label}`,
           <Text style={styles.settingsMono}>{selectedWallet?.address ?? '--'}</Text>
         )}
+
+        {renderSettingsGroupHeading('Recovery', 'Security & recovery', 'Export, device linking, and trusted app access.')}
 
         {renderSettingsSection(
           'backup',
@@ -5371,15 +5561,6 @@ export default function App() {
         )}
 
         {renderSettingsSection(
-          'network',
-          'Network services',
-          'Environment-driven',
-          <Text style={styles.sectionHint}>
-            RPC, Shyft metadata, and Jupiter pricing can be supplied with EXPO_PUBLIC environment values.
-          </Text>
-        )}
-
-        {renderSettingsSection(
           'trusted-apps',
           'Trusted apps',
           trustedAppsCount > 0 ? `${trustedAppsCount} trusted` : 'No trusted apps',
@@ -5407,6 +5588,8 @@ export default function App() {
           )}
           </>
         )}
+
+        {renderSettingsGroupHeading('Community', 'Community & tracking', 'Verification, governance, and OG reputation spaces for this wallet.')}
 
         {renderSettingsSection(
           'verification',
@@ -5610,6 +5793,8 @@ export default function App() {
           )}
           </>
         )}
+
+        {renderSettingsGroupHeading('Manage', 'Wallet manager', 'Create, import, switch, remove, and lock wallets on this device.')}
 
         {renderSettingsSection(
           'all-wallets',
@@ -5829,6 +6014,8 @@ export default function App() {
                   />
                 </>
               ) : null}
+
+              {submitLoading ? renderSetupProgress(submitStatus ?? 'Working…') : null}
 
               {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
@@ -6640,6 +6827,18 @@ function createStyles(palette: MobileThemePalette) {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center'
+  },
+  settingsGroupHeading: {
+    gap: 4,
+    paddingHorizontal: 2,
+    paddingTop: 6
+  },
+  settingsGroupEyebrow: {
+    color: palette.primaryButton,
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 1.2,
+    textTransform: 'uppercase'
   },
   settingsSectionToggle: {
     flexDirection: 'row',
@@ -7644,6 +7843,226 @@ function createStyles(palette: MobileThemePalette) {
     color: palette.muted,
     fontSize: 12,
     fontWeight: '600'
+  },
+  swapFlowCard: {
+    gap: 16,
+    padding: 18
+  },
+  swapFlowShell: {
+    gap: 12
+  },
+  swapLeg: {
+    gap: 10
+  },
+  swapLegHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10
+  },
+  swapLegLabel: {
+    color: palette.muted,
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 1,
+    textTransform: 'uppercase'
+  },
+  swapQuickRatios: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    padding: 3,
+    borderRadius: 999,
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.12)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.86)'
+          : 'rgba(255,255,255,0.08)'
+  },
+  swapRatioChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 999
+  },
+  swapRatioChipDisabled: {
+    opacity: 0.45
+  },
+  swapRatioChipText: {
+    color: palette.text,
+    fontSize: 12,
+    fontWeight: '800'
+  },
+  swapRatioChipTextDisabled: {
+    color: palette.muted
+  },
+  swapLegMain: {
+    gap: 10
+  },
+  swapSelectShell: {
+    minHeight: 76
+  },
+  swapLegValueRow: {
+    alignItems: 'flex-end'
+  },
+  swapLegAmountInput: {
+    width: '100%',
+    color: palette.text,
+    fontSize: 36,
+    lineHeight: 40,
+    fontWeight: '900',
+    textAlign: 'right',
+    letterSpacing: -1.2,
+    paddingVertical: 0
+  },
+  swapLegQuote: {
+    width: '100%',
+    color: palette.text,
+    fontSize: 34,
+    lineHeight: 38,
+    fontWeight: '900',
+    textAlign: 'right',
+    letterSpacing: -1
+  },
+  swapLegQuotePending: {
+    color: palette.muted
+  },
+  swapFlipButton: {
+    width: 44,
+    height: 44,
+    alignSelf: 'center',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginVertical: -6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: palette.panelBorder,
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.12)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.84)'
+          : 'rgba(255,255,255,0.08)'
+  },
+  swapSettingsRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end'
+  },
+  swapSlippageChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 999,
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.1)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.82)'
+          : 'rgba(255,255,255,0.06)',
+    borderWidth: 1,
+    borderColor: palette.panelBorder
+  },
+  swapSlippageLabel: {
+    color: palette.muted,
+    fontSize: 12,
+    fontWeight: '700'
+  },
+  swapSlippageValue: {
+    color: palette.text,
+    fontSize: 13,
+    fontWeight: '800'
+  },
+  swapRoutePicker: {
+    gap: 8
+  },
+  swapRouteOption: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+    padding: 14,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: palette.panelBorder,
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.09)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.72)'
+          : 'rgba(255,255,255,0.05)'
+  },
+  swapRouteOptionActive: {
+    borderColor: palette.primaryButton,
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.14)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.86)'
+          : 'rgba(255,255,255,0.1)'
+  },
+  swapRouteOptionCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 4
+  },
+  swapRouteOptionMeta: {
+    alignItems: 'flex-end',
+    gap: 4
+  },
+  swapRouteOptionTitle: {
+    color: palette.text,
+    fontSize: 14,
+    fontWeight: '800'
+  },
+  swapRouteOptionSubtitle: {
+    color: palette.muted,
+    fontSize: 12,
+    lineHeight: 17
+  },
+  swapRouteOptionValue: {
+    color: palette.text,
+    fontSize: 15,
+    fontWeight: '900'
+  },
+  swapRouteOptionImpact: {
+    color: palette.muted,
+    fontSize: 12,
+    fontWeight: '700'
+  },
+  swapSummaryCard: {
+    gap: 12,
+    padding: 16,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: palette.panelBorder,
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.09)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.74)'
+          : 'rgba(255,255,255,0.05)'
+  },
+  swapSummaryRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 16
+  },
+  swapSummaryLabel: {
+    flex: 1,
+    color: palette.muted,
+    fontSize: 13,
+    fontWeight: '700'
+  },
+  swapSummaryValue: {
+    flex: 1,
+    color: palette.text,
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '800',
+    textAlign: 'right'
   },
   receiveAddressCard: {
     padding: 18,
