@@ -679,9 +679,10 @@ body[data-surface='popup'] {
 
 body[data-surface='popup']::before,
 body[data-surface='popup']::after {
-  display: none;
-  animation: none;
-  opacity: 0;
+  inset: -10%;
+  opacity: calc(var(--theme-ambient-opacity) * 0.42);
+  mix-blend-mode: normal;
+  filter: blur(14px) saturate(110%);
 }
 
 a {
@@ -1822,9 +1823,6 @@ body[data-surface='panel'] .popup-menu-content {
 
 .token-row-static {
   width: 100%;
-  content-visibility: auto;
-  contain: layout paint style;
-  contain-intrinsic-size: 76px;
 }
 
 .wallet-source-badge.created {
@@ -3121,9 +3119,6 @@ body[data-surface='popup'] .staking-summary-grid {
   padding: 4px 0;
   color: inherit;
   cursor: pointer;
-  content-visibility: auto;
-  contain: layout paint style;
-  contain-intrinsic-size: 76px;
 }
 
 .token-item-interactive:hover {

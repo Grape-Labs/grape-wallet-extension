@@ -109,6 +109,20 @@ function normalizeDeviceLinkEnvelope(input: Partial<DeviceLinkQrEnvelope> | Part
   };
 }
 
+function normalizeDeviceLinkEncryptedField(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const plusNormalized = value.trim().replace(/ /g, '+').replace(/[\r\n\t]/g, '');
+  const base64Normalized = plusNormalized.replace(/-/g, '+').replace(/_/g, '/');
+  const remainder = base64Normalized.length % 4;
+  if (remainder === 0) {
+    return base64Normalized;
+  }
+  return `${base64Normalized}${'='.repeat(4 - remainder)}`;
+}
+
 export function parseDeviceLinkPayloadText(input: string): DeviceLinkQrEnvelope {
   const trimmed = input.trim();
   if (!trimmed) {
@@ -143,16 +157,25 @@ export function parseDeviceLinkPayloadText(input: string): DeviceLinkQrEnvelope 
   }
 
   const handoff = parsed.handoff as Partial<EncryptedPayload>;
+  const normalizedHandoff = {
+    ...handoff,
+    salt: normalizeDeviceLinkEncryptedField(handoff.salt),
+    iv: normalizeDeviceLinkEncryptedField(handoff.iv),
+    ciphertext: normalizeDeviceLinkEncryptedField(handoff.ciphertext)
+  };
   if (
-    handoff.algorithm !== 'AES-GCM' ||
-    handoff.kdf !== 'PBKDF2' ||
-    typeof handoff.iterations !== 'number' ||
-    typeof handoff.salt !== 'string' ||
-    typeof handoff.iv !== 'string' ||
-    typeof handoff.ciphertext !== 'string'
+    normalizedHandoff.algorithm !== 'AES-GCM' ||
+    normalizedHandoff.kdf !== 'PBKDF2' ||
+    typeof normalizedHandoff.iterations !== 'number' ||
+    typeof normalizedHandoff.salt !== 'string' ||
+    typeof normalizedHandoff.iv !== 'string' ||
+    typeof normalizedHandoff.ciphertext !== 'string'
   ) {
     throw new Error('Restore payload is invalid.');
   }
 
-  return parsed as DeviceLinkQrEnvelope;
+  return {
+    ...(parsed as DeviceLinkQrEnvelope),
+    handoff: normalizedHandoff as EncryptedPayload
+  };
 }
