@@ -2636,7 +2636,7 @@ class WalletController {
   }
 
   private normalizePairingCode(input: string) {
-    return input.trim().toUpperCase().replace(/[^A-Z2-7]/g, '');
+    return input.trim().toUpperCase().replace(/[^A-Z2-9]/g, '');
   }
 
   private createPairingCode() {

@@ -1948,7 +1948,7 @@ function applyMobileDeviceLinkPreferences(state: MobileWalletState, preferences:
 }
 
 function normalizeDeviceLinkPairingCode(input: string) {
-  return input.trim().toUpperCase().replace(/[^A-Z2-7]/g, '');
+  return input.trim().toUpperCase().replace(/[^A-Z2-9]/g, '');
 }
 
 function createDeviceLinkPairingCode() {
