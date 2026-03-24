@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Fingerprint } from 'lucide-react';
 import QRCode from 'qrcode';
 
 import { Button, Card, Input, KeyValueRow, PageShell, StatusPill, TextArea } from '@grape/ui';
@@ -54,6 +55,7 @@ function OptionsPage() {
   const [deviceLinkPassword, setDeviceLinkPassword] = useState('');
   const [deviceLinkError, setDeviceLinkError] = useState<string | null>(null);
   const [deviceLinkQr, setDeviceLinkQr] = useState<string | null>(null);
+  const [deviceLinkQrExpanded, setDeviceLinkQrExpanded] = useState(false);
   const [copiedDeviceLinkField, setCopiedDeviceLinkField] = useState<'code' | 'payload' | null>(null);
   const [revealedFields, setRevealedFields] = useState<{ mnemonic: boolean; privateKey: boolean }>({
     mnemonic: false,
@@ -107,13 +109,14 @@ function OptionsPage() {
     const activeSession = deviceLinkSessions.find((session) => session.status === 'ready');
     if (!activeSession) {
       setDeviceLinkQr(null);
+      setDeviceLinkQrExpanded(false);
       return;
     }
 
     void QRCode.toDataURL(activeSession.qrPayload, {
       errorCorrectionLevel: 'L',
-      margin: 2,
-      width: 420,
+      margin: 6,
+      width: 1400,
       color: {
         dark: '#101114',
         light: '#ffffff'
@@ -583,21 +586,31 @@ function OptionsPage() {
             <KeyValueRow label="Wallet type" value={formatWalletSourceLabel(selectedWallet.source, selectedWallet.signer?.kind)} />
             <KeyValueRow label="Public key" value={<span className="mono transfer-signature">{state.activeWallet?.publicKey ?? 'Unknown'}</span>} />
             {biometricSupported && selectedWallet.biometricUnlock ? (
-              <div className="stack">
-                <p className="muted">This wallet can be exported after device unlock. Password entry remains available as fallback.</p>
-                <Button tone="secondary" onClick={() => void handleExportWithBiometric()} disabled={exporting}>
-                  {exporting ? 'Checking device...' : 'Verify with device'}
-                </Button>
-              </div>
+              <p className="muted">This wallet can be exported after device unlock. Password entry remains available as fallback.</p>
             ) : null}
             <label className="stack">
               <span className="muted">Password</span>
-              <Input
-                type="password"
-                value={exportPassword}
-                onChange={(event) => setExportPassword(event.target.value)}
-                placeholder="Confirm password to reveal export"
-              />
+              <div className="send-input-shell send-input-shell-action">
+                <Input
+                  type="password"
+                  value={exportPassword}
+                  onChange={(event) => setExportPassword(event.target.value)}
+                  placeholder="Confirm password to reveal export"
+                  className="send-recipient-input"
+                />
+                {biometricSupported && selectedWallet.biometricUnlock ? (
+                  <button
+                    type="button"
+                    className="biometric-inline-button"
+                    onClick={() => void handleExportWithBiometric()}
+                    disabled={exporting}
+                    aria-label={exporting ? 'Checking device' : 'Verify with device'}
+                    title={exporting ? 'Checking device...' : 'Verify with device'}
+                  >
+                    <Fingerprint size={16} />
+                  </button>
+                ) : null}
+              </div>
             </label>
             <div className="inline">
               <Button onClick={() => void handleExport()} disabled={exporting || !exportPassword.trim()}>
@@ -703,19 +716,29 @@ function OptionsPage() {
             </p>
             <KeyValueRow label="Selected wallet" value={selectedWallet.name} />
             <KeyValueRow label="Public key" value={<span className="mono transfer-signature">{state.activeWallet?.publicKey ?? 'Unknown'}</span>} />
-            {biometricSupported && selectedWallet.biometricUnlock ? (
-              <Button tone="secondary" onClick={() => void handleCreateDeviceLinkWithBiometric()} disabled={deviceLinkLoading}>
-                {deviceLinkLoading ? 'Checking device...' : 'Verify with device'}
-              </Button>
-            ) : null}
             <label className="stack">
               <span className="muted">Password</span>
-              <Input
-                type="password"
-                value={deviceLinkPassword}
-                onChange={(event) => setDeviceLinkPassword(event.target.value)}
-                placeholder="Verify password to create link"
-              />
+              <div className="send-input-shell send-input-shell-action">
+                <Input
+                  type="password"
+                  value={deviceLinkPassword}
+                  onChange={(event) => setDeviceLinkPassword(event.target.value)}
+                  placeholder="Verify password to create link"
+                  className="send-recipient-input"
+                />
+                {biometricSupported && selectedWallet.biometricUnlock ? (
+                  <button
+                    type="button"
+                    className="biometric-inline-button"
+                    onClick={() => void handleCreateDeviceLinkWithBiometric()}
+                    disabled={deviceLinkLoading}
+                    aria-label={deviceLinkLoading ? 'Checking device' : 'Verify with device'}
+                    title={deviceLinkLoading ? 'Checking device...' : 'Verify with device'}
+                  >
+                    <Fingerprint size={16} />
+                  </button>
+                ) : null}
+              </div>
             </label>
             <Button onClick={() => void handleCreateDeviceLink(deviceLinkPassword)} disabled={deviceLinkLoading || !deviceLinkPassword.trim()}>
               {deviceLinkLoading ? 'Creating link...' : 'Link new device'}
@@ -749,7 +772,21 @@ function OptionsPage() {
                   </div>
                 </div>
                 <TextArea readOnly value={activeDeviceLinkSession.pairingCode} />
-                {deviceLinkQr ? <img className="receive-qr" src={deviceLinkQr} alt="Device link QR code" /> : null}
+                {deviceLinkQr ? (
+                  <div className="stack" style={{ justifyItems: 'center' }}>
+                    <button
+                      type="button"
+                      className="receive-qr-button"
+                      onClick={() => setDeviceLinkQrExpanded(true)}
+                      aria-label="Open large device link QR code"
+                    >
+                      <img className="receive-qr" src={deviceLinkQr} alt="Device link QR code" />
+                    </button>
+                    <Button tone="secondary" onClick={() => setDeviceLinkQrExpanded(true)}>
+                      Open large QR
+                    </Button>
+                  </div>
+                ) : null}
                 <div className="stack">
                   <span className="muted">Restore payload</span>
                   <TextArea readOnly value={activeDeviceLinkSession.qrPayload} />
@@ -795,6 +832,22 @@ function OptionsPage() {
           ))
         )}
       </Card>
+      {deviceLinkQrExpanded && deviceLinkQr ? (
+        <div className="qr-lightbox-backdrop" onClick={() => setDeviceLinkQrExpanded(false)} role="presentation">
+          <div className="qr-lightbox" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Large device link QR code">
+            <div className="space-between" style={{ alignItems: 'center', gap: '12px' }}>
+              <div className="stack" style={{ gap: '6px' }}>
+                <strong>Scan on mobile</strong>
+                <span className="muted">Hold the phone a bit farther back and keep the full QR inside the frame.</span>
+              </div>
+              <Button tone="secondary" className="mini-button" onClick={() => setDeviceLinkQrExpanded(false)}>
+                Close
+              </Button>
+            </div>
+            <img className="receive-qr receive-qr-large" src={deviceLinkQr} alt="Large device link QR code" />
+          </div>
+        </div>
+      ) : null}
     </PageShell>
   );
 }

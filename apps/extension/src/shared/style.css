@@ -677,6 +677,13 @@ body[data-surface='popup'] {
   min-height: 720px;
 }
 
+body[data-surface='popup']::before,
+body[data-surface='popup']::after {
+  display: none;
+  animation: none;
+  opacity: 0;
+}
+
 a {
   color: inherit;
 }
@@ -858,6 +865,15 @@ body[data-surface='popup'] .asset-panel-card {
   width: 100%;
   max-width: 100%;
   box-sizing: border-box;
+}
+
+body[data-surface='popup'] .wallet-home-card,
+body[data-surface='popup'] .asset-panel-card,
+body[data-surface='popup'] .popup-menu-content,
+body[data-surface='popup'] .send-asset-menu,
+body[data-surface='popup'] .bottom-nav {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 body[data-surface='page'] .page-content {
@@ -1806,6 +1822,9 @@ body[data-surface='panel'] .popup-menu-content {
 
 .token-row-static {
   width: 100%;
+  content-visibility: auto;
+  contain: layout paint style;
+  contain-intrinsic-size: 76px;
 }
 
 .wallet-source-badge.created {
@@ -3102,6 +3121,9 @@ body[data-surface='popup'] .staking-summary-grid {
   padding: 4px 0;
   color: inherit;
   cursor: pointer;
+  content-visibility: auto;
+  contain: layout paint style;
+  contain-intrinsic-size: 76px;
 }
 
 .token-item-interactive:hover {
@@ -4700,15 +4722,55 @@ body[data-surface='popup'] .token-change {
   justify-items: center;
 }
 
+.receive-qr-button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+}
+
 .receive-qr {
-  width: min(100%, 340px);
+  width: min(100%, 460px);
   height: auto;
   aspect-ratio: 1;
-  border-radius: 28px;
+  border-radius: 24px;
   border: 1px solid var(--theme-divider);
-  padding: 18px;
+  padding: 10px;
   background: #ffffff;
   object-fit: contain;
+  image-rendering: pixelated;
+}
+
+.receive-qr-large {
+  width: min(96vw, calc(100vh - 120px), 980px);
+  max-width: 100%;
+  border-radius: 18px;
+  padding: 16px;
+}
+
+.qr-lightbox-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 8px;
+  background: rgba(7, 8, 12, 0.82);
+  backdrop-filter: blur(10px) saturate(125%);
+  -webkit-backdrop-filter: blur(10px) saturate(125%);
+}
+
+.qr-lightbox {
+  width: auto;
+  max-width: calc(100vw - 16px);
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 22px;
+  border: 1px solid var(--theme-divider);
+  background: var(--theme-panel);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.38);
+  justify-items: center;
 }
 
 .device-link-scanner {
