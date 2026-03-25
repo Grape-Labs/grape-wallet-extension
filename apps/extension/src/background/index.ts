@@ -1246,20 +1246,58 @@ class WalletController {
       await this.setSessionState({ locked: false, lastActivityAt: Date.now() });
       return true;
     }
-    const unlockedEntries = await Promise.all(
-      vaultWallets.map(async (wallet) => {
-        const secret = await unlockVaultRecord(wallet.vault!, password);
-        return [wallet.id, secret] as const;
-      })
-    ).catch(() => null);
 
-    if (!unlockedEntries) {
+    const selectedWallet = getSelectedWallet(walletState);
+    const prioritizedWallets =
+      selectedWallet?.vault
+        ? [selectedWallet, ...vaultWallets.filter((wallet) => wallet.id !== selectedWallet.id)]
+        : vaultWallets;
+    const [primaryWallet, ...remainingWallets] = prioritizedWallets;
+
+    if (!primaryWallet?.vault) {
+      await this.setSessionState({ locked: false, lastActivityAt: Date.now() });
+      return true;
+    }
+
+    const primarySecret = await unlockVaultRecord(primaryWallet.vault, password).catch(() => null);
+    if (!primarySecret) {
       throw new RpcError('INVALID_PASSWORD', 'Password is incorrect.');
     }
-    this.unlockedSecrets = Object.fromEntries(
-      unlockedEntries.map(([walletId, secret]) => [walletId, { secret, unlockedAt: Date.now() }])
-    );
+
+    this.unlockedSecrets = {
+      [primaryWallet.id]: {
+        secret: primarySecret,
+        unlockedAt: Date.now()
+      }
+    };
     await this.setSessionState({ locked: false, lastActivityAt: Date.now() });
+
+    // Unlock the remaining wallets off the critical path so the UI can open immediately.
+    void (async () => {
+      for (const wallet of remainingWallets) {
+        if (!wallet.vault || this.unlockedSecrets[wallet.id]) {
+          continue;
+        }
+
+        const session = await this.getSessionState();
+        if (session.locked) {
+          return;
+        }
+
+        try {
+          const secret = await unlockVaultRecord(wallet.vault, password);
+          this.unlockedSecrets[wallet.id] = {
+            secret,
+            unlockedAt: Date.now()
+          };
+        } catch {
+          return;
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    })();
+
     return true;
   }
 
