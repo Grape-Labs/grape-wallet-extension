@@ -259,6 +259,55 @@ function normalizeScannedRecipientInput(input: string): string {
   return address || compact;
 }
 
+function sanitizeDecimalInput(value: string, maxDecimals: number): string {
+  const safeDecimals = Number.isFinite(maxDecimals) ? Math.max(0, Math.floor(maxDecimals)) : 0;
+  const digitsAndDots = value.replace(/[^\d.]/g, '');
+  if (!digitsAndDots) {
+    return '';
+  }
+
+  const firstDotIndex = digitsAndDots.indexOf('.');
+  const hasDot = firstDotIndex !== -1;
+  const normalized = hasDot
+    ? `${digitsAndDots.slice(0, firstDotIndex)}.${digitsAndDots.slice(firstDotIndex + 1).replace(/\./g, '')}`
+    : digitsAndDots.replace(/\./g, '');
+  let [wholePart = '', fractionPart = ''] = normalized.split('.');
+  wholePart = wholePart.replace(/^0+(?=\d)/, '');
+
+  if (!hasDot) {
+    return wholePart;
+  }
+
+  if (safeDecimals === 0) {
+    return wholePart || '0';
+  }
+
+  fractionPart = fractionPart.slice(0, safeDecimals);
+  return `${wholePart || '0'}.${fractionPart}`;
+}
+
+function normalizeDecimalInputForSubmit(value: string, maxDecimals: number): string {
+  return sanitizeDecimalInput(value, maxDecimals).replace(/\.$/, '');
+}
+
+function formatSwapAmountInput(amount: number, maxDecimals: number): string {
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return '';
+  }
+
+  const safeDecimals = Number.isFinite(maxDecimals) ? Math.max(0, Math.floor(maxDecimals)) : 0;
+  const precision = Math.min(safeDecimals, amount >= 1_000 ? 2 : amount >= 1 ? 6 : 9);
+  return amount.toFixed(precision).replace(/\.?0+$/, '');
+}
+
+function getSwapAssetDecimals(asset: AssetOption | null | undefined): number {
+  if (!asset) {
+    return 9;
+  }
+
+  return asset.asset.kind === 'spl-token' ? asset.asset.decimals : 9;
+}
+
 function formatWholeNumberString(value: string | null | undefined): string {
   if (!value) {
     return '0';
@@ -1266,6 +1315,13 @@ function PopupPage() {
     }
   };
 
+  const applyUnlockedState = (nextState: WalletStateResponse) => {
+    setSurfaceError(null);
+    setState(nextState);
+    setAssetsLoading(true);
+    void refresh();
+  };
+
   useEffect(() => {
     return () => {
       if (assetRevalidateTimerRef.current !== null) {
@@ -2014,6 +2070,7 @@ function PopupPage() {
     swapInputAssetId === 'sol'
       ? null
       : assets.tokens.find((token) => `${token.mint}:${token.programId}` === swapInputAssetId) ?? null;
+  const selectedSwapInputDecimals = getSwapAssetDecimals(selectedSwapInputAsset);
   const swapOutputOptions = useMemo<SwapOutputOption[]>(() => {
     if (selectedChainValue !== 'solana') {
       return [];
@@ -2069,6 +2126,10 @@ function PopupPage() {
     if (!selectedSwapInputAsset || !effectiveSwapOutputMint) {
       return;
     }
+    const normalizedSwapAmount = normalizeDecimalInputForSubmit(swapAmount, selectedSwapInputDecimals);
+    if (!normalizedSwapAmount) {
+      return;
+    }
 
     try {
       swapQuoteRequestRef.current = requestId;
@@ -2077,7 +2138,7 @@ function PopupPage() {
       setSwapResult(null);
       const quote = await sendRuntimeMessage<WalletSwapQuoteResponse>({
         type: 'wallet_get_swap_quote',
-        amount: swapAmount,
+        amount: normalizedSwapAmount,
         slippageBps: Number(swapSlippageBps),
         inputAsset: selectedSwapInputAsset.asset,
         outputMint: effectiveSwapOutputMint
@@ -2206,10 +2267,11 @@ function PopupPage() {
     }
 
     const slippage = Number(swapSlippageBps);
+    const normalizedSwapAmount = normalizeDecimalInputForSubmit(swapAmount, selectedSwapInputDecimals);
     if (
       state?.wallet.selectedNetwork !== 'mainnet-beta' ||
       !selectedSwapInputAsset ||
-      !swapAmount.trim() ||
+      !normalizedSwapAmount ||
       !effectiveSwapOutputMint ||
       effectiveSwapOutputMint.length < 32 ||
       !Number.isFinite(slippage)
@@ -2231,6 +2293,7 @@ function PopupPage() {
   }, [
     effectiveSwapOutputMint,
     selectedSwapInputAsset,
+    selectedSwapInputDecimals,
     swapAmount,
     swapInputAssetId,
     swapOutputMint,
@@ -3399,12 +3462,12 @@ function PopupPage() {
     try {
       setUnlocking(true);
       setUnlockError(null);
-      await sendRuntimeMessage<WalletStateResponse>({
+      const nextState = await sendRuntimeMessage<WalletStateResponse>({
         type: 'wallet_unlock',
         password: unlockPassword
       });
       setUnlockPassword('');
-      await refresh();
+      applyUnlockedState(nextState);
     } catch (error) {
       setUnlockError(error instanceof Error ? error.message : 'Unable to unlock wallet.');
     } finally {
@@ -3429,12 +3492,12 @@ function PopupPage() {
       setBiometricUnlocking(true);
       setUnlockError(null);
       const password = await unlockWithBiometric(selectedWallet.biometricUnlock);
-      await sendRuntimeMessage<WalletStateResponse>({
+      const nextState = await sendRuntimeMessage<WalletStateResponse>({
         type: 'wallet_unlock',
         password
       });
       setUnlockPassword('');
-      await refresh();
+      applyUnlockedState(nextState);
     } catch (error) {
       setUnlockError(error instanceof Error ? error.message : 'Unable to unlock with device.');
     } finally {
@@ -3462,14 +3525,14 @@ function PopupPage() {
       setTokenActionError(null);
       setIncidentError(null);
       const password = await unlockWithBiometric(selectedWallet.biometricUnlock);
-      await sendRuntimeMessage<WalletStateResponse>({
+      const nextState = await sendRuntimeMessage<WalletStateResponse>({
         type: 'wallet_unlock',
         password
       });
       setSwapPassword('');
       setBurnPassword('');
       setIncidentPassword('');
-      await refresh();
+      applyUnlockedState(nextState);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to unlock with device.';
       setSendError(message);
@@ -6200,6 +6263,7 @@ function PopupPage() {
       swapQuote?.routes[0] ??
       null;
     const quoteOutputValue = activeSwapRoute ? `${activeSwapRoute.outputAmountUi} ${outputAssetSymbol}` : '0';
+    const swapPrecisionHint = `${inputAssetSymbol} supports up to ${selectedSwapInputDecimals} decimal place${selectedSwapInputDecimals === 1 ? '' : 's'}.`;
 
     if (submittingSwap) {
       return (
@@ -6253,7 +6317,7 @@ function PopupPage() {
           ? Math.max((assets.lamports ?? 0) / 1_000_000_000 - 0.00001, 0)
           : Number(selectedSwapInputHolding?.amount ?? '0');
       const nextAmount = Math.max(sourceAmount * ratio, 0);
-      setSwapAmount(nextAmount.toFixed(6).replace(/\.?0+$/, ''));
+      setSwapAmount(formatSwapAmountInput(nextAmount, selectedSwapInputDecimals));
       setSwapQuote(null);
       setSwapResult(null);
     }
@@ -6274,6 +6338,7 @@ function PopupPage() {
       }
 
       setSwapInputAssetId(nextInputId);
+      setSwapAmount((current) => sanitizeDecimalInput(current, getSwapAssetDecimals(assetOptions.find((option) => option.id === nextInputId) ?? null)));
       setSwapOutputMint(currentInputMint);
       setSwapUseCustomOutputMint(false);
       setSwapCustomOutputMint('');
@@ -6333,6 +6398,7 @@ function PopupPage() {
                             active={option.id === swapInputAssetId}
                             onSelect={() => {
                               setSwapInputAssetId(option.id);
+                              setSwapAmount((current) => sanitizeDecimalInput(current, getSwapAssetDecimals(option)));
                               setSwapInputPickerOpen(false);
                               setSwapQuote(null);
                               setSwapResult(null);
@@ -6349,7 +6415,7 @@ function PopupPage() {
                     className="swap-leg-amount"
                     value={swapAmount}
                     onChange={(event) => {
-                      setSwapAmount(event.target.value);
+                      setSwapAmount(sanitizeDecimalInput(event.target.value, selectedSwapInputDecimals));
                       setSwapQuote(null);
                       setSwapResult(null);
                     }}
@@ -6358,6 +6424,7 @@ function PopupPage() {
                     aria-label="Swap amount"
                   />
                 </div>
+                <div className="swap-precision-hint muted">{swapPrecisionHint}</div>
               </div>
             </section>
 

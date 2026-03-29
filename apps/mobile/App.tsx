@@ -734,12 +734,52 @@ function getAssetSubtitle(asset: MobileAsset, selectedChainLabel: string, select
   return asset.symbol;
 }
 
-function formatSwapAmountInput(amount: number) {
+function getMobileAssetAmountDecimals(asset: MobileAsset | null | undefined) {
+  if (!asset) {
+    return 9;
+  }
+
+  return asset.tokenType === 'spl' ? asset.decimals ?? 0 : 9;
+}
+
+function sanitizeDecimalInput(value: string, maxDecimals: number) {
+  const safeDecimals = Number.isFinite(maxDecimals) ? Math.max(0, Math.floor(maxDecimals)) : 0;
+  const digitsAndDots = value.replace(/[^\d.]/g, '');
+  if (!digitsAndDots) {
+    return '';
+  }
+
+  const firstDotIndex = digitsAndDots.indexOf('.');
+  const hasDot = firstDotIndex !== -1;
+  const normalized = hasDot
+    ? `${digitsAndDots.slice(0, firstDotIndex)}.${digitsAndDots.slice(firstDotIndex + 1).replace(/\./g, '')}`
+    : digitsAndDots.replace(/\./g, '');
+  let [wholePart = '', fractionPart = ''] = normalized.split('.');
+  wholePart = wholePart.replace(/^0+(?=\d)/, '');
+
+  if (!hasDot) {
+    return wholePart;
+  }
+
+  if (safeDecimals === 0) {
+    return wholePart || '0';
+  }
+
+  fractionPart = fractionPart.slice(0, safeDecimals);
+  return `${wholePart || '0'}.${fractionPart}`;
+}
+
+function normalizeDecimalInputForSubmit(value: string, maxDecimals: number) {
+  return sanitizeDecimalInput(value, maxDecimals).replace(/\.$/, '');
+}
+
+function formatSwapAmountInput(amount: number, maxDecimals: number) {
   if (!Number.isFinite(amount) || amount <= 0) {
     return '';
   }
 
-  const precision = amount >= 1_000 ? 2 : amount >= 1 ? 6 : 9;
+  const safeDecimals = Number.isFinite(maxDecimals) ? Math.max(0, Math.floor(maxDecimals)) : 0;
+  const precision = Math.min(safeDecimals, amount >= 1_000 ? 2 : amount >= 1 ? 6 : 9);
   return amount.toFixed(precision).replace(/\.?0+$/, '');
 }
 
@@ -1226,7 +1266,7 @@ export default function App() {
   }
 
   function handleSwapAmountChange(value: string) {
-    setSwapAmount(value);
+    setSwapAmount(sanitizeDecimalInput(value, getMobileAssetAmountDecimals(selectedSwapInputAsset)));
     resetSwapDraft();
   }
 
@@ -1246,9 +1286,16 @@ export default function App() {
       return;
     }
 
-    setSwapAmount(formatSwapAmountInput(availableAmount * ratio));
+    setSwapAmount(formatSwapAmountInput(availableAmount * ratio, getMobileAssetAmountDecimals(selectedSwapInputAsset)));
     resetSwapDraft();
   }
+
+  useEffect(() => {
+    const nextValue = sanitizeDecimalInput(swapAmount, getMobileAssetAmountDecimals(selectedSwapInputAsset));
+    if (nextValue !== swapAmount) {
+      setSwapAmount(nextValue);
+    }
+  }, [selectedSwapInputAsset, swapAmount]);
 
   useEffect(() => {
     let mounted = true;
@@ -2500,7 +2547,8 @@ export default function App() {
       setSwapError('Choose both swap assets first.');
       return;
     }
-    if (!swapAmount.trim()) {
+    const normalizedSwapAmount = normalizeDecimalInputForSubmit(swapAmount, getMobileAssetAmountDecimals(selectedSwapInputAsset));
+    if (!normalizedSwapAmount) {
       setSwapError('Enter an amount to swap.');
       return;
     }
@@ -2512,7 +2560,7 @@ export default function App() {
         wallet: selectedWallet,
         inputAsset: selectedSwapInputAsset,
         outputAsset: selectedSwapOutputAsset,
-        amount: swapAmount.trim(),
+        amount: normalizedSwapAmount,
         slippageBps: MOBILE_SWAP_SLIPPAGE_BPS
       });
       setSwapQuote(nextQuote);
@@ -4936,6 +4984,10 @@ export default function App() {
     const quoteOutputValue = activeSwapRoute ? `${activeSwapRoute.outputAmountUi} ${selectedSwapOutputAsset?.symbol ?? ''}`.trim() : '0';
     const availableInputAmount = selectedSwapInputAsset?.amountUi ?? 0;
     const swapRatioOptions = [0.25, 0.5, 0.75, 1] as const;
+    const selectedSwapInputDecimals = getMobileAssetAmountDecimals(selectedSwapInputAsset);
+    const swapPrecisionHint = selectedSwapInputAsset
+      ? `${selectedSwapInputAsset.symbol} supports up to ${selectedSwapInputDecimals} decimal place${selectedSwapInputDecimals === 1 ? '' : 's'}.`
+      : 'Swap precision depends on the selected asset.';
 
     return (
       <View style={styles.stack}>
@@ -5007,6 +5059,7 @@ export default function App() {
                     style={styles.swapLegAmountInput}
                   />
                 </View>
+                <Text style={styles.swapPrecisionHint}>{swapPrecisionHint}</Text>
               </View>
             </View>
 
@@ -7904,6 +7957,12 @@ function createStyles(palette: MobileThemePalette) {
   },
   swapLegValueRow: {
     alignItems: 'flex-end'
+  },
+  swapPrecisionHint: {
+    color: palette.muted,
+    fontSize: 12,
+    lineHeight: 17,
+    textAlign: 'right'
   },
   swapLegAmountInput: {
     width: '100%',

@@ -4432,6 +4432,11 @@ body[data-surface='popup'] .send-flow-amount-meta span {
   min-width: 0;
 }
 
+.swap-precision-hint {
+  font-size: 0.78rem;
+  text-align: right;
+}
+
 .swap-leg-amount,
 .swap-leg-quote {
   width: 100%;
