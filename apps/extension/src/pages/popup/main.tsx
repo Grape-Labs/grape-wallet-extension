@@ -36,7 +36,7 @@ import {
 import QRCode from 'qrcode';
 
 import { Button, Card, Input, KeyValueRow, PageShell, StatusPill } from '@grape/ui';
-import { STORAGE_KEYS } from '@grape/core';
+import { GRAPE_VERIFICATION_REQUIRED_DAO_ID, STORAGE_KEYS } from '@grape/core';
 
 import type {
   ApprovalRecord,
@@ -1259,6 +1259,9 @@ function PopupPage() {
     rotateMintAuthorities: true
   });
   const [activeApproval, setActiveApproval] = useState<ApprovalRecord | null>(null);
+  const [accessRefreshing, setAccessRefreshing] = useState(false);
+  const [accessError, setAccessError] = useState<string | null>(null);
+  const [accessSettingsBusy, setAccessSettingsBusy] = useState(false);
   const assetActionCardRef = useRef<HTMLDivElement | null>(null);
   const communitySectionRef = useRef<HTMLDivElement | null>(null);
   const verificationSectionRef = useRef<HTMLDivElement | null>(null);
@@ -1280,7 +1283,7 @@ function PopupPage() {
       setSurfaceError(null);
       const nextState = await sendRuntimeMessage<WalletStateResponse>({ type: 'wallet_get_state' });
       setState(nextState);
-      if (nextState.wallet.setup === 'ready' && !nextState.session.locked) {
+      if (nextState.wallet.setup === 'ready' && !nextState.session.locked && nextState.access.granted) {
         setAssetsLoading(true);
         try {
           const nextAssets = await sendRuntimeMessage<WalletAssetsResponse>({
@@ -1843,7 +1846,7 @@ function PopupPage() {
   ]);
 
   useEffect(() => {
-    if (!state || state.wallet.setup !== 'ready' || state.session.locked || state.wallet.selectedChain !== 'solana') {
+    if (!state || !state.access.granted || state.wallet.setup !== 'ready' || state.session.locked || state.wallet.selectedChain !== 'solana') {
       setVerification({
         trackedSpaces: state?.wallet.trackedVerificationSpaceIds ?? [],
         identities: [],
@@ -1893,12 +1896,39 @@ function PopupPage() {
   }, [
     state?.activeWallet?.id,
     state?.activeAccount?.publicKey,
+    state?.access.granted,
     state?.session.locked,
     state?.wallet.selectedChain,
     state?.wallet.selectedNetwork,
     state?.wallet.trackedVerificationSpaceIds,
     state?.wallet.setup
   ]);
+
+  useEffect(() => {
+    if (!state?.access.granted || state.session.locked) {
+      return;
+    }
+
+    const lastCheckedAt = state.access.lastCheckedAt ?? 0;
+    if (Date.now() - lastCheckedAt < 12 * 60 * 60 * 1000) {
+      return;
+    }
+
+    let cancelled = false;
+    void sendRuntimeMessage<WalletStateResponse>({ type: 'wallet_refresh_access' })
+      .then((nextState) => {
+        if (!cancelled) {
+          setState(nextState);
+        }
+      })
+      .catch(() => {
+        // Keep the current local grant and avoid interrupting the user.
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [state?.access.granted, state?.access.lastCheckedAt, state?.session.locked]);
 
   const homeBalance = useMemo(
     () => formatBaseUnitAmount(assets.lamports, assets.nativeDecimals ?? 9, assets.nativeSymbol),
@@ -2984,6 +3014,60 @@ function PopupPage() {
     return (
       <PageShell eyebrow={null} title="" subtitle="">
         {renderLockedWelcome()}
+      </PageShell>
+    );
+  }
+
+  if (!state.access.granted) {
+    return (
+      <PageShell
+        title="Complete Grape Verification"
+        subtitle="Verify once with a qualifying Solana wallet and Grape will remember access on this device."
+      >
+        <Card title="Verification">
+          <div className="stack">
+            <p className="muted access-required-copy">
+              Use one wallet verified in Grape Verification DAO{' '}
+              <span className="mono access-required-dao">{GRAPE_VERIFICATION_REQUIRED_DAO_ID}</span>.
+              After verification succeeds, Grape will not ask you to repeat this flow on each open.
+            </p>
+            {state.wallet.wallets.some((walletEntry) => walletEntry.chain === 'solana') ? (
+              <p className="success-box">
+                A Solana wallet is available in this extension. Verify it in Grape Verification, then return here and check verification.
+              </p>
+            ) : (
+              <p className="warning-box">
+                Add a Solana wallet first. Grape Verification currently checks eligibility against a Solana wallet.
+              </p>
+            )}
+            {accessError ? <p className="danger-box">{accessError}</p> : null}
+            <Button
+              className="button-block"
+              onClick={() => window.open(buildVerificationSpaceUrl(GRAPE_VERIFICATION_REQUIRED_DAO_ID), '_blank', 'noopener,noreferrer')}
+            >
+              Open Grape Verification
+            </Button>
+            <Button
+              tone="secondary"
+              className="button-block"
+              disabled={accessRefreshing}
+              onClick={async () => {
+                try {
+                  setAccessRefreshing(true);
+                  setAccessError(null);
+                  await sendRuntimeMessage<WalletStateResponse>({ type: 'wallet_refresh_access' });
+                  await refresh();
+                } catch (error) {
+                  setAccessError(error instanceof Error ? error.message : 'Unable to check Grape Verification.');
+                } finally {
+                  setAccessRefreshing(false);
+                }
+              }}
+            >
+              {accessRefreshing ? 'Checking verification…' : 'Check verification'}
+            </Button>
+          </div>
+        </Card>
       </PageShell>
     );
   }
@@ -5585,6 +5669,60 @@ function PopupPage() {
                 ))}
               </select>
             </label>
+            <div className="stack">
+              <div className="settings-row">
+                <span className="muted">Grape Verification</span>
+                <strong>{state.access.granted ? 'Verified' : 'Required'}</strong>
+              </div>
+              <p className="muted">
+                Verification is remembered on this device after one successful check.
+              </p>
+              <div className="inline wrap-actions">
+                <Button
+                  tone="secondary"
+                  onClick={async () => {
+                    try {
+                      setAccessSettingsBusy(true);
+                      setAccessError(null);
+                      await sendRuntimeMessage<WalletStateResponse>({ type: 'wallet_refresh_access' });
+                      await refresh();
+                    } catch (error) {
+                      setAccessError(error instanceof Error ? error.message : 'Unable to re-check Grape Verification.');
+                    } finally {
+                      setAccessSettingsBusy(false);
+                    }
+                  }}
+                  disabled={accessSettingsBusy}
+                >
+                  {accessSettingsBusy ? 'Checking...' : 'Re-check verification'}
+                </Button>
+                <Button
+                  tone="secondary"
+                  onClick={async () => {
+                      setAccessSettingsBusy(true);
+                    try {
+                      setAccessError(null);
+                      await sendRuntimeMessage<WalletStateResponse>({ type: 'wallet_clear_access' });
+                      await refresh();
+                    } catch (error) {
+                      setAccessError(error instanceof Error ? error.message : 'Unable to clear remembered verification.');
+                    } finally {
+                      setAccessSettingsBusy(false);
+                    }
+                  }}
+                  disabled={accessSettingsBusy}
+                >
+                  Clear verification
+                </Button>
+              </div>
+              {state.access.grantedAt ? (
+                <p className="muted">Granted {new Date(state.access.grantedAt).toLocaleString()}</p>
+              ) : null}
+              {state.access.lastCheckedAt ? (
+                <p className="muted">Last checked {new Date(state.access.lastCheckedAt).toLocaleString()}</p>
+              ) : null}
+              {accessError ? <p className="danger-box">{accessError}</p> : null}
+            </div>
             <div className="stack">
               <div className="settings-row">
                 <span className="muted">Biometric unlock</span>

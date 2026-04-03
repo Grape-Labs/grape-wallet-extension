@@ -1,4 +1,6 @@
 import {
+  GRAPE_VERIFICATION_REQUIRED_DAO_ID,
+  hasRequiredGrapeVerificationAccess,
   createEmptyWalletState,
   createInitialSessionState,
   createDeviceLinkPayloadText,
@@ -7,6 +9,7 @@ import {
   decryptText,
   encryptText,
   getSelectedWallet,
+  getSelectedWalletForChain,
   parseDeviceLinkPayloadText,
   type DeviceLinkHandoffPayload,
   type DeviceLinkPreferencesSnapshot,
@@ -169,6 +172,16 @@ const deviceLinkStorage = new ChromeStorageArea<Record<string, DeviceLinkSession
   chrome.storage.local,
   STORAGE_KEYS.deviceLinkSessions,
   {}
+);
+const accessSessionStorage = new ChromeStorageArea<import('@grape/core').AccessSessionState>(
+  chrome.storage.local,
+  'grape:access-session',
+  {
+    granted: false,
+    requiredDaoId: GRAPE_VERIFICATION_REQUIRED_DAO_ID,
+    grantedAt: null,
+    lastCheckedAt: null
+  }
 );
 const assetCacheStorage = new ChromeStorageArea<Record<string, { cachedAt: number; data: WalletAssetsResponse }>>(
   chrome.storage.session,
@@ -1371,11 +1384,12 @@ class WalletController {
   }
 
   async getStateResponse() {
-    const [wallet, session, permissions, activeAccount] = await Promise.all([
+    const [wallet, session, permissions, activeAccount, access] = await Promise.all([
       this.getWalletState(),
       this.getSessionState(),
       permissionsStorage.get(),
-      this.getActiveAccount()
+      this.getActiveAccount(),
+      accessSessionStorage.get()
     ]);
     const activeWallet = getSelectedWallet(wallet);
 
@@ -1383,6 +1397,7 @@ class WalletController {
       wallet,
       session,
       permissions: listPermissions(permissions),
+      access,
       activeWallet:
         activeWallet && activeAccount
           ? {
@@ -2065,6 +2080,82 @@ class WalletController {
     }
 
     return this.refreshVerificationCache(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey);
+  }
+
+  private getAccessVerificationTarget(walletState: Awaited<ReturnType<WalletController['getWalletState']>>) {
+    const solanaWallet =
+      getSelectedWalletForChain(walletState, 'solana') ??
+      walletState.wallets.find((wallet) => wallet.chain === 'solana');
+    if (!solanaWallet) {
+      return null;
+    }
+
+    const activeAccount =
+      solanaWallet.accounts.find((account) => account.id === solanaWallet.selectedAccountId) ??
+      solanaWallet.accounts[0];
+    if (!activeAccount) {
+      return null;
+    }
+
+    return {
+      wallet: solanaWallet,
+      publicKey: activeAccount.publicKey
+    };
+  }
+
+  async refreshAccessSession() {
+    const walletState = await this.getWalletState();
+    const currentAccess = await accessSessionStorage.get();
+    const verificationTarget = this.getAccessVerificationTarget(walletState);
+    if (!verificationTarget) {
+      throw new RpcError('ACCESS_UNAVAILABLE', 'Create or import a Solana wallet before checking Grape access.');
+    }
+
+    const owner = tryParseSolanaPublicKey(verificationTarget.publicKey);
+    if (!owner) {
+      throw new RpcError('ACCESS_UNAVAILABLE', 'The selected Solana wallet address is invalid.');
+    }
+
+    const connection = this.createConnection('mainnet-beta', walletState);
+    const identities = await fetchVerificationForWallet(connection, owner, [GRAPE_VERIFICATION_REQUIRED_DAO_ID]);
+    const now = Date.now();
+
+    if (!hasRequiredGrapeVerificationAccess(identities)) {
+      await accessSessionStorage.set({
+        ...currentAccess,
+        granted: currentAccess.granted,
+        lastCheckedAt: now
+      });
+
+      if (currentAccess.granted) {
+        return this.getStateResponse();
+      }
+
+      throw new RpcError(
+        'ACCESS_REQUIRED',
+        'Verify one of your Solana wallets in Grape Verification to unlock Grape on this device.'
+      );
+    }
+
+    await accessSessionStorage.set({
+      granted: true,
+      requiredDaoId: GRAPE_VERIFICATION_REQUIRED_DAO_ID,
+      grantedAt: currentAccess.grantedAt ?? now,
+      lastCheckedAt: now,
+      qualifyingWalletPublicKey: verificationTarget.publicKey
+    });
+
+    return this.getStateResponse();
+  }
+
+  async clearAccessSession() {
+    await accessSessionStorage.set({
+      granted: false,
+      requiredDaoId: GRAPE_VERIFICATION_REQUIRED_DAO_ID,
+      grantedAt: null,
+      lastCheckedAt: Date.now()
+    });
+    return this.getStateResponse();
   }
 
   private async refreshGovernanceCache(
@@ -7223,6 +7314,12 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
           break;
         case 'wallet_get_verification':
           sendResponse(await controller.getVerification());
+          break;
+        case 'wallet_refresh_access':
+          sendResponse(await controller.refreshAccessSession());
+          break;
+        case 'wallet_clear_access':
+          sendResponse(await controller.clearAccessSession());
           break;
         case 'wallet_get_governance':
           sendResponse(await controller.getGovernance());

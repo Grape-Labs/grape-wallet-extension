@@ -386,6 +386,12 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     type: z.literal('wallet_get_verification')
   }),
   z.object({
+    type: z.literal('wallet_refresh_access')
+  }),
+  z.object({
+    type: z.literal('wallet_clear_access')
+  }),
+  z.object({
     type: z.literal('wallet_get_governance')
   }),
   z.object({

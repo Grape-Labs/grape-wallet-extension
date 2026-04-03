@@ -1,4 +1,5 @@
 import type {
+  AccessSessionState,
   ApprovalKind,
   ApprovalState,
   DeviceLinkSessionRecord,
@@ -34,6 +35,7 @@ export type WalletStateResponse = {
   wallet: WalletState;
   session: SessionState;
   permissions: OriginPermission[];
+  access: AccessSessionState;
   activeWallet?: {
     id: string;
     name: string;

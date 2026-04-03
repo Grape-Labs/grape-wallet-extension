@@ -3830,6 +3830,17 @@ body[data-surface='popup'] .collectible-grid {
   font-size: 0.92rem;
 }
 
+.access-required-copy {
+  max-width: 100%;
+}
+
+.access-required-dao {
+  display: inline-block;
+  max-width: 100%;
+  white-space: normal;
+  word-break: break-all;
+}
+
 .approval-address {
   display: inline-block;
   max-width: 100%;

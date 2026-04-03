@@ -1,4 +1,5 @@
 export * from './approval-machine';
+export * from './access';
 export * from './crypto';
 export * from './device-link';
 export * from './encoding';
