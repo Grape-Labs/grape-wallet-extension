@@ -131,6 +131,24 @@ export function ApprovalView(props: {
       .catch(() => setWalletState(null));
   }, []);
 
+  async function approveRequest(passwordOverride?: string) {
+    try {
+      setSubmitting(true);
+      setError(null);
+      await sendRuntimeMessage({
+        type: 'approval_respond',
+        approvalId,
+        approved: true,
+        password: passwordOverride ?? (requiresPassword ? password : undefined)
+      });
+      setApproved(true);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : 'Unable to approve request.');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   async function handleBiometricUnlock() {
     if (!selectedWallet?.biometricUnlock) {
       return;
@@ -146,6 +164,7 @@ export function ApprovalView(props: {
       });
       setPassword('');
       setWalletState(nextState);
+      await approveRequest(nextPassword);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'Unable to unlock with device.');
     } finally {
@@ -394,15 +413,15 @@ export function ApprovalView(props: {
                   type="button"
                   className="biometric-inline-button"
                   onClick={() => void handleBiometricUnlock()}
-                  aria-label="Unlock with device"
-                  title="Unlock with device"
-                  disabled={biometricUnlocking}
+                  aria-label="Approve with device"
+                  title="Approve with device"
+                  disabled={biometricUnlocking || submitting}
                 >
                   <Fingerprint size={16} />
                 </button>
               ) : null}
             </div>
-            <p className="muted">Grape never auto-approves signing requests.</p>
+            <p className="muted">Approve this request with your password or device.</p>
           </div>
         </Card>
       ) : null}
@@ -426,23 +445,7 @@ export function ApprovalView(props: {
         </Button>
         <Button
           disabled={submitting || (requiresPassword && !password.trim())}
-          onClick={async () => {
-            try {
-              setSubmitting(true);
-              setError(null);
-              await sendRuntimeMessage({
-                type: 'approval_respond',
-                approvalId,
-                approved: true,
-                password: requiresPassword ? password : undefined
-              });
-              setApproved(true);
-            } catch (nextError) {
-              setError(nextError instanceof Error ? nextError.message : 'Unable to approve request.');
-            } finally {
-              setSubmitting(false);
-            }
-          }}
+          onClick={() => void approveRequest()}
         >
           Approve
         </Button>
