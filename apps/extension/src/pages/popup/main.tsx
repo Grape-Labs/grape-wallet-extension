@@ -384,8 +384,8 @@ function getGovernanceProposalTimeMeta(
 } {
   if (!proposal.votingEndsAt) {
     return {
-      badgeLabel: proposal.canVote ? 'Vote now' : proposal.hasVoted ? 'Voted' : proposal.state,
-      badgeTone: proposal.canVote ? 'success' : proposal.hasVoted ? 'warning' : 'neutral',
+      badgeLabel: proposal.canVote ? 'Vote now' : proposal.state,
+      badgeTone: proposal.canVote ? 'success' : 'neutral',
       metaText: null,
       noteText: null,
       votingWindowOpen: true
@@ -397,8 +397,8 @@ function getGovernanceProposalTimeMeta(
 
   if (votingWindowOpen) {
     return {
-      badgeLabel: proposal.canVote ? 'Vote now' : proposal.hasVoted ? 'Voted' : 'Ending',
-      badgeTone: proposal.canVote ? 'success' : proposal.hasVoted ? 'warning' : 'neutral',
+      badgeLabel: proposal.canVote ? 'Vote now' : 'Ending',
+      badgeTone: proposal.canVote ? 'success' : 'neutral',
       metaText: `Ending ${relativeTime}`,
       noteText: null,
       votingWindowOpen
@@ -424,14 +424,25 @@ function getGovernanceProposalTimeMeta(
   };
 }
 
-function formatVotingPower(rawAmount: bigint, decimals: number): string {
+function formatVotingPower(rawAmount: bigint, decimals: number, truncateFraction = false): string {
   if (decimals === 0) return formatWholeNumberString(rawAmount.toString());
   const divisor = BigInt(10 ** decimals);
   const whole = rawAmount / divisor;
   const remainder = rawAmount % divisor;
-  if (remainder === BigInt(0)) return formatWholeNumberString(whole.toString());
+  if (truncateFraction || remainder === BigInt(0)) return formatWholeNumberString(whole.toString());
   const fracStr = remainder.toString().padStart(decimals, '0').replace(/0+$/, '').slice(0, 4);
   return `${formatWholeNumberString(whole.toString())}.${fracStr}`;
+}
+
+function getGovernanceVoteDecimals(
+  proposal: WalletGovernanceResponse['proposals'][number],
+  daoSummary: WalletGovernanceResponse['daos'][number] | null
+): number {
+  if (!daoSummary) {
+    return 0;
+  }
+
+  return proposal.governingTokenMint === daoSummary.communityMint ? daoSummary.communityTokenDecimals : 0;
 }
 
 function buildOgReputationSpaceUrl(daoId: string): string {
@@ -2830,6 +2841,7 @@ function PopupPage() {
   const session = state?.session ?? ({ locked: true } as WalletStateResponse['session']);
   const permissions = state?.permissions ?? [];
   const canUseUnlockedSigner = state?.canUseUnlockedSigner ?? false;
+  const governanceSigningUnlocked = canUseUnlockedSigner;
   const activeWallet = state?.activeWallet;
   const isWatchOnlyWallet = activeWallet?.signerKind === 'watch-only';
   const recentRecipients = state?.recentRecipients ?? [];
@@ -2853,7 +2865,10 @@ function PopupPage() {
     ...verification.trackedSpaces
   ]).size;
   const verificationLinkedIdentityCount = verification.identities.length;
-  const actionableGovernanceProposalCount = governance.proposals.filter((proposal) => proposal.canVote).length;
+  const liveGovernanceProposalCount = governance.proposals.filter((proposal) => {
+    const timeMeta = getGovernanceProposalTimeMeta(proposal);
+    return proposal.stateCode === 2 && timeMeta.votingWindowOpen;
+  }).length;
   const totalGovernanceDaoCount = new Set([...governance.discoveredDaos, ...governance.delegateDaos, ...governance.governedDaos, ...wallet.trackedGovernanceDaoIds]).size;
   const selectedNetworkCustomRpc =
     selectedChain === 'sui'
@@ -3377,23 +3392,38 @@ function PopupPage() {
       }
 
       let lastResult: WalletGovernanceVoteResponse | null = null;
+      const skippedAlreadyVotedLabels: string[] = [];
       for (const source of selectedSources) {
-        lastResult = await sendRuntimeMessage<WalletGovernanceVoteResponse>({
-          type: 'wallet_cast_governance_vote',
-          daoId: input.daoId,
-          governanceId: input.governanceId,
-          proposalId: input.proposalId,
-          proposalOwnerRecordId: input.proposalOwnerRecordId,
-          tokenOwnerRecordId: source.tokenOwnerRecordId,
-          governingTokenMint: input.governingTokenMint,
-          voteKind: input.voteKind,
-          choiceRank: input.choiceRank,
-          password: canUseUnlockedSigner ? undefined : governancePassword || undefined
-        });
+        try {
+          lastResult = await sendRuntimeMessage<WalletGovernanceVoteResponse>({
+            type: 'wallet_cast_governance_vote',
+            daoId: input.daoId,
+            governanceId: input.governanceId,
+            proposalId: input.proposalId,
+            proposalOwnerRecordId: input.proposalOwnerRecordId,
+            tokenOwnerRecordId: source.tokenOwnerRecordId,
+            governingTokenMint: input.governingTokenMint,
+            voteKind: input.voteKind,
+            choiceRank: input.choiceRank,
+            password: governanceSigningUnlocked ? undefined : governancePassword || undefined
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Unable to submit governance vote.';
+          if (message.toLowerCase().includes('already voted')) {
+            skippedAlreadyVotedLabels.push(formatGovernanceVoteSourceLabel(source));
+            continue;
+          }
+          throw error;
+        }
       }
       if (lastResult) {
         setGovernanceVoteResult(lastResult);
         setGovernancePassword('');
+        if (skippedAlreadyVotedLabels.length > 0) {
+          setGovernanceVoteError(`Skipped ${skippedAlreadyVotedLabels.join(', ')} because those records already voted. Refreshed governance state.`);
+        }
+      } else if (skippedAlreadyVotedLabels.length > 0) {
+        setGovernanceVoteError(`The selected record already voted: ${skippedAlreadyVotedLabels.join(', ')}. Refreshed governance state.`);
       }
       await refresh();
     } catch (error) {
@@ -3422,11 +3452,14 @@ function PopupPage() {
     const timeMeta = getGovernanceProposalTimeMeta(proposal, nowUnixSeconds);
     const canVoteNow = proposal.canVote && timeMeta.votingWindowOpen;
     const proposalUrl = buildGovernanceProposalUrl(proposal.daoId, proposal.proposalId);
+    const voteDecimals = getGovernanceVoteDecimals(proposal, daoSummary);
     const inactiveVotingPowerMessage =
       !timeMeta.votingWindowOpen && timeMeta.noteText
         ? timeMeta.noteText
+        : hasDaoVotingPower && availableVoteSources.length === 0
+          ? 'This wallet has governance power in this DAO, but the proposal vote source is still being resolved.'
         : proposal.hasVoted && availableVoteSources.length === 0
-          ? 'This wallet already voted on the active proposal.'
+          ? 'This wallet already used its currently resolved voting source for this proposal.'
           : availableVoteSources.length > 0
             ? hasDelegatedProposalVoteSource
               ? 'This wallet has delegated voting power available for this proposal.'
@@ -3478,9 +3511,9 @@ function PopupPage() {
           </div>
         </div>
         <div className="governance-proposal-metrics">
-          <span>Yes {formatWholeNumberString(proposal.yesVotes)}</span>
-          {BigInt(proposal.noVotes) > BigInt(0) ? <span>No {formatWholeNumberString(proposal.noVotes)}</span> : null}
-          {BigInt(proposal.denyVotes) > BigInt(0) ? <span>Deny {formatWholeNumberString(proposal.denyVotes)}</span> : null}
+          <span>Yes {formatVotingPower(BigInt(proposal.yesVotes), voteDecimals, true)}</span>
+          {BigInt(proposal.noVotes) > BigInt(0) ? <span>No {formatVotingPower(BigInt(proposal.noVotes), voteDecimals, true)}</span> : null}
+          {BigInt(proposal.denyVotes) > BigInt(0) ? <span>Deny {formatVotingPower(BigInt(proposal.denyVotes), voteDecimals, true)}</span> : null}
         </div>
         {canVoteNow ? (
           <div className="governance-vote-actions">
@@ -3490,7 +3523,7 @@ function PopupPage() {
                 tone="secondary"
                 disabled={
                   governanceVotingProposalId === proposal.proposalId ||
-                  (!canUseUnlockedSigner && !governancePassword.trim())
+                  (!governanceSigningUnlocked && !governancePassword.trim())
                 }
                 onClick={() =>
                   void handleGovernanceVote({
@@ -3514,7 +3547,7 @@ function PopupPage() {
                 tone="secondary"
                 disabled={
                   governanceVotingProposalId === proposal.proposalId ||
-                  (!canUseUnlockedSigner && !governancePassword.trim())
+                  (!governanceSigningUnlocked && !governancePassword.trim())
                 }
                 onClick={() =>
                   void handleGovernanceVote({
@@ -3613,6 +3646,9 @@ function PopupPage() {
         type: 'wallet_unlock',
         password
       });
+      setBridgePassword('');
+      setStakePassword('');
+      setGovernancePassword('');
       setSwapPassword('');
       setBurnPassword('');
       setIncidentPassword('');
@@ -3620,6 +3656,9 @@ function PopupPage() {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to unlock with device.';
       setSendError(message);
+      setBridgeError(message);
+      setStakeError(message);
+      setGovernanceVoteError(message);
       setSwapError(message);
       setTokenActionError(message);
       setIncidentError(message);
@@ -4134,13 +4173,11 @@ function PopupPage() {
                   <strong>
                     {governanceLoading
                       ? 'Loading...'
-                      : actionableGovernanceProposalCount > 0
-                        ? `${actionableGovernanceProposalCount} ready`
-                        : governance.proposals.length > 0
-                          ? `${governance.proposals.length} recent`
-                          : totalGovernanceDaoCount > 0
-                            ? 'No recent'
-                            : 'Scanning DAOs'}
+                      : liveGovernanceProposalCount > 0
+                        ? `${liveGovernanceProposalCount} live`
+                        : totalGovernanceDaoCount > 0
+                          ? 'No live'
+                          : 'Scanning DAOs'}
                   </strong>
                   <span className="wallet-shortcut-meta">
                     {totalGovernanceDaoCount} DAO{totalGovernanceDaoCount === 1 ? '' : 's'}
@@ -4510,7 +4547,7 @@ function PopupPage() {
                   }
                   return (
                     <>
-                      {activeProposals.length > 0 ? (!canUseUnlockedSigner ? (
+                      {activeProposals.length > 0 ? (!governanceSigningUnlocked ? (
                         <label className="stack">
                           <span className="muted">Password</span>
                           <div className="send-input-shell send-input-shell-sign">
@@ -4518,7 +4555,7 @@ function PopupPage() {
                               type="password"
                               value={governancePassword}
                               onChange={(event) => setGovernancePassword(event.target.value)}
-                              placeholder="Password required to sign governance votes"
+                              placeholder="Unlock required to sign governance votes"
                             />
                             {biometricSupported && activeWallet?.biometricEnabled ? (
                               <button

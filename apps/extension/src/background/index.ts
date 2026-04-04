@@ -76,8 +76,12 @@ import {
   getAllProposals,
   getGovernance,
   getGovernanceProgramVersion,
+  getRealmConfigAddress,
   getProposal,
   getRealm,
+  getTokenOwnerRecordForRealm,
+  getVoteRecord,
+  getVoteRecordAddress,
   getVoteRecordsByVoter,
   getTokenOwnerRecordsByOwner,
   getGovernanceAccounts,
@@ -183,6 +187,11 @@ const accessSessionStorage = new ChromeStorageArea<import('@grape/core').AccessS
     lastCheckedAt: null
   }
 );
+const unlockedSecretSessionStorage = new ChromeStorageArea<UnlockedSecretCache>(
+  chrome.storage.session,
+  'grape:unlocked-secrets',
+  {}
+);
 const assetCacheStorage = new ChromeStorageArea<Record<string, { cachedAt: number; data: WalletAssetsResponse }>>(
   chrome.storage.session,
   'grape:asset-cache',
@@ -206,6 +215,9 @@ const METADATA_PROGRAM_ID = new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt
 const VINE_REP_PROGRAM_ID = new PublicKey('V1NE6WCWJPRiVFq5DtaN8p87M9DmmUd2zQuVbvLgQwX');
 const VERIFICATION_REGISTRY_PROGRAM_ID = new PublicKey('VrFyyRxPoyWxpABpBXU4YUCCF9p8giDSJUv2oXfDr5q');
 const DEFAULT_GOVERNANCE_PROGRAM_ID = 'GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPCVZw';
+const GOVERNANCE_PROGRAM_VERSION_V1 = 1;
+const GOVERNANCE_PROGRAM_VERSION_V2 = 2;
+const GOVERNANCE_PROGRAM_VERSION_V3 = 3;
 const GOVERNANCE_GRAPHQL_URL = 'https://grape.shyft.to/v1/graphql/';
 const KNOWN_TOKEN_SYMBOLS: Record<string, string> = {
   [JUPITER_SOL_MINT]: 'SOL',
@@ -452,6 +464,22 @@ class WalletController {
 
   private getGovernanceCacheKey(walletId: string, network: 'mainnet-beta' | 'devnet', publicKey: string) {
     return `${walletId}:${network}:${publicKey}`;
+  }
+
+  private async persistUnlockedSecrets() {
+    await unlockedSecretSessionStorage.set(this.unlockedSecrets);
+  }
+
+  private async clearUnlockedSecrets() {
+    this.unlockedSecrets = {};
+    await unlockedSecretSessionStorage.set({});
+  }
+
+  private async ensureUnlockedSecretsLoaded() {
+    if (Object.keys(this.unlockedSecrets).length > 0) {
+      return;
+    }
+    this.unlockedSecrets = await unlockedSecretSessionStorage.get();
   }
 
   private async invalidateAssetCache(cacheKey?: string) {
@@ -1032,13 +1060,16 @@ class WalletController {
       return session;
     }
     if (isSessionExpired(session, wallet.idleTimeoutMs)) {
-      this.unlockedSecrets = {};
+      await this.clearUnlockedSecrets();
       const locked = {
         ...session,
         locked: true
       };
       await sessionStorage.set(locked);
       return locked;
+    }
+    if (!session.locked) {
+      await this.ensureUnlockedSecretsLoaded();
     }
     return session;
   }
@@ -1140,6 +1171,7 @@ class WalletController {
         secret,
         unlockedAt: Date.now()
       };
+      await this.persistUnlockedSecrets();
     }
     await this.setSessionState({ locked: false, lastActivityAt: Date.now() });
     return nextState;
@@ -1248,6 +1280,7 @@ class WalletController {
       secret: { kind: 'mnemonic', mnemonic },
       unlockedAt: Date.now()
     };
+    await this.persistUnlockedSecrets();
     await this.setSessionState({ locked: false, lastActivityAt: Date.now() });
     return nextState;
   }
@@ -1277,45 +1310,38 @@ class WalletController {
       throw new RpcError('INVALID_PASSWORD', 'Password is incorrect.');
     }
 
-    this.unlockedSecrets = {
+    const nextUnlockedSecrets: typeof this.unlockedSecrets = {
       [primaryWallet.id]: {
         secret: primarySecret,
         unlockedAt: Date.now()
       }
     };
-    await this.setSessionState({ locked: false, lastActivityAt: Date.now() });
 
-    // Unlock the remaining wallets off the critical path so the UI can open immediately.
-    void (async () => {
-      for (const wallet of remainingWallets) {
-        if (!wallet.vault || this.unlockedSecrets[wallet.id]) {
-          continue;
-        }
-
-        const session = await this.getSessionState();
-        if (session.locked) {
-          return;
-        }
-
-        try {
-          const secret = await unlockVaultRecord(wallet.vault, password);
-          this.unlockedSecrets[wallet.id] = {
-            secret,
-            unlockedAt: Date.now()
-          };
-        } catch {
-          return;
-        }
-
-        await new Promise((resolve) => setTimeout(resolve, 0));
+    for (const wallet of remainingWallets) {
+      if (!wallet.vault || nextUnlockedSecrets[wallet.id]) {
+        continue;
       }
-    })();
+
+      try {
+        const secret = await unlockVaultRecord(wallet.vault, password);
+        nextUnlockedSecrets[wallet.id] = {
+          secret,
+          unlockedAt: Date.now()
+        };
+      } catch {
+        // Keep the successfully unlocked wallets available even if one secondary wallet fails.
+      }
+    }
+
+    this.unlockedSecrets = nextUnlockedSecrets;
+    await this.persistUnlockedSecrets();
+    await this.setSessionState({ locked: false, lastActivityAt: Date.now() });
 
     return true;
   }
 
   async lockWallet() {
-    this.unlockedSecrets = {};
+    await this.clearUnlockedSecrets();
     const walletState = await this.getWalletState();
     if (walletState.wallets.length > 0 && walletState.wallets.every((entry) => entry.signer.kind === 'watch-only')) {
       await this.setSessionState({ locked: false, lastActivityAt: Date.now() });
@@ -1326,7 +1352,7 @@ class WalletController {
   }
 
   async resetWallet() {
-    this.unlockedSecrets = {};
+    await this.clearUnlockedSecrets();
 
     for (const [approvalId, pending] of this.pendingApprovals.entries()) {
       pending.reject(new RpcError('WALLET_RESET', 'Wallet was reset.'));
@@ -1354,6 +1380,7 @@ class WalletController {
     }
 
     delete this.unlockedSecrets[walletId];
+    await this.persistUnlockedSecrets();
 
     for (const [approvalId, pending] of this.pendingApprovals.entries()) {
       const approval = approvals[approvalId];
@@ -2387,7 +2414,7 @@ class WalletController {
     const connection = this.createConnection(walletState.selectedNetwork, walletState);
 
     const [programVersion, proposalAccount, governanceAccount, realmAccount] = await Promise.all([
-      getGovernanceProgramVersion(connection, programId),
+      resolveGovernanceProgramVersion(connection, programId, realmPk),
       getProposal(connection, proposalPk),
       getGovernance(connection, governancePk),
       getRealm(connection, realmPk)
@@ -2395,6 +2422,12 @@ class WalletController {
 
     if (proposalAccount.account.state !== ProposalState.Voting) {
       throw new RpcError('PROPOSAL_NOT_VOTING', 'This proposal is not in the voting window anymore.');
+    }
+
+    const voteRecordPk = await getVoteRecordAddress(programId, proposalPk, tokenOwnerRecordPk);
+    const existingVoteRecord = await getVoteRecord(connection, voteRecordPk).catch(() => null);
+    if (existingVoteRecord && !existingVoteRecord.account.isRelinquished) {
+      throw new RpcError('ALREADY_VOTED', 'This token owner record already voted on the proposal.');
     }
 
     const instructions: TransactionInstruction[] = [];
@@ -4423,6 +4456,7 @@ class WalletController {
   }
 
   private async getUnlockedSecret(walletId: string, vault: NonNullable<ReturnType<typeof getSelectedWallet>>['vault'], password?: string) {
+    await this.ensureUnlockedSecretsLoaded();
     const cached = this.unlockedSecrets[walletId];
     if (cached) {
       return cached.secret;
@@ -4440,6 +4474,7 @@ class WalletController {
       secret,
       unlockedAt: Date.now()
     };
+    await this.persistUnlockedSecrets();
     return secret;
   }
 }
@@ -5250,6 +5285,43 @@ function findGovernanceOwnerByDao(daoId: string): GovernanceOwner {
       dao: daoId
     }
   );
+}
+
+async function resolveGovernanceProgramVersion(
+  connection: Connection,
+  programId: PublicKey,
+  realmPk: PublicKey
+): Promise<number> {
+  const programIdValue = programId.toBase58();
+
+  try {
+    const detectedVersion = await getGovernanceProgramVersion(connection, programId);
+    if (detectedVersion > GOVERNANCE_PROGRAM_VERSION_V1) {
+      return detectedVersion;
+    }
+  } catch {
+    // Some RPC endpoints fail the metadata/simulation probe and spl-governance falls back to v1.
+  }
+
+  if (programIdValue === DEFAULT_GOVERNANCE_PROGRAM_ID) {
+    return GOVERNANCE_PROGRAM_VERSION_V3;
+  }
+
+  if (GOVERNANCE_OWNERS.some((entry) => entry.owner === programIdValue)) {
+    return GOVERNANCE_PROGRAM_VERSION_V2;
+  }
+
+  try {
+    const realmConfigPk = await getRealmConfigAddress(programId, realmPk);
+    const realmConfigInfo = await connection.getAccountInfo(realmConfigPk, 'confirmed');
+    if (realmConfigInfo) {
+      return GOVERNANCE_PROGRAM_VERSION_V2;
+    }
+  } catch {
+    // Ignore and keep the conservative fallback below.
+  }
+
+  return GOVERNANCE_PROGRAM_VERSION_V1;
 }
 
 function getGovernanceNamespaces(): Array<{ namespace: string; programId: string }> {
@@ -6286,27 +6358,165 @@ function normalizeGovernanceVoteOwnersByProposal(
   return votesByProposal;
 }
 
-function buildGovernanceProposalVoteSources(
+function getGovernanceEligibleVoteMemberships(
   proposalMint: string,
   ownerKey: string,
-  memberships: GovernanceMembershipRecord[],
-  votedOwners: Set<string>
-): WalletGovernanceResponse['proposals'][number]['voteSources'] {
+  memberships: GovernanceMembershipRecord[]
+) {
   return memberships
     .filter((membership) => membership.governingTokenMint === proposalMint)
     .filter((membership) => BigInt(membership.governingTokenDepositAmount) > BigInt(0))
     .filter((membership) => {
-      const isDirect = membership.governingTokenOwner === ownerKey;
-      if (isDirect) {
-        return !membership.governanceDelegate || membership.governanceDelegate === ownerKey;
+      if (membership.governingTokenOwner === ownerKey) {
+        return true;
       }
       return membership.governanceDelegate === ownerKey;
-    })
+    });
+}
+
+function toGovernanceMembershipRecord(entry: {
+  pubkey: { toBase58(): string };
+  account: {
+    governingTokenMint: { toBase58(): string };
+    governingTokenOwner: { toBase58(): string };
+    governanceDelegate?: { toBase58(): string } | null;
+    governingTokenDepositAmount: { toString(): string };
+  };
+}): GovernanceMembershipRecord {
+  return {
+    pubkey: entry.pubkey.toBase58(),
+    governingTokenMint: entry.account.governingTokenMint.toBase58(),
+    governingTokenOwner: entry.account.governingTokenOwner.toBase58(),
+    governanceDelegate: entry.account.governanceDelegate?.toBase58() ?? null,
+    governingTokenDepositAmount: entry.account.governingTokenDepositAmount.toString()
+  };
+}
+
+async function resolveGovernanceProposalMemberships(
+  connection: Connection,
+  programId: PublicKey,
+  realmPk: PublicKey,
+  proposalMint: string,
+  ownerKey: string,
+  memberships: GovernanceMembershipRecord[],
+  loadRealmTokenOwnerRecords: () => Promise<TokenOwnerRecord[]>
+): Promise<GovernanceMembershipRecord[]> {
+  if (getGovernanceEligibleVoteMemberships(proposalMint, ownerKey, memberships).length > 0) {
+    return memberships;
+  }
+
+  const merged = new Map(memberships.map((entry) => [entry.pubkey, entry] as const));
+  const ownerPk = tryParseSolanaPublicKey(ownerKey);
+  const proposalMintPk = tryParseSolanaPublicKey(proposalMint);
+
+  if (ownerPk && proposalMintPk) {
+    try {
+      const directRecord = await getTokenOwnerRecordForRealm(connection, programId, realmPk, proposalMintPk, ownerPk);
+      const normalized = toGovernanceMembershipRecord(directRecord);
+      if (
+        BigInt(normalized.governingTokenDepositAmount) > 0n &&
+        (!normalized.governanceDelegate || normalized.governanceDelegate === ownerKey)
+      ) {
+        merged.set(normalized.pubkey, normalized);
+      }
+    } catch {
+      // Ignore and keep the indexed memberships if the direct TOR lookup misses.
+    }
+  }
+
+  try {
+    const realmTokenOwnerRecords = await loadRealmTokenOwnerRecords();
+    for (const entry of realmTokenOwnerRecords) {
+      const normalized = toGovernanceMembershipRecord(entry);
+      if (normalized.governingTokenMint !== proposalMint) {
+        continue;
+      }
+      if (BigInt(normalized.governingTokenDepositAmount) <= 0n) {
+        continue;
+      }
+
+      const isDirect = normalized.governingTokenOwner === ownerKey;
+      if (isDirect) {
+        if (!normalized.governanceDelegate || normalized.governanceDelegate === ownerKey) {
+          merged.set(normalized.pubkey, normalized);
+        }
+        continue;
+      }
+
+      if (normalized.governanceDelegate === ownerKey) {
+        merged.set(normalized.pubkey, normalized);
+      }
+    }
+  } catch {
+    // Ignore RPC fallback failure and keep the existing memberships.
+  }
+
+  return Array.from(merged.values());
+}
+
+async function resolveGovernanceVoteSourceStatus(
+  connection: Connection,
+  programId: PublicKey,
+  ownerKey: string,
+  proposals: Array<{ proposalId: string; governingTokenMint: string }>,
+  memberships: GovernanceMembershipRecord[]
+): Promise<Map<string, Set<string>>> {
+  const voteRecordEntries: Array<{ proposalId: string; tokenOwnerRecordId: string; voteRecordPk: PublicKey }> = [];
+
+  for (const proposal of proposals) {
+    const eligibleMemberships = getGovernanceEligibleVoteMemberships(proposal.governingTokenMint, ownerKey, memberships);
+    for (const membership of eligibleMemberships) {
+      voteRecordEntries.push({
+        proposalId: proposal.proposalId,
+        tokenOwnerRecordId: membership.pubkey,
+        voteRecordPk: await getVoteRecordAddress(programId, new PublicKey(proposal.proposalId), new PublicKey(membership.pubkey))
+      });
+    }
+  }
+
+  const votedTokenOwnerRecordsByProposal = new Map<string, Set<string>>();
+  for (let index = 0; index < voteRecordEntries.length; index += 100) {
+    const batch = voteRecordEntries.slice(index, index + 100);
+    const voteRecords = await Promise.all(
+      batch.map((entry) =>
+        getVoteRecord(connection, entry.voteRecordPk)
+          .then((record) => (!record.account.isRelinquished ? record : null))
+          .catch(() => null)
+      )
+    );
+
+    voteRecords.forEach((record, accountIndex) => {
+      if (!record) {
+        return;
+      }
+
+      const entry = batch[accountIndex];
+      if (!votedTokenOwnerRecordsByProposal.has(entry.proposalId)) {
+        votedTokenOwnerRecordsByProposal.set(entry.proposalId, new Set<string>());
+      }
+      votedTokenOwnerRecordsByProposal.get(entry.proposalId)?.add(entry.tokenOwnerRecordId);
+    });
+  }
+
+  return votedTokenOwnerRecordsByProposal;
+}
+
+function buildGovernanceProposalVoteSources(
+  proposalMint: string,
+  ownerKey: string,
+  memberships: GovernanceMembershipRecord[],
+  votedOwners: Set<string>,
+  votedTokenOwnerRecordIds?: Set<string>
+): WalletGovernanceResponse['proposals'][number]['voteSources'] {
+  return getGovernanceEligibleVoteMemberships(proposalMint, ownerKey, memberships)
     .map((membership) => ({
       tokenOwnerRecordId: membership.pubkey,
       governingTokenOwner: membership.governingTokenOwner,
       isDelegate: membership.governingTokenOwner !== ownerKey,
-      hasVoted: votedOwners.has(membership.governingTokenOwner)
+      hasVoted:
+        votedTokenOwnerRecordIds !== undefined
+          ? votedTokenOwnerRecordIds.has(membership.pubkey)
+          : votedOwners.has(membership.governingTokenOwner)
     }))
     .sort((left, right) => {
       if (left.isDelegate !== right.isDelegate) {
@@ -6439,6 +6649,7 @@ async function resolveGovernanceRealmInfo(
 }
 
 async function fetchGovernanceForDaoViaGraphql(
+  connection: Connection,
   owner: PublicKey,
   daoId: string,
   governanceOwner: GovernanceOwner,
@@ -6509,19 +6720,49 @@ async function fetchGovernanceForDaoViaGraphql(
   ]);
 
   const proposalRows = normalizeGovernanceProposalRows(proposalData, namespace);
-  const votedOwnersByProposal = normalizeGovernanceVoteOwnersByProposal(voteData, namespace);
   const governanceConfigById = new Map(governanceAccounts.map((entry) => [entry.pubkey, entry] as const));
+  const programId = new PublicKey(governanceOwner.owner);
+  const realmPk = new PublicKey(daoId);
+  let realmTokenOwnerRecordCachePromise: Promise<TokenOwnerRecord[]> | null = null;
+  const loadRealmTokenOwnerRecords = () => {
+    if (!realmTokenOwnerRecordCachePromise) {
+      realmTokenOwnerRecordCachePromise = getGovernanceAccounts(connection, programId, TokenOwnerRecord, [
+        new MemcmpFilter(1, realmPk.toBuffer())
+      ]).catch(() => []);
+    }
+    return realmTokenOwnerRecordCachePromise;
+  };
+  const votedOwnersByProposal = normalizeGovernanceVoteOwnersByProposal(voteData, namespace);
 
-  const proposals = proposalRows
-    .map((proposal) => {
-      const votedOwners = votedOwnersByProposal.get(proposal.pubkey) ?? new Set<string>();
-      const voteSources = buildGovernanceProposalVoteSources(
+  const proposals = (
+    await Promise.all(
+    proposalRows.map(async (proposal) => {
+      const proposalMemberships = await resolveGovernanceProposalMemberships(
+        connection,
+        programId,
+        realmPk,
         proposal.governingTokenMint,
         ownerKey,
         membershipRecords,
-        votedOwners
+        loadRealmTokenOwnerRecords
       );
-      const membership = resolveGovernanceProposalMembership(proposal.governingTokenMint, ownerKey, membershipRecords);
+      const votedOwners = votedOwnersByProposal.get(proposal.pubkey) ?? new Set<string>();
+      const votedTokenOwnerRecordsByProposal = await resolveGovernanceVoteSourceStatus(
+        connection,
+        programId,
+        ownerKey,
+        [{ proposalId: proposal.pubkey, governingTokenMint: proposal.governingTokenMint }],
+        proposalMemberships
+      ).catch(() => new Map<string, Set<string>>());
+      const votedTokenOwnerRecordIds = votedTokenOwnerRecordsByProposal.get(proposal.pubkey) ?? new Set<string>();
+      const voteSources = buildGovernanceProposalVoteSources(
+        proposal.governingTokenMint,
+        ownerKey,
+        proposalMemberships,
+        votedOwners,
+        votedTokenOwnerRecordIds
+      );
+      const membership = resolveGovernanceProposalMembership(proposal.governingTokenMint, ownerKey, proposalMemberships);
       const governanceConfig = governanceConfigById.get(proposal.governance);
       const resolvedVotingTime =
         proposal.maxVotingTime !== null && proposal.maxVotingTime !== undefined
@@ -6573,7 +6814,8 @@ async function fetchGovernanceForDaoViaGraphql(
         denyVotes: proposal.denyVotes
       } satisfies WalletGovernanceResponse['proposals'][number];
     })
-    .sort((left, right) => (right.votingAt ?? right.draftAt ?? 0) - (left.votingAt ?? left.draftAt ?? 0));
+    )
+  ).sort((left, right) => (right.votingAt ?? right.draftAt ?? 0) - (left.votingAt ?? left.draftAt ?? 0));
 
   const daoSummary = buildGovernanceDaoSummary(
     daoId, realm.name, realm.communityMint, ownerKey, membershipRecords, isNonMemberDao, isDelegateDao
@@ -6693,6 +6935,16 @@ async function fetchGovernanceForDaoViaRpc(
     }
     votedOwnersByProposal.get(proposalId)?.add(governingTokenOwner);
   }
+  const votedTokenOwnerRecordsByProposal = await resolveGovernanceVoteSourceStatus(
+    connection,
+    programId,
+    ownerKey,
+    proposals.map((proposal) => ({
+      proposalId: proposal.pubkey.toBase58(),
+      governingTokenMint: proposal.account.governingTokenMint.toBase58()
+    })),
+    effectiveMemberships
+  ).catch(() => new Map<string, Set<string>>());
 
   return {
     source: 'rpc',
@@ -6715,11 +6967,13 @@ async function fetchGovernanceForDaoViaRpc(
       .map((entry) => {
         const proposalMint = entry.account.governingTokenMint.toBase58();
         const votedOwners = votedOwnersByProposal.get(entry.pubkey.toBase58()) ?? new Set<string>();
+        const votedTokenOwnerRecordIds = votedTokenOwnerRecordsByProposal.get(entry.pubkey.toBase58()) ?? new Set<string>();
         const voteSources = buildGovernanceProposalVoteSources(
           proposalMint,
           ownerKey,
           effectiveMemberships,
-          votedOwners
+          votedOwners,
+          votedTokenOwnerRecordIds
         );
         const membership = resolveGovernanceProposalMembership(proposalMint, ownerKey, effectiveMemberships);
         const votingAt = entry.account.votingAt ? entry.account.votingAt.toNumber() : null;
@@ -6886,6 +7140,7 @@ async function fetchGovernanceForWallet(
         const preloadedRpcTors = rpcTorsByRealm.get(daoId);
         try {
         return await fetchGovernanceForDaoViaGraphql(
+          connection,
           owner,
           daoId,
           governanceOwner,
