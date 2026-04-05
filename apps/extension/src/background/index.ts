@@ -1310,32 +1310,58 @@ class WalletController {
       throw new RpcError('INVALID_PASSWORD', 'Password is incorrect.');
     }
 
+    const unlockedAt = Date.now();
     const nextUnlockedSecrets: typeof this.unlockedSecrets = {
       [primaryWallet.id]: {
         secret: primarySecret,
-        unlockedAt: Date.now()
+        unlockedAt
       }
     };
 
-    for (const wallet of remainingWallets) {
-      if (!wallet.vault || nextUnlockedSecrets[wallet.id]) {
-        continue;
-      }
+    if (primarySecret.kind === 'mnemonic') {
+      for (const wallet of walletState.wallets) {
+        if (
+          !wallet.vault ||
+          nextUnlockedSecrets[wallet.id] ||
+          wallet.id === primaryWallet.id ||
+          wallet.signer.kind !== 'software' ||
+          wallet.source !== primaryWallet.source ||
+          wallet.name !== primaryWallet.name
+        ) {
+          continue;
+        }
 
-      try {
-        const secret = await unlockVaultRecord(wallet.vault, password);
         nextUnlockedSecrets[wallet.id] = {
-          secret,
-          unlockedAt: Date.now()
+          secret: primarySecret,
+          unlockedAt
         };
-      } catch {
-        // Keep the successfully unlocked wallets available even if one secondary wallet fails.
       }
     }
 
     this.unlockedSecrets = nextUnlockedSecrets;
     await this.persistUnlockedSecrets();
     await this.setSessionState({ locked: false, lastActivityAt: Date.now() });
+
+    void (async () => {
+      for (const wallet of remainingWallets) {
+        if (!wallet.vault || this.unlockedSecrets[wallet.id]) {
+          continue;
+        }
+
+        try {
+          const secret = await unlockVaultRecord(wallet.vault, password);
+          this.unlockedSecrets[wallet.id] = {
+            secret,
+            unlockedAt: Date.now()
+          };
+          await this.persistUnlockedSecrets();
+        } catch {
+          // Ignore secondary-wallet failures and keep the primary unlock fast.
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    })();
 
     return true;
   }

@@ -862,7 +862,6 @@ body[data-surface='popup'] .page-content {
   width: 100%;
   max-width: 100%;
   padding-bottom: 112px;
-  transform: translateZ(0);
 }
 
 body[data-surface='popup'] .wallet-home-card,
@@ -4976,6 +4975,7 @@ body[data-surface='popup'] .token-change {
   left: 16px;
   right: 16px;
   bottom: 14px;
+  z-index: 40;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: center;
