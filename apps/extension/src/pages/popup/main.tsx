@@ -384,8 +384,8 @@ function getGovernanceProposalTimeMeta(
 } {
   if (!proposal.votingEndsAt) {
     return {
-      badgeLabel: proposal.canVote ? 'Vote now' : proposal.state,
-      badgeTone: proposal.canVote ? 'success' : 'neutral',
+      badgeLabel: proposal.canVote ? 'Vote now' : proposal.hasVoted ? 'Voted' : proposal.state,
+      badgeTone: proposal.canVote || proposal.hasVoted ? 'success' : 'neutral',
       metaText: null,
       noteText: null,
       votingWindowOpen: true
@@ -397,8 +397,8 @@ function getGovernanceProposalTimeMeta(
 
   if (votingWindowOpen) {
     return {
-      badgeLabel: proposal.canVote ? 'Vote now' : 'Ending',
-      badgeTone: proposal.canVote ? 'success' : 'neutral',
+      badgeLabel: proposal.canVote ? 'Vote now' : proposal.hasVoted ? 'Voted' : proposal.state,
+      badgeTone: proposal.canVote || proposal.hasVoted ? 'success' : 'neutral',
       metaText: `Ending ${relativeTime}`,
       noteText: null,
       votingWindowOpen
@@ -3456,10 +3456,10 @@ function PopupPage() {
     const inactiveVotingPowerMessage =
       !timeMeta.votingWindowOpen && timeMeta.noteText
         ? timeMeta.noteText
+        : proposal.hasVoted && availableVoteSources.length === 0
+          ? 'This wallet has already voted on this proposal.'
         : hasDaoVotingPower && availableVoteSources.length === 0
           ? 'This wallet has governance power in this DAO, but the proposal vote source is still being resolved.'
-        : proposal.hasVoted && availableVoteSources.length === 0
-          ? 'This wallet already used its currently resolved voting source for this proposal.'
           : availableVoteSources.length > 0
             ? hasDelegatedProposalVoteSource
               ? 'This wallet has delegated voting power available for this proposal.'
@@ -3505,7 +3505,6 @@ function PopupPage() {
             </div>
             <span className="governance-proposal-meta">
               {proposal.realmName} • {proposal.state}
-              {timeMeta.metaText ? ` • ${timeMeta.metaText}` : ''}
               {proposal.votingEndsAt ? ` • ${new Date(proposal.votingEndsAt * 1000).toLocaleString()}` : ''}
             </span>
           </div>
