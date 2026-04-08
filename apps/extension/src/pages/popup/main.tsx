@@ -2865,11 +2865,28 @@ function PopupPage() {
     ...verification.trackedSpaces
   ]).size;
   const verificationLinkedIdentityCount = verification.identities.length;
-  const liveGovernanceProposalCount = governance.proposals.filter((proposal) => {
+  const visibleGovernanceProposals = governance.proposals.filter((proposal) => {
+    if (proposal.votingPowerType !== 'unknown') {
+      return true;
+    }
+
+    if (proposal.hasVoted) {
+      return true;
+    }
+
+    return (proposal.voteSources?.length ?? 0) > 0;
+  });
+  const liveGovernanceProposalCount = visibleGovernanceProposals.filter((proposal) => {
     const timeMeta = getGovernanceProposalTimeMeta(proposal);
     return proposal.stateCode === 2 && timeMeta.votingWindowOpen;
   }).length;
-  const totalGovernanceDaoCount = new Set([...governance.discoveredDaos, ...governance.delegateDaos, ...governance.governedDaos, ...wallet.trackedGovernanceDaoIds]).size;
+  const detectedGovernanceDaoIds = new Set([
+    ...governance.discoveredDaos,
+    ...governance.delegateDaos,
+    ...governance.governedDaos
+  ]);
+  const visibleGovernanceDaoIds = new Set([...detectedGovernanceDaoIds, ...governance.trackedDaos]);
+  const totalGovernanceDaoCount = visibleGovernanceDaoIds.size;
   const selectedNetworkCustomRpc =
     selectedChain === 'sui'
       ? wallet.chainState.sui.customRpcUrl ?? ''
@@ -3438,6 +3455,8 @@ function PopupPage() {
     nowUnixSeconds: number
   ) {
     const daoSummary = governance.daos.find((dao) => dao.daoId === proposal.daoId) ?? null;
+    const isTrackedDao = governance.trackedDaos.includes(proposal.daoId);
+    const isDetectedDao = detectedGovernanceDaoIds.has(proposal.daoId);
     const hasCommunityPower = daoSummary
       ? BigInt(daoSummary.communityVotingPower ?? '0') > 0n || BigInt(daoSummary.delegateCommunityVotingPower ?? '0') > 0n
       : false;
@@ -3474,7 +3493,11 @@ function PopupPage() {
               ? 'This wallet has DAO voting power, but the proposal voting class could not be resolved yet.'
               : hasDaoVotingPower
                 ? 'This wallet has governance power in this DAO, but the matching voter record for this proposal is not available yet.'
-                : 'This wallet is tracking the DAO, but it does not currently have voting power for this proposal.';
+                : isTrackedDao
+                  ? 'This wallet is tracking this DAO, but it does not currently have voting power for this proposal.'
+                  : isDetectedDao
+                    ? 'This DAO was auto-detected for this wallet, but it does not currently have voting power for this proposal.'
+                    : 'This wallet does not currently have voting power for this proposal.';
 
     return (
       <div key={proposal.proposalId} className="governance-proposal-card">
@@ -4525,11 +4548,11 @@ function PopupPage() {
                 {(() => {
                   if (governanceLoading || governanceError) return null;
                   const nowUnixSeconds = Math.floor(Date.now() / 1000);
-                  const activeProposals = governance.proposals.filter((proposal) => {
+                  const activeProposals = visibleGovernanceProposals.filter((proposal) => {
                     const timeMeta = getGovernanceProposalTimeMeta(proposal, nowUnixSeconds);
                     return proposal.stateCode === 2 && timeMeta.votingWindowOpen;
                   });
-                  const finalizingProposals = governance.proposals.filter((proposal) => {
+                  const finalizingProposals = visibleGovernanceProposals.filter((proposal) => {
                     const timeMeta = getGovernanceProposalTimeMeta(proposal, nowUnixSeconds);
                     return proposal.stateCode === 2 && !timeMeta.votingWindowOpen;
                   });
@@ -5462,12 +5485,6 @@ function PopupPage() {
   }
 
   function renderSettings() {
-    const participatingGovernanceDaoIds = new Set([
-      ...governance.discoveredDaos,
-      ...governance.delegateDaos,
-      ...governance.governedDaos,
-      ...wallet.trackedGovernanceDaoIds
-    ]);
     const trackedReputationCount = wallet.trackedReputationSpaceIds.length;
     const trackedVerificationCount = wallet.trackedVerificationSpaceIds.length;
     const trackedGovernanceCount = wallet.trackedGovernanceDaoIds.length;
@@ -5928,8 +5945,8 @@ function PopupPage() {
           section: 'governance',
           title: 'Governance DAOs',
           summary:
-            participatingGovernanceDaoIds.size > 0
-              ? `${participatingGovernanceDaoIds.size} participating • ${trackedGovernanceCount} tracked`
+            detectedGovernanceDaoIds.size > 0
+              ? `${detectedGovernanceDaoIds.size} detected • ${trackedGovernanceCount} tracked`
               : trackedGovernanceCount > 0
                 ? `${trackedGovernanceCount} tracked`
                 : 'No DAOs detected',
@@ -5960,7 +5977,8 @@ function PopupPage() {
                   {governanceEligibility.length > 0 ? (
                     <div className="reputation-space-list">
                       {governanceEligibility.map((dao) => {
-                        const isParticipating = participatingGovernanceDaoIds.has(dao.daoId);
+                        const isDetected = detectedGovernanceDaoIds.has(dao.daoId);
+                        const isTracked = governance.trackedDaos.includes(dao.daoId);
                         const matchedLabels = [
                           dao.matchesCommunity ? `Community: ${dao.communityAmountLabel ?? 'Eligible'}` : null,
                           dao.matchesCouncil ? `Council: ${dao.councilAmountLabel ?? 'Eligible'}` : null
@@ -5972,13 +5990,14 @@ function PopupPage() {
                                 <strong>{dao.realmName}</strong>
                                 {dao.matchesCommunity ? <StatusPill tone="neutral">Community</StatusPill> : null}
                                 {dao.matchesCouncil ? <StatusPill tone="neutral">Council</StatusPill> : null}
-                                {isParticipating ? <StatusPill tone="success">Participating</StatusPill> : null}
+                                {isDetected ? <StatusPill tone="success">Detected</StatusPill> : null}
+                                {!isDetected && isTracked ? <StatusPill tone="neutral">Tracked</StatusPill> : null}
                               </div>
                               <span className="muted mono settings-inline-value">{dao.daoId}</span>
                               <span className="muted">{matchedLabels.join(' • ')}</span>
                             </div>
                             <div className="reputation-space-actions">
-                              {!isParticipating ? (
+                              {!isDetected && !isTracked ? (
                                 <Button
                                   tone="secondary"
                                   onClick={() => void handleSaveGovernanceDaos([...wallet.trackedGovernanceDaoIds, dao.daoId])}
