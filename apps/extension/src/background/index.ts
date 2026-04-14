@@ -651,6 +651,22 @@ class WalletController {
     return network === 'devnet' ? '0x279f' : '0x8f';
   }
 
+  private resolveEthereumChainId(network: 'mainnet-beta' | 'devnet') {
+    return network === 'devnet' ? '0xaa36a7' : '0x1';
+  }
+
+  private getPreferredEvmChain(walletState: Awaited<ReturnType<WalletController['getWalletState']>>): 'monad' | 'ethereum' {
+    if (walletState.selectedChain === 'monad' || walletState.selectedChain === 'ethereum') {
+      return walletState.selectedChain;
+    }
+
+    if (walletState.wallets.some((wallet) => wallet.chain === 'ethereum')) {
+      return 'ethereum';
+    }
+
+    return 'monad';
+  }
+
   private resolveMonadNetworkFromChainId(chainId: string): MonadNetwork | null {
     const normalized = chainId.trim().toLowerCase();
     if (normalized === '0x8f' || normalized === '143') {
@@ -660,6 +676,49 @@ class WalletController {
       return 'testnet';
     }
     return null;
+  }
+
+  private resolveEthereumNetworkFromChainId(chainId: string): EthereumNetwork | null {
+    const normalized = chainId.trim().toLowerCase();
+    if (normalized === '0x1' || normalized === '1') {
+      return 'mainnet';
+    }
+    if (normalized === '0xaa36a7' || normalized === '11155111') {
+      return 'sepolia';
+    }
+    return null;
+  }
+
+  private resolveEvmSelection(
+    walletState: Awaited<ReturnType<WalletController['getWalletState']>>,
+    request?: Extract<
+      ProviderRequest,
+      { method: 'monad_accounts' | 'monad_requestAccounts' | 'monad_chainId' | 'monad_switchChain' | 'monad_addChain' | 'monad_sendTransaction' | 'monad_signMessage' | 'monad_signTypedData' }
+    >
+  ): { chain: 'monad' | 'ethereum'; network: 'mainnet-beta' | 'devnet' } {
+    if (request && (request.method === 'monad_switchChain' || request.method === 'monad_addChain')) {
+      const ethereumNetwork = this.resolveEthereumNetworkFromChainId(request.params.chainId);
+      if (ethereumNetwork) {
+        return {
+          chain: 'ethereum',
+          network: ethereumNetwork === 'sepolia' ? 'devnet' : 'mainnet-beta'
+        };
+      }
+
+      const monadNetwork = this.resolveMonadNetworkFromChainId(request.params.chainId);
+      if (monadNetwork) {
+        return {
+          chain: 'monad',
+          network: monadNetwork === 'testnet' ? 'devnet' : 'mainnet-beta'
+        };
+      }
+    }
+
+    const chain = this.getPreferredEvmChain(walletState);
+    return {
+      chain,
+      network: this.getSelectedNetworkForChain(walletState, chain)
+    };
   }
 
   private async setChainNetwork(chain: GrapeChain, network: 'mainnet-beta' | 'devnet') {
@@ -686,6 +745,47 @@ class WalletController {
         }
       },
       selectedNetwork: walletState.selectedChain === chain ? network : walletState.selectedNetwork
+    });
+  }
+
+  private async setSelectedChainNetwork(chain: GrapeChain, network: 'mainnet-beta' | 'devnet') {
+    const walletState = await this.getWalletState();
+    const nextSelectedWalletId =
+      walletState.selectedWalletIds[chain] ?? walletState.wallets.find((wallet) => wallet.chain === chain)?.id;
+
+    await walletStateStorage.set({
+      ...walletState,
+      chainState: {
+        ...walletState.chainState,
+        solana: {
+          ...walletState.chainState.solana,
+          selectedNetwork: chain === 'solana' ? network : walletState.chainState.solana.selectedNetwork
+        },
+        sui: {
+          ...walletState.chainState.sui,
+          selectedNetwork: chain === 'sui' ? network : walletState.chainState.sui.selectedNetwork
+        },
+        monad: {
+          ...walletState.chainState.monad,
+          selectedNetwork: chain === 'monad' ? network : walletState.chainState.monad.selectedNetwork
+        },
+        ethereum: {
+          ...walletState.chainState.ethereum,
+          selectedNetwork: chain === 'ethereum' ? network : walletState.chainState.ethereum.selectedNetwork
+        }
+      },
+      selectedChain: chain,
+      selectedWalletIds: nextSelectedWalletId
+        ? {
+            ...walletState.selectedWalletIds,
+            [chain]: nextSelectedWalletId
+          }
+        : walletState.selectedWalletIds,
+      selectedNetwork: network,
+      selectedWalletId:
+        chain === 'solana'
+          ? nextSelectedWalletId ?? walletState.selectedWalletId
+          : walletState.selectedWalletId
     });
   }
 
@@ -1659,15 +1759,15 @@ class WalletController {
         },
         sui: {
           ...walletState.chainState.sui,
-          selectedNetwork: selectedChain === 'sui' ? network : walletState.chainState.selectedNetwork
+          selectedNetwork: selectedChain === 'sui' ? network : walletState.chainState.sui.selectedNetwork
         },
         monad: {
           ...walletState.chainState.monad,
-          selectedNetwork: selectedChain === 'monad' ? network : walletState.chainState.selectedNetwork
+          selectedNetwork: selectedChain === 'monad' ? network : walletState.chainState.monad.selectedNetwork
         },
         ethereum: {
           ...walletState.chainState.ethereum,
-          selectedNetwork: selectedChain === 'ethereum' ? network : walletState.chainState.selectedNetwork
+          selectedNetwork: selectedChain === 'ethereum' ? network : walletState.chainState.ethereum.selectedNetwork
         }
       },
       selectedNetwork: network
@@ -1804,10 +1904,10 @@ class WalletController {
         chain === 'solana'
           ? walletState.chainState.solana.selectedNetwork
           : chain === 'sui'
-            ? walletState.chainState.selectedNetwork
+            ? walletState.chainState.sui.selectedNetwork
             : chain === 'monad'
-              ? walletState.chainState.selectedNetwork
-              : walletState.chainState.selectedNetwork,
+              ? walletState.chainState.monad.selectedNetwork
+              : walletState.chainState.ethereum.selectedNetwork,
       selectedWalletId: nextSelectedWalletId ?? walletState.selectedWalletId
     });
     return this.getStateResponse();
@@ -4322,7 +4422,7 @@ class WalletController {
       origin: request.origin.origin
     });
     const walletState = await this.getWalletState();
-    const requestChain = getProviderRequestChain(request);
+    const requestChain = getProviderRequestChain(request, walletState, this.resolveEthereumNetworkFromChainId.bind(this), this.resolveMonadNetworkFromChainId.bind(this), this.getPreferredEvmChain.bind(this));
     const selectedWallet = getSelectedWalletForChain(walletState, requestChain);
     if (walletState.setup !== 'ready' || !selectedWallet || !selectedWallet.selectedAccountId) {
       throw new RpcError('WALLET_NOT_READY', 'Wallet has not been created or imported yet.');
@@ -4340,16 +4440,14 @@ class WalletController {
     }
 
     if (request.method === 'monad_chainId') {
-      return this.resolveMonadChainId(selectedNetwork);
+      return requestChain === 'ethereum'
+        ? this.resolveEthereumChainId(selectedNetwork)
+        : this.resolveMonadChainId(selectedNetwork);
     }
 
     if (request.method === 'monad_switchChain' || request.method === 'monad_addChain') {
-      const nextNetwork = this.resolveMonadNetworkFromChainId(request.params.chainId);
-      if (!nextNetwork) {
-        throw new RpcError('CHAIN_UNSUPPORTED', 'Grape only supports Monad mainnet and testnet.');
-      }
-
-      await this.setChainNetwork('monad', nextNetwork === 'testnet' ? 'devnet' : 'mainnet-beta');
+      const evmSelection = this.resolveEvmSelection(walletState, request);
+      await this.setSelectedChainNetwork(evmSelection.chain, evmSelection.network);
       return null;
     }
 
@@ -4608,20 +4706,20 @@ class WalletController {
       }
       case 'monad_signMessage': {
         if (approvalWallet.signer.kind === 'ledger') {
-          throw new RpcError('LEDGER_UNSUPPORTED', 'Ledger message signing is not supported for Monad dapps.');
+          throw new RpcError('LEDGER_UNSUPPORTED', `Ledger message signing is not supported for ${formatChainLabel(approval.chain)} dapps.`);
         }
 
-        const signer = resolveMonadVaultSecret(secret);
+        const signer = approval.chain === 'ethereum' ? resolveEthereumVaultSecret(secret) : resolveMonadVaultSecret(secret);
         return signer.signMessage({
           message: normalizeMonadSignMessage(approval.request.params.message)
         });
       }
       case 'monad_signTypedData': {
         if (approvalWallet.signer.kind === 'ledger') {
-          throw new RpcError('LEDGER_UNSUPPORTED', 'Ledger typed data signing is not supported for Monad dapps.');
+          throw new RpcError('LEDGER_UNSUPPORTED', `Ledger typed data signing is not supported for ${formatChainLabel(approval.chain)} dapps.`);
         }
 
-        const signer = resolveMonadVaultSecret(secret);
+        const signer = approval.chain === 'ethereum' ? resolveEthereumVaultSecret(secret) : resolveMonadVaultSecret(secret);
         return signer.signTypedData(JSON.parse(approval.request.params.typedData));
       }
       case 'signTransaction': {
@@ -4702,26 +4800,39 @@ class WalletController {
       }
       case 'monad_sendTransaction': {
         if (approvalWallet.signer.kind === 'ledger') {
-          throw new RpcError('LEDGER_UNSUPPORTED', 'Ledger contract transaction execution is not supported for Monad dapps.');
+          throw new RpcError('LEDGER_UNSUPPORTED', `Ledger contract transaction execution is not supported for ${formatChainLabel(approval.chain)} dapps.`);
         }
 
         const transactionRequest = approval.request.params.transaction;
         if (!transactionRequest.to?.trim()) {
-          throw new RpcError('INVALID_REQUEST', 'Monad transactions must include a destination address.');
+          throw new RpcError('INVALID_REQUEST', `${formatChainLabel(approval.chain)} transactions must include a destination address.`);
         }
 
         return {
-          signature: await sendMonadTransactionRequest(this.resolveMonadNetwork(approval.network), secret, {
-            to: transactionRequest.to,
-            data: transactionRequest.data,
-            value: transactionRequest.value,
-            gas: transactionRequest.gas,
-            gasPrice: transactionRequest.gasPrice,
-            maxFeePerGas: transactionRequest.maxFeePerGas,
-            maxPriorityFeePerGas: transactionRequest.maxPriorityFeePerGas,
-            nonce: transactionRequest.nonce,
-            customRpcUrl: walletState.chainState.monad.customRpcUrl
-          })
+          signature:
+            approval.chain === 'ethereum'
+              ? await sendEthereumTransactionRequest(this.resolveEthereumNetwork(approval.network), secret, {
+                  to: transactionRequest.to,
+                  data: transactionRequest.data,
+                  value: transactionRequest.value,
+                  gas: transactionRequest.gas,
+                  gasPrice: transactionRequest.gasPrice,
+                  maxFeePerGas: transactionRequest.maxFeePerGas,
+                  maxPriorityFeePerGas: transactionRequest.maxPriorityFeePerGas,
+                  nonce: transactionRequest.nonce,
+                  customRpcUrl: walletState.chainState.ethereum.customRpcUrl
+                })
+              : await sendMonadTransactionRequest(this.resolveMonadNetwork(approval.network), secret, {
+                  to: transactionRequest.to,
+                  data: transactionRequest.data,
+                  value: transactionRequest.value,
+                  gas: transactionRequest.gas,
+                  gasPrice: transactionRequest.gasPrice,
+                  maxFeePerGas: transactionRequest.maxFeePerGas,
+                  maxPriorityFeePerGas: transactionRequest.maxPriorityFeePerGas,
+                  nonce: transactionRequest.nonce,
+                  customRpcUrl: walletState.chainState.monad.customRpcUrl
+                })
         };
       }
       default:
@@ -4928,7 +5039,13 @@ function toApprovalKind(request: ProviderRequest) {
   }
 }
 
-function getProviderRequestChain(request: ProviderRequest): GrapeChain {
+function getProviderRequestChain(
+  request: ProviderRequest,
+  walletState: import('@grape/core').WalletState,
+  resolveEthereumNetworkFromChainId: (chainId: string) => EthereumNetwork | null,
+  resolveMonadNetworkFromChainId: (chainId: string) => MonadNetwork | null,
+  getPreferredEvmChain: (walletState: import('@grape/core').WalletState) => 'monad' | 'ethereum'
+): GrapeChain {
   switch (request.method) {
     case 'connect':
     case 'disconnect':
@@ -4948,12 +5065,19 @@ function getProviderRequestChain(request: ProviderRequest): GrapeChain {
     case 'monad_accounts':
     case 'monad_requestAccounts':
     case 'monad_chainId':
-    case 'monad_switchChain':
-    case 'monad_addChain':
     case 'monad_sendTransaction':
     case 'monad_signMessage':
     case 'monad_signTypedData':
-      return 'monad';
+      return getPreferredEvmChain(walletState);
+    case 'monad_switchChain':
+    case 'monad_addChain':
+      if (resolveEthereumNetworkFromChainId(request.params.chainId)) {
+        return 'ethereum';
+      }
+      if (resolveMonadNetworkFromChainId(request.params.chainId)) {
+        return 'monad';
+      }
+      throw new RpcError('CHAIN_UNSUPPORTED', 'Grape only supports Ethereum, Sepolia, Monad, and Monad testnet.');
     default:
       throw new RpcError('UNKNOWN_REQUEST', 'Unsupported provider chain.');
   }
@@ -4971,6 +5095,8 @@ function getAccountPermissionForChain(chain: GrapeChain): import('@grape/core').
       return 'sui:accounts';
     case 'monad':
       return 'monad:accounts';
+    case 'ethereum':
+      return 'ethereum:accounts';
     default:
       return 'solana:accounts';
   }
@@ -4984,6 +5110,8 @@ function getSignPermissionForChain(chain: GrapeChain): import('@grape/core').Per
       return 'sui:sign';
     case 'monad':
       return 'monad:sign';
+    case 'ethereum':
+      return 'ethereum:sign';
     default:
       return 'solana:sign';
   }
@@ -5004,6 +5132,21 @@ function normalizeMonadSignMessage(message: string) {
   }
 
   return message;
+}
+
+function formatChainLabel(chain: GrapeChain) {
+  switch (chain) {
+    case 'ethereum':
+      return 'Ethereum';
+    case 'monad':
+      return 'Monad';
+    case 'sui':
+      return 'Sui';
+    case 'solana':
+      return 'Solana';
+    default:
+      return chain;
+  }
 }
 
 function atobBytes(value: string): Uint8Array {

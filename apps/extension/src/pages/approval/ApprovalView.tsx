@@ -454,7 +454,7 @@ export function ApprovalView(props: {
           <p className="warning-box">This will sign and execute a Sui transaction on the selected network.</p>
         ) : null}
         {approval.request.method === 'monad_sendTransaction' ? (
-          <p className="warning-box">This will sign and broadcast a Monad transaction to the selected RPC endpoint.</p>
+          <p className="warning-box">This will sign and broadcast an EVM transaction to the selected RPC endpoint.</p>
         ) : null}
       </Card>
 

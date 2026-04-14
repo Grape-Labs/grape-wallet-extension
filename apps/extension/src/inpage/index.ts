@@ -30,6 +30,7 @@ declare global {
     grapeSolana?: GrapeInpageProvider;
     solana?: GrapeInpageProvider;
     grapeMonad?: GrapeMonadProvider;
+    grapeEthereum?: GrapeMonadProvider;
     ethereum?: GrapeMonadProvider;
     grapeSui?: SuiWalletStandardWallet;
     __grapeDebugEvents?: GrapeDebugEvent[];

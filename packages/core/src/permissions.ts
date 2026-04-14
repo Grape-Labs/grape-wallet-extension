@@ -4,7 +4,9 @@ export type PermissionKind =
   | 'sui:accounts'
   | 'sui:sign'
   | 'monad:accounts'
-  | 'monad:sign';
+  | 'monad:sign'
+  | 'ethereum:accounts'
+  | 'ethereum:sign';
 
 export type OriginPermission = {
   origin: string;

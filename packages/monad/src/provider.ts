@@ -74,7 +74,7 @@ export class GrapeMonadProvider {
   readonly origin: PageOrigin;
 
   private accounts: string[] = [];
-  private chainId = '0x8f';
+  private chainId = '0x1';
   private readonly listeners: {
     [K in keyof MonadProviderEventMap]: Set<MonadProviderEventMap[K]>;
   } = {
@@ -278,7 +278,7 @@ export class GrapeMonadProvider {
   }
 }
 
-function defineProvider(name: 'ethereum' | 'grapeMonad', provider: GrapeMonadProvider, overwrite = true) {
+function defineProvider(name: 'ethereum' | 'grapeMonad' | 'grapeEthereum', provider: GrapeMonadProvider, overwrite = true) {
   if (!overwrite && name in window && window[name]) {
     return;
   }
@@ -302,7 +302,7 @@ function announceEip6963Provider(provider: GrapeMonadProvider) {
     uuid: crypto.randomUUID(),
     name: 'Grape',
     icon: GRAPE_PROVIDER_ICON,
-    rdns: 'wallet.grape.monad'
+    rdns: 'wallet.grape.evm'
   };
 
   const announce = () => {
@@ -324,12 +324,16 @@ declare global {
   interface Window {
     ethereum?: GrapeMonadProvider;
     grapeMonad?: GrapeMonadProvider;
+    grapeEthereum?: GrapeMonadProvider;
   }
 }
 
 export function initializeMonadProvider(provider: GrapeMonadProvider) {
   defineProvider('grapeMonad', provider);
+  defineProvider('grapeEthereum', provider);
   defineProvider('ethereum', provider, false);
   announceEip6963Provider(provider);
   return provider;
 }
+
+export { GrapeMonadProvider as GrapeEvmProvider };
