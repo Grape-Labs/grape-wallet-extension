@@ -203,7 +203,7 @@ export function createEmptyWalletState(): WalletState {
     trackedGovernanceDaoIds: [],
     chainState: {
       solana: {
-        selectedNetwork: 'devnet',
+        selectedNetwork: 'mainnet-beta',
         customRpcUrls: {}
       },
       sui: {
@@ -216,7 +216,7 @@ export function createEmptyWalletState(): WalletState {
         selectedNetwork: 'mainnet-beta'
       }
     },
-    selectedNetwork: 'devnet',
+    selectedNetwork: 'mainnet-beta',
     selectedTheme: DEFAULT_THEME,
     privacyMode: false,
     customRpcUrls: {},
@@ -382,7 +382,7 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
       trackedGovernanceDaoIds: normalizeTrackedDaoIds(input.trackedGovernanceDaoIds),
       chainState: {
         solana: {
-          selectedNetwork: input.selectedNetwork ?? 'devnet',
+          selectedNetwork: input.selectedNetwork ?? 'mainnet-beta',
           customRpcUrls: normalizeCustomRpcUrls(input.customRpcUrls)
         },
         sui: {
@@ -396,7 +396,7 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
       }
       },
       selectedWalletId: 'wallet-1',
-      selectedNetwork: input.selectedNetwork ?? 'devnet',
+      selectedNetwork: input.selectedNetwork ?? 'mainnet-beta',
       selectedTheme: normalizeTheme(input.selectedTheme),
       privacyMode: input.privacyMode ?? false,
       customRpcUrls: normalizeCustomRpcUrls(input.customRpcUrls),
@@ -413,7 +413,7 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
     trackedVerificationSpaceIds: normalizeTrackedVerificationSpaceIds(input.trackedVerificationSpaceIds),
     trackedGovernanceDaoIds: normalizeTrackedDaoIds(input.trackedGovernanceDaoIds),
     chainState: normalizeChainState(input.chainState, input.selectedNetwork, input.customRpcUrls),
-    selectedNetwork: input.selectedNetwork ?? 'devnet',
+    selectedNetwork: input.selectedNetwork ?? 'mainnet-beta',
     selectedTheme: normalizeTheme(input.selectedTheme),
     privacyMode: input.privacyMode ?? false,
     customRpcUrls: normalizeCustomRpcUrls(input.customRpcUrls),
@@ -495,7 +495,7 @@ function normalizeChainState(
   );
   return {
     solana: {
-      selectedNetwork: chainState?.solana?.selectedNetwork ?? selectedNetwork ?? 'devnet',
+      selectedNetwork: chainState?.solana?.selectedNetwork ?? selectedNetwork ?? 'mainnet-beta',
       customRpcUrls: normalizedSolanaCustomRpc
     },
     sui: {

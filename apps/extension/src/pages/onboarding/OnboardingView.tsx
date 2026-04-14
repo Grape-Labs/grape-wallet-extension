@@ -153,7 +153,7 @@ export function OnboardingView(props: OnboardingViewProps) {
   const [ledgerSelectedAccounts, setLedgerSelectedAccounts] = useState<Array<{ publicKey: string; derivationPath: string }>>([]);
   const [ledgerAccounts, setLedgerAccounts] = useState<LedgerCandidate[]>([]);
   const [ledgerScanCount, setLedgerScanCount] = useState(LEDGER_ACCOUNT_SCAN_BATCH_SIZE);
-  const [network, setNetwork] = useState<'mainnet-beta' | 'devnet'>('devnet');
+  const [network, setNetwork] = useState<'mainnet-beta' | 'devnet'>('mainnet-beta');
   const [scanningLedger, setScanningLedger] = useState(false);
   const [importMethod, setImportMethod] = useState<ImportMethod>('mnemonic');
   const [ledgerChain, setLedgerChain] = useState<LedgerImportChain>('solana');
@@ -200,7 +200,7 @@ export function OnboardingView(props: OnboardingViewProps) {
         setExistingWalletCount(state.wallet.wallets.length);
         setHasPasswordProtectedWallet(state.wallet.wallets.some((wallet) => !!wallet.vault));
       } catch {
-        setNetwork('devnet');
+        setNetwork('mainnet-beta');
         setExistingWalletCount(0);
         setHasPasswordProtectedWallet(false);
       }

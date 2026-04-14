@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { migrateWalletState, normalizeTheme, rememberWalletRecipient, removeWalletProfile, removeWalletRecipient, type WalletProfile } from '../src/state';
+import { createEmptyWalletState, migrateWalletState, normalizeTheme, rememberWalletRecipient, removeWalletProfile, removeWalletRecipient, type WalletProfile } from '../src/state';
 
 const vaultRecord = {
   version: 1 as const,
@@ -17,6 +17,16 @@ const vaultRecord = {
 };
 
 describe('wallet state', () => {
+  it('defaults a fresh wallet state to mainnet', () => {
+    const state = createEmptyWalletState();
+
+    expect(state.selectedNetwork).toBe('mainnet-beta');
+    expect(state.chainState.solana.selectedNetwork).toBe('mainnet-beta');
+    expect(state.chainState.sui.selectedNetwork).toBe('mainnet-beta');
+    expect(state.chainState.monad.selectedNetwork).toBe('mainnet-beta');
+    expect(state.chainState.ethereum.selectedNetwork).toBe('mainnet-beta');
+  });
+
   it('migrates wallet profiles without recipients', () => {
     const migrated = migrateWalletState({
       setup: 'ready',

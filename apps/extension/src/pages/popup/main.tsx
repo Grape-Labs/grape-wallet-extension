@@ -2834,8 +2834,8 @@ function PopupPage() {
       chainState: {
         solana: { selectedWalletId: undefined, selectedNetwork: 'mainnet-beta', customRpcUrl: null },
         sui: { selectedWalletId: undefined, selectedNetwork: 'mainnet-beta', customRpcUrl: null },
-        monad: { selectedWalletId: undefined, selectedNetwork: 'devnet', customRpcUrl: null },
-        ethereum: { selectedWalletId: undefined, selectedNetwork: 'devnet', customRpcUrl: null }
+        monad: { selectedWalletId: undefined, selectedNetwork: 'mainnet-beta', customRpcUrl: null },
+        ethereum: { selectedWalletId: undefined, selectedNetwork: 'mainnet-beta', customRpcUrl: null }
       }
     } as WalletStateResponse['wallet']);
   const session = state?.session ?? ({ locked: true } as WalletStateResponse['session']);
