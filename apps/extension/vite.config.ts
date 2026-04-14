@@ -33,7 +33,7 @@ function createManifestPlugin(mainnetRpcUrl: string): Plugin {
       const manifest = {
         manifest_version: 3,
         name: 'Grape',
-        version: '0.4.0',
+        version: '0.4.1',
         description: 'Modern multi-chain wallet for assets, collectibles, swaps, and secure dApp connections.',
         icons: {
           '16': 'icons/grape_logo_white-16.png',

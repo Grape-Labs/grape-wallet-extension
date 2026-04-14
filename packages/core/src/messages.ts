@@ -328,6 +328,10 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     walletId: z.string().min(1)
   }),
   z.object({
+    type: z.literal('wallet_remove_recent_recipient'),
+    address: z.string().trim().min(1)
+  }),
+  z.object({
     type: z.literal('wallet_set_idle_timeout'),
     idleTimeoutMs: z.number().int().positive()
   }),

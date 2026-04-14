@@ -144,9 +144,24 @@ function OptionsPage() {
     setCustomRpcError(null);
   }, [state?.wallet.customRpcUrls, state?.wallet.selectedNetwork]);
 
+  function navigateInCurrentTab(path: string) {
+    window.location.href = chrome.runtime.getURL(path);
+  }
+
+  const settingsActions = (
+    <div className="inline wrap-actions">
+      <Button tone="secondary" className="mini-button" onClick={() => navigateInCurrentTab('wallet.html?view=settings')}>
+        Compact settings
+      </Button>
+      <Button tone="secondary" className="mini-button" onClick={() => navigateInCurrentTab('wallet.html')}>
+        Wallet
+      </Button>
+    </div>
+  );
+
   if (loading) {
     return (
-      <PageShell title="Settings" subtitle="Manage security and connected sites.">
+      <PageShell title="Settings" subtitle="Manage security and connected sites." actions={settingsActions}>
         <Card title="Loading">
           <p className="muted">Loading wallet settings...</p>
         </Card>
@@ -156,7 +171,7 @@ function OptionsPage() {
 
   if (loadError) {
     return (
-      <PageShell title="Settings" subtitle="Manage security and connected sites.">
+      <PageShell title="Settings" subtitle="Manage security and connected sites." actions={settingsActions}>
         <Card title="Unable to load settings">
           <div className="stack">
             <p className="danger-box">{loadError}</p>
@@ -169,7 +184,7 @@ function OptionsPage() {
 
   if (!state) {
     return (
-      <PageShell title="Settings" subtitle="Manage security and connected sites.">
+      <PageShell title="Settings" subtitle="Manage security and connected sites." actions={settingsActions}>
         <Card title="No wallet state">
           <p className="muted">Wallet state is not available yet.</p>
         </Card>
@@ -387,7 +402,7 @@ function OptionsPage() {
   }
 
   return (
-    <PageShell title="Settings" subtitle="Manage security and connected sites.">
+    <PageShell title="Settings" subtitle="Manage security and connected sites." actions={settingsActions}>
       <Card title="Security">
         <div className="space-between">
           <StatusPill tone={state.session.locked ? 'warning' : 'success'}>

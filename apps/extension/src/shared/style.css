@@ -4017,19 +4017,62 @@ body[data-surface='popup'] .token-list {
   flex-wrap: wrap;
 }
 
-.recipient-chip {
+.recipient-chip-shell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   border: 1px solid var(--theme-divider);
   background: var(--theme-surface-soft);
+  border-radius: 999px;
+  padding: 4px;
+  transition: border-color 160ms ease, background-color 160ms ease;
+}
+
+.recipient-chip-shell:focus-within,
+.recipient-chip-shell:hover {
+  background: var(--theme-accent-soft);
+  border-color: color-mix(in srgb, var(--theme-accent) 28%, transparent);
+}
+
+.recipient-chip-shell.active {
+  background: var(--theme-accent-soft);
+  border-color: color-mix(in srgb, var(--theme-accent) 28%, transparent);
+}
+
+.recipient-chip {
+  border: 0;
+  background: transparent;
   color: inherit;
   border-radius: 999px;
-  padding: 8px 12px;
+  padding: 4px 8px;
   cursor: pointer;
 }
 
 .recipient-chip.active,
 .recipient-chip:hover {
-  background: var(--theme-accent-soft);
-  border-color: color-mix(in srgb, var(--theme-accent) 28%, transparent);
+  background: transparent;
+}
+
+.recipient-chip-remove {
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
+  color: var(--theme-subtle);
+  background: transparent;
+  transition: color 160ms ease, background-color 160ms ease;
+}
+
+.recipient-chip-remove:hover,
+.recipient-chip-remove:focus-visible {
+  color: var(--theme-error);
+  background: color-mix(in srgb, var(--theme-error) 14%, transparent);
+  outline: none;
 }
 
 .send-flow-card {

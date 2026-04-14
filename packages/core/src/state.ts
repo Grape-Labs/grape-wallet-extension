@@ -268,6 +268,15 @@ export function rememberWalletRecipient(wallet: WalletProfile, address: string, 
   };
 }
 
+export function removeWalletRecipient(wallet: WalletProfile, address: string): WalletProfile {
+  const normalizedAddress = address.trim();
+
+  return {
+    ...wallet,
+    recentRecipients: wallet.recentRecipients.filter((recipient) => recipient.address !== normalizedAddress)
+  };
+}
+
 export function removeWalletProfile(state: WalletState, walletId: string): WalletState {
   const removedWallet = state.wallets.find((wallet) => wallet.id === walletId);
   const nextWallets = state.wallets.filter((wallet) => wallet.id !== walletId);

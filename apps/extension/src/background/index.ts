@@ -21,6 +21,7 @@ import {
   listPermissions,
   migrateWalletState,
   removeWalletProfile,
+  removeWalletRecipient,
   rememberWalletRecipient,
   revokeOriginPermissions,
   runtimeMessageSchema,
@@ -480,6 +481,15 @@ class WalletController {
       return;
     }
     this.unlockedSecrets = await unlockedSecretSessionStorage.get();
+  }
+
+  private async getUnlockedWalletIds(sessionLocked: boolean) {
+    if (sessionLocked) {
+      return [] as string[];
+    }
+
+    await this.ensureUnlockedSecretsLoaded();
+    return Object.keys(this.unlockedSecrets);
   }
 
   private async invalidateAssetCache(cacheKey?: string) {
@@ -1427,6 +1437,23 @@ class WalletController {
     return this.getStateResponse();
   }
 
+  async removeRecentRecipient(address: string) {
+    const walletState = await this.getWalletState();
+    const selectedWallet = getSelectedWallet(walletState);
+    if (!selectedWallet) {
+      return this.getStateResponse();
+    }
+
+    await walletStateStorage.set({
+      ...walletState,
+      wallets: walletState.wallets.map((wallet) =>
+        wallet.id === selectedWallet.id ? removeWalletRecipient(wallet, address) : wallet
+      )
+    });
+
+    return this.getStateResponse();
+  }
+
   async getActiveAccount() {
     const wallet = await this.getWalletState();
     const selectedWallet = getSelectedWallet(wallet);
@@ -1445,6 +1472,7 @@ class WalletController {
       accessSessionStorage.get()
     ]);
     const activeWallet = getSelectedWallet(wallet);
+    const unlockedWalletIds = await this.getUnlockedWalletIds(session.locked);
 
     return {
       wallet,
@@ -1465,8 +1493,8 @@ class WalletController {
           : undefined,
       activeAccount: activeAccount ? { publicKey: activeAccount.publicKey } : undefined,
       recentRecipients: activeWallet?.recentRecipients ?? [],
-      canUseUnlockedSigner: !!(activeWallet && activeWallet.signer.kind !== 'watch-only' && this.unlockedSecrets[activeWallet.id]) && !session.locked,
-      unlockedWalletIds: session.locked ? [] : Object.keys(this.unlockedSecrets)
+      canUseUnlockedSigner: !!(activeWallet && activeWallet.signer.kind !== 'watch-only' && unlockedWalletIds.includes(activeWallet.id)),
+      unlockedWalletIds
     };
   }
 
@@ -4417,6 +4445,8 @@ class WalletController {
     publicKey: string,
     extras?: Pick<ApprovalRecord, 'requestedPermissions' | 'transactionSummary'>
   ) {
+    const session = await this.getSessionState();
+    const unlockedWalletIds = await this.getUnlockedWalletIds(session.locked);
     const kind = toApprovalKind(request);
     const state = createPendingApproval(crypto.randomUUID(), kind);
     const approval: ApprovalRecord = {
@@ -4431,7 +4461,7 @@ class WalletController {
       network,
       requestedPermissions: extras?.requestedPermissions,
       transactionSummary: extras?.transactionSummary,
-      requiresPassword: !this.unlockedSecrets[walletId],
+      requiresPassword: !unlockedWalletIds.includes(walletId),
       hostSurfaceId: getPreferredApprovalSurface()?.surfaceId
     };
 
@@ -7568,6 +7598,9 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
           break;
         case 'wallet_remove':
           sendResponse(await controller.removeWallet(message.walletId));
+          break;
+        case 'wallet_remove_recent_recipient':
+          sendResponse(await controller.removeRecentRecipient(message.address));
           break;
         case 'wallet_set_idle_timeout':
           sendResponse(await controller.setIdleTimeout(message.idleTimeoutMs));

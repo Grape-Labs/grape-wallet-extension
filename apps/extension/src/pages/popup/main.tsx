@@ -3199,6 +3199,22 @@ function PopupPage() {
     await refresh();
   }
 
+  async function handleRecentRecipientRemove(address: string) {
+    const nextState = await sendRuntimeMessage<WalletStateResponse>({
+      type: 'wallet_remove_recent_recipient',
+      address
+    });
+
+    if (recipient === address) {
+      setRecipient('');
+    }
+    if (incidentSafeWallet === address) {
+      setIncidentSafeWallet('');
+    }
+
+    setState(nextState);
+  }
+
   async function handleSaveCustomRpc() {
     try {
       setCustomRpcBusy(true);
@@ -5108,15 +5124,25 @@ function PopupPage() {
                 <label className="send-field-label">Recent</label>
                 <div className="recipient-list">
                   {recentRecipients.map((entry) => (
-                    <button
-                      key={entry.address}
-                      type="button"
-                      className={`recipient-chip ${recipient === entry.address ? 'active' : ''}`.trim()}
-                      onClick={() => setRecipient(entry.address)}
-                      title={entry.address}
-                    >
-                      <span className="mono">{formatAddress(entry.address)}</span>
-                    </button>
+                    <div key={entry.address} className={`recipient-chip-shell ${recipient === entry.address ? 'active' : ''}`.trim()}>
+                      <button
+                        type="button"
+                        className={`recipient-chip ${recipient === entry.address ? 'active' : ''}`.trim()}
+                        onClick={() => setRecipient(entry.address)}
+                        title={entry.address}
+                      >
+                        <span className="mono">{formatAddress(entry.address)}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="recipient-chip-remove"
+                        aria-label={`Remove recent recipient ${entry.address}`}
+                        title="Remove recent recipient"
+                        onClick={() => void handleRecentRecipientRemove(entry.address)}
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
                   ))}
                 </div>
               </div>
@@ -6288,15 +6314,25 @@ function PopupPage() {
             {recentRecipients.length > 0 ? (
               <div className="recipient-list">
                 {recentRecipients.map((entry) => (
-                  <button
-                    key={entry.address}
-                    type="button"
-                    className={`recipient-chip ${incidentSafeWallet === entry.address ? 'active' : ''}`.trim()}
-                    onClick={() => setIncidentSafeWallet(entry.address)}
-                    title={entry.address}
-                  >
-                    <span className="mono">{formatAddress(entry.address)}</span>
-                  </button>
+                  <div key={entry.address} className={`recipient-chip-shell ${incidentSafeWallet === entry.address ? 'active' : ''}`.trim()}>
+                    <button
+                      type="button"
+                      className={`recipient-chip ${incidentSafeWallet === entry.address ? 'active' : ''}`.trim()}
+                      onClick={() => setIncidentSafeWallet(entry.address)}
+                      title={entry.address}
+                    >
+                      <span className="mono">{formatAddress(entry.address)}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="recipient-chip-remove"
+                      aria-label={`Remove recent recipient ${entry.address}`}
+                      title="Remove recent recipient"
+                      onClick={() => void handleRecentRecipientRemove(entry.address)}
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
                 ))}
               </div>
             ) : null}

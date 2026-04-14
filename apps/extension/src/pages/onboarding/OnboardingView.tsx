@@ -160,7 +160,6 @@ export function OnboardingView(props: OnboardingViewProps) {
   const [privateKeyChain, setPrivateKeyChain] = useState<ImportChain>('solana');
   const [watchOnlyChain, setWatchOnlyChain] = useState<ImportChain>('solana');
   const [confirmBackup, setConfirmBackup] = useState(false);
-  const [showAdvancedCustody, setShowAdvancedCustody] = useState(false);
   const [password, setPassword] = useState('');
   const [passwordConfirm, setPasswordConfirm] = useState('');
   const [restorePayload, setRestorePayload] = useState('');
@@ -183,7 +182,6 @@ export function OnboardingView(props: OnboardingViewProps) {
   useEffect(() => {
     if (requestedMode === 'create' || requestedMode === 'import') {
       setSetupTrack('advanced');
-      setShowAdvancedCustody(true);
       setMode(requestedMode);
     }
   }, [requestedMode]);
@@ -520,14 +518,10 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
   function renderStepContent() {
     if (step === 1) {
       return (
-        <Card title="Choose setup path">
+        <Card title="How do you want to add this wallet?">
           <div className="stack">
-            <p className="muted">Start with the simplest path first. Advanced custody is still available, but it should be intentional.</p>
+            <p className="muted">Pick the path that matches what you already have.</p>
             <div className="stack">
-              <div className="space-between" style={{ alignItems: 'center' }}>
-                <strong>Easy setup</strong>
-                <span className="section-label">Recommended</span>
-              </div>
               <button
                 type="button"
                 className={`choice-card ${isEasyRestorePath ? 'active' : ''}`.trim()}
@@ -541,15 +535,28 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
                   setError(null);
                 }}
               >
-                <strong>Restore from Grape</strong>
-                <span className="muted">Move your wallet from another Grape device with a short-lived QR handoff and pairing code.</span>
+                <strong>Move from another Grape device</strong>
+                <span className="muted">Use the QR handoff and pairing code from an existing Grape wallet.</span>
               </button>
               <button
                 type="button"
-                className={`choice-card ${isEasyTrack && easySetupMethod === 'import' ? 'active' : ''}`.trim()}
+                className={`choice-card ${setupTrack === 'advanced' && mode === 'create' ? 'active' : ''}`.trim()}
                 onClick={() => {
-                  setSetupTrack('easy');
-                  setEasySetupMethod('import');
+                  setSetupTrack('advanced');
+                  setMode('create');
+                  setConfirmBackup(false);
+                  setConfirmPasskeyOnlyAccess(false);
+                  setError(null);
+                }}
+              >
+                <strong>Create new wallet</strong>
+                <span className="muted">Generate a fresh recovery phrase and create a new wallet in Grape.</span>
+              </button>
+              <button
+                type="button"
+                className={`choice-card ${setupTrack === 'advanced' && mode === 'import' ? 'active' : ''}`.trim()}
+                onClick={() => {
+                  setSetupTrack('advanced');
                   setMode('import');
                   setImportMethod('mnemonic');
                   setConfirmBackup(false);
@@ -557,75 +564,11 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
                   setError(null);
                 }}
               >
-                <strong>Import seed / private key</strong>
-                <span className="muted">Use an existing recovery phrase or private key when you need the fastest live path right now.</span>
-              </button>
-              <button
-                type="button"
-                className={`choice-card ${isEasyApprovalPath ? 'active' : ''}`.trim()}
-                onClick={() => {
-                  setSetupTrack('easy');
-                  setEasySetupMethod('approval');
-                  setMode('create');
-                  setImportMethod('mnemonic');
-                  setError(null);
-                }}
-              >
-                <div className="space-between" style={{ alignItems: 'flex-start', gap: '12px' }}>
-                  <strong>Create from existing wallet approval</strong>
-                  <span className="section-label">{existingWalletCount > 0 ? 'Coming next' : 'Needs wallet'}</span>
-                </div>
-                <span className="muted">
-                  {existingWalletCount > 0
-                    ? 'Approve setup from an existing wallet instead of forcing raw secret management on day one.'
-                    : 'This path becomes available after you already have at least one wallet in Grape.'}
-                </span>
+                <strong>Import existing wallet</strong>
+                <span className="muted">Use a recovery phrase, private key, Ledger, or watch-only address.</span>
               </button>
             </div>
-            <div className="stack">
-              <div className="space-between" style={{ alignItems: 'center' }}>
-                <strong>Advanced custody</strong>
-                <Button
-                  tone="secondary"
-                  onClick={() => {
-                    setShowAdvancedCustody((currentValue) => !currentValue);
-                    setError(null);
-                  }}
-                >
-                  {showAdvancedCustody ? 'Hide advanced' : 'Show advanced'}
-                </Button>
-              </div>
-              <p className="muted">Reveal the raw custody paths only when you want full manual control.</p>
-              {showAdvancedCustody ? (
-                <div className="stack">
-                  <button
-                    type="button"
-                    className={`choice-card ${setupTrack === 'advanced' && mode === 'create' ? 'active' : ''}`.trim()}
-                    onClick={() => {
-                      setSetupTrack('advanced');
-                      setMode('create');
-                      setError(null);
-                    }}
-                  >
-                    <strong>Create new wallet</strong>
-                    <span className="muted">Generate a fresh 12-word or 24-word recovery phrase for supported chains.</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`choice-card ${setupTrack === 'advanced' && mode === 'import' ? 'active' : ''}`.trim()}
-                    onClick={() => {
-                      setSetupTrack('advanced');
-                      setMode('import');
-                      setImportMethod('mnemonic');
-                      setError(null);
-                    }}
-                  >
-                    <strong>Import existing wallet</strong>
-                    <span className="muted">Restore from a recovery phrase, private key, watch-only address, or Ledger.</span>
-                  </button>
-                </div>
-              ) : null}
-            </div>
+            <p className="muted">Wallet approval setup is planned, but it is not available in this build yet.</p>
           </div>
         </Card>
       );
@@ -1193,7 +1136,7 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
           <span className="section-label">Step {step} of 3</span>
           <strong>
             {step === 1
-              ? 'Choose your setup path'
+              ? 'Choose how to add this wallet'
               : step === 2
                 ? isEasyPasskeyPath
                   ? 'Review passkey recovery options'
@@ -1237,23 +1180,15 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
     <PageShell
       title={
         isAppendFlow
-          ? setupTrack === 'advanced' && mode === 'create'
-            ? 'Add wallet'
-            : 'Add wallet to Grape'
-          : setupTrack === 'easy'
-            ? 'Easy setup'
-            : 'Set up wallet'
+          ? 'Add wallet'
+          : 'Set up wallet'
       }
       subtitle={
         isAppendFlow
-          ? setupTrack === 'advanced' && mode === 'create'
-            ? 'Create another wallet set and add it to Grape.'
-            : 'Add another wallet with the setup path that fits your recovery model.'
-          : setupTrack === 'easy'
-            ? 'Start with restore or import first, then reveal advanced custody only when you actually need it.'
-            : mode === 'create'
-              ? 'Create a new wallet for Grape-supported chains in a few clear steps.'
-              : 'Import your wallet with a recovery phrase, private key, watch-only address, or Ledger.'
+          ? 'Choose the simplest way to add another wallet.'
+          : mode === 'create'
+            ? 'Create or import a wallet in a few clear steps.'
+            : 'Choose the simplest way to get started.'
       }
     >
       {content}

@@ -57,6 +57,15 @@ describe('message routing contracts', () => {
     expect(message.type).toBe('approval_respond');
   });
 
+  it('validates runtime messages for removing saved recent recipients', () => {
+    const message = runtimeMessageSchema.parse({
+      type: 'wallet_remove_recent_recipient',
+      address: '7tCjotf5gGQ3U7P9C5iUKZx7PFrf7CAnr7Lq5M2vXy4V'
+    });
+
+    expect(message.type).toBe('wallet_remove_recent_recipient');
+  });
+
   it('validates swap runtime messages used by the wallet popup', () => {
     const quoteMessage = runtimeMessageSchema.parse({
       type: 'wallet_get_swap_quote',

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { migrateWalletState, normalizeTheme, rememberWalletRecipient, removeWalletProfile, type WalletProfile } from '../src/state';
+import { migrateWalletState, normalizeTheme, rememberWalletRecipient, removeWalletProfile, removeWalletRecipient, type WalletProfile } from '../src/state';
 
 const vaultRecord = {
   version: 1 as const,
@@ -72,6 +72,34 @@ describe('wallet state', () => {
 
     expect(deduped.recentRecipients.map((recipient) => recipient.address)).toEqual(['old-address', 'new-address']);
     expect(deduped.recentRecipients[0]?.lastUsedAt).toBe(3);
+  });
+
+  it('removes a recent recipient without affecting the others', () => {
+    const wallet: WalletProfile = {
+      id: 'wallet-1',
+      name: 'Wallet 1',
+      chain: 'solana',
+      vault: vaultRecord,
+      signer: { kind: 'software' },
+      source: 'created',
+      accounts: [
+        {
+          id: 'account-0',
+          index: 0,
+          publicKey: '11111111111111111111111111111111',
+          derivationPath: `m/44'/501'/0'/0'`
+        }
+      ],
+      selectedAccountId: 'account-0',
+      recentRecipients: [
+        { address: 'remove-me', lastUsedAt: 3 },
+        { address: 'keep-me', lastUsedAt: 2 }
+      ]
+    };
+
+    const nextWallet = removeWalletRecipient(wallet, 'remove-me');
+
+    expect(nextWallet.recentRecipients).toEqual([{ address: 'keep-me', lastUsedAt: 2 }]);
   });
 
   it('maps removed themes to the closest supported theme', () => {
