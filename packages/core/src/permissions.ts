@@ -1,4 +1,10 @@
-export type PermissionKind = 'solana:accounts' | 'solana:sign';
+export type PermissionKind =
+  | 'solana:accounts'
+  | 'solana:sign'
+  | 'sui:accounts'
+  | 'sui:sign'
+  | 'monad:accounts'
+  | 'monad:sign';
 
 export type OriginPermission = {
   origin: string;
@@ -59,4 +65,3 @@ export function hasPermission(state: PermissionsState, origin: string, permissio
 export function listPermissions(state: PermissionsState): OriginPermission[] {
   return Object.values(state.origins).sort((left, right) => right.updatedAt - left.updatedAt);
 }
-

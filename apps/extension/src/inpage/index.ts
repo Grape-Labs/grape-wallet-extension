@@ -1,5 +1,7 @@
-import { providerResponseSchema } from '@grape/core';
+import { providerResponseSchema, type ProviderRequest } from '@grape/core';
+import { initializeMonadProvider, GrapeMonadProvider } from '@grape/monad';
 import { GrapeInpageProvider, initializeWalletStandard } from '@grape/solana';
+import { initializeSuiWalletStandard, type SuiWalletStandardWallet } from '@grape/sui';
 
 const FROM_INPAGE = 'grape:inpage';
 const FROM_CONTENT = 'grape:content';
@@ -27,6 +29,9 @@ declare global {
     grape?: GrapeInpageProvider;
     grapeSolana?: GrapeInpageProvider;
     solana?: GrapeInpageProvider;
+    grapeMonad?: GrapeMonadProvider;
+    ethereum?: GrapeMonadProvider;
+    grapeSui?: SuiWalletStandardWallet;
     __grapeDebugEvents?: GrapeDebugEvent[];
     __grapeLastProviderDebug?: GrapeDebugEvent;
     [GRAPE_INPAGE_INIT_FLAG]?: boolean;
@@ -54,7 +59,7 @@ if (!window[GRAPE_INPAGE_INIT_FLAG]) {
     const pendingRequests = new Map<string, PendingRequest>();
 
     const transport = {
-      request<T>(request: Parameters<GrapeInpageProvider['transport']['request']>[0]): Promise<T> {
+      request<T>(request: ProviderRequest): Promise<T> {
         return new Promise((resolve, reject) => {
           pendingRequests.set(request.id, {
             resolve: resolve as (value: unknown) => void,
@@ -82,6 +87,11 @@ if (!window[GRAPE_INPAGE_INIT_FLAG]) {
     };
 
     const provider = new GrapeInpageProvider(transport, {
+      origin: window.location.origin,
+      href: window.location.href,
+      title: document.title
+    });
+    const monadProvider = new GrapeMonadProvider(transport, {
       origin: window.location.origin,
       href: window.location.href,
       title: document.title
@@ -138,6 +148,12 @@ if (!window[GRAPE_INPAGE_INIT_FLAG]) {
     });
 
     initializeWalletStandard(provider);
+    initializeMonadProvider(monadProvider);
+    initializeSuiWalletStandard(transport, {
+      origin: window.location.origin,
+      href: window.location.href,
+      title: document.title
+    });
   } catch (error) {
     console.error('Grape Wallet inpage initialization failed', error);
   }

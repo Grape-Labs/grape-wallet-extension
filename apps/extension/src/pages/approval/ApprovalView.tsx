@@ -30,6 +30,23 @@ function summarizeMessage(base64Message: string): string {
   }
 }
 
+function summarizeHexMessage(message: string): string {
+  const normalized = message.trim();
+  if (!normalized.startsWith('0x') || normalized.length % 2 !== 0) {
+    return normalized;
+  }
+
+  try {
+    const bytes = new Uint8Array((normalized.length - 2) / 2);
+    for (let index = 2; index < normalized.length; index += 2) {
+      bytes[(index - 2) / 2] = Number.parseInt(normalized.slice(index, index + 2), 16);
+    }
+    return new TextDecoder().decode(bytes);
+  } catch {
+    return normalized;
+  }
+}
+
 function formatLamports(lamports: number | null | undefined): string {
   if (lamports == null) {
     return 'Unknown';
@@ -226,6 +243,7 @@ export function ApprovalView(props: {
       </Card>
 
       <Card title="Request details">
+        <KeyValueRow label="Chain" value={approval.chain} />
         <KeyValueRow label="Network" value={approval.network} />
         <KeyValueRow
           label="Account"
@@ -243,13 +261,46 @@ export function ApprovalView(props: {
             ))}
           </div>
         ) : null}
-        {approval.request.method === 'signMessage' ? (
+        {approval.request.method === 'signMessage' || approval.request.method === 'sui_signPersonalMessage' ? (
           <p className="warning-box">{summarizeMessage(approval.request.params.message)}</p>
+        ) : null}
+        {approval.request.method === 'monad_signMessage' ? (
+          <p className="warning-box">{summarizeHexMessage(approval.request.params.message)}</p>
         ) : null}
         {approval.request.method === 'signAllTransactions' ? (
           <p className="warning-box">
             This request asks to sign {approval.request.params.transactions.length} transactions.
           </p>
+        ) : null}
+        {approval.request.method === 'monad_sendTransaction' ? (
+          <div className="stack">
+            {approval.request.params.transaction.from ? (
+              <KeyValueRow
+                label="From"
+                value={
+                  <span className="mono approval-address" title={approval.request.params.transaction.from}>
+                    {formatAddress(approval.request.params.transaction.from)}
+                  </span>
+                }
+              />
+            ) : null}
+            {approval.request.params.transaction.to ? (
+              <KeyValueRow
+                label="To"
+                value={
+                  <span className="mono approval-address" title={approval.request.params.transaction.to}>
+                    {formatAddress(approval.request.params.transaction.to)}
+                  </span>
+                }
+              />
+            ) : null}
+            {approval.request.params.transaction.value ? (
+              <KeyValueRow label="Value" value={approval.request.params.transaction.value} />
+            ) : null}
+            {approval.request.params.transaction.data ? (
+              <KeyValueRow label="Data" value={<span className="mono">{formatAddress(approval.request.params.transaction.data, 10, 8)}</span>} />
+            ) : null}
+          </div>
         ) : null}
         {approval.transactionSummary ? (
           <div className="stack">
@@ -395,6 +446,15 @@ export function ApprovalView(props: {
         ) : null}
         {approval.request.method === 'signAndSendTransaction' || approval.request.method === 'sendTransaction' ? (
           <p className="warning-box">This will sign and broadcast the transaction to the selected RPC endpoint.</p>
+        ) : null}
+        {approval.request.method === 'sui_signTransaction' ? (
+          <p className="warning-box">This request asks to sign a Sui transaction for the selected wallet.</p>
+        ) : null}
+        {approval.request.method === 'sui_signAndExecuteTransaction' ? (
+          <p className="warning-box">This will sign and execute a Sui transaction on the selected network.</p>
+        ) : null}
+        {approval.request.method === 'monad_sendTransaction' ? (
+          <p className="warning-box">This will sign and broadcast a Monad transaction to the selected RPC endpoint.</p>
         ) : null}
       </Card>
 

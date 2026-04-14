@@ -87,6 +87,33 @@ export const pageOriginSchema = z.object({
   faviconUrl: z.string().url().optional()
 });
 
+const monadTransactionRequestSchema = z.object({
+  from: z.string().min(2).optional(),
+  to: z.string().min(2).optional(),
+  data: z.string().min(2).optional(),
+  value: z.string().min(1).optional(),
+  gas: z.string().min(1).optional(),
+  gasPrice: z.string().min(1).optional(),
+  maxFeePerGas: z.string().min(1).optional(),
+  maxPriorityFeePerGas: z.string().min(1).optional(),
+  nonce: z.string().min(1).optional(),
+  chainId: z.string().min(1).optional()
+});
+
+const monadAddChainSchema = z.object({
+  chainId: z.string().min(1),
+  chainName: z.string().min(1).optional(),
+  rpcUrls: z.array(z.string().url()).optional(),
+  blockExplorerUrls: z.array(z.string().url()).optional(),
+  nativeCurrency: z
+    .object({
+      name: z.string().min(1),
+      symbol: z.string().min(1),
+      decimals: z.number().int().min(0).max(255)
+    })
+    .optional()
+});
+
 export const providerRequestSchema = z.discriminatedUnion('method', [
   z.object({
     id: z.string(),
@@ -140,6 +167,110 @@ export const providerRequestSchema = z.discriminatedUnion('method', [
     origin: pageOriginSchema,
     params: z.object({
       transaction: bytesSchema
+    })
+  }),
+  z.object({
+    id: z.string(),
+    method: z.literal('sui_connect'),
+    origin: pageOriginSchema,
+    params: z
+      .object({
+        silent: z.boolean().optional()
+      })
+      .default({})
+  }),
+  z.object({
+    id: z.string(),
+    method: z.literal('sui_disconnect'),
+    origin: pageOriginSchema,
+    params: z.object({}).default({})
+  }),
+  z.object({
+    id: z.string(),
+    method: z.literal('sui_getAccounts'),
+    origin: pageOriginSchema,
+    params: z.object({}).default({})
+  }),
+  z.object({
+    id: z.string(),
+    method: z.literal('sui_signPersonalMessage'),
+    origin: pageOriginSchema,
+    params: z.object({
+      message: bytesSchema
+    })
+  }),
+  z.object({
+    id: z.string(),
+    method: z.literal('sui_signTransaction'),
+    origin: pageOriginSchema,
+    params: z.object({
+      transaction: bytesSchema
+    })
+  }),
+  z.object({
+    id: z.string(),
+    method: z.literal('sui_signAndExecuteTransaction'),
+    origin: pageOriginSchema,
+    params: z.object({
+      transaction: bytesSchema
+    })
+  }),
+  z.object({
+    id: z.string(),
+    method: z.literal('monad_accounts'),
+    origin: pageOriginSchema,
+    params: z.object({}).default({})
+  }),
+  z.object({
+    id: z.string(),
+    method: z.literal('monad_requestAccounts'),
+    origin: pageOriginSchema,
+    params: z.object({}).default({})
+  }),
+  z.object({
+    id: z.string(),
+    method: z.literal('monad_chainId'),
+    origin: pageOriginSchema,
+    params: z.object({}).default({})
+  }),
+  z.object({
+    id: z.string(),
+    method: z.literal('monad_switchChain'),
+    origin: pageOriginSchema,
+    params: z.object({
+      chainId: z.string().min(1)
+    })
+  }),
+  z.object({
+    id: z.string(),
+    method: z.literal('monad_addChain'),
+    origin: pageOriginSchema,
+    params: monadAddChainSchema
+  }),
+  z.object({
+    id: z.string(),
+    method: z.literal('monad_sendTransaction'),
+    origin: pageOriginSchema,
+    params: z.object({
+      transaction: monadTransactionRequestSchema
+    })
+  }),
+  z.object({
+    id: z.string(),
+    method: z.literal('monad_signMessage'),
+    origin: pageOriginSchema,
+    params: z.object({
+      message: z.string().min(1),
+      address: z.string().min(2).optional()
+    })
+  }),
+  z.object({
+    id: z.string(),
+    method: z.literal('monad_signTypedData'),
+    origin: pageOriginSchema,
+    params: z.object({
+      address: z.string().min(2),
+      typedData: z.string().min(2)
     })
   })
 ]);

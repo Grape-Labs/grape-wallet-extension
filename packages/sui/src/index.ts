@@ -310,3 +310,5 @@ function decodeHex(value: string): Uint8Array {
   }
   return bytes;
 }
+
+export * from './wallet-standard';

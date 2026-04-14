@@ -18,6 +18,7 @@ export type ApprovalRecord = {
   id: string;
   kind: ApprovalKind;
   state: ApprovalState;
+  chain: WalletState['selectedChain'];
   request: ProviderRequest;
   origin: PageOrigin;
   createdAt: number;

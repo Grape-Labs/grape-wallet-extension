@@ -46,6 +46,41 @@ describe('message routing contracts', () => {
     expect(request.method).toBe('sendTransaction');
   });
 
+  it('validates Sui and Monad provider requests', () => {
+    const suiRequest = providerRequestSchema.parse({
+      id: 'request-sui-1',
+      method: 'sui_signTransaction',
+      origin: {
+        origin: 'https://example.com',
+        href: 'https://example.com/app',
+        title: 'Example App'
+      },
+      params: {
+        transaction: '{"version":2}'
+      }
+    });
+
+    const monadRequest = providerRequestSchema.parse({
+      id: 'request-monad-1',
+      method: 'monad_sendTransaction',
+      origin: {
+        origin: 'https://example.com',
+        href: 'https://example.com/app',
+        title: 'Example App'
+      },
+      params: {
+        transaction: {
+          from: '0x1111111111111111111111111111111111111111',
+          to: '0x2222222222222222222222222222222222222222',
+          value: '0x1'
+        }
+      }
+    });
+
+    expect(suiRequest.method).toBe('sui_signTransaction');
+    expect(monadRequest.method).toBe('monad_sendTransaction');
+  });
+
   it('validates runtime messages used by extension pages', () => {
     const message = runtimeMessageSchema.parse({
       type: 'approval_respond',

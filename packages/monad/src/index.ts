@@ -275,6 +275,11 @@ export async function sendMonadTransactionRequest(
     to: string;
     data?: string;
     value?: string;
+    gas?: string;
+    gasPrice?: string;
+    maxFeePerGas?: string;
+    maxPriorityFeePerGas?: string;
+    nonce?: string;
     customRpcUrl?: string | null;
   }
 ): Promise<Hex> {
@@ -290,13 +295,41 @@ export async function sendMonadTransactionRequest(
     transport: http(getMonadRpcUrl(network, input.customRpcUrl))
   });
 
-  return walletClient.sendTransaction({
+  const transactionRequest = {
     account,
     chain,
     to: input.to.trim() as Address,
     data: input.data?.trim() ? (input.data.trim() as Hex) : undefined,
-    value: normalizeBigIntValue(input.value)
-  });
+    value: normalizeBigIntValue(input.value),
+    gas: normalizeBigIntValue(input.gas),
+    nonce: normalizeNumberValue(input.nonce)
+  } as {
+    account: typeof account;
+    chain: typeof chain;
+    to: Address;
+    data?: Hex;
+    value?: bigint;
+    gas?: bigint;
+    gasPrice?: bigint;
+    maxFeePerGas?: bigint;
+    maxPriorityFeePerGas?: bigint;
+    nonce?: number;
+  };
+
+  const gasPrice = normalizeBigIntValue(input.gasPrice);
+  const maxFeePerGas = normalizeBigIntValue(input.maxFeePerGas);
+  const maxPriorityFeePerGas = normalizeBigIntValue(input.maxPriorityFeePerGas);
+  if (gasPrice !== undefined) {
+    transactionRequest.gasPrice = gasPrice;
+  }
+  if (maxFeePerGas !== undefined) {
+    transactionRequest.maxFeePerGas = maxFeePerGas;
+  }
+  if (maxPriorityFeePerGas !== undefined) {
+    transactionRequest.maxPriorityFeePerGas = maxPriorityFeePerGas;
+  }
+
+  return walletClient.sendTransaction(transactionRequest as never);
 }
 
 function normalizeHexPrivateKey(privateKey: string): Hex {
@@ -316,3 +349,14 @@ function normalizeBigIntValue(value?: string | null) {
 
   return BigInt(trimmed);
 }
+
+function normalizeNumberValue(value?: string | null) {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  return Number(BigInt(trimmed));
+}
+
+export * from './provider';

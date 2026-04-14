@@ -49,6 +49,7 @@ export type WalletAccount = {
   id: string;
   index: number;
   publicKey: string;
+  rawPublicKey?: string;
   derivationPath: string;
 };
 

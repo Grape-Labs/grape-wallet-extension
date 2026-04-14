@@ -554,6 +554,141 @@ class WalletController {
     return createEthereumPublicClient(this.resolveEthereumNetwork(network), walletState.chainState.ethereum.customRpcUrl);
   }
 
+  private getSelectedNetworkForChain(
+    walletState: Awaited<ReturnType<WalletController['getWalletState']>>,
+    chain: GrapeChain
+  ): 'mainnet-beta' | 'devnet' {
+    switch (chain) {
+      case 'solana':
+        return walletState.chainState.solana.selectedNetwork;
+      case 'sui':
+        return walletState.chainState.sui.selectedNetwork;
+      case 'monad':
+        return walletState.chainState.monad.selectedNetwork;
+      case 'ethereum':
+        return walletState.chainState.ethereum.selectedNetwork;
+      default:
+        return walletState.selectedNetwork;
+    }
+  }
+
+  private async getUnlockedSecretIfAvailable(walletId: string) {
+    const session = await this.getSessionState();
+    if (session.locked) {
+      return null;
+    }
+
+    await this.ensureUnlockedSecretsLoaded();
+    return this.unlockedSecrets[walletId]?.secret ?? null;
+  }
+
+  private async persistWalletAccountRawPublicKey(walletId: string, accountId: string, rawPublicKey: string) {
+    const walletState = await this.getWalletState();
+    const nextWallets = walletState.wallets.map((wallet) => {
+      if (wallet.id !== walletId) {
+        return wallet;
+      }
+
+      return {
+        ...wallet,
+        accounts: wallet.accounts.map((account) =>
+          account.id === accountId && account.rawPublicKey !== rawPublicKey
+            ? {
+                ...account,
+                rawPublicKey
+              }
+            : account
+        )
+      };
+    });
+
+    await walletStateStorage.set({
+      ...walletState,
+      wallets: nextWallets
+    });
+  }
+
+  private async getSuiProviderAccount(
+    wallet: Awaited<ReturnType<WalletController['getWalletState']>>['wallets'][number],
+    account: Awaited<ReturnType<WalletController['getWalletState']>>['wallets'][number]['accounts'][number]
+  ) {
+    let rawPublicKey = account.rawPublicKey;
+
+    if (!rawPublicKey && wallet.signer.kind === 'software') {
+      const unlockedSecret = await this.getUnlockedSecretIfAvailable(wallet.id);
+      if (unlockedSecret) {
+        rawPublicKey = arrayBufferToBase64(resolveSuiVaultSecret(unlockedSecret).getPublicKey().toRawBytes());
+        void this.persistWalletAccountRawPublicKey(wallet.id, account.id, rawPublicKey);
+      }
+    }
+
+    return {
+      address: account.publicKey,
+      publicKey: rawPublicKey ?? arrayBufferToBase64(new TextEncoder().encode(account.publicKey))
+    };
+  }
+
+  private async buildProviderConnectResult(
+    request: ProviderRequest,
+    wallet: Awaited<ReturnType<WalletController['getWalletState']>>['wallets'][number],
+    account: Awaited<ReturnType<WalletController['getWalletState']>>['wallets'][number]['accounts'][number]
+  ) {
+    switch (request.method) {
+      case 'connect':
+        return { publicKey: account.publicKey };
+      case 'sui_connect':
+        return {
+          accounts: [await this.getSuiProviderAccount(wallet, account)]
+        };
+      case 'monad_requestAccounts':
+        return [account.publicKey];
+      default:
+        throw new RpcError('UNKNOWN_REQUEST', 'Unsupported connection request.');
+    }
+  }
+
+  private resolveMonadChainId(network: 'mainnet-beta' | 'devnet') {
+    return network === 'devnet' ? '0x279f' : '0x8f';
+  }
+
+  private resolveMonadNetworkFromChainId(chainId: string): MonadNetwork | null {
+    const normalized = chainId.trim().toLowerCase();
+    if (normalized === '0x8f' || normalized === '143') {
+      return 'mainnet';
+    }
+    if (normalized === '0x279f' || normalized === '10143') {
+      return 'testnet';
+    }
+    return null;
+  }
+
+  private async setChainNetwork(chain: GrapeChain, network: 'mainnet-beta' | 'devnet') {
+    const walletState = await this.getWalletState();
+    await walletStateStorage.set({
+      ...walletState,
+      chainState: {
+        ...walletState.chainState,
+        solana: {
+          ...walletState.chainState.solana,
+          selectedNetwork: chain === 'solana' ? network : walletState.chainState.solana.selectedNetwork
+        },
+        sui: {
+          ...walletState.chainState.sui,
+          selectedNetwork: chain === 'sui' ? network : walletState.chainState.sui.selectedNetwork
+        },
+        monad: {
+          ...walletState.chainState.monad,
+          selectedNetwork: chain === 'monad' ? network : walletState.chainState.monad.selectedNetwork
+        },
+        ethereum: {
+          ...walletState.chainState.ethereum,
+          selectedNetwork: chain === 'ethereum' ? network : walletState.chainState.ethereum.selectedNetwork
+        }
+      },
+      selectedNetwork: walletState.selectedChain === chain ? network : walletState.selectedNetwork
+    });
+  }
+
   private getNextWalletNumber(walletState: Awaited<ReturnType<WalletController['getWalletState']>>) {
     return (
       walletState.wallets.reduce((max, wallet) => {
@@ -570,6 +705,7 @@ class WalletController {
     secret: VaultSecret;
     password?: string;
     publicKey: string;
+    rawPublicKey?: string;
     signer: import('@grape/core').WalletSigner;
     source: import('@grape/core').WalletProfile['source'];
     derivationPath: string;
@@ -580,6 +716,7 @@ class WalletController {
       id: 'account-0',
       index: 0,
       publicKey: input.publicKey,
+      rawPublicKey: input.rawPublicKey,
       derivationPath: input.derivationPath
     };
 
@@ -1146,12 +1283,22 @@ class WalletController {
                 : `m/44'/60'/0'/0/0`
             : 'imported-private-key';
 
+    const rawPublicKey =
+      chain === 'sui' && signer.kind !== 'watch-only'
+        ? secret.kind === 'mnemonic'
+          ? arrayBufferToBase64(deriveSuiAccount0(secret.mnemonic).keypair.getPublicKey().toRawBytes())
+          : secret.kind === 'private-key'
+            ? arrayBufferToBase64(importSuiPrivateKey(secret.secretKey).keypair.getPublicKey().toRawBytes())
+            : undefined
+        : undefined;
+
     const profile = await this.buildWalletProfile({
       name: `Wallet ${nextWalletNumber}`,
       chain,
       secret,
       password,
       publicKey,
+      rawPublicKey,
       signer,
       source,
       derivationPath
@@ -1165,10 +1312,10 @@ class WalletController {
         chain === 'solana'
           ? current.chainState.solana.selectedNetwork
           : chain === 'sui'
-            ? current.chainState.selectedNetwork
+            ? current.chainState.sui.selectedNetwork
             : chain === 'monad'
-              ? current.chainState.selectedNetwork
-              : current.chainState.selectedNetwork,
+              ? current.chainState.monad.selectedNetwork
+              : current.chainState.ethereum.selectedNetwork,
       selectedWalletIds: {
         ...current.selectedWalletIds,
         [chain]: profile.id
@@ -1229,6 +1376,7 @@ class WalletController {
         secret: { kind: 'mnemonic', mnemonic },
         password,
         publicKey: suiAccount.address,
+        rawPublicKey: arrayBufferToBase64(suiAccount.keypair.getPublicKey().toRawBytes()),
         signer,
         source,
         derivationPath: suiAccount.derivationPath,
@@ -4173,20 +4321,53 @@ class WalletController {
       method: request.method,
       origin: request.origin.origin
     });
-    const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    const walletState = await this.getWalletState();
+    const requestChain = getProviderRequestChain(request);
+    const selectedWallet = getSelectedWalletForChain(walletState, requestChain);
+    if (walletState.setup !== 'ready' || !selectedWallet || !selectedWallet.selectedAccountId) {
+      throw new RpcError('WALLET_NOT_READY', 'Wallet has not been created or imported yet.');
+    }
     const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
     if (!activeAccount) {
       throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
     }
+    const selectedNetwork = this.getSelectedNetworkForChain(walletState, requestChain);
+    const permissions = await permissionsStorage.get();
+    const accountPermission = getAccountPermissionForChain(requestChain);
 
-    if (request.method === 'disconnect') {
+    if (request.method === 'disconnect' || request.method === 'sui_disconnect') {
       return { disconnected: true };
     }
 
-    if (request.method === 'connect') {
-      const permissions = await permissionsStorage.get();
-      const isTrusted = hasPermission(permissions, request.origin.origin, 'solana:accounts');
-      if (request.params.silent) {
+    if (request.method === 'monad_chainId') {
+      return this.resolveMonadChainId(selectedNetwork);
+    }
+
+    if (request.method === 'monad_switchChain' || request.method === 'monad_addChain') {
+      const nextNetwork = this.resolveMonadNetworkFromChainId(request.params.chainId);
+      if (!nextNetwork) {
+        throw new RpcError('CHAIN_UNSUPPORTED', 'Grape only supports Monad mainnet and testnet.');
+      }
+
+      await this.setChainNetwork('monad', nextNetwork === 'testnet' ? 'devnet' : 'mainnet-beta');
+      return null;
+    }
+
+    const isTrusted = hasPermission(permissions, request.origin.origin, accountPermission);
+
+    if (request.method === 'sui_getAccounts') {
+      return isTrusted ? [await this.getSuiProviderAccount(selectedWallet, activeAccount)] : [];
+    }
+
+    if (request.method === 'monad_accounts') {
+      return isTrusted ? [activeAccount.publicKey] : [];
+    }
+
+    if (isProviderConnectRequest(request)) {
+      const silentConnect =
+        request.method === 'connect' || request.method === 'sui_connect' ? !!request.params.silent : false;
+
+      if (silentConnect) {
         if (!isTrusted) {
           throw new RpcError('NOT_CONNECTED', 'This site has not been approved yet.');
         }
@@ -4197,7 +4378,7 @@ class WalletController {
           origin: request.origin.origin,
           success: true
         });
-        return { publicKey: activeAccount.publicKey };
+        return this.buildProviderConnectResult(request, selectedWallet, activeAccount);
       }
 
       if (isTrusted) {
@@ -4208,14 +4389,11 @@ class WalletController {
           origin: request.origin.origin,
           success: true
         });
-        return { publicKey: activeAccount.publicKey };
+        return this.buildProviderConnectResult(request, selectedWallet, activeAccount);
       }
 
-      const approval = await this.createApproval(request, walletState.selectedNetwork, selectedWallet.id, activeAccount.publicKey, {
-        requestedPermissions:
-          selectedWallet.signer.kind === 'watch-only'
-            ? ['View your public key']
-            : ['View your public key', 'Request signatures with approval']
+      const approval = await this.createApproval(request, requestChain, selectedNetwork, selectedWallet.id, activeAccount.publicKey, {
+        requestedPermissions: getRequestedPermissionLabels(requestChain, selectedWallet.signer.kind)
       });
       debug?.({
         phase: 'approval_created',
@@ -4224,13 +4402,12 @@ class WalletController {
         approvalId: approval.id,
         kind: approval.kind,
         origin: request.origin.origin,
-        network: walletState.selectedNetwork
+        network: selectedNetwork
       });
       return this.awaitApproval(approval.id, debug);
     }
 
-    const permissions = await permissionsStorage.get();
-    if (!hasPermission(permissions, request.origin.origin, 'solana:accounts')) {
+    if (!hasPermission(permissions, request.origin.origin, accountPermission)) {
       throw new RpcError('NOT_CONNECTED', 'Connect this site before signing.');
     }
 
@@ -4238,20 +4415,38 @@ class WalletController {
       throw new RpcError('WATCH_ONLY_WALLET', 'This wallet is watch-only and cannot sign messages or transactions.');
     }
 
+    if (request.method === 'monad_sendTransaction') {
+      const requestedFrom = request.params.transaction.from?.trim().toLowerCase();
+      if (requestedFrom && requestedFrom !== activeAccount.publicKey.toLowerCase()) {
+        throw new RpcError('ACCOUNT_MISMATCH', 'The requested sender does not match the active Monad wallet.');
+      }
+    }
+
+    if (request.method === 'monad_signMessage') {
+      const requestedAddress = request.params.address?.trim().toLowerCase();
+      if (requestedAddress && requestedAddress !== activeAccount.publicKey.toLowerCase()) {
+        throw new RpcError('ACCOUNT_MISMATCH', 'The requested signer does not match the active Monad wallet.');
+      }
+    }
+
+    if (request.method === 'monad_signTypedData' && request.params.address.trim().toLowerCase() !== activeAccount.publicKey.toLowerCase()) {
+      throw new RpcError('ACCOUNT_MISMATCH', 'The requested signer does not match the active Monad wallet.');
+    }
+
     const transactionSummary =
       request.method === 'signTransaction' || request.method === 'signAndSendTransaction' || request.method === 'sendTransaction'
-        ? await inspectTransaction(request.params.transaction, this.createConnection(walletState.selectedNetwork, walletState))
+        ? await inspectTransaction(request.params.transaction, this.createConnection(selectedNetwork, walletState))
         : request.method === 'signAllTransactions'
           ? {
               ...(await inspectTransaction(
                 request.params.transactions[0],
-                this.createConnection(walletState.selectedNetwork, walletState)
+                this.createConnection(selectedNetwork, walletState)
               )),
               warnings: ['Only the first transaction in this batch was decoded and simulated.']
             }
           : undefined;
 
-    const approval = await this.createApproval(request, walletState.selectedNetwork, selectedWallet.id, activeAccount.publicKey, {
+    const approval = await this.createApproval(request, requestChain, selectedNetwork, selectedWallet.id, activeAccount.publicKey, {
       transactionSummary
     });
     debug?.({
@@ -4261,7 +4456,7 @@ class WalletController {
       approvalId: approval.id,
       kind: approval.kind,
       origin: request.origin.origin,
-      network: walletState.selectedNetwork
+      network: selectedNetwork
     });
     return this.awaitApproval(approval.id, debug);
   }
@@ -4352,34 +4547,37 @@ class WalletController {
   }
 
   private async executeApproval(approval: ApprovalRecord, password?: string) {
-    if (approval.kind === 'connect') {
-      const permissions = await permissionsStorage.get();
-      await permissionsStorage.set(
-        grantPermissions(
-          permissions,
-          approval.origin.origin,
-          approval.requestedPermissions?.includes('Request signatures with approval') ? ['solana:accounts', 'solana:sign'] : ['solana:accounts'],
-          {
-          faviconUrl: approval.origin.faviconUrl,
-          title: approval.origin.title
-          }
-        )
-      );
-      return { publicKey: approval.publicKey };
-    }
-
-    const { walletState } = await this.ensureReadyWallet();
+    const walletState = await this.getWalletState();
     const approvalWallet =
       (approval.walletId ? walletState.wallets.find((wallet) => wallet.id === approval.walletId) : undefined) ??
-      getSelectedWallet(walletState);
+      getSelectedWalletForChain(walletState, approval.chain);
     if (!approvalWallet) {
       throw new RpcError('WALLET_NOT_FOUND', 'The wallet for this approval could not be found.');
+    }
+    const approvalAccount = approvalWallet.accounts.find((account) => account.publicKey === approval.publicKey) ?? approvalWallet.accounts[0];
+    if (!approvalAccount) {
+      throw new RpcError('ACCOUNT_MISSING', 'No active account is available for this approval.');
+    }
+
+    if (approval.kind === 'connect') {
+      const permissions = await permissionsStorage.get();
+      const grantedPermissions = [getAccountPermissionForChain(approval.chain)];
+      if (approvalWallet.signer.kind !== 'watch-only') {
+        grantedPermissions.push(getSignPermissionForChain(approval.chain));
+      }
+      await permissionsStorage.set(
+        grantPermissions(permissions, approval.origin.origin, grantedPermissions, {
+          faviconUrl: approval.origin.faviconUrl,
+          title: approval.origin.title
+        })
+      );
+      return this.buildProviderConnectResult(approval.request, approvalWallet, approvalAccount);
     }
 
     this.assertInteractiveWallet(approvalWallet);
     const secret = await this.getUnlockedSecret(approvalWallet.id, approvalWallet.vault, password);
-    switch (approval.kind) {
-      case 'sign-message': {
+    switch (approval.request.method) {
+      case 'signMessage': {
         if (approvalWallet.signer.kind === 'ledger') {
           throw new RpcError('LEDGER_UNSUPPORTED', 'Ledger message signing is not supported in this MVP.');
         }
@@ -4395,7 +4593,38 @@ class WalletController {
           signature: arrayBufferToBase64(signature)
         };
       }
-      case 'sign-transaction': {
+      case 'sui_signPersonalMessage': {
+        if (approvalWallet.signer.kind === 'ledger') {
+          throw new RpcError('LEDGER_UNSUPPORTED', 'Ledger message signing is not supported for Sui dapps.');
+        }
+
+        const signer = resolveSuiVaultSecret(secret);
+        const signed = await signer.signPersonalMessage(atobBytes(approval.request.params.message));
+        return {
+          address: signer.toSuiAddress(),
+          bytes: signed.bytes,
+          signature: signed.signature
+        };
+      }
+      case 'monad_signMessage': {
+        if (approvalWallet.signer.kind === 'ledger') {
+          throw new RpcError('LEDGER_UNSUPPORTED', 'Ledger message signing is not supported for Monad dapps.');
+        }
+
+        const signer = resolveMonadVaultSecret(secret);
+        return signer.signMessage({
+          message: normalizeMonadSignMessage(approval.request.params.message)
+        });
+      }
+      case 'monad_signTypedData': {
+        if (approvalWallet.signer.kind === 'ledger') {
+          throw new RpcError('LEDGER_UNSUPPORTED', 'Ledger typed data signing is not supported for Monad dapps.');
+        }
+
+        const signer = resolveMonadVaultSecret(secret);
+        return signer.signTypedData(JSON.parse(approval.request.params.typedData));
+      }
+      case 'signTransaction': {
         const transactionRequest = approval.request as Extract<ProviderRequest, { method: 'signTransaction' }>;
         return {
           transaction:
@@ -4404,7 +4633,20 @@ class WalletController {
               : signSerializedTransaction(transactionRequest.params.transaction, resolveSolanaVaultSecret(secret))
         };
       }
-      case 'sign-all-transactions': {
+      case 'sui_signTransaction': {
+        if (approvalWallet.signer.kind === 'ledger') {
+          throw new RpcError('LEDGER_UNSUPPORTED', 'Ledger transaction signing is not supported for Sui dapps.');
+        }
+
+        const signer = resolveSuiVaultSecret(secret);
+        const signed = await signer.signTransaction(atobBytes(approval.request.params.transaction));
+        return {
+          address: signer.toSuiAddress(),
+          bytes: signed.bytes,
+          signature: signed.signature
+        };
+      }
+      case 'signAllTransactions': {
         const transactionsRequest = approval.request as Extract<ProviderRequest, { method: 'signAllTransactions' }>;
         return {
           transactions:
@@ -4413,7 +4655,8 @@ class WalletController {
               : signSerializedTransactions(transactionsRequest.params.transactions, resolveSolanaVaultSecret(secret))
         };
       }
-      case 'sign-and-send-transaction': {
+      case 'signAndSendTransaction':
+      case 'sendTransaction': {
         const transactionRequest = approval.request as Extract<
           ProviderRequest,
           { method: 'signAndSendTransaction' | 'sendTransaction' }
@@ -4433,6 +4676,54 @@ class WalletController {
           throw normalizeSigningError(error);
         }
       }
+      case 'sui_signAndExecuteTransaction': {
+        if (approvalWallet.signer.kind === 'ledger') {
+          throw new RpcError('LEDGER_UNSUPPORTED', 'Ledger transaction execution is not supported for Sui dapps.');
+        }
+
+        const signer = resolveSuiVaultSecret(secret);
+        const client = await this.createSuiClient(approval.network, walletState);
+        const signed = await signer.signTransaction(atobBytes(approval.request.params.transaction));
+        const result = await client.executeTransactionBlock({
+          transactionBlock: signed.bytes,
+          signature: signed.signature,
+          options: {
+            showRawEffects: true
+          }
+        });
+
+        return {
+          address: signer.toSuiAddress(),
+          bytes: signed.bytes,
+          signature: signed.signature,
+          digest: result.digest,
+          effects: result.rawEffects ? arrayBufferToBase64(new Uint8Array(result.rawEffects)) : undefined
+        };
+      }
+      case 'monad_sendTransaction': {
+        if (approvalWallet.signer.kind === 'ledger') {
+          throw new RpcError('LEDGER_UNSUPPORTED', 'Ledger contract transaction execution is not supported for Monad dapps.');
+        }
+
+        const transactionRequest = approval.request.params.transaction;
+        if (!transactionRequest.to?.trim()) {
+          throw new RpcError('INVALID_REQUEST', 'Monad transactions must include a destination address.');
+        }
+
+        return {
+          signature: await sendMonadTransactionRequest(this.resolveMonadNetwork(approval.network), secret, {
+            to: transactionRequest.to,
+            data: transactionRequest.data,
+            value: transactionRequest.value,
+            gas: transactionRequest.gas,
+            gasPrice: transactionRequest.gasPrice,
+            maxFeePerGas: transactionRequest.maxFeePerGas,
+            maxPriorityFeePerGas: transactionRequest.maxPriorityFeePerGas,
+            nonce: transactionRequest.nonce,
+            customRpcUrl: walletState.chainState.monad.customRpcUrl
+          })
+        };
+      }
       default:
         throw new RpcError('UNKNOWN_APPROVAL', 'Unsupported approval kind.');
     }
@@ -4440,6 +4731,7 @@ class WalletController {
 
   private async createApproval(
     request: ProviderRequest,
+    chain: WalletState['selectedChain'],
     network: 'mainnet-beta' | 'devnet',
     walletId: string,
     publicKey: string,
@@ -4453,6 +4745,7 @@ class WalletController {
       id: state.id,
       kind,
       state,
+      chain,
       request,
       origin: request.origin,
       createdAt: state.createdAt,
@@ -4612,19 +4905,105 @@ async function reassignApprovalsFromSurface(surfaceId: string) {
 function toApprovalKind(request: ProviderRequest) {
   switch (request.method) {
     case 'connect':
+    case 'sui_connect':
+    case 'monad_requestAccounts':
       return 'connect';
     case 'signMessage':
+    case 'sui_signPersonalMessage':
+    case 'monad_signMessage':
+    case 'monad_signTypedData':
       return 'sign-message';
     case 'signTransaction':
+    case 'sui_signTransaction':
       return 'sign-transaction';
     case 'signAllTransactions':
       return 'sign-all-transactions';
     case 'signAndSendTransaction':
     case 'sendTransaction':
+    case 'sui_signAndExecuteTransaction':
+    case 'monad_sendTransaction':
       return 'sign-and-send-transaction';
     default:
       throw new RpcError('UNKNOWN_REQUEST', 'Unsupported request type.');
   }
+}
+
+function getProviderRequestChain(request: ProviderRequest): GrapeChain {
+  switch (request.method) {
+    case 'connect':
+    case 'disconnect':
+    case 'signMessage':
+    case 'signTransaction':
+    case 'signAllTransactions':
+    case 'signAndSendTransaction':
+    case 'sendTransaction':
+      return 'solana';
+    case 'sui_connect':
+    case 'sui_disconnect':
+    case 'sui_getAccounts':
+    case 'sui_signPersonalMessage':
+    case 'sui_signTransaction':
+    case 'sui_signAndExecuteTransaction':
+      return 'sui';
+    case 'monad_accounts':
+    case 'monad_requestAccounts':
+    case 'monad_chainId':
+    case 'monad_switchChain':
+    case 'monad_addChain':
+    case 'monad_sendTransaction':
+    case 'monad_signMessage':
+    case 'monad_signTypedData':
+      return 'monad';
+    default:
+      throw new RpcError('UNKNOWN_REQUEST', 'Unsupported provider chain.');
+  }
+}
+
+function isProviderConnectRequest(request: ProviderRequest) {
+  return request.method === 'connect' || request.method === 'sui_connect' || request.method === 'monad_requestAccounts';
+}
+
+function getAccountPermissionForChain(chain: GrapeChain): import('@grape/core').PermissionKind {
+  switch (chain) {
+    case 'solana':
+      return 'solana:accounts';
+    case 'sui':
+      return 'sui:accounts';
+    case 'monad':
+      return 'monad:accounts';
+    default:
+      return 'solana:accounts';
+  }
+}
+
+function getSignPermissionForChain(chain: GrapeChain): import('@grape/core').PermissionKind {
+  switch (chain) {
+    case 'solana':
+      return 'solana:sign';
+    case 'sui':
+      return 'sui:sign';
+    case 'monad':
+      return 'monad:sign';
+    default:
+      return 'solana:sign';
+  }
+}
+
+function getRequestedPermissionLabels(chain: GrapeChain, signer: import('@grape/core').WalletSigner): string[] {
+  const viewPermission = chain === 'solana' ? 'View your public key' : 'View your wallet address';
+  if (signer.kind === 'watch-only') {
+    return [viewPermission];
+  }
+
+  return [viewPermission, 'Request signatures and transaction approvals'];
+}
+
+function normalizeMonadSignMessage(message: string) {
+  if (message.startsWith('0x') && /^0x[0-9a-fA-F]*$/.test(message) && message.length % 2 === 0) {
+    return { raw: message as `0x${string}` };
+  }
+
+  return message;
 }
 
 function atobBytes(value: string): Uint8Array {
