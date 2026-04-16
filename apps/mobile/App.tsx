@@ -2933,6 +2933,7 @@ export default function App() {
 
   async function handleGovernanceVote(input: {
     daoId: string;
+    governanceProgramId: string;
     governanceId: string;
     proposalId: string;
     proposalOwnerRecordId: string;
@@ -2996,6 +2997,7 @@ export default function App() {
           state: walletState,
           wallet: selectedWallet,
           daoId: input.daoId,
+          governanceProgramId: input.governanceProgramId,
           governanceId: input.governanceId,
           proposalId: input.proposalId,
           proposalOwnerRecordId: input.proposalOwnerRecordId,
@@ -3115,6 +3117,7 @@ export default function App() {
                 onPress={() =>
                   void handleGovernanceVote({
                     daoId: proposal.daoId,
+                    governanceProgramId: proposal.governanceProgramId,
                     governanceId: proposal.governanceId,
                     proposalId: proposal.proposalId,
                     proposalOwnerRecordId: proposal.proposalOwnerRecordId,
@@ -3138,6 +3141,7 @@ export default function App() {
                 onPress={() =>
                   void handleGovernanceVote({
                     daoId: proposal.daoId,
+                    governanceProgramId: proposal.governanceProgramId,
                     governanceId: proposal.governanceId,
                     proposalId: proposal.proposalId,
                     proposalOwnerRecordId: proposal.proposalOwnerRecordId,

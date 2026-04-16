@@ -92,6 +92,25 @@ describe('message routing contracts', () => {
     expect(message.type).toBe('approval_respond');
   });
 
+  it('validates governance vote runtime messages with an explicit governance program', () => {
+    const message = runtimeMessageSchema.parse({
+      type: 'wallet_cast_governance_vote',
+      daoId: 'By2sVGZXwfQq6rAiAM3rNPJ9iQfb5e2QhnF4YjJ4Bip',
+      governanceProgramId: 'GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPCVZw',
+      governanceId: '8opHzTAnfzRpPEx21XtnrVTX28YQuCpAjcn1PczScKh',
+      proposalId: '7eHf3wBqLQxM5j5P3n4vD4K1M4x8rW2i5tQ7m4vWQx9G',
+      proposalOwnerRecordId: '3wK8P3dJxLh9c4VYz6xW9g2V5sN3qT8mP4rL6fD2nQ1A',
+      tokenOwnerRecordId: '5gM2R7hLqN4xP8vW3dT9kC1yB6jF2sH7uQ4mZ8pR1xY',
+      governingTokenMint: '9xQeWvG816bUx9EPfEZdfnN6fCxW7G8xL9p1b2c3d4e',
+      voteKind: 'approve'
+    });
+
+    expect(message.type).toBe('wallet_cast_governance_vote');
+    expect(message).toMatchObject({
+      governanceProgramId: 'GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPCVZw'
+    });
+  });
+
   it('validates runtime messages for removing saved recent recipients', () => {
     const message = runtimeMessageSchema.parse({
       type: 'wallet_remove_recent_recipient',
@@ -134,7 +153,7 @@ describe('message routing contracts', () => {
       outputMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
     });
 
-    expect(quoteMessage.amount).toBe('.1');
+    expect(quoteMessage).toMatchObject({ amount: '.1' });
   });
 
   it('validates token maintenance and incident response runtime messages', () => {

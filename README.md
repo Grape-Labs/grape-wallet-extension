@@ -110,15 +110,19 @@ Set your mainnet RPC endpoint in `.env`:
 VITE_GRAPE_MAINNET_RPC_URL=https://your-mainnet-rpc.example.com/?api-key=replace-me
 VITE_GRAPE_JUP_API_KEY=your-jupiter-api-key
 VITE_GRAPE_SHYFT_API_KEY=your-shyft-api-key
+GRAPE_EXTENSION_KEY_FILE=.extension-keys/grape-chromium.pem
 ```
 
 Notes:
 
 - `.env` is ignored by Git
+- `.extension-keys/` is ignored by Git for local Chromium signing material
 - this keeps the RPC URL out of GitHub, but not out of the shipped extension bundle
 - if the RPC key must be hidden from end users, use a backend/proxy instead of a client-side build variable
 - Jupiter pricing uses `api.jup.ag` when `VITE_GRAPE_JUP_API_KEY` is set and falls back to `lite-api.jup.ag` otherwise
 - Shyft metadata uses `wallet/all_tokens` to enrich wallet tokens with names, symbols, and logos when `VITE_GRAPE_SHYFT_API_KEY` is set
+- `GRAPE_EXTENSION_KEY_FILE` can point to a PEM private key or PEM public key; `GRAPE_EXTENSION_KEY` can hold the base64 manifest key directly
+- keep the same Chromium key on every build if you want future updates to replace the existing extension instead of creating a new one
 
 ## Scripts
 
@@ -151,6 +155,29 @@ The extension output is written to:
 apps/extension/dist
 ```
 
+## Keep The Same Chromium Extension
+
+If you want Chromium to treat rebuilt packages as the same extension, keep one stable extension key and reuse it on every build.
+
+Example local setup:
+
+```bash
+mkdir -p .extension-keys
+openssl genrsa -out .extension-keys/grape-chromium.pem 2048
+```
+
+Then point `.env` at that key:
+
+```bash
+GRAPE_EXTENSION_KEY_FILE=.extension-keys/grape-chromium.pem
+```
+
+Notes:
+
+- this sets the manifest `key` during build, which keeps the extension ID stable
+- do not rotate that key unless you intentionally want a new Chromium extension ID
+- if you already have the manifest public key string, set `GRAPE_EXTENSION_KEY` instead of `GRAPE_EXTENSION_KEY_FILE`
+
 ## Load Unpacked In Chrome
 
 1. Run `pnpm build`
@@ -164,6 +191,8 @@ If you make changes:
 1. rebuild with `pnpm build` or run `pnpm dev`
 2. go back to `chrome://extensions`
 3. click `Reload` on Grape Wallet
+
+If you are replacing an existing Chromium install and want it to stay the same extension, make sure the build still uses the same `GRAPE_EXTENSION_KEY_FILE` or `GRAPE_EXTENSION_KEY` value as the original install.
 
 If Chrome keeps stale icons or stale assets cached, remove the extension and load unpacked again from `apps/extension/dist`.
 

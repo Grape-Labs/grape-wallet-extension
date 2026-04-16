@@ -2,6 +2,9 @@ import { getMobileSolanaRpcUrl } from './config';
 
 const DEFAULT_SOLANA_NETWORK = 'mainnet-beta';
 const DEFAULT_GOVERNANCE_PROGRAM_ID = 'GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPCVZw';
+const GOVERNANCE_PROGRAM_VERSION_V1 = 1;
+const GOVERNANCE_PROGRAM_VERSION_V2 = 2;
+const GOVERNANCE_PROGRAM_VERSION_V3 = 3;
 const GOVERNANCE_GRAPHQL_URL = 'https://grape.shyft.to/v1/graphql/';
 
 type GovernanceOwner = {
@@ -190,6 +193,44 @@ function findGovernanceOwnerByDao(daoId: string): GovernanceOwner {
       dao: daoId
     }
   );
+}
+
+export async function resolveMobileGovernanceProgramVersion(
+  connection: import('@solana/web3.js').Connection,
+  programId: import('@solana/web3.js').PublicKey,
+  realmPk: import('@solana/web3.js').PublicKey
+): Promise<number> {
+  const { getGovernanceProgramVersion, getRealmConfigAddress } = loadSplGovernanceModule();
+  const programIdValue = programId.toBase58();
+
+  try {
+    const detectedVersion = await getGovernanceProgramVersion(connection, programId);
+    if (detectedVersion > GOVERNANCE_PROGRAM_VERSION_V1) {
+      return detectedVersion;
+    }
+  } catch {
+    // Some RPC endpoints fail the metadata/simulation probe and spl-governance falls back to v1.
+  }
+
+  if (programIdValue === DEFAULT_GOVERNANCE_PROGRAM_ID) {
+    return GOVERNANCE_PROGRAM_VERSION_V3;
+  }
+
+  if (GOVERNANCE_OWNERS.some((entry) => entry.owner === programIdValue)) {
+    return GOVERNANCE_PROGRAM_VERSION_V2;
+  }
+
+  try {
+    const realmConfigPk = await getRealmConfigAddress(programId, realmPk);
+    const realmConfigInfo = await connection.getAccountInfo(realmConfigPk, 'confirmed');
+    if (realmConfigInfo) {
+      return GOVERNANCE_PROGRAM_VERSION_V2;
+    }
+  } catch {
+    // Ignore and keep the conservative fallback below.
+  }
+
+  return GOVERNANCE_PROGRAM_VERSION_V1;
 }
 
 function getGovernanceNamespaces(): Array<{ namespace: string; programId: string }> {

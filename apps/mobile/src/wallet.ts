@@ -42,9 +42,10 @@ import {
   getMobileSuiSendUnsupportedMessage,
   importMobileSuiPrivateKey
 } from './sui';
-import type {
-  MobileGovernanceResponse,
-  MobileGovernanceVoteResponse
+import {
+  resolveMobileGovernanceProgramVersion,
+  type MobileGovernanceResponse,
+  type MobileGovernanceVoteResponse
 } from './governance';
 import type { MobileReputationResponse } from './reputation';
 import type { MobilePasskeyWalletConfig } from './passkeys';
@@ -1152,6 +1153,7 @@ export async function castWalletGovernanceVote(input: {
   state: MobileWalletState;
   wallet: MobileWallet;
   daoId: string;
+  governanceProgramId?: string;
   governanceId: string;
   proposalId: string;
   proposalOwnerRecordId: string;
@@ -1171,7 +1173,6 @@ export async function castWalletGovernanceVote(input: {
   const { Connection, PublicKey, Transaction } = web3;
   const {
     getGovernance,
-    getGovernanceProgramVersion,
     getRealm,
     getProposal,
     ProposalState,
@@ -1185,8 +1186,7 @@ export async function castWalletGovernanceVote(input: {
       ? resolveSolanaVaultSecret({ kind: 'mnemonic', mnemonic: secret.mnemonic })
       : resolveSolanaVaultSecret({ kind: 'private-key', secretKey: secret.secretKey });
   const owner = new PublicKey(input.wallet.address);
-  const governanceOwner = findGovernanceOwnerByDao(input.daoId);
-  const programId = new PublicKey(governanceOwner.owner);
+  const programId = new PublicKey(input.governanceProgramId ?? findGovernanceOwnerByDao(input.daoId).owner);
   const realmPk = new PublicKey(input.daoId);
   const governancePk = new PublicKey(input.governanceId);
   const proposalPk = new PublicKey(input.proposalId);
@@ -1196,7 +1196,7 @@ export async function castWalletGovernanceVote(input: {
   const connection = new Connection(getMobileSolanaRpcUrl(DEFAULT_SOLANA_NETWORK), 'confirmed');
 
   const [programVersion, proposalAccount, governanceAccount, realmAccount] = await Promise.all([
-    getGovernanceProgramVersion(connection, programId),
+    resolveMobileGovernanceProgramVersion(connection, programId, realmPk),
     getProposal(connection, proposalPk),
     getGovernance(connection, governancePk),
     getRealm(connection, realmPk)
@@ -1204,6 +1204,17 @@ export async function castWalletGovernanceVote(input: {
 
   if (proposalAccount.account.state !== ProposalState.Voting) {
     throw new Error('This proposal is not in the voting window anymore.');
+  }
+  if (proposalAccount.account.governance.toBase58() !== input.governanceId) {
+    throw new Error('This proposal does not belong to the selected governance account.');
+  }
+  if (proposalAccount.account.tokenOwnerRecord.toBase58() !== input.proposalOwnerRecordId) {
+    throw new Error('This proposal owner record does not match the selected proposal.');
+  }
+  if (proposalAccount.account.governingTokenMint.toBase58() !== input.governingTokenMint) {
+    throw new Error(
+      'The selected vote record does not match this proposal voting class. Community and council votes must use their matching governance mint.'
+    );
   }
 
   const instructions: import('@solana/web3.js').TransactionInstruction[] = [];

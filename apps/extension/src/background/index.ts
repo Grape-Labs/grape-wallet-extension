@@ -2680,6 +2680,7 @@ class WalletController {
 
   async castGovernanceVote(input: {
     daoId: string;
+    governanceProgramId?: string;
     governanceId: string;
     proposalId: string;
     proposalOwnerRecordId: string;
@@ -2705,8 +2706,7 @@ class WalletController {
       throw new RpcError('INVALID_PUBLIC_KEY', 'Active wallet address is invalid.');
     }
 
-    const governanceOwner = findGovernanceOwnerByDao(input.daoId);
-    const programId = new PublicKey(governanceOwner.owner);
+    const programId = new PublicKey(input.governanceProgramId ?? findGovernanceOwnerByDao(input.daoId).owner);
     const realmPk = new PublicKey(input.daoId);
     const governancePk = new PublicKey(input.governanceId);
     const proposalPk = new PublicKey(input.proposalId);
@@ -2724,6 +2724,18 @@ class WalletController {
 
     if (proposalAccount.account.state !== ProposalState.Voting) {
       throw new RpcError('PROPOSAL_NOT_VOTING', 'This proposal is not in the voting window anymore.');
+    }
+    if (proposalAccount.account.governance.toBase58() !== input.governanceId) {
+      throw new RpcError('INVALID_PROPOSAL', 'This proposal does not belong to the selected governance account.');
+    }
+    if (proposalAccount.account.tokenOwnerRecord.toBase58() !== input.proposalOwnerRecordId) {
+      throw new RpcError('INVALID_PROPOSAL', 'This proposal owner record does not match the selected proposal.');
+    }
+    if (proposalAccount.account.governingTokenMint.toBase58() !== input.governingTokenMint) {
+      throw new RpcError(
+        'INVALID_GOVERNANCE_MINT',
+        'The selected vote record does not match this proposal voting class. Community and council votes must use their matching governance mint.'
+      );
     }
 
     const voteRecordPk = await getVoteRecordAddress(programId, proposalPk, tokenOwnerRecordPk);

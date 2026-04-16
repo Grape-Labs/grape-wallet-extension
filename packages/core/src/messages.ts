@@ -539,6 +539,7 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('wallet_cast_governance_vote'),
     daoId: z.string().trim().min(32),
+    governanceProgramId: z.string().trim().min(32).optional(),
     governanceId: z.string().trim().min(32),
     proposalId: z.string().trim().min(32),
     proposalOwnerRecordId: z.string().trim().min(32),

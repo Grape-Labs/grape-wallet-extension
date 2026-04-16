@@ -1,3 +1,5 @@
+import { createPrivateKey, createPublicKey } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import react from '@vitejs/plugin-react';
@@ -6,6 +8,14 @@ import { defineConfig, loadEnv, type Plugin } from 'vite';
 const extensionRoot = __dirname;
 const workspaceRoot = resolve(extensionRoot, '../..');
 const DEFAULT_MAINNET_RPC_URL = 'https://api.mainnet-beta.solana.com';
+const extensionPackage = JSON.parse(
+  readFileSync(resolve(extensionRoot, 'package.json'), 'utf8')
+) as { version?: string };
+const EXTENSION_VERSION = extensionPackage.version?.trim();
+
+if (!EXTENSION_VERSION) {
+  throw new Error('Missing version in apps/extension/package.json');
+}
 
 function resolveMainnetRpcUrl(rawValue?: string): string {
   const trimmed = rawValue?.trim();
@@ -25,7 +35,59 @@ function toHostPermission(rpcUrl: string): string {
   return `${origin}/*`;
 }
 
-function createManifestPlugin(mainnetRpcUrl: string): Plugin {
+function normalizeExtensionManifestKey(rawValue: string): string {
+  const trimmed = rawValue.trim();
+  if (!trimmed) {
+    throw new Error('Chromium extension key cannot be empty.');
+  }
+
+  try {
+    if (trimmed.includes('BEGIN PUBLIC KEY')) {
+      return createPublicKey(trimmed)
+        .export({ format: 'der', type: 'spki' })
+        .toString('base64');
+    }
+
+    if (trimmed.includes('BEGIN PRIVATE KEY') || trimmed.includes('BEGIN RSA PRIVATE KEY')) {
+      return createPublicKey(createPrivateKey(trimmed))
+        .export({ format: 'der', type: 'spki' })
+        .toString('base64');
+    }
+
+    const normalized = trimmed.replace(/\s+/g, '');
+    createPublicKey({
+      key: Buffer.from(normalized, 'base64'),
+      format: 'der',
+      type: 'spki'
+    });
+    return normalized;
+  } catch {
+    throw new Error(
+      'Invalid Chromium extension key. Use a PEM public/private key or a base64-encoded SPKI public key.'
+    );
+  }
+}
+
+function resolveExtensionManifestKey(env: Record<string, string>): string | undefined {
+  const inlineKey = env.GRAPE_EXTENSION_KEY?.trim();
+  const keyFile = env.GRAPE_EXTENSION_KEY_FILE?.trim();
+
+  if (inlineKey && keyFile) {
+    throw new Error('Set only one of GRAPE_EXTENSION_KEY or GRAPE_EXTENSION_KEY_FILE.');
+  }
+
+  if (keyFile) {
+    return normalizeExtensionManifestKey(readFileSync(resolve(workspaceRoot, keyFile), 'utf8'));
+  }
+
+  if (inlineKey) {
+    return normalizeExtensionManifestKey(inlineKey);
+  }
+
+  return undefined;
+}
+
+function createManifestPlugin(mainnetRpcUrl: string, extensionKey?: string): Plugin {
   return {
     name: 'grape-manifest',
     apply: 'build',
@@ -33,7 +95,8 @@ function createManifestPlugin(mainnetRpcUrl: string): Plugin {
       const manifest = {
         manifest_version: 3,
         name: 'Grape',
-        version: '0.5.0',
+        version: EXTENSION_VERSION,
+        ...(extensionKey ? { key: extensionKey } : {}),
         description: 'Modern multi-chain wallet for assets, collectibles, swaps, and secure dApp connections.',
         icons: {
           '16': 'icons/grape_logo_white-16.png',
@@ -102,11 +165,12 @@ function createManifestPlugin(mainnetRpcUrl: string): Plugin {
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, workspaceRoot, '');
   const mainnetRpcUrl = resolveMainnetRpcUrl(env.VITE_GRAPE_MAINNET_RPC_URL);
+  const extensionKey = resolveExtensionManifestKey(env);
 
   return {
     root: extensionRoot,
     envDir: workspaceRoot,
-    plugins: [react(), createManifestPlugin(mainnetRpcUrl)],
+    plugins: [react(), createManifestPlugin(mainnetRpcUrl, extensionKey)],
     publicDir: resolve(extensionRoot, 'public'),
     resolve: {
       alias: {

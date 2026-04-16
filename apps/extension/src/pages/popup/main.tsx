@@ -3380,6 +3380,7 @@ function PopupPage() {
 
   async function handleGovernanceVote(input: {
     daoId: string;
+    governanceProgramId: string;
     governanceId: string;
     proposalId: string;
     proposalOwnerRecordId: string;
@@ -3431,6 +3432,7 @@ function PopupPage() {
           lastResult = await sendRuntimeMessage<WalletGovernanceVoteResponse>({
             type: 'wallet_cast_governance_vote',
             daoId: input.daoId,
+            governanceProgramId: input.governanceProgramId,
             governanceId: input.governanceId,
             proposalId: input.proposalId,
             proposalOwnerRecordId: input.proposalOwnerRecordId,
@@ -3566,6 +3568,7 @@ function PopupPage() {
                 onClick={() =>
                   void handleGovernanceVote({
                     daoId: proposal.daoId,
+                    governanceProgramId: proposal.governanceProgramId,
                     governanceId: proposal.governanceId,
                     proposalId: proposal.proposalId,
                     proposalOwnerRecordId: proposal.proposalOwnerRecordId,
@@ -3590,6 +3593,7 @@ function PopupPage() {
                 onClick={() =>
                   void handleGovernanceVote({
                     daoId: proposal.daoId,
+                    governanceProgramId: proposal.governanceProgramId,
                     governanceId: proposal.governanceId,
                     proposalId: proposal.proposalId,
                     proposalOwnerRecordId: proposal.proposalOwnerRecordId,
