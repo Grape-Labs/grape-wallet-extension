@@ -73,6 +73,8 @@ import {
   TransactionInstruction
 } from '@solana/web3.js';
 import {
+  getMaxVoterWeightRecordAddress,
+  getVoterWeightRecordAddress,
   getAllGovernances,
   getAllProposals,
   getGovernance,
@@ -80,7 +82,7 @@ import {
   getRealmConfigAddress,
   getProposal,
   getRealm,
-  getTokenOwnerRecordForRealm,
+  getTokenOwnerRecord,
   getVoteRecord,
   getVoteRecordAddress,
   getVoteRecordsByVoter,
@@ -89,6 +91,7 @@ import {
   TokenOwnerRecord,
   MemcmpFilter,
   getNativeTreasuryAddress,
+  tryGetRealmConfig,
   ProposalState,
   Vote,
   VoteChoice,
@@ -143,6 +146,7 @@ import type {
   CollectionHolding,
   CollectibleItem,
   StakeAccountRow,
+  StakeValidatorRow,
   TokenHolding,
   WalletAssetsResponse,
   WalletBridgeQuoteResponse,
@@ -192,6 +196,11 @@ const unlockedSecretSessionStorage = new ChromeStorageArea<UnlockedSecretCache>(
   chrome.storage.session,
   'grape:unlocked-secrets',
   {}
+);
+const unlockedPasswordSessionStorage = new ChromeStorageArea<{ value: string | null }>(
+  chrome.storage.session,
+  'grape:unlocked-password',
+  { value: null }
 );
 const assetCacheStorage = new ChromeStorageArea<Record<string, { cachedAt: number; data: WalletAssetsResponse }>>(
   chrome.storage.session,
@@ -473,7 +482,10 @@ class WalletController {
 
   private async clearUnlockedSecrets() {
     this.unlockedSecrets = {};
-    await unlockedSecretSessionStorage.set({});
+    await Promise.all([
+      unlockedSecretSessionStorage.set({}),
+      unlockedPasswordSessionStorage.set({ value: null })
+    ]);
   }
 
   private async ensureUnlockedSecretsLoaded() {
@@ -1317,6 +1329,19 @@ class WalletController {
     }
     if (!session.locked) {
       await this.ensureUnlockedSecretsLoaded();
+      if (
+        wallet.wallets.some((entry) => entry.signer.kind !== 'watch-only') &&
+        Object.keys(this.unlockedSecrets).length === 0
+      ) {
+        await unlockedPasswordSessionStorage.set({ value: null });
+        const locked = {
+          ...session,
+          locked: true,
+          lastActivityAt: 0
+        };
+        await sessionStorage.set(locked);
+        return locked;
+      }
     }
     return session;
   }
@@ -1428,7 +1453,10 @@ class WalletController {
         secret,
         unlockedAt: Date.now()
       };
-      await this.persistUnlockedSecrets();
+      await Promise.all([
+        this.persistUnlockedSecrets(),
+        password ? unlockedPasswordSessionStorage.set({ value: password }) : Promise.resolve()
+      ]);
     }
     await this.setSessionState({ locked: false, lastActivityAt: Date.now() });
     return nextState;
@@ -1538,7 +1566,10 @@ class WalletController {
       secret: { kind: 'mnemonic', mnemonic },
       unlockedAt: Date.now()
     };
-    await this.persistUnlockedSecrets();
+    await Promise.all([
+      this.persistUnlockedSecrets(),
+      unlockedPasswordSessionStorage.set({ value: password })
+    ]);
     await this.setSessionState({ locked: false, lastActivityAt: Date.now() });
     return nextState;
   }
@@ -1569,7 +1600,7 @@ class WalletController {
     }
 
     const unlockedAt = Date.now();
-    const nextUnlockedSecrets: typeof this.unlockedSecrets = {
+    const nextUnlockedSecrets: UnlockedSecretCache = {
       [primaryWallet.id]: {
         secret: primarySecret,
         unlockedAt
@@ -1597,7 +1628,10 @@ class WalletController {
     }
 
     this.unlockedSecrets = nextUnlockedSecrets;
-    await this.persistUnlockedSecrets();
+    await Promise.all([
+      this.persistUnlockedSecrets(),
+      unlockedPasswordSessionStorage.set({ value: password })
+    ]);
     await this.setSessionState({ locked: false, lastActivityAt: Date.now() });
 
     void (async () => {
@@ -1614,7 +1648,7 @@ class WalletController {
           };
           await this.persistUnlockedSecrets();
         } catch {
-          // Ignore secondary-wallet failures and keep the primary unlock fast.
+          // Ignore secondary-wallet failures and keep primary unlock responsive.
         }
 
         await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1720,6 +1754,17 @@ class WalletController {
       accessSessionStorage.get()
     ]);
     const activeWallet = getSelectedWallet(wallet);
+    const unlockedPassword = session.locked ? null : (await unlockedPasswordSessionStorage.get()).value;
+    const canUseUnlockedSigner = !!(
+      activeWallet &&
+      activeAccount &&
+      activeWallet.signer.kind !== 'watch-only' &&
+      !session.locked &&
+      (
+        (await this.findUnlockedSecretForAccount(activeWallet.id, activeWallet.chain, activeAccount.publicKey, activeAccount.derivationPath)) ||
+        (!!activeWallet.vault && !!unlockedPassword)
+      )
+    );
     const unlockedWalletIds = await this.getUnlockedWalletIds(session.locked);
 
     return {
@@ -1741,7 +1786,7 @@ class WalletController {
           : undefined,
       activeAccount: activeAccount ? { publicKey: activeAccount.publicKey } : undefined,
       recentRecipients: activeWallet?.recentRecipients ?? [],
-      canUseUnlockedSigner: !!(activeWallet && activeWallet.signer.kind !== 'watch-only' && unlockedWalletIds.includes(activeWallet.id)),
+      canUseUnlockedSigner,
       unlockedWalletIds
     };
   }
@@ -2145,7 +2190,7 @@ class WalletController {
     try {
       return selectedWallet.signer.kind === 'ledger'
         ? throwLedgerUnsupported()
-        : await signAndSendTransaction(transaction, resolveSolanaVaultSecret(secret), connection);
+        : await signAndSendTransaction(transaction, this.resolveSolanaSignerForWallet(secret, selectedWallet, activePublicKey), connection);
     } catch (error) {
       throw normalizeSigningError(error);
     } finally {
@@ -2715,11 +2760,13 @@ class WalletController {
     const governingTokenMintPk = new PublicKey(input.governingTokenMint);
     const connection = this.createConnection(walletState.selectedNetwork, walletState);
 
-    const [programVersion, proposalAccount, governanceAccount, realmAccount] = await Promise.all([
+    const [programVersion, proposalAccount, governanceAccount, realmAccount, tokenOwnerRecordAccount, realmConfigAccount] = await Promise.all([
       resolveGovernanceProgramVersion(connection, programId, realmPk),
       getProposal(connection, proposalPk),
       getGovernance(connection, governancePk),
-      getRealm(connection, realmPk)
+      getRealm(connection, realmPk),
+      getTokenOwnerRecord(connection, tokenOwnerRecordPk),
+      tryGetRealmConfig(connection, programId, realmPk)
     ]);
 
     if (proposalAccount.account.state !== ProposalState.Voting) {
@@ -2735,6 +2782,15 @@ class WalletController {
       throw new RpcError(
         'INVALID_GOVERNANCE_MINT',
         'The selected vote record does not match this proposal voting class. Community and council votes must use their matching governance mint.'
+      );
+    }
+    if (tokenOwnerRecordAccount.account.realm.toBase58() !== input.daoId) {
+      throw new RpcError('INVALID_TOKEN_OWNER_RECORD', 'This token owner record does not belong to the selected DAO.');
+    }
+    if (tokenOwnerRecordAccount.account.governingTokenMint.toBase58() !== input.governingTokenMint) {
+      throw new RpcError(
+        'INVALID_TOKEN_OWNER_RECORD',
+        'This token owner record does not match the proposal voting mint.'
       );
     }
 
@@ -2757,6 +2813,43 @@ class WalletController {
               veto: undefined
             });
 
+    const communityMintPk = realmAccount.account.communityMint;
+    const councilMintPk = realmAccount.account.config.councilMint ?? null;
+    const governingTokenConfig = governingTokenMintPk.equals(communityMintPk)
+      ? realmConfigAccount?.account.communityTokenConfig
+      : councilMintPk && governingTokenMintPk.equals(councilMintPk)
+        ? realmConfigAccount?.account.councilTokenConfig
+        : null;
+    const governingTokenOwnerPk = tokenOwnerRecordAccount.account.governingTokenOwner;
+    const voterWeightRecordPk = governingTokenConfig?.voterWeightAddin
+      ? await getVoterWeightRecordAddress(
+          governingTokenConfig.voterWeightAddin,
+          realmPk,
+          governingTokenMintPk,
+          governingTokenOwnerPk
+        )
+      : undefined;
+    const maxVoterWeightRecordPk = governingTokenConfig?.maxVoterWeightAddin
+      ? await getMaxVoterWeightRecordAddress(
+          governingTokenConfig.maxVoterWeightAddin,
+          realmPk,
+          governingTokenMintPk
+        )
+      : undefined;
+    const governancePluginAccounts = [voterWeightRecordPk, maxVoterWeightRecordPk].filter(
+      (entry): entry is PublicKey => !!entry
+    );
+    if (governancePluginAccounts.length > 0) {
+      const pluginAccountInfos = await connection.getMultipleAccountsInfo(governancePluginAccounts, 'confirmed');
+      const missingGovernancePluginAccount = governancePluginAccounts.find((_, index) => !pluginAccountInfos[index]);
+      if (missingGovernancePluginAccount) {
+        throw new RpcError(
+          'GOVERNANCE_PLUGIN_ACCOUNT_MISSING',
+          'This DAO uses a governance voter-weight plugin, but the required voting record is not available for this wallet yet. Voting for this DAO is not currently supported in Grape.'
+        );
+      }
+    }
+
     await withCastVote(
       instructions,
       programId,
@@ -2769,17 +2862,44 @@ class WalletController {
       owner,
       governingTokenMintPk,
       vote,
-      owner
+      owner,
+      voterWeightRecordPk,
+      maxVoterWeightRecordPk
     );
 
-    const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
+    const secret = await this.getUnlockedSecretForAccount(
+      selectedWallet.id,
+      selectedWallet.vault,
+      selectedWallet.chain,
+      activeAccount.publicKey,
+      input.password,
+      activeAccount.derivationPath
+    );
     const { blockhash } = await connection.getLatestBlockhash('confirmed');
     const transaction = new Transaction({
       feePayer: owner,
       recentBlockhash: blockhash
     });
     transaction.add(...instructions);
-    const signature = await this.submitTransactionForWallet(selectedWallet, activeAccount.publicKey, secret, connection, transaction);
+    let signature: string;
+    try {
+      signature = await this.submitTransactionForWallet(selectedWallet, activeAccount.publicKey, secret, connection, transaction);
+    } catch (error) {
+      if (error instanceof RpcError) {
+        const normalizedMessage = error.message.toLowerCase();
+        if (
+          normalizedMessage.includes('custom program error: 0x44d') ||
+          normalizedMessage.includes('account doesn\'t exist') ||
+          normalizedMessage.includes('account does not exist')
+        ) {
+          throw new RpcError(
+            'GOVERNANCE_PLUGIN_ACCOUNT_MISSING',
+            'This DAO uses a governance voter-weight plugin, but the required voting record is not available for this wallet yet. Voting for this DAO is not currently supported in Grape.'
+          );
+        }
+      }
+      throw error;
+    }
 
     this.governanceCache.clear();
 
@@ -2959,6 +3079,46 @@ class WalletController {
     };
   }
 
+  async getStakeValidators() {
+    const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    if (selectedWallet.chain !== 'solana') {
+      return {
+        validators: [],
+        source: 'none' as const,
+        network: walletState.selectedNetwork,
+        refreshedAt: Date.now()
+      };
+    }
+
+    const connection = this.createConnection(walletState.selectedNetwork, walletState);
+    const voteAccounts = await connection.getVoteAccounts('confirmed');
+    const validators: StakeValidatorRow[] = voteAccounts.current
+      .map((entry) => ({
+        voteAccount: entry.votePubkey,
+        nodePubkey: entry.nodePubkey,
+        commission: entry.commission,
+        activatedStakeLamports: Number(entry.activatedStake ?? 0),
+        lastVote: entry.lastVote,
+        rootSlot: entry.rootSlot
+      }))
+      .sort((left, right) => {
+        if (right.activatedStakeLamports !== left.activatedStakeLamports) {
+          return right.activatedStakeLamports - left.activatedStakeLamports;
+        }
+        if (left.commission !== right.commission) {
+          return left.commission - right.commission;
+        }
+        return left.voteAccount.localeCompare(right.voteAccount);
+      });
+
+    return {
+      validators,
+      source: validators.length > 0 ? ('rpc' as const) : ('none' as const),
+      network: walletState.selectedNetwork,
+      refreshedAt: Date.now()
+    };
+  }
+
   async getActivity(limit = 30): Promise<WalletActivityResponse> {
     const { walletState, selectedWallet } = await this.ensureReadyWallet();
     const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
@@ -3123,11 +3283,20 @@ class WalletController {
     return `${raw.slice(0, 4)}-${raw.slice(4, 8)}`;
   }
 
-  private resolvePublicKeyFromSecret(secret: VaultSecret, chain: GrapeChain): string {
+  private resolveSolanaSignerForWallet(
+    secret: VaultSecret,
+    wallet: NonNullable<ReturnType<typeof getSelectedWallet>>,
+    publicKey: string
+  ) {
+    const derivationPath = wallet.accounts.find((account) => account.publicKey === publicKey)?.derivationPath;
+    return resolveSolanaVaultSecret(secret, derivationPath);
+  }
+
+  private resolvePublicKeyFromSecret(secret: VaultSecret, chain: GrapeChain, derivationPath?: string): string {
     if (secret.kind === 'mnemonic') {
       switch (chain) {
         case 'solana':
-          return deriveSolanaAccount0(secret.mnemonic).publicKey;
+          return resolveSolanaVaultSecret(secret, derivationPath).publicKey.toBase58();
         case 'sui':
           return deriveSuiAccount0(secret.mnemonic).address;
         case 'monad':
@@ -3395,7 +3564,7 @@ class WalletController {
       if (selectedWallet.signer.kind === 'ledger') {
         throwLedgerUnsupported();
       } else {
-        transaction.partialSign(resolveSolanaVaultSecret(secret));
+        transaction.partialSign(this.resolveSolanaSignerForWallet(secret, selectedWallet, activeAccount.publicKey));
         signature = await connection.sendRawTransaction(transaction.serialize());
       }
     } catch (error) {
@@ -3687,7 +3856,11 @@ class WalletController {
         signature =
           selectedWallet.signer.kind === 'ledger'
             ? throwLedgerUnsupported()
-            : await signAndSendTransaction(transaction, resolveSolanaVaultSecret(secret), connection);
+            : await signAndSendTransaction(
+                transaction,
+                this.resolveSolanaSignerForWallet(secret, selectedWallet, activeAccount.publicKey),
+                connection
+              );
       } catch (error) {
         throw normalizeSigningError(error);
       }
@@ -4189,14 +4362,14 @@ class WalletController {
 
     let signature: string;
     try {
-      signature =
-        selectedWallet.signer.kind === 'ledger'
-          ? throwLedgerUnsupported()
-          : await signAndSendSerializedTransaction(
-              swap.swapTransaction,
-              resolveSolanaVaultSecret(secret),
-              this.resolveRpcEndpoint(walletState.selectedNetwork, walletState)
-            );
+        signature =
+          selectedWallet.signer.kind === 'ledger'
+            ? throwLedgerUnsupported()
+            : await signAndSendSerializedTransaction(
+                swap.swapTransaction,
+                this.resolveSolanaSignerForWallet(secret, selectedWallet, activeAccount.publicKey),
+                this.resolveRpcEndpoint(walletState.selectedNetwork, walletState)
+              );
     } catch (error) {
       throw normalizeSigningError(error);
     }
@@ -4301,7 +4474,7 @@ class WalletController {
       if (selectedWallet.chain === 'solana') {
         signature = await signAndSendSerializedTransaction(
           transactionRequest.data,
-          resolveSolanaVaultSecret(secret),
+          this.resolveSolanaSignerForWallet(secret, selectedWallet, activeAccount.publicKey),
           this.resolveRpcEndpoint(walletState.selectedNetwork, walletState)
         );
       } else if (selectedWallet.chain === 'ethereum') {
@@ -4692,7 +4865,7 @@ class WalletController {
           throw new RpcError('LEDGER_UNSUPPORTED', 'Ledger message signing is not supported in this MVP.');
         }
 
-        const signer = resolveSolanaVaultSecret(secret);
+        const signer = this.resolveSolanaSignerForWallet(secret, approvalWallet, approvalAccount.publicKey);
         const messageRequest = approval.request as Extract<ProviderRequest, { method: 'signMessage' }>;
         const signature = signMessageBytes(
           atobBytes(messageRequest.params.message),
@@ -4740,7 +4913,10 @@ class WalletController {
           transaction:
             approvalWallet.signer.kind === 'ledger'
               ? throwLedgerUnsupported()
-              : signSerializedTransaction(transactionRequest.params.transaction, resolveSolanaVaultSecret(secret))
+              : signSerializedTransaction(
+                  transactionRequest.params.transaction,
+                  this.resolveSolanaSignerForWallet(secret, approvalWallet, approvalAccount.publicKey)
+                )
         };
       }
       case 'sui_signTransaction': {
@@ -4762,7 +4938,10 @@ class WalletController {
           transactions:
             approvalWallet.signer.kind === 'ledger'
               ? throwLedgerUnsupported()
-              : signSerializedTransactions(transactionsRequest.params.transactions, resolveSolanaVaultSecret(secret))
+              : signSerializedTransactions(
+                  transactionsRequest.params.transactions,
+                  this.resolveSolanaSignerForWallet(secret, approvalWallet, approvalAccount.publicKey)
+                )
         };
       }
       case 'signAndSendTransaction':
@@ -4778,7 +4957,7 @@ class WalletController {
                 ? throwLedgerUnsupported()
                 : await signAndSendSerializedTransaction(
                     transactionRequest.params.transaction,
-                    resolveSolanaVaultSecret(secret),
+                    this.resolveSolanaSignerForWallet(secret, approvalWallet, approvalAccount.publicKey),
                     this.resolveRpcEndpoint(approval.network, walletState)
                   )
           };
@@ -4937,17 +5116,93 @@ class WalletController {
       throw new RpcError('WATCH_ONLY_WALLET', 'This wallet does not have local signing secrets.');
     }
 
-    if (!password) {
+    const resolvedPassword = password ?? (await unlockedPasswordSessionStorage.get()).value ?? undefined;
+    if (!resolvedPassword) {
       throw new RpcError('PASSWORD_REQUIRED', 'Password is required to sign.');
     }
 
-    const secret = await unlockVaultRecord(vault, password);
+    let secret: VaultSecret;
+    try {
+      secret = await unlockVaultRecord(vault, resolvedPassword);
+    } catch (error) {
+      if (!password) {
+        await unlockedPasswordSessionStorage.set({ value: null });
+        throw new RpcError('PASSWORD_REQUIRED', 'Password is required to sign.');
+      }
+      throw error;
+    }
     this.unlockedSecrets[walletId] = {
       secret,
       unlockedAt: Date.now()
     };
     await this.persistUnlockedSecrets();
     return secret;
+  }
+
+  private async findUnlockedSecretForAccount(
+    walletId: string,
+    chain: GrapeChain,
+    publicKey: string,
+    derivationPath?: string
+  ): Promise<VaultSecret | null> {
+    await this.ensureUnlockedSecretsLoaded();
+
+    const cached = this.unlockedSecrets[walletId];
+    if (cached) {
+      try {
+        if (this.resolvePublicKeyFromSecret(cached.secret, chain, derivationPath) === publicKey) {
+          return cached.secret;
+        }
+      } catch {
+        // Ignore cached secrets that cannot be mapped to this chain/account.
+      }
+    }
+
+    for (const entry of Object.values(this.unlockedSecrets)) {
+      try {
+        if (this.resolvePublicKeyFromSecret(entry.secret, chain, derivationPath) !== publicKey) {
+          continue;
+        }
+
+        this.unlockedSecrets[walletId] = {
+          secret: entry.secret,
+          unlockedAt: Date.now()
+        };
+        await this.persistUnlockedSecrets();
+        return entry.secret;
+      } catch {
+        // Ignore secrets that cannot be mapped to this chain/account.
+      }
+    }
+
+    return null;
+  }
+
+  private async getUnlockedSecretForAccount(
+    walletId: string,
+    vault: NonNullable<ReturnType<typeof getSelectedWallet>>['vault'],
+    chain: GrapeChain,
+    publicKey: string,
+    password?: string,
+    derivationPath?: string
+  ) {
+    const resolved = await this.findUnlockedSecretForAccount(walletId, chain, publicKey, derivationPath);
+    if (resolved) {
+      return resolved;
+    }
+
+    if (!password) {
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        await delay(150);
+        this.unlockedSecrets = await unlockedSecretSessionStorage.get();
+        const retried = await this.findUnlockedSecretForAccount(walletId, chain, publicKey, derivationPath);
+        if (retried) {
+          return retried;
+        }
+      }
+    }
+
+    return this.getUnlockedSecret(walletId, vault, password);
   }
 }
 
@@ -6982,68 +7237,6 @@ function toGovernanceMembershipRecord(entry: {
   };
 }
 
-async function resolveGovernanceProposalMemberships(
-  connection: Connection,
-  programId: PublicKey,
-  realmPk: PublicKey,
-  proposalMint: string,
-  ownerKey: string,
-  memberships: GovernanceMembershipRecord[],
-  loadRealmTokenOwnerRecords: () => Promise<TokenOwnerRecord[]>
-): Promise<GovernanceMembershipRecord[]> {
-  if (getGovernanceEligibleVoteMemberships(proposalMint, ownerKey, memberships).length > 0) {
-    return memberships;
-  }
-
-  const merged = new Map(memberships.map((entry) => [entry.pubkey, entry] as const));
-  const ownerPk = tryParseSolanaPublicKey(ownerKey);
-  const proposalMintPk = tryParseSolanaPublicKey(proposalMint);
-
-  if (ownerPk && proposalMintPk) {
-    try {
-      const directRecord = await getTokenOwnerRecordForRealm(connection, programId, realmPk, proposalMintPk, ownerPk);
-      const normalized = toGovernanceMembershipRecord(directRecord);
-      if (
-        BigInt(normalized.governingTokenDepositAmount) > 0n &&
-        (!normalized.governanceDelegate || normalized.governanceDelegate === ownerKey)
-      ) {
-        merged.set(normalized.pubkey, normalized);
-      }
-    } catch {
-      // Ignore and keep the indexed memberships if the direct TOR lookup misses.
-    }
-  }
-
-  try {
-    const realmTokenOwnerRecords = await loadRealmTokenOwnerRecords();
-    for (const entry of realmTokenOwnerRecords) {
-      const normalized = toGovernanceMembershipRecord(entry);
-      if (normalized.governingTokenMint !== proposalMint) {
-        continue;
-      }
-      if (BigInt(normalized.governingTokenDepositAmount) <= 0n) {
-        continue;
-      }
-
-      const isDirect = normalized.governingTokenOwner === ownerKey;
-      if (isDirect) {
-        if (!normalized.governanceDelegate || normalized.governanceDelegate === ownerKey) {
-          merged.set(normalized.pubkey, normalized);
-        }
-        continue;
-      }
-
-      if (normalized.governanceDelegate === ownerKey) {
-        merged.set(normalized.pubkey, normalized);
-      }
-    }
-  } catch {
-    // Ignore RPC fallback failure and keep the existing memberships.
-  }
-
-  return Array.from(merged.values());
-}
-
 async function resolveGovernanceVoteSourceStatus(
   connection: Connection,
   programId: PublicKey,
@@ -7239,7 +7432,7 @@ async function resolveGovernanceRealmInfo(
 }
 
 async function fetchGovernanceForDaoViaGraphql(
-  connection: Connection,
+  _connection: Connection,
   owner: PublicKey,
   daoId: string,
   governanceOwner: GovernanceOwner,
@@ -7311,46 +7504,17 @@ async function fetchGovernanceForDaoViaGraphql(
 
   const proposalRows = normalizeGovernanceProposalRows(proposalData, namespace);
   const governanceConfigById = new Map(governanceAccounts.map((entry) => [entry.pubkey, entry] as const));
-  const programId = new PublicKey(governanceOwner.owner);
-  const realmPk = new PublicKey(daoId);
-  let realmTokenOwnerRecordCachePromise: Promise<TokenOwnerRecord[]> | null = null;
-  const loadRealmTokenOwnerRecords = () => {
-    if (!realmTokenOwnerRecordCachePromise) {
-      realmTokenOwnerRecordCachePromise = getGovernanceAccounts(connection, programId, TokenOwnerRecord, [
-        new MemcmpFilter(1, realmPk.toBuffer())
-      ]).catch(() => []);
-    }
-    return realmTokenOwnerRecordCachePromise;
-  };
   const votedOwnersByProposal = normalizeGovernanceVoteOwnersByProposal(voteData, namespace);
 
-  const proposals = (
-    await Promise.all(
-    proposalRows.map(async (proposal) => {
-      const proposalMemberships = await resolveGovernanceProposalMemberships(
-        connection,
-        programId,
-        realmPk,
-        proposal.governingTokenMint,
-        ownerKey,
-        membershipRecords,
-        loadRealmTokenOwnerRecords
-      );
+  const proposals = proposalRows
+    .map((proposal) => {
+      const proposalMemberships = membershipRecords;
       const votedOwners = votedOwnersByProposal.get(proposal.pubkey) ?? new Set<string>();
-      const votedTokenOwnerRecordsByProposal = await resolveGovernanceVoteSourceStatus(
-        connection,
-        programId,
-        ownerKey,
-        [{ proposalId: proposal.pubkey, governingTokenMint: proposal.governingTokenMint }],
-        proposalMemberships
-      ).catch(() => new Map<string, Set<string>>());
-      const votedTokenOwnerRecordIds = votedTokenOwnerRecordsByProposal.get(proposal.pubkey) ?? new Set<string>();
       const voteSources = buildGovernanceProposalVoteSources(
         proposal.governingTokenMint,
         ownerKey,
         proposalMemberships,
-        votedOwners,
-        votedTokenOwnerRecordIds
+        votedOwners
       );
       const membership = resolveGovernanceProposalMembership(proposal.governingTokenMint, ownerKey, proposalMemberships);
       const governanceConfig = governanceConfigById.get(proposal.governance);
@@ -7404,8 +7568,7 @@ async function fetchGovernanceForDaoViaGraphql(
         denyVotes: proposal.denyVotes
       } satisfies WalletGovernanceResponse['proposals'][number];
     })
-    )
-  ).sort((left, right) => (right.votingAt ?? right.draftAt ?? 0) - (left.votingAt ?? left.draftAt ?? 0));
+    .sort((left, right) => (right.votingAt ?? right.draftAt ?? 0) - (left.votingAt ?? left.draftAt ?? 0));
 
   const daoSummary = buildGovernanceDaoSummary(
     daoId, realm.name, realm.communityMint, ownerKey, membershipRecords, isNonMemberDao, isDelegateDao
@@ -7636,69 +7799,6 @@ async function fetchGovernanceForWallet(
   );
   const discoveredDaoOwnerMap = await discoverGovernanceDaoOwnersForWallet(owner);
 
-  // ── RPC-based global TOR discovery ──────────────────────────────────────────
-  // Shyft may not index all TokenOwnerRecords. We query every known governance
-  // program in parallel — one getProgramAccounts call per program — so DAOs on
-  // custom programs (Marinade, Jito, Helium, etc.) are found even when Shyft
-  // has no entry for them.
-  // We also fetch TORs where the wallet is the delegate (offset 122 in TOR layout:
-  //   1 accountType + 32 realm + 32 mint + 32 owner + 8 deposit + 4+4+1+1+6 misc + 1 option = 122).
-  const rpcTorsByRealm = new Map<string, GovernanceMembershipRecord[]>();
-  const allProgramIds = Array.from(
-    new Set([DEFAULT_GOVERNANCE_PROGRAM_ID, ...GOVERNANCE_OWNERS.map((e) => e.owner)])
-  );
-  const [torResults, delegateTorResults] = await Promise.all([
-    Promise.allSettled(
-      allProgramIds.map((pid) => getTokenOwnerRecordsByOwner(connection, new PublicKey(pid), owner))
-    ),
-    Promise.allSettled(
-      allProgramIds.map((pid) =>
-        getGovernanceAccounts(connection, new PublicKey(pid), TokenOwnerRecord, [
-          new MemcmpFilter(122, owner.toBuffer())
-        ]).catch(() => [])
-      )
-    )
-  ]);
-
-  const addTorToMap = (tor: { pubkey: { toBase58(): string }; account: { realm: { toBase58(): string }; governingTokenMint: { toBase58(): string }; governingTokenOwner: { toBase58(): string }; governanceDelegate?: { toBase58(): string } | null; governingTokenDepositAmount: { toString(): string } } }, programId: string, isDelegate: boolean) => {
-    const realmId = tor.account.realm.toBase58();
-    const rec: GovernanceMembershipRecord = {
-      pubkey: tor.pubkey.toBase58(),
-      governingTokenMint: tor.account.governingTokenMint.toBase58(),
-      governingTokenOwner: tor.account.governingTokenOwner.toBase58(),
-      governanceDelegate: tor.account.governanceDelegate?.toBase58() ?? null,
-      governingTokenDepositAmount: tor.account.governingTokenDepositAmount.toString()
-    };
-    if (!rpcTorsByRealm.has(realmId)) rpcTorsByRealm.set(realmId, []);
-    // Avoid duplicates (an owner TOR already in the map)
-    const existing = rpcTorsByRealm.get(realmId)!;
-    if (!existing.some((r) => r.pubkey === rec.pubkey)) {
-      existing.push(rec);
-    }
-    if (!discoveredDaoOwnerMap.has(realmId)) {
-      const knownOwner = GOVERNANCE_OWNERS.find((e) => e.owner === programId && e.dao === realmId)
-        ?? GOVERNANCE_OWNERS.find((e) => e.owner === programId);
-      discoveredDaoOwnerMap.set(realmId, {
-        owner: { owner: programId, name: knownOwner?.name ?? programId, dao: realmId },
-        isDelegate,
-        isNonMember: false
-      });
-    }
-  };
-
-  for (let i = 0; i < allProgramIds.length; i++) {
-    const programId = allProgramIds[i];
-    const ownerResult = torResults[i];
-    if (ownerResult.status === 'fulfilled') {
-      for (const tor of ownerResult.value) addTorToMap(tor, programId, false);
-    }
-    const delegateResult = delegateTorResults[i];
-    if (delegateResult.status === 'fulfilled') {
-      for (const tor of delegateResult.value) addTorToMap(tor, programId, true);
-    }
-  }
-  // ────────────────────────────────────────────────────────────────────────────
-
   const discoveredDaoIds = [...discoveredDaoOwnerMap.keys()];
   const delegateDaoIds = discoveredDaoIds.filter((id) => discoveredDaoOwnerMap.get(id)?.isDelegate === true);
   const governedDaoIds = discoveredDaoIds.filter((id) => discoveredDaoOwnerMap.get(id)?.isNonMember === true);
@@ -7726,8 +7826,6 @@ async function fetchGovernanceForWallet(
         const isDelegateDao = discovered?.isDelegate === true;
         // Non-member: treasury/governed wallet, OR manually tracked but not discovered
         const isNonMemberDao = discovered?.isNonMember === true || (!discovered && uniqueTrackedDaoIds.includes(daoId));
-        // Pre-fetched TORs for this realm (from the global getTokenOwnerRecordsByOwner call)
-        const preloadedRpcTors = rpcTorsByRealm.get(daoId);
         try {
         return await fetchGovernanceForDaoViaGraphql(
           connection,
@@ -7735,33 +7833,26 @@ async function fetchGovernanceForWallet(
           daoId,
           governanceOwner,
           isDelegateDao,
-          isNonMemberDao,
-          preloadedRpcTors
+          isNonMemberDao
         );
       } catch {
-        const fallbackRealm = preloadedRpcTors && preloadedRpcTors.length > 0
-          ? await resolveGovernanceRealmInfo(connection, daoId, governanceOwner).catch(() => null)
-          : null;
-        const fallbackDaoSummary = fallbackRealm && preloadedRpcTors && preloadedRpcTors.length > 0
-          ? {
-              ...buildGovernanceDaoSummary(
-                daoId,
-                fallbackRealm.name,
-                fallbackRealm.communityMint,
-                owner.toBase58(),
-                preloadedRpcTors,
-                isNonMemberDao,
-                isDelegateDao
-              ),
-              councilMint: fallbackRealm.councilMint
-            }
-          : null;
-        return {
-          source: 'none' as const,
-          member: (preloadedRpcTors?.length ?? 0) > 0,
-          proposals: [],
-          daoSummary: fallbackDaoSummary
-        };
+        try {
+          return await fetchGovernanceForDaoViaRpc(
+            connection,
+            owner,
+            daoId,
+            governanceOwner,
+            undefined,
+            isNonMemberDao
+          );
+        } catch {
+          return {
+            source: 'none' as const,
+            member: false,
+            proposals: [],
+            daoSummary: null
+          };
+        }
       }
     })
   );
@@ -7772,39 +7863,6 @@ async function fetchGovernanceForWallet(
   let daos = results
     .map((entry) => ('daoSummary' in entry ? entry.daoSummary : null))
     .filter((s): s is WalletGovernanceResponse['daos'][number] => s !== null);
-
-  const knownDaoSummaryIds = new Set(daos.map((dao) => dao.daoId));
-  const fallbackDaoSummaryPromises = Array.from(rpcTorsByRealm.entries())
-    .filter(([daoId, memberships]) => memberships.length > 0 && !knownDaoSummaryIds.has(daoId))
-    .map(async ([daoId, memberships]) => {
-      const discovered = discoveredDaoOwnerMap.get(daoId);
-      const governanceOwner = discovered?.owner ?? (await resolveGovernanceOwnerByRealm(daoId));
-      const realm = await resolveGovernanceRealmInfo(connection, daoId, governanceOwner);
-      if (!realm) {
-        return null;
-      }
-
-      const isDelegateDao = discovered?.isDelegate === true || memberships.every((record) => record.governingTokenOwner !== owner.toBase58());
-      return {
-        ...buildGovernanceDaoSummary(
-          daoId,
-          realm.name,
-          realm.communityMint,
-          owner.toBase58(),
-          memberships,
-          false,
-          isDelegateDao
-        ),
-        councilMint: realm.councilMint
-      };
-    });
-
-  if (fallbackDaoSummaryPromises.length > 0) {
-    const fallbackDaos = (await Promise.all(fallbackDaoSummaryPromises)).filter(
-      (entry): entry is WalletGovernanceResponse['daos'][number] => entry !== null
-    );
-    daos = [...daos, ...fallbackDaos];
-  }
 
   // Batch-fetch community token decimals so voting power can be displayed correctly.
   // SPL Mint layout: decimals is a single u8 at byte offset 44.
@@ -8186,6 +8244,9 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
           break;
         case 'wallet_get_stake_accounts':
           sendResponse(await controller.getStakeAccounts());
+          break;
+        case 'wallet_get_stake_validators':
+          sendResponse(await controller.getStakeValidators());
           break;
         case 'wallet_get_token_details':
           sendResponse(

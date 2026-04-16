@@ -557,6 +557,9 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     type: z.literal('wallet_get_stake_accounts')
   }),
   z.object({
+    type: z.literal('wallet_get_stake_validators')
+  }),
+  z.object({
     type: z.literal('wallet_get_token_details'),
     mint: z.string().min(32),
     accountAddress: z.string().min(32),

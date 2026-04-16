@@ -5,7 +5,7 @@ export const THEMES: Array<{ id: GrapeTheme; label: string }> = [
   { id: 'comic', label: 'Comic' },
   { id: 'sunset', label: 'Sunset' },
   { id: 'matrix', label: 'Matrix' },
-  { id: 'tron', label: 'Tron' },
+  { id: 'tron', label: 'Ares' },
   { id: 'apple', label: 'Apple Glass' },
   { id: 'aurora', label: 'Aurora' },
   { id: 'champagne', label: 'Champagne' },

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { FormEvent, ReactNode } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
@@ -62,8 +62,10 @@ import type {
   WalletReputationResponse,
   WalletVerificationResponse,
   WalletStakeAccountsResponse,
+  WalletStakeValidatorsResponse,
   WalletStakeActionResponse,
   WalletStateResponse,
+  StakeValidatorRow,
   WalletSwapExecuteResponse,
   WalletSwapQuoteResponse
 } from '../../shared/models';
@@ -1220,6 +1222,7 @@ function PopupPage() {
   const [activityError, setActivityError] = useState<string | null>(null);
   const [expandedActivitySignature, setExpandedActivitySignature] = useState<string | null>(null);
   const [stakeAccounts, setStakeAccounts] = useState<StakeAccountRow[]>([]);
+  const [stakeValidators, setStakeValidators] = useState<StakeValidatorRow[]>([]);
   const [stakeSource, setStakeSource] = useState<'shyft' | 'rpc' | 'none'>('none');
   const [stakeLoading, setStakeLoading] = useState(false);
   const [stakeAmount, setStakeAmount] = useState('');
@@ -1347,16 +1350,33 @@ function PopupPage() {
   const refreshStakeAccounts = async () => {
     if (!state || state.wallet.setup !== 'ready') {
       setStakeAccounts([]);
+      setStakeValidators([]);
       setStakeSource('none');
       return;
     }
 
     setStakeLoading(true);
     try {
-      const nextStakeState = await sendRuntimeMessage<WalletStakeAccountsResponse>({ type: 'wallet_get_stake_accounts' });
-      setStakeAccounts(nextStakeState.accounts);
-      setStakeSource(nextStakeState.source);
-      setStakeError(null);
+      const [stakeAccountsResult, stakeValidatorsResult] = await Promise.allSettled([
+        sendRuntimeMessage<WalletStakeAccountsResponse>({ type: 'wallet_get_stake_accounts' }),
+        sendRuntimeMessage<WalletStakeValidatorsResponse>({ type: 'wallet_get_stake_validators' })
+      ]);
+
+      if (stakeAccountsResult.status === 'fulfilled') {
+        setStakeAccounts(stakeAccountsResult.value.accounts);
+        setStakeSource(stakeAccountsResult.value.source);
+        setStakeError(null);
+      } else {
+        setStakeAccounts([]);
+        setStakeSource('none');
+        setStakeError(stakeAccountsResult.reason instanceof Error ? stakeAccountsResult.reason.message : 'Unable to load stake accounts.');
+      }
+
+      if (stakeValidatorsResult.status === 'fulfilled') {
+        setStakeValidators(stakeValidatorsResult.value.validators);
+      } else {
+        setStakeValidators([]);
+      }
     } catch (error) {
       setStakeError(error instanceof Error ? error.message : 'Unable to load stake accounts.');
     } finally {
@@ -1441,8 +1461,8 @@ function PopupPage() {
     setBridgePassword('');
     setStakePassword('');
     setBurnPassword('');
-    setGovernancePassword('');
     setIncidentPassword('');
+    setGovernancePassword('');
   }, [state?.canUseUnlockedSigner]);
 
   useEffect(() => {
@@ -1546,7 +1566,7 @@ function PopupPage() {
     }
 
     void refreshStakeAccounts();
-  }, [homeTab, view, state?.wallet.setup, state?.session.locked, state?.activeWallet?.signerKind, state?.wallet.selectedWalletId]);
+  }, [homeTab, view, state?.wallet.setup, state?.session.locked, state?.activeWallet?.signerKind, state?.wallet.selectedWalletId, state?.wallet.selectedNetwork]);
 
   useEffect(() => {
     if (homeTab !== 'activity' || state?.wallet.setup !== 'ready' || view !== 'home') {
@@ -2841,9 +2861,22 @@ function PopupPage() {
   const session = state?.session ?? ({ locked: true } as WalletStateResponse['session']);
   const permissions = state?.permissions ?? [];
   const canUseUnlockedSigner = state?.canUseUnlockedSigner ?? false;
-  const governanceSigningUnlocked = canUseUnlockedSigner;
   const activeWallet = state?.activeWallet;
+  const selectedStakeValidator = stakeValidators.find((validator) => validator.voteAccount === stakeVoteAccount.trim()) ?? null;
   const isWatchOnlyWallet = activeWallet?.signerKind === 'watch-only';
+  const governanceVotingReady = !session.locked && !isWatchOnlyWallet;
+  const governanceVotingFallbackReady = !isWatchOnlyWallet && (governanceVotingReady || !!governancePassword.trim());
+  const governanceVoteErrorRequiresFallback = !!governanceVoteError && (
+    governanceVoteError.includes('Enter your password') ||
+    governanceVoteError.includes('device unlock') ||
+    governanceVoteError.includes('Vote signing session is out of sync') ||
+    governanceVoteError.includes('Password is required to sign')
+  );
+  const governanceNeedsSigningFallback = !isWatchOnlyWallet && (
+    !governanceVotingReady ||
+    !!governancePassword.trim() ||
+    governanceVoteErrorRequiresFallback
+  );
   const recentRecipients = state?.recentRecipients ?? [];
   const privacyMode = wallet.privacyMode;
   const selectedChain = wallet.selectedChain;
@@ -3390,6 +3423,20 @@ function PopupPage() {
     choiceRank?: number;
     voteSources?: WalletGovernanceResponse['proposals'][number]['voteSources'];
   }) {
+    const latestState = await sendRuntimeMessage<WalletStateResponse>({ type: 'wallet_get_state' }).catch(() => null);
+    if (latestState) {
+      setState(latestState);
+    }
+
+    const latestGovernanceVotingReady = !((latestState?.session ?? state?.session)?.locked ?? true) && !(
+      (latestState?.activeWallet ?? state?.activeWallet)?.signerKind === 'watch-only'
+    );
+
+    if (!latestGovernanceVotingReady && !governancePassword.trim()) {
+      setGovernanceVoteError('Enter your password or use device unlock before voting on proposals.');
+      return;
+    }
+
     const voteSources = (input.voteSources ?? []).filter((source) => !source.hasVoted);
     const fallbackSource = input.tokenOwnerRecordId
       ? [{
@@ -3440,7 +3487,7 @@ function PopupPage() {
             governingTokenMint: input.governingTokenMint,
             voteKind: input.voteKind,
             choiceRank: input.choiceRank,
-            password: governanceSigningUnlocked ? undefined : governancePassword || undefined
+            password: governancePassword.trim() || undefined
           });
         } catch (error) {
           const message = error instanceof Error ? error.message : 'Unable to submit governance vote.';
@@ -3462,7 +3509,20 @@ function PopupPage() {
       }
       await refresh();
     } catch (error) {
-      setGovernanceVoteError(error instanceof Error ? error.message : 'Unable to submit governance vote.');
+      const message = error instanceof Error ? error.message : 'Unable to submit governance vote.';
+      if (message === 'Password is required to sign.') {
+        const nextState = await sendRuntimeMessage<WalletStateResponse>({ type: 'wallet_get_state' }).catch(() => null);
+        if (nextState) {
+          setState(nextState);
+        }
+        setGovernanceVoteError(
+          nextState?.session.locked
+            ? 'Enter your password or use device unlock before voting on proposals.'
+            : 'Vote signing session is out of sync. Enter your password below or use device unlock, then try again.'
+        );
+      } else {
+        setGovernanceVoteError(message);
+      }
     } finally {
       setGovernanceVotingProposalId(null);
     }
@@ -3558,13 +3618,12 @@ function PopupPage() {
         {canVoteNow ? (
           <div className="governance-vote-actions">
             {proposal.choices.map((choice) => (
-              <Button
-                key={`${proposal.proposalId}:${choice.rank}`}
-                tone="secondary"
-                disabled={
-                  governanceVotingProposalId === proposal.proposalId ||
-                  (!governanceSigningUnlocked && !governancePassword.trim())
-                }
+                <Button
+                  key={`${proposal.proposalId}:${choice.rank}`}
+                  tone="secondary"
+                  disabled={
+                  governanceVotingProposalId === proposal.proposalId || !governanceVotingFallbackReady
+                  }
                 onClick={() =>
                   void handleGovernanceVote({
                     daoId: proposal.daoId,
@@ -3587,8 +3646,7 @@ function PopupPage() {
               <Button
                 tone="secondary"
                 disabled={
-                  governanceVotingProposalId === proposal.proposalId ||
-                  (!governanceSigningUnlocked && !governancePassword.trim())
+                  governanceVotingProposalId === proposal.proposalId || !governanceVotingFallbackReady
                 }
                 onClick={() =>
                   void handleGovernanceVote({
@@ -3632,6 +3690,11 @@ function PopupPage() {
     } finally {
       setUnlocking(false);
     }
+  }
+
+  function handleUnlockInlineSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void handleUnlockInline();
   }
 
   async function handleBiometricUnlockInline() {
@@ -3683,14 +3746,15 @@ function PopupPage() {
       setSwapError(null);
       setTokenActionError(null);
       setIncidentError(null);
+      setGovernanceVoteError(null);
       const password = await unlockWithBiometric(selectedWallet.biometricUnlock);
       const nextState = await sendRuntimeMessage<WalletStateResponse>({
         type: 'wallet_unlock',
         password
       });
+      setGovernancePassword('');
       setBridgePassword('');
       setStakePassword('');
-      setGovernancePassword('');
       setSwapPassword('');
       setBurnPassword('');
       setIncidentPassword('');
@@ -3704,6 +3768,31 @@ function PopupPage() {
       setSwapError(message);
       setTokenActionError(message);
       setIncidentError(message);
+    } finally {
+      setBiometricUnlocking(false);
+    }
+  }
+
+  async function handleBiometricUnlockForGovernance() {
+    if (!wallet.wallets.length) {
+      return;
+    }
+
+    const selectedWallet =
+      wallet.wallets.find((entry) => entry.id === selectedWalletIdForChain) ??
+      wallet.wallets.find((entry) => entry.chain === wallet.selectedChain) ??
+      wallet.wallets[0];
+    if (!selectedWallet?.biometricUnlock) {
+      return;
+    }
+
+    try {
+      setBiometricUnlocking(true);
+      setGovernanceVoteError(null);
+      const password = await unlockWithBiometric(selectedWallet.biometricUnlock);
+      setGovernancePassword(password);
+    } catch (error) {
+      setGovernanceVoteError(error instanceof Error ? error.message : 'Unable to unlock with device.');
     } finally {
       setBiometricUnlocking(false);
     }
@@ -4032,7 +4121,7 @@ function PopupPage() {
             <h2 className="unlock-welcome-title">Grape Wallet</h2>
           </div>
 
-          <div className="unlock-welcome-form">
+          <form className="unlock-welcome-form" onSubmit={handleUnlockInlineSubmit}>
             <div className="unlock-password-shell">
               <Input
                 type={showUnlockPassword ? 'text' : 'password'}
@@ -4066,9 +4155,9 @@ function PopupPage() {
             {unlockError ? <p className="danger-box">{unlockError}</p> : null}
 
             <Button
+              type="submit"
               className="button-block unlock-submit-button"
               disabled={unlocking || !unlockPassword.trim()}
-              onClick={() => void handleUnlockInline()}
             >
               {unlocking ? 'Unlocking...' : 'Unlock'}
             </Button>
@@ -4076,7 +4165,7 @@ function PopupPage() {
             <p className="muted unlock-welcome-helper">
               Unlock once per session. Grape will ask again only after you lock it or the idle timeout expires.
             </p>
-          </div>
+          </form>
         </Card>
       </div>
     );
@@ -4589,33 +4678,36 @@ function PopupPage() {
                   }
                   return (
                     <>
-                      {activeProposals.length > 0 ? (!governanceSigningUnlocked ? (
-                        <label className="stack">
-                          <span className="muted">Password</span>
-                          <div className="send-input-shell send-input-shell-sign">
-                            <Input
-                              type="password"
-                              value={governancePassword}
-                              onChange={(event) => setGovernancePassword(event.target.value)}
-                              placeholder="Unlock required to sign governance votes"
-                            />
-                            {biometricSupported && activeWallet?.biometricEnabled ? (
-                              <button
-                                type="button"
-                                className="biometric-inline-button"
-                                onClick={() => void handleBiometricUnlockForSigning()}
-                                aria-label="Unlock with device"
-                                title="Unlock with device"
-                                disabled={biometricUnlocking}
-                              >
-                                <Fingerprint size={16} />
-                              </button>
-                            ) : null}
-                          </div>
-                        </label>
-                      ) : (
-                        <p className="muted">Wallet is already unlocked. You can sign governance votes without re-entering your password.</p>
-                      )) : null}
+                      {activeProposals.length > 0 && governanceNeedsSigningFallback ? (
+                        <div className="stack">
+                          <label className="stack">
+                            <span className="muted">Governance signing password</span>
+                            <div className="send-input-shell send-input-shell-sign">
+                              <Input
+                                type="password"
+                                value={governancePassword}
+                                onChange={(event) => setGovernancePassword(event.target.value)}
+                                placeholder={governanceVotingReady ? 'Optional password fallback' : 'Password required to sign'}
+                              />
+                              {biometricSupported && activeWallet?.biometricEnabled ? (
+                                <button
+                                  type="button"
+                                  className="biometric-inline-button"
+                                  onClick={() => void handleBiometricUnlockForGovernance()}
+                                  aria-label="Unlock with device"
+                                  title="Unlock with device"
+                                  disabled={biometricUnlocking}
+                                >
+                                  <Fingerprint size={16} />
+                                </button>
+                              ) : null}
+                            </div>
+                          </label>
+                          <p className="muted">
+                            Enter your password or use device unlock before voting on proposals.
+                          </p>
+                        </div>
+                      ) : null}
                       {activeProposals.length > 0 ? (
                         <div className="governance-proposal-list">
                           {activeProposals.map((proposal) => renderGovernanceProposalCard(proposal, nowUnixSeconds))}
@@ -4796,6 +4888,30 @@ function PopupPage() {
                 <div className="staking-form-card">
                   <h3>Stake</h3>
                   <Input value={stakeAmount} onChange={(event) => setStakeAmount(event.target.value)} placeholder="Amount (SOL)" />
+                  <select
+                    className="staking-select"
+                    value={selectedStakeValidator?.voteAccount ?? ''}
+                    onChange={(event) => setStakeVoteAccount(event.target.value)}
+                    disabled={stakeLoading || stakeValidators.length === 0}
+                  >
+                    <option value="">
+                      {stakeLoading ? 'Loading validators...' : stakeValidators.length > 0 ? 'Select validator' : 'No validators loaded'}
+                    </option>
+                    {stakeValidators.map((validator) => (
+                      <option key={validator.voteAccount} value={validator.voteAccount}>
+                        {`${formatAddress(validator.voteAccount)} • ${formatSolAmountFromLamports(validator.activatedStakeLamports)} SOL • ${validator.commission}% commission`}
+                      </option>
+                    ))}
+                  </select>
+                  {selectedStakeValidator ? (
+                    <p className="muted">
+                      Active stake {formatSolAmountFromLamports(selectedStakeValidator.activatedStakeLamports)} SOL • Commission {selectedStakeValidator.commission}% • Node {formatAddress(selectedStakeValidator.nodePubkey)}
+                    </p>
+                  ) : (
+                    <p className="muted">
+                      Choose a validator from the live Solana vote-account list, or paste a vote account manually.
+                    </p>
+                  )}
                   <Input value={stakeVoteAccount} onChange={(event) => setStakeVoteAccount(event.target.value)} placeholder="Validator vote account" />
                   <Button className="button-block" onClick={handleCreateStake} disabled={isWatchOnlyWallet || stakeSubmitting !== null || !stakeAmount.trim() || !stakeVoteAccount.trim()}>
                     {stakeSubmitting === 'stake' ? 'Submitting...' : 'Stake SOL'}
@@ -5345,7 +5461,7 @@ function PopupPage() {
             <KeyValueRow label="Token account" value={<span className="mono asset-detail-mono">{assetDetails.accountAddress}</span>} />
             <div className="inline wrap-actions asset-detail-links">
               <Button tone="secondary" onClick={() => window.open(buildExplorerUrl(assetDetails.mint, explorerNetwork), '_blank', 'noopener,noreferrer')}>
-                Mint on Explorer
+                View on Explorer
               </Button>
               <Button tone="secondary" onClick={() => window.open(buildExplorerUrl(assetDetails.accountAddress, explorerNetwork), '_blank', 'noopener,noreferrer')}>
                 Token Account on Explorer

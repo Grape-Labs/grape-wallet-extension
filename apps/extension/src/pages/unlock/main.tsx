@@ -1,3 +1,4 @@
+import type { FormEvent } from 'react';
 import { useEffect, useState } from 'react';
 
 import { Button, Card, Input, PageShell } from '@grape/ui';
@@ -73,34 +74,39 @@ function UnlockPage() {
     }
   }
 
+  async function handleUnlock() {
+    try {
+      setError(null);
+      await sendRuntimeMessage<WalletStateResponse>({
+        type: 'wallet_unlock',
+        password
+      });
+      handleUnlockSuccess();
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : 'Unable to unlock wallet.');
+    }
+  }
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void handleUnlock();
+  }
+
   return (
     <PageShell title="Unlock" subtitle="Enter your password to open your wallet.">
       <Card title="Wallet locked">
-        <div className="stack">
+        <form className="stack" onSubmit={handleSubmit}>
           <Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Password" />
           {error ? <p className="danger-box">{error}</p> : null}
-          <Button
-            onClick={async () => {
-              try {
-                setError(null);
-                await sendRuntimeMessage<WalletStateResponse>({
-                  type: 'wallet_unlock',
-                  password
-                });
-                handleUnlockSuccess();
-              } catch (nextError) {
-                setError(nextError instanceof Error ? nextError.message : 'Unable to unlock wallet.');
-              }
-            }}
-          >
+          <Button type="submit">
             Unlock
           </Button>
           {biometricSupported && state?.activeWallet?.biometricEnabled ? (
-            <Button tone="secondary" onClick={() => void handleBiometricUnlock()} disabled={biometricUnlocking}>
+            <Button type="button" tone="secondary" onClick={() => void handleBiometricUnlock()} disabled={biometricUnlocking}>
               {biometricUnlocking ? 'Checking device...' : 'Unlock with device'}
             </Button>
           ) : null}
-        </div>
+        </form>
       </Card>
     </PageShell>
   );

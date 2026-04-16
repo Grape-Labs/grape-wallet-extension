@@ -399,6 +399,22 @@ export type WalletStakeAccountsResponse = {
   refreshedAt: number;
 };
 
+export type StakeValidatorRow = {
+  voteAccount: string;
+  nodePubkey: string;
+  commission: number;
+  activatedStakeLamports: number;
+  lastVote: number;
+  rootSlot: number;
+};
+
+export type WalletStakeValidatorsResponse = {
+  validators: StakeValidatorRow[];
+  source: 'rpc' | 'none';
+  network: WalletState['selectedNetwork'];
+  refreshedAt: number;
+};
+
 export type WalletStakeActionResponse = {
   signature: string;
   action: 'stake' | 'deactivate' | 'withdraw';

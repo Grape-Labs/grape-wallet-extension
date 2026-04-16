@@ -1172,10 +1172,14 @@ export async function castWalletGovernanceVote(input: {
   const web3 = loadSolanaWeb3Module();
   const { Connection, PublicKey, Transaction } = web3;
   const {
+    getMaxVoterWeightRecordAddress,
+    getVoterWeightRecordAddress,
     getGovernance,
     getRealm,
     getProposal,
+    getTokenOwnerRecord,
     ProposalState,
+    tryGetRealmConfig,
     Vote,
     VoteChoice,
     VoteKind,
@@ -1195,11 +1199,13 @@ export async function castWalletGovernanceVote(input: {
   const governingTokenMintPk = new PublicKey(input.governingTokenMint);
   const connection = new Connection(getMobileSolanaRpcUrl(DEFAULT_SOLANA_NETWORK), 'confirmed');
 
-  const [programVersion, proposalAccount, governanceAccount, realmAccount] = await Promise.all([
+  const [programVersion, proposalAccount, governanceAccount, realmAccount, tokenOwnerRecordAccount, realmConfigAccount] = await Promise.all([
     resolveMobileGovernanceProgramVersion(connection, programId, realmPk),
     getProposal(connection, proposalPk),
     getGovernance(connection, governancePk),
-    getRealm(connection, realmPk)
+    getRealm(connection, realmPk),
+    getTokenOwnerRecord(connection, tokenOwnerRecordPk),
+    tryGetRealmConfig(connection, programId, realmPk)
   ]);
 
   if (proposalAccount.account.state !== ProposalState.Voting) {
@@ -1216,6 +1222,12 @@ export async function castWalletGovernanceVote(input: {
       'The selected vote record does not match this proposal voting class. Community and council votes must use their matching governance mint.'
     );
   }
+  if (tokenOwnerRecordAccount.account.realm.toBase58() !== input.daoId) {
+    throw new Error('This token owner record does not belong to the selected DAO.');
+  }
+  if (tokenOwnerRecordAccount.account.governingTokenMint.toBase58() !== input.governingTokenMint) {
+    throw new Error('This token owner record does not match the proposal voting mint.');
+  }
 
   const instructions: import('@solana/web3.js').TransactionInstruction[] = [];
   const vote =
@@ -1230,6 +1242,42 @@ export async function castWalletGovernanceVote(input: {
             veto: undefined
           });
 
+  const communityMintPk = realmAccount.account.communityMint;
+  const councilMintPk = realmAccount.account.config.councilMint ?? null;
+  const governingTokenConfig = governingTokenMintPk.equals(communityMintPk)
+    ? realmConfigAccount?.account.communityTokenConfig
+    : councilMintPk && governingTokenMintPk.equals(councilMintPk)
+      ? realmConfigAccount?.account.councilTokenConfig
+      : null;
+  const governingTokenOwnerPk = tokenOwnerRecordAccount.account.governingTokenOwner;
+  const voterWeightRecordPk = governingTokenConfig?.voterWeightAddin
+    ? await getVoterWeightRecordAddress(
+        governingTokenConfig.voterWeightAddin,
+        realmPk,
+        governingTokenMintPk,
+        governingTokenOwnerPk
+      )
+    : undefined;
+  const maxVoterWeightRecordPk = governingTokenConfig?.maxVoterWeightAddin
+    ? await getMaxVoterWeightRecordAddress(
+        governingTokenConfig.maxVoterWeightAddin,
+        realmPk,
+        governingTokenMintPk
+      )
+    : undefined;
+  const governancePluginAccounts = [voterWeightRecordPk, maxVoterWeightRecordPk].filter(
+    (entry): entry is import('@solana/web3.js').PublicKey => !!entry
+  );
+  if (governancePluginAccounts.length > 0) {
+    const pluginAccountInfos = await connection.getMultipleAccountsInfo(governancePluginAccounts, 'confirmed');
+    const missingGovernancePluginAccount = governancePluginAccounts.find((_, index) => !pluginAccountInfos[index]);
+    if (missingGovernancePluginAccount) {
+      throw new Error(
+        'This DAO uses a governance voter-weight plugin, but the required voting record is not available for this wallet yet. Voting for this DAO is not currently supported in Grape.'
+      );
+    }
+  }
+
   await withCastVote(
     instructions,
     programId,
@@ -1242,7 +1290,9 @@ export async function castWalletGovernanceVote(input: {
     owner,
     governingTokenMintPk,
     vote,
-    owner
+    owner,
+    voterWeightRecordPk,
+    maxVoterWeightRecordPk
   );
 
   const { blockhash } = await connection.getLatestBlockhash('confirmed');

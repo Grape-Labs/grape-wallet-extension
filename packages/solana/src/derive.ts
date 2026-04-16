@@ -30,7 +30,10 @@ export type ExportedSoftwareWalletSecret = {
   mnemonic?: string;
 };
 
-export function deriveSolanaAccount0(mnemonic: string): DerivedSolanaAccount {
+export function deriveSolanaAccount(
+  mnemonic: string,
+  derivationPath = SOLANA_DERIVATION_PATH
+): DerivedSolanaAccount {
   const normalizedMnemonic = normalizeMnemonic(mnemonic);
   if (!validateWalletMnemonic(normalizedMnemonic)) {
     throw new Error('Mnemonic is invalid.');
@@ -38,7 +41,7 @@ export function deriveSolanaAccount0(mnemonic: string): DerivedSolanaAccount {
 
   const seed = mnemonicToSeedBytes(normalizedMnemonic);
   const hdKey = HDKey.fromMasterSeed(new Uint8Array(seed));
-  const derived = hdKey.derive(SOLANA_DERIVATION_PATH);
+  const derived = hdKey.derive(derivationPath);
   if (!derived.privateKey) {
     throw new Error('Unable to derive Solana account.');
   }
@@ -46,10 +49,14 @@ export function deriveSolanaAccount0(mnemonic: string): DerivedSolanaAccount {
   const keypair = Keypair.fromSeed(derived.privateKey);
   return {
     mnemonic: normalizedMnemonic,
-    derivationPath: SOLANA_DERIVATION_PATH,
+    derivationPath,
     keypair,
     publicKey: keypair.publicKey.toBase58()
   };
+}
+
+export function deriveSolanaAccount0(mnemonic: string): DerivedSolanaAccount {
+  return deriveSolanaAccount(mnemonic, SOLANA_DERIVATION_PATH);
 }
 
 export function validateSolanaPrivateKey(privateKey: string): boolean {
@@ -74,9 +81,9 @@ export function importSolanaPrivateKey(privateKey: string): ImportedSolanaPrivat
   };
 }
 
-export function resolveSolanaVaultSecret(secret: VaultSecret): Keypair {
+export function resolveSolanaVaultSecret(secret: VaultSecret, derivationPath = SOLANA_DERIVATION_PATH): Keypair {
   if (secret.kind === 'mnemonic') {
-    return deriveSolanaAccount0(secret.mnemonic).keypair;
+    return deriveSolanaAccount(secret.mnemonic, derivationPath).keypair;
   }
 
   if (secret.kind === 'auth-token') {
@@ -86,9 +93,12 @@ export function resolveSolanaVaultSecret(secret: VaultSecret): Keypair {
   return importSolanaPrivateKey(secret.secretKey).keypair;
 }
 
-export function exportSolanaSoftwareWalletSecret(secret: VaultSecret): ExportedSoftwareWalletSecret {
+export function exportSolanaSoftwareWalletSecret(
+  secret: VaultSecret,
+  derivationPath = SOLANA_DERIVATION_PATH
+): ExportedSoftwareWalletSecret {
   if (secret.kind === 'mnemonic') {
-    const derived = deriveSolanaAccount0(secret.mnemonic);
+    const derived = deriveSolanaAccount(secret.mnemonic, derivationPath);
     return {
       kind: 'mnemonic',
       publicKey: derived.publicKey,

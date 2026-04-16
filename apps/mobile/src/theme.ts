@@ -28,7 +28,7 @@ export const mobileThemes: Array<{ id: GrapeTheme; label: string }> = [
   { id: 'comic', label: 'Comic' },
   { id: 'sunset', label: 'Sunset' },
   { id: 'matrix', label: 'Matrix' },
-  { id: 'tron', label: 'Tron' },
+  { id: 'tron', label: 'Ares' },
   { id: 'apple', label: 'Apple Glass' },
   { id: 'aurora', label: 'Aurora' },
   { id: 'champagne', label: 'Champagne' },
@@ -107,7 +107,7 @@ const themeMap: Record<GrapeTheme, Omit<MobileThemePalette, keyof typeof basePal
   },
   tron: {
     id: 'tron',
-    label: 'Tron',
+    label: 'Ares',
     backgroundAssetKey: 'bg_tron',
     backgroundImageOpacity: 0.88,
     backgroundImageBlur: 1,

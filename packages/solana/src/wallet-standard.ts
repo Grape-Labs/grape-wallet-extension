@@ -139,26 +139,41 @@ export function createWalletStandardWallet(
         version: '1.0.0',
         supportedTransactionVersions: ['legacy', 0] as const,
         signTransaction: async (...inputs) => {
-          const outputs = [];
           for (const input of inputs) {
             if (input.account.address !== provider.publicKey?.toBase58()) {
               throw new Error('Requested account does not match the active Grape account.');
             }
+          }
 
+          if (inputs.length === 1) {
             const signed = await provider.transport.request<{ transaction: string }>({
               id: crypto.randomUUID(),
               method: 'signTransaction',
               origin: provider.origin,
               params: {
-                transaction: bytesToBase64(input.transaction)
+                transaction: bytesToBase64(inputs[0].transaction)
               }
             });
 
-            outputs.push({
-              signedTransaction: base64ToBytes(signed.transaction)
-            });
+            return [
+              {
+                signedTransaction: base64ToBytes(signed.transaction)
+              }
+            ];
           }
-          return outputs;
+
+          const signedBatch = await provider.transport.request<{ transactions: string[] }>({
+            id: crypto.randomUUID(),
+            method: 'signAllTransactions',
+            origin: provider.origin,
+            params: {
+              transactions: inputs.map((input) => bytesToBase64(input.transaction))
+            }
+          });
+
+          return signedBatch.transactions.map((transaction) => ({
+            signedTransaction: base64ToBytes(transaction)
+          }));
         }
       }
     },
