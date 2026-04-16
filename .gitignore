@@ -8,3 +8,4 @@ coverage
 .env.*.local
 .extension-keys/
 .DS_Store
+.claude
