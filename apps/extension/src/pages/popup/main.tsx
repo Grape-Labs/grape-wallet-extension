@@ -4472,7 +4472,7 @@ function PopupPage() {
                         <strong>{formatWholeNumberString(totalEffectiveReputationPoints)}</strong>
                       </div>
                       <div className="community-summary-card">
-                        <span className="muted">Latest season points</span>
+                        <span className="muted">Latest season</span>
                         <strong>{formatWholeNumberString(totalLatestSeasonReputationPoints)}</strong>
                       </div>
                     </div>
