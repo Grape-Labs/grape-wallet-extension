@@ -34,6 +34,7 @@ import {
   X
 } from 'lucide-react';
 import QRCode from 'qrcode';
+import extensionPackage from '../../../package.json';
 
 import { Button, Card, Input, KeyValueRow, PageShell, StatusPill } from '@grape/ui';
 import { GRAPE_VERIFICATION_REQUIRED_DAO_ID, STORAGE_KEYS } from '@grape/core';
@@ -78,6 +79,8 @@ import { applyDocumentTheme, THEMES } from '../../shared/theme';
 import { openExtensionPage, openExtensionSidePanel } from '../../shared/window';
 import { ApprovalView } from '../approval/ApprovalView';
 import { mountPage } from '../lib';
+
+const APP_VERSION = extensionPackage.version?.trim() || 'unknown';
 import { OnboardingView } from '../onboarding/OnboardingView';
 
 type PopupView = 'home' | 'send' | 'receive' | 'swap' | 'bridge' | 'settings' | 'asset' | 'security' | 'approval';
@@ -2845,7 +2848,7 @@ function PopupPage() {
       wallets: [],
       privacyMode: false,
       trackedReputationSpaceIds: [],
-      trackedVerificationSpaceIds: [],
+      trackedVerificationSpaceIds: [GRAPE_VERIFICATION_REQUIRED_DAO_ID],
       trackedGovernanceDaoIds: [],
       selectedChain: 'solana',
       selectedNetwork: 'mainnet-beta',
@@ -2887,6 +2890,7 @@ function PopupPage() {
   const isEthereumChain = selectedChain === 'ethereum';
   const selectedNetworkLabel = formatNetworkLabel(selectedChain, wallet.selectedNetwork);
   const totalEffectiveReputationPoints = reputation.spaces.reduce((sum, space) => sum + BigInt(space.effectivePoints), BigInt(0)).toString();
+  const totalLatestSeasonReputationPoints = reputation.spaces.reduce((sum, space) => sum + BigInt(space.latestSeasonPoints), BigInt(0)).toString();
   const verificationDaoNameMap = new Map<string, string>([
     ...reputation.spaces
       .filter((space) => !!space.name)
@@ -3093,7 +3097,7 @@ function PopupPage() {
           <div className="stack">
             <p className="muted access-required-copy">
               Use one wallet verified in Grape Verification DAO{' '}
-              <span className="mono access-required-dao">{GRAPE_VERIFICATION_REQUIRED_DAO_ID}</span>.
+              <span className="mono access-required-dao">{GRAPE_VERIFICATION_REQUIRED_DAO_ID}</span>
               After verification succeeds, Grape will not ask you to repeat this flow on each open.
             </p>
             {state.wallet.wallets.some((walletEntry) => walletEntry.chain === 'solana') ? (
@@ -4291,7 +4295,9 @@ function PopupPage() {
                           : 'Add spaces'}
                   </strong>
                   <span className="wallet-shortcut-meta">
-                    {reputation.spaces.length} space{reputation.spaces.length === 1 ? '' : 's'}
+                    {reputation.spaces.length > 0
+                      ? `Latest s. ${formatWholeNumberString(totalLatestSeasonReputationPoints)} pts`
+                      : `${reputation.spaces.length} space${reputation.spaces.length === 1 ? '' : 's'}`}
                   </span>
                 </button>
                 <button
@@ -4466,8 +4472,8 @@ function PopupPage() {
                         <strong>{formatWholeNumberString(totalEffectiveReputationPoints)}</strong>
                       </div>
                       <div className="community-summary-card">
-                        <span className="muted">Tracked spaces</span>
-                        <strong>{reputation.spaces.length}</strong>
+                        <span className="muted">Latest season points</span>
+                        <strong>{formatWholeNumberString(totalLatestSeasonReputationPoints)}</strong>
                       </div>
                     </div>
                     <div className="grape-reputation-list">
@@ -4480,7 +4486,7 @@ function PopupPage() {
                             <div className="grape-reputation-copy">
                               <strong>{space.name ?? `Space ${formatAddress(space.daoId)}`}</strong>
                               <span>
-                                {space.symbol ?? formatAddress(space.repMint)} • Latest season {space.latestSeasonWithPoints}:{' '}
+                                {space.symbol ?? formatAddress(space.repMint)} • {space.latestSeasonWithPoints}:{' '}
                                 {formatWholeNumberString(space.latestSeasonPoints)} pts
                               </span>
                             </div>
@@ -5324,9 +5330,13 @@ function PopupPage() {
   function renderReceive() {
     return (
       <>
-        <Card title="Receive">
+        <Card className="receive-panel">
           <div className="receive-card">
-            {receiveQr ? <img className="receive-qr" src={receiveQr} alt="Wallet address QR code" /> : null}
+            {receiveQr ? (
+              <div className="receive-qr-shell">
+                <img className="receive-qr" src={receiveQr} alt="Wallet address QR code" />
+              </div>
+            ) : null}
             <div className="receive-address">
               <div className="mono receive-address-value">{activePublicKey}</div>
               <Button tone="secondary" className="button-block" onClick={handleCopyAddress}>&nbsp;
@@ -5831,6 +5841,10 @@ function PopupPage() {
             <div className="settings-row">
               <span className="muted">Connected sites</span>
               <strong>{permissions.length}</strong>
+            </div>
+            <div className="settings-row">
+              <span className="muted">Version</span>
+              <strong className="mono">{APP_VERSION}</strong>
             </div>
             <label className="incident-toggle compact-settings-toggle">
               <input

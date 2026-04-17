@@ -123,6 +123,7 @@ Notes:
 - Shyft metadata uses `wallet/all_tokens` to enrich wallet tokens with names, symbols, and logos when `VITE_GRAPE_SHYFT_API_KEY` is set
 - `GRAPE_EXTENSION_KEY_FILE` can point to a PEM private key or PEM public key; `GRAPE_EXTENSION_KEY` can hold the base64 manifest key directly
 - keep the same Chromium key on every build if you want future updates to replace the existing extension instead of creating a new one
+- extension builds now fail by default if no stable Chromium key is configured; set `GRAPE_ALLOW_EPHEMERAL_EXTENSION_ID=true` only if you intentionally want a temporary unpacked-only build with a different ID
 
 ## Scripts
 
@@ -148,6 +149,8 @@ Create the unpacked build:
 ```bash
 pnpm build
 ```
+
+The extension build automatically increments the shared release version before packaging, so each build gets a new app/manifest version.
 
 The extension output is written to:
 
@@ -177,6 +180,8 @@ Notes:
 - this sets the manifest `key` during build, which keeps the extension ID stable
 - do not rotate that key unless you intentionally want a new Chromium extension ID
 - if you already have the manifest public key string, set `GRAPE_EXTENSION_KEY` instead of `GRAPE_EXTENSION_KEY_FILE`
+- if you omit both key settings, `pnpm build` now fails to prevent shipping a zip that installs as a separate extension
+- extension builds also auto-bump the root and `apps/extension` package versions together before packaging
 
 ## Load Unpacked In Chrome
 

@@ -8,6 +8,7 @@ import {
   createDeviceLinkPayloadText,
   decryptText,
   DEFAULT_THEME,
+  GRAPE_VERIFICATION_REQUIRED_DAO_ID,
   encryptText,
   parseDeviceLinkPayloadText,
   type DeviceLinkHandoffPayload,
@@ -258,7 +259,7 @@ export function createEmptyMobileWalletState(): MobileWalletState {
     selectedWalletIds: {},
     trustedDappOrigins: [],
     trackedReputationSpaceIds: [],
-    trackedVerificationSpaceIds: [],
+    trackedVerificationSpaceIds: [GRAPE_VERIFICATION_REQUIRED_DAO_ID],
     trackedGovernanceDaoIds: [],
     wallets: [],
     passwordSalt: '',
@@ -332,7 +333,7 @@ export async function createWalletSet(input: {
     selectedWalletIds: Object.fromEntries(wallets.map((wallet) => [wallet.chain, wallet.id])),
     trustedDappOrigins: [],
     trackedReputationSpaceIds: [],
-    trackedVerificationSpaceIds: [],
+    trackedVerificationSpaceIds: [GRAPE_VERIFICATION_REQUIRED_DAO_ID],
     trackedGovernanceDaoIds: [],
     wallets,
     passwordSalt,
@@ -407,7 +408,7 @@ export async function createPrivateKeyWallet(input: {
     },
     trustedDappOrigins: [],
     trackedReputationSpaceIds: [],
-    trackedVerificationSpaceIds: [],
+    trackedVerificationSpaceIds: [GRAPE_VERIFICATION_REQUIRED_DAO_ID],
     trackedGovernanceDaoIds: [],
     wallets: [wallet],
     passwordSalt,
@@ -2328,7 +2329,7 @@ function normalizeMobileWalletState(state: MobileWalletState): MobileWalletState
     passkeyWallet: normalizePasskeyWalletConfig(state.passkeyWallet),
     trustedDappOrigins: normalizeTrustedDappOrigins(state.trustedDappOrigins),
     trackedReputationSpaceIds: normalizeTrackedReputationSpaceIds(state.trackedReputationSpaceIds),
-    trackedVerificationSpaceIds: normalizeTrackedDaoIds(state.trackedVerificationSpaceIds),
+    trackedVerificationSpaceIds: normalizeTrackedVerificationSpaceIds(state.trackedVerificationSpaceIds),
     trackedGovernanceDaoIds: normalizeTrackedDaoIds(state.trackedGovernanceDaoIds)
   };
 }
@@ -2385,6 +2386,10 @@ function normalizeTrackedReputationSpaceIds(value: string[] | null | undefined) 
         .filter(Boolean)
     )
   );
+}
+
+function normalizeTrackedVerificationSpaceIds(value: string[] | null | undefined) {
+  return normalizeTrackedDaoIds([...(Array.isArray(value) ? value : []), GRAPE_VERIFICATION_REQUIRED_DAO_ID]);
 }
 
 function normalizeTrackedDaoIds(value: string[] | null | undefined) {

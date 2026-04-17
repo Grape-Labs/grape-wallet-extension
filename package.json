@@ -1,11 +1,12 @@
 {
   "name": "grape-wallet-extension",
   "private": true,
-  "version": "0.5.3",
+  "version": "0.5.22",
   "packageManager": "pnpm@10.6.3",
   "scripts": {
     "build": "pnpm --filter @grape/core build && pnpm --filter @grape/solana build && pnpm --filter @grape/sui build && pnpm --filter @grape/monad build && pnpm --filter @grape/ethereum build && pnpm --filter @grape/ui build && pnpm --filter @grape/wallet-adapter build && pnpm --filter @grape/extension build && pnpm --filter @grape/passkey-web build",
     "dev": "pnpm --filter @grape/extension dev",
+    "version:bump:extension": "node scripts/bump-extension-version.mjs",
     "passkey-web:dev": "pnpm --filter @grape/passkey-web dev",
     "passkey-web:build": "pnpm --filter @grape/passkey-web build",
     "mobile:start": "pnpm --filter @grape/mobile start",

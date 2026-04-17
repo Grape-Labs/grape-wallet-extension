@@ -1,10 +1,10 @@
 {
   "name": "@grape/extension",
-  "version": "0.5.3",
+  "version": "0.5.22",
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vite build",
+    "build": "node ../../scripts/ensure-extension-build-ready.mjs && node ../../scripts/bump-extension-version.mjs && vite build",
     "dev": "vite build --watch",
     "typecheck": "tsc -p tsconfig.json"
   },

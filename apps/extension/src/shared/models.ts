@@ -154,7 +154,7 @@ export type WalletVerificationResponse = {
   trackedSpaces: string[];
   identities: WalletVerificationIdentity[];
   totalVerified: number;
-  source: 'onchain' | 'none';
+  source: 'shyft' | 'onchain' | 'none';
   network: WalletState['selectedNetwork'];
   refreshedAt: number;
 };

@@ -87,6 +87,11 @@ function resolveExtensionManifestKey(env: Record<string, string>): string | unde
   return undefined;
 }
 
+function shouldAllowEphemeralExtensionId(env: Record<string, string>): boolean {
+  const rawValue = env.GRAPE_ALLOW_EPHEMERAL_EXTENSION_ID?.trim().toLowerCase();
+  return rawValue === '1' || rawValue === 'true' || rawValue === 'yes';
+}
+
 function createManifestPlugin(mainnetRpcUrl: string, extensionKey?: string): Plugin {
   return {
     name: 'grape-manifest',
@@ -166,6 +171,15 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, workspaceRoot, '');
   const mainnetRpcUrl = resolveMainnetRpcUrl(env.VITE_GRAPE_MAINNET_RPC_URL);
   const extensionKey = resolveExtensionManifestKey(env);
+  const allowEphemeralExtensionId = shouldAllowEphemeralExtensionId(env);
+
+  if (!extensionKey && !allowEphemeralExtensionId) {
+    throw new Error(
+      'Missing Chromium extension key. Add GRAPE_EXTENSION_KEY_FILE=.extension-keys/grape-chromium.pem ' +
+      'or GRAPE_EXTENSION_KEY=... to the repo-root .env so rebuilt zips keep the same extension ID. ' +
+      'If you are updating an existing install, reuse the original key. If you intentionally want an ephemeral unpacked-only build, set GRAPE_ALLOW_EPHEMERAL_EXTENSION_ID=true.'
+    );
+  }
 
   return {
     root: extensionRoot,

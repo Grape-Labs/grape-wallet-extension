@@ -6,6 +6,7 @@ import {
   createDeviceLinkPayloadText,
   createVaultRecord,
   createPendingApproval,
+  base64ToBytes,
   decryptText,
   encryptText,
   getSelectedWallet,
@@ -229,6 +230,8 @@ const GOVERNANCE_PROGRAM_VERSION_V1 = 1;
 const GOVERNANCE_PROGRAM_VERSION_V2 = 2;
 const GOVERNANCE_PROGRAM_VERSION_V3 = 3;
 const GOVERNANCE_GRAPHQL_URL = 'https://grape.shyft.to/v1/graphql/';
+const VERIFICATION_GRAPHQL_NAMESPACE = 'grape_verification_registry';
+const GRAPHQL_RETRYABLE_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);
 const KNOWN_TOKEN_SYMBOLS: Record<string, string> = {
   [JUPITER_SOL_MINT]: 'SOL',
   EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v: 'USDC'
@@ -311,6 +314,29 @@ type VerificationLinkAccount = {
   identity: string;
   walletHash: Uint8Array;
   linkedAt: number | null;
+};
+
+type GraphqlVerificationSpaceRow = {
+  pubkey?: string;
+  daoId?: string;
+  salt?: string;
+};
+
+type GraphqlVerificationIdentityRow = {
+  pubkey?: string;
+  space?: string;
+  platform?: number | string;
+  verified?: boolean;
+  verifiedAt?: number | string | null;
+  expiresAt?: number | string | null;
+  attestedBy?: string | null;
+};
+
+type GraphqlVerificationLinkRow = {
+  pubkey?: string;
+  identity?: string;
+  walletHash?: string;
+  linkedAt?: number | string | null;
 };
 
 type GovernanceOwner = {
@@ -1347,7 +1373,7 @@ class WalletController {
   }
 
   async setSessionState(partial: Partial<{ locked: boolean; lastActivityAt: number }>) {
-    const current = await this.getSessionState();
+    const current = await sessionStorage.get();
     await sessionStorage.set({
       ...current,
       ...partial
@@ -1587,18 +1613,34 @@ class WalletController {
       selectedWallet?.vault
         ? [selectedWallet, ...vaultWallets.filter((wallet) => wallet.id !== selectedWallet.id)]
         : vaultWallets;
-    const [primaryWallet, ...remainingWallets] = prioritizedWallets;
+    let primaryWallet: (typeof prioritizedWallets)[number] | undefined;
+    let primarySecret: VaultSecret | null = null;
 
-    if (!primaryWallet?.vault) {
+    if (prioritizedWallets.length === 0) {
       await this.setSessionState({ locked: false, lastActivityAt: Date.now() });
       return true;
     }
 
-    const primarySecret = await unlockVaultRecord(primaryWallet.vault, password).catch(() => null);
-    if (!primarySecret) {
+    for (const wallet of prioritizedWallets) {
+      if (!wallet.vault) {
+        continue;
+      }
+
+      const unlocked = await unlockVaultRecord(wallet.vault, password).catch(() => null);
+      if (!unlocked) {
+        continue;
+      }
+
+      primaryWallet = wallet;
+      primarySecret = unlocked;
+      break;
+    }
+
+    if (!primaryWallet?.vault || !primarySecret) {
       throw new RpcError('INVALID_PASSWORD', 'Password is incorrect.');
     }
 
+    const remainingWallets = prioritizedWallets.filter((wallet) => wallet.id !== primaryWallet.id);
     const unlockedAt = Date.now();
     const nextUnlockedSecrets: UnlockedSecretCache = {
       [primaryWallet.id]: {
@@ -2407,19 +2449,14 @@ class WalletController {
         return empty;
       }
 
-      const connection = this.createConnection(network, walletState);
-      let identities: WalletVerificationResponse['identities'] = [];
-      try {
-        identities = await fetchVerificationForWallet(connection, owner, trackedSpaces);
-      } catch {
-        identities = [];
-      }
+      const identities = await fetchVerificationForWalletIndexed(owner, trackedSpaces);
+      const source: WalletVerificationResponse['source'] = trackedSpaces.length > 0 ? 'shyft' : 'none';
 
       const result: WalletVerificationResponse = {
         trackedSpaces,
         identities,
         totalVerified: identities.filter((identity) => identity.verified).length,
-        source: trackedSpaces.length > 0 ? 'onchain' : 'none',
+        source,
         network,
         refreshedAt: Date.now()
       };
@@ -2489,9 +2526,7 @@ class WalletController {
     if (!owner) {
       throw new RpcError('ACCESS_UNAVAILABLE', 'The selected Solana wallet address is invalid.');
     }
-
-    const connection = this.createConnection('mainnet-beta', walletState);
-    const identities = await fetchVerificationForWallet(connection, owner, [GRAPE_VERIFICATION_REQUIRED_DAO_ID]);
+    const identities = await fetchVerificationForWalletIndexed(owner, [GRAPE_VERIFICATION_REQUIRED_DAO_ID]);
     const now = Date.now();
 
     if (!hasRequiredGrapeVerificationAccess(identities)) {
@@ -6108,6 +6143,89 @@ async function fetchVerificationForWallet(
     }
   }
 
+  return sortVerificationIdentities(identities);
+}
+
+function parseVerificationNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return value;
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
+function decodeGraphqlByteString(value: unknown): Uint8Array | null {
+  if (value instanceof Uint8Array) {
+    return value;
+  }
+  if (Array.isArray(value) && value.every((entry) => typeof entry === 'number')) {
+    return new Uint8Array(value);
+  }
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const normalizedHex = trimmed.startsWith('\\x')
+    ? trimmed.slice(2)
+    : trimmed.startsWith('0x')
+      ? trimmed.slice(2)
+      : trimmed;
+
+  if (/^[0-9a-fA-F]+$/.test(normalizedHex) && normalizedHex.length % 2 === 0) {
+    const bytes = new Uint8Array(normalizedHex.length / 2);
+    for (let index = 0; index < normalizedHex.length; index += 2) {
+      bytes[index / 2] = Number.parseInt(normalizedHex.slice(index, index + 2), 16);
+    }
+    return bytes;
+  }
+
+  try {
+    return base64ToBytes(trimmed);
+  } catch {
+    return null;
+  }
+}
+
+function matchesGraphqlByteString(value: unknown, expectedBytes: Uint8Array): boolean {
+  const expectedBase64 = arrayBufferToBase64(expectedBytes);
+  const expectedHex = bytesToHex(expectedBytes).toLowerCase();
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return false;
+    }
+
+    if (trimmed === expectedBase64) {
+      return true;
+    }
+
+    const normalizedHex = trimmed.startsWith('\\x')
+      ? trimmed.slice(2)
+      : trimmed.startsWith('0x')
+        ? trimmed.slice(2)
+        : trimmed;
+    if (normalizedHex.toLowerCase() === expectedHex) {
+      return true;
+    }
+  }
+
+  const decoded = decodeGraphqlByteString(value);
+  return decoded ? bytesToHex(decoded).toLowerCase() === expectedHex : false;
+}
+
+function sortVerificationIdentities(
+  identities: WalletVerificationResponse['identities']
+): WalletVerificationResponse['identities'] {
   return identities.sort((left, right) => {
     if (left.verified !== right.verified) {
       return left.verified ? -1 : 1;
@@ -6120,6 +6238,199 @@ async function fetchVerificationForWallet(
     }
     return left.platform.localeCompare(right.platform);
   });
+}
+
+function buildVerificationSpacesQuery(spacePubkeys: string[]): string {
+  const ids = spacePubkeys.map((entry) => `"${escapeGraphqlString(entry)}"`).join(', ');
+  return `
+    query VerificationSpaces {
+      ${VERIFICATION_GRAPHQL_NAMESPACE}_GrapeVerificationSpace(where: {pubkey: {_in: [${ids}]}}) {
+        pubkey
+        daoId
+        salt
+      }
+    }
+  `;
+}
+
+function buildVerificationIdentitiesBySpaceQuery(spacePubkeys: string[]): string {
+  const ids = spacePubkeys.map((entry) => `"${escapeGraphqlString(entry)}"`).join(', ');
+  return `
+    query VerificationIdentitiesBySpace {
+      ${VERIFICATION_GRAPHQL_NAMESPACE}_GrapeVerificationIdentity(limit: 5000, where: {space: {_in: [${ids}]}}) {
+        pubkey
+        space
+        platform
+        verified
+        verifiedAt
+        expiresAt
+        attestedBy
+      }
+    }
+  `;
+}
+
+function buildVerificationLinksByIdentityQuery(identityPubkeys: string[]): string {
+  const ids = identityPubkeys.map((entry) => `"${escapeGraphqlString(entry)}"`).join(', ');
+  return `
+    query VerificationLinksByIdentity {
+      ${VERIFICATION_GRAPHQL_NAMESPACE}_GrapeVerificationLink(limit: 5000, where: {identity: {_in: [${ids}]}}) {
+        pubkey
+        identity
+        linkedAt
+        walletHash
+      }
+    }
+  `;
+}
+
+async function fetchVerificationForWalletIndexed(
+  owner: PublicKey,
+  trackedDaoIds: string[] = []
+): Promise<WalletVerificationResponse['identities']> {
+  const daoIds = Array.from(new Set(trackedDaoIds.map((entry) => entry.trim()).filter((entry) => !!entry)));
+  if (daoIds.length === 0) {
+    return [];
+  }
+
+  const requestedSpaces = daoIds
+    .map((daoId) => {
+      const daoPk = tryParseSolanaPublicKey(daoId);
+      if (!daoPk) {
+        return null;
+      }
+      const [spacePda] = PublicKey.findProgramAddressSync(
+        [utf8Bytes('space'), daoPk.toBytes()],
+        VERIFICATION_REGISTRY_PROGRAM_ID
+      );
+      return { daoId, spacePda: spacePda.toBase58() };
+    })
+    .filter((entry): entry is { daoId: string; spacePda: string } => !!entry);
+
+  if (requestedSpaces.length === 0) {
+    return [];
+  }
+
+  const requestedSpaceByPubkey = new Map(requestedSpaces.map((entry) => [entry.spacePda, entry] as const));
+  const spacesData = await fetchGovernanceGraphql<Record<string, GraphqlVerificationSpaceRow[]>>(
+    buildVerificationSpacesQuery(requestedSpaces.map((entry) => entry.spacePda))
+  );
+  const spaceRows = Array.isArray(spacesData[`${VERIFICATION_GRAPHQL_NAMESPACE}_GrapeVerificationSpace`])
+    ? spacesData[`${VERIFICATION_GRAPHQL_NAMESPACE}_GrapeVerificationSpace`]
+    : [];
+
+  const walletHashBySpace = new Map<string, Uint8Array>();
+  for (const row of spaceRows) {
+    const pubkey = typeof row.pubkey === 'string' ? row.pubkey.trim() : '';
+    if (!pubkey || !requestedSpaceByPubkey.has(pubkey)) {
+      continue;
+    }
+
+    const salt = decodeGraphqlByteString(row.salt);
+    if (!salt || salt.length === 0) {
+      continue;
+    }
+
+    const walletHash = await sha256Bytes(concatBytes(salt, utf8Bytes('wallet'), owner.toBytes()));
+    walletHashBySpace.set(pubkey, walletHash);
+  }
+
+  const spacePubkeys = Array.from(walletHashBySpace.keys());
+  if (spacePubkeys.length === 0) {
+    return [];
+  }
+
+  const identityData = await fetchGovernanceGraphql<Record<string, GraphqlVerificationIdentityRow[]>>(
+    buildVerificationIdentitiesBySpaceQuery(spacePubkeys)
+  );
+  const identityRows = Array.isArray(identityData[`${VERIFICATION_GRAPHQL_NAMESPACE}_GrapeVerificationIdentity`])
+    ? identityData[`${VERIFICATION_GRAPHQL_NAMESPACE}_GrapeVerificationIdentity`]
+    : [];
+  const identityPubkeys = Array.from(new Set(identityRows.map((entry) => (typeof entry.pubkey === 'string' ? entry.pubkey.trim() : '')).filter((entry) => !!entry)));
+
+  if (identityPubkeys.length === 0) {
+    return [];
+  }
+
+  const linksData = await fetchGovernanceGraphql<Record<string, GraphqlVerificationLinkRow[]>>(
+    buildVerificationLinksByIdentityQuery(identityPubkeys)
+  );
+  const identityLinks = Array.isArray(linksData[`${VERIFICATION_GRAPHQL_NAMESPACE}_GrapeVerificationLink`])
+    ? linksData[`${VERIFICATION_GRAPHQL_NAMESPACE}_GrapeVerificationLink`]
+    : [];
+
+  const walletLinksByIdentity = new Map<string, GraphqlVerificationLinkRow[]>();
+  for (const link of identityLinks) {
+    const identity = typeof link.identity === 'string' ? link.identity.trim() : '';
+    if (!identity) {
+      continue;
+    }
+    const existing = walletLinksByIdentity.get(identity);
+    if (existing) {
+      existing.push(link);
+    } else {
+      walletLinksByIdentity.set(identity, [link]);
+    }
+  }
+
+  const linkedWalletCounts = new Map<string, number>();
+  for (const link of identityLinks) {
+    const identity = typeof link.identity === 'string' ? link.identity.trim() : '';
+    if (!identity) {
+      continue;
+    }
+    linkedWalletCounts.set(identity, (linkedWalletCounts.get(identity) ?? 0) + 1);
+  }
+
+  const identities: WalletVerificationResponse['identities'] = [];
+  for (const row of identityRows) {
+    const identityId = typeof row.pubkey === 'string' ? row.pubkey.trim() : '';
+    const spaceId = typeof row.space === 'string' ? row.space.trim() : '';
+    if (!identityId || !spaceId) {
+      continue;
+    }
+
+    const requestedSpace = requestedSpaceByPubkey.get(spaceId);
+    const expectedWalletHash = walletHashBySpace.get(spaceId);
+    if (!requestedSpace || !expectedWalletHash) {
+      continue;
+    }
+
+    // Shyft exposes walletHash as a byte-like column. Query links by identity and
+    // compare the hash locally instead of relying on a GraphQL equality filter.
+    const matchingLinks = (walletLinksByIdentity.get(identityId) ?? []).filter((entry) =>
+      matchesGraphqlByteString(entry.walletHash, expectedWalletHash)
+    );
+    if (matchingLinks.length === 0) {
+      continue;
+    }
+
+    for (const link of matchingLinks) {
+      const linkId = typeof link.pubkey === 'string' ? link.pubkey.trim() : '';
+      if (!linkId) {
+        continue;
+      }
+
+      identities.push({
+        daoId: requestedSpace.daoId,
+        spaceId,
+        identityId,
+        linkId,
+        platform: getVerificationPlatform(Number(row.platform ?? -1)),
+        platformCode: Number(row.platform ?? -1),
+        verified: row.verified === true,
+        verifiedAt: parseVerificationNumber(row.verifiedAt),
+        expiresAt: parseVerificationNumber(row.expiresAt),
+        attestedBy: typeof row.attestedBy === 'string' && row.attestedBy.trim() ? row.attestedBy.trim() : null,
+        linkedAt: parseVerificationNumber(link.linkedAt),
+        linkedWalletCount: linkedWalletCounts.get(identityId) ?? matchingLinks.length,
+        currentWalletLinked: true,
+        walletHashHex: bytesToHex(expectedWalletHash)
+      });
+    }
+  }
+
+  return sortVerificationIdentities(identities);
 }
 
 function findGovernanceOwnerByDao(daoId: string): GovernanceOwner {
@@ -6434,34 +6745,45 @@ function limitGovernanceProposalsForDisplay(
 }
 
 async function fetchGovernanceGraphql<T>(query: string): Promise<T> {
-  const response = await fetch(GOVERNANCE_GRAPHQL_URL, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'accept-encoding': 'gzip'
-    },
-    body: JSON.stringify({ query }),
-    cache: 'no-store'
-  });
+  let lastStatus: number | null = null;
 
-  if (!response.ok) {
-    throw new Error(`Governance GraphQL request failed with ${response.status}.`);
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const response = await fetch(GOVERNANCE_GRAPHQL_URL, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'accept-encoding': 'gzip'
+      },
+      body: JSON.stringify({ query }),
+      cache: 'no-store'
+    });
+
+    if (!response.ok) {
+      lastStatus = response.status;
+      if (!GRAPHQL_RETRYABLE_STATUS_CODES.has(response.status) || attempt === 3) {
+        throw new Error(`GraphQL request failed with ${response.status}.`);
+      }
+      await delay(250 * attempt);
+      continue;
+    }
+
+    const payload = (await response.json()) as {
+      data?: T;
+      errors?: Array<{ message?: string }>;
+    };
+
+    if (Array.isArray(payload.errors) && payload.errors.length > 0) {
+      throw new Error(payload.errors.map((entry) => entry.message || 'Unknown GraphQL error').join('; '));
+    }
+
+    if (!payload.data) {
+      throw new Error('GraphQL response did not include data.');
+    }
+
+    return payload.data;
   }
 
-  const payload = (await response.json()) as {
-    data?: T;
-    errors?: Array<{ message?: string }>;
-  };
-
-  if (Array.isArray(payload.errors) && payload.errors.length > 0) {
-    throw new Error(payload.errors.map((entry) => entry.message || 'Unknown GraphQL error').join('; '));
-  }
-
-  if (!payload.data) {
-    throw new Error('Governance GraphQL response did not include data.');
-  }
-
-  return payload.data;
+  throw new Error(`GraphQL request failed with ${lastStatus ?? 'unknown status'}.`);
 }
 
 function buildGovernanceRealmQuery(namespace: string, daoId: string): string {
