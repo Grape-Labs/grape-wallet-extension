@@ -37,11 +37,12 @@ export async function requestMonadLedgerAccounts(input: {
   startIndex?: number;
   count?: number;
   customRpcUrl?: string | null;
+  promptForPermission?: boolean;
 }): Promise<MonadLedgerDiscoveredAccount[]> {
   ensureLedgerRuntimeGlobals();
   const startIndex = input.startIndex ?? 0;
   const count = input.count ?? MONAD_LEDGER_ACCOUNT_SCAN_BATCH_SIZE;
-  const transport = await TransportWebHID.request();
+  const transport = await openMonadLedgerTransport(input.promptForPermission ?? true);
 
   try {
     const eth = new Eth(transport);
@@ -79,6 +80,11 @@ export async function requestMonadLedgerAccounts(input: {
   } finally {
     await transport.close().catch(() => undefined);
   }
+}
+
+export async function authorizeMonadLedgerTransport(): Promise<void> {
+  const transport = await openMonadLedgerTransport(true);
+  await transport.close().catch(() => undefined);
 }
 
 export async function sendMonadWithLedger(
@@ -139,10 +145,7 @@ async function sendMonadLedgerTransaction(
   }
 ): Promise<Hex> {
   ensureLedgerRuntimeGlobals();
-  const transport = await TransportWebHID.openConnected();
-  if (!transport) {
-    throw new Error('Ledger device not found. Connect it and authorize Grape first.');
-  }
+  const transport = await openMonadLedgerTransport(false);
 
   try {
     const chain = network === 'testnet' ? MONAD_TESTNET_CHAIN : MONAD_MAINNET_CHAIN;
@@ -191,4 +194,18 @@ function stripHexPrefix(value: Hex) {
 
 function ensureHex(value: string): Hex {
   return (value.startsWith('0x') ? value : `0x${value}`) as Hex;
+}
+
+async function openMonadLedgerTransport(promptForPermission: boolean) {
+  ensureLedgerRuntimeGlobals();
+  if (promptForPermission) {
+    return TransportWebHID.request();
+  }
+
+  const transport = await TransportWebHID.openConnected();
+  if (!transport) {
+    throw new Error('Ledger device not found. Connect it and authorize Grape first.');
+  }
+
+  return transport;
 }

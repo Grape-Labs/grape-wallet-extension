@@ -1,3 +1,6 @@
+import './ledger-polyfills';
+import Solana from '@ledgerhq/hw-app-solana';
+import TransportWebHID from '@ledgerhq/hw-transport-webhid';
 import { base64ToBytes, RpcError } from '@grape/core';
 import { PublicKey, Transaction, VersionedTransaction, Connection } from '@solana/web3.js';
 import { Buffer } from 'buffer';
@@ -17,27 +20,11 @@ export type LedgerDiscoveredAccount = {
 
 type LedgerDerivationVariant = 'root' | 'bip44-change' | 'bip44-legacy';
 
-type LedgerTransportModule = {
-  default: {
-    request(): Promise<unknown>;
-    openConnected(): Promise<unknown | null>;
-  };
-};
-
-type LedgerSolanaModule = {
-  default: new (transport: unknown) => {
-    getAddress(path: string, display?: boolean): Promise<{ address: string | Buffer }>;
-    signTransaction(path: string, txBuffer: Uint8Array, userInputType?: 'ata'): Promise<{ signature: Uint8Array | Buffer }>;
-  };
-};
-
 export async function requestLedgerAccount(path = LEDGER_DEFAULT_DERIVATION_PATH): Promise<{
   publicKey: string;
   derivationPath: string;
 }> {
-  const TransportWebHID = await loadLedgerTransport();
-  const Solana = await loadLedgerSolana();
-  const transport = await TransportWebHID.request();
+  const transport = await openLedgerTransport(true);
 
   try {
     const solana = new Solana(transport);
@@ -55,12 +42,11 @@ export async function requestLedgerAccounts(input: {
   rpcEndpoint: string;
   startIndex?: number;
   count?: number;
+  promptForPermission?: boolean;
 }): Promise<LedgerDiscoveredAccount[]> {
   const startIndex = input.startIndex ?? 0;
   const count = input.count ?? LEDGER_ACCOUNT_SCAN_BATCH_SIZE;
-  const TransportWebHID = await loadLedgerTransport();
-  const Solana = await loadLedgerSolana();
-  const transport = await TransportWebHID.request();
+  const transport = await openLedgerTransport(input.promptForPermission ?? true);
 
   try {
     const solana = new Solana(transport);
@@ -186,6 +172,11 @@ export async function signAndSendLedgerSerializedTransaction(
   return connection.sendRawTransaction(base64ToBytes(signed));
 }
 
+export async function authorizeLedgerTransport(): Promise<void> {
+  const transport = await openLedgerTransport(true);
+  await closeLedgerTransport(transport);
+}
+
 function normalizeLedgerAddress(input: string | Buffer): string {
   if (typeof input === 'string') {
     return input;
@@ -230,13 +221,7 @@ function getLedgerDerivationLabel(index: number, variant: LedgerDerivationVarian
 }
 
 async function signLedgerTransactionBytes(messageBytes: Uint8Array, derivationPath: string): Promise<Uint8Array> {
-  const TransportWebHID = await loadLedgerTransport();
-  const Solana = await loadLedgerSolana();
-  const transport = await TransportWebHID.openConnected();
-
-  if (!transport) {
-    throw new RpcError('LEDGER_NOT_CONNECTED', 'Ledger device not found. Connect it and authorize Grape Wallet first.');
-  }
+  const transport = await openLedgerTransport(false);
 
   try {
     const solana = new Solana(transport);
@@ -247,17 +232,6 @@ async function signLedgerTransactionBytes(messageBytes: Uint8Array, derivationPa
   } finally {
     await closeLedgerTransport(transport);
   }
-}
-
-async function loadLedgerTransport() {
-  ensureLedgerRuntimeGlobals();
-  const module = (await import('@ledgerhq/hw-transport-webhid')) as LedgerTransportModule;
-  return module.default;
-}
-
-async function loadLedgerSolana() {
-  const module = (await import('@ledgerhq/hw-app-solana')) as LedgerSolanaModule;
-  return module.default;
 }
 
 function ensureLedgerRuntimeGlobals() {
@@ -274,16 +248,32 @@ function ensureLedgerRuntimeGlobals() {
   }
 }
 
-async function closeLedgerTransport(transport: unknown) {
-  const closable = transport as { close?: () => Promise<void> } | null;
-  if (closable?.close) {
-    await closable.close();
+async function openLedgerTransport(promptForPermission: boolean): Promise<TransportWebHID> {
+  ensureLedgerRuntimeGlobals();
+
+  if (promptForPermission) {
+    return TransportWebHID.request();
   }
+
+  const transport = await TransportWebHID.openConnected();
+  if (!transport) {
+    throw new RpcError('LEDGER_NOT_CONNECTED', 'Ledger device not found. Connect it and authorize Grape Wallet first.');
+  }
+
+  return transport;
+}
+
+async function closeLedgerTransport(transport: TransportWebHID) {
+  await transport.close();
 }
 
 function normalizeLedgerError(error: unknown): RpcError {
   const message = error instanceof Error ? error.message : 'Ledger request failed.';
   const lower = message.toLowerCase();
+
+  if (lower.includes('user gesture')) {
+    return new RpcError('LEDGER_PERMISSION_REQUIRED', 'Click "Scan Ledger accounts" to authorize your Ledger connection.');
+  }
 
   if (lower.includes('hid') || lower.includes('device')) {
     return new RpcError('LEDGER_NOT_CONNECTED', 'Ledger device is not available. Connect it and unlock it.');

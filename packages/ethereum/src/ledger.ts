@@ -36,11 +36,12 @@ export async function requestEthereumLedgerAccounts(input: {
   startIndex?: number;
   count?: number;
   customRpcUrl?: string | null;
+  promptForPermission?: boolean;
 }): Promise<EthereumLedgerDiscoveredAccount[]> {
   ensureLedgerRuntimeGlobals();
   const startIndex = input.startIndex ?? 0;
   const count = input.count ?? ETHEREUM_LEDGER_ACCOUNT_SCAN_BATCH_SIZE;
-  const transport = await TransportWebHID.request();
+  const transport = await openEthereumLedgerTransport(input.promptForPermission ?? true);
 
   try {
     const eth = new Eth(transport);
@@ -78,6 +79,11 @@ export async function requestEthereumLedgerAccounts(input: {
   } finally {
     await transport.close().catch(() => undefined);
   }
+}
+
+export async function authorizeEthereumLedgerTransport(): Promise<void> {
+  const transport = await openEthereumLedgerTransport(true);
+  await transport.close().catch(() => undefined);
 }
 
 export async function sendEthereumWithLedger(
@@ -138,10 +144,7 @@ async function sendEthereumLedgerTransaction(
   }
 ): Promise<Hex> {
   ensureLedgerRuntimeGlobals();
-  const transport = await TransportWebHID.openConnected();
-  if (!transport) {
-    throw new Error('Ledger device not found. Connect it and authorize Grape first.');
-  }
+  const transport = await openEthereumLedgerTransport(false);
 
   try {
     const chain = network === 'sepolia' ? sepolia : mainnet;
@@ -190,4 +193,18 @@ function stripHexPrefix(value: Hex) {
 
 function ensureHex(value: string): Hex {
   return (value.startsWith('0x') ? value : `0x${value}`) as Hex;
+}
+
+async function openEthereumLedgerTransport(promptForPermission: boolean) {
+  ensureLedgerRuntimeGlobals();
+  if (promptForPermission) {
+    return TransportWebHID.request();
+  }
+
+  const transport = await TransportWebHID.openConnected();
+  if (!transport) {
+    throw new Error('Ledger device not found. Connect it and authorize Grape first.');
+  }
+
+  return transport;
 }

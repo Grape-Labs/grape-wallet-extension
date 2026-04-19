@@ -161,6 +161,7 @@ const GOVERNANCE_OWNERS: GovernanceOwner[] = [
 
 const GOVERNANCE_REALM_DIRECTORY_CACHE_TTL_MS = 15 * 60 * 1000;
 const GOVERNANCE_REALM_DIRECTORY_PAGE_SIZE = 1000;
+const GRAPHQL_RETRYABLE_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);
 let governanceRealmDirectoryCache:
   | {
       expiresAt: number;
@@ -262,6 +263,10 @@ function normalizeTrackedDaoIds(value: string[]) {
 
 function escapeGraphqlString(value: string) {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function parseGovernanceNumber(value: unknown): number | null {
@@ -417,34 +422,45 @@ function limitGovernanceProposalsForDisplay(
 }
 
 async function fetchGovernanceGraphql<T>(query: string): Promise<T> {
-  const response = await fetch(GOVERNANCE_GRAPHQL_URL, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'accept-encoding': 'gzip'
-    },
-    body: JSON.stringify({ query }),
-    cache: 'no-store'
-  });
+  let lastStatus: number | null = null;
 
-  if (!response.ok) {
-    throw new Error(`Governance GraphQL request failed with ${response.status}.`);
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const response = await fetch(GOVERNANCE_GRAPHQL_URL, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'accept-encoding': 'gzip'
+      },
+      body: JSON.stringify({ query }),
+      cache: 'no-store'
+    });
+
+    if (!response.ok) {
+      lastStatus = response.status;
+      if (!GRAPHQL_RETRYABLE_STATUS_CODES.has(response.status) || attempt === 3) {
+        throw new Error(`GraphQL request failed with ${response.status}.`);
+      }
+      await delay(250 * attempt);
+      continue;
+    }
+
+    const payload = (await response.json()) as {
+      data?: T;
+      errors?: Array<{ message?: string }>;
+    };
+
+    if (Array.isArray(payload.errors) && payload.errors.length > 0) {
+      throw new Error(payload.errors.map((entry) => entry.message || 'Unknown GraphQL error').join('; '));
+    }
+
+    if (!payload.data) {
+      throw new Error('GraphQL response did not include data.');
+    }
+
+    return payload.data;
   }
 
-  const payload = (await response.json()) as {
-    data?: T;
-    errors?: Array<{ message?: string }>;
-  };
-
-  if (Array.isArray(payload.errors) && payload.errors.length > 0) {
-    throw new Error(payload.errors.map((entry) => entry.message || 'Unknown GraphQL error').join('; '));
-  }
-
-  if (!payload.data) {
-    throw new Error('Governance GraphQL response did not include data.');
-  }
-
-  return payload.data;
+  throw new Error(`GraphQL request failed with ${lastStatus ?? 'unknown status'}.`);
 }
 
 function buildGovernanceRealmQuery(namespace: string, daoId: string) {

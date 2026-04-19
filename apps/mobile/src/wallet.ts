@@ -49,6 +49,7 @@ import {
   type MobileGovernanceVoteResponse
 } from './governance';
 import type { MobileReputationResponse } from './reputation';
+import type { MobileVerificationResponse } from './verification';
 import type { MobilePasskeyWalletConfig } from './passkeys';
 import { GRAPE_PASSKEY_WALLET_SPEC_VERSION } from '../../../packages/core/src/passkeys';
 
@@ -180,6 +181,8 @@ const MOBILE_SOLANA_ASSET_CACHE_TTL_MS = 30_000;
 const mobileSolanaAssetCache = new Map<string, { expiresAt: number; assets: MobileAsset[] }>();
 const MOBILE_REPUTATION_CACHE_TTL_MS = 30_000;
 const mobileReputationCache = new Map<string, { expiresAt: number; data: MobileReputationResponse }>();
+const MOBILE_VERIFICATION_CACHE_TTL_MS = 30_000;
+const mobileVerificationCache = new Map<string, { expiresAt: number; data: MobileVerificationResponse }>();
 const MOBILE_GOVERNANCE_CACHE_TTL_MS = 30_000;
 const mobileGovernanceCache = new Map<string, { expiresAt: number; data: MobileGovernanceResponse }>();
 const MOBILE_DEVICE_LINK_TTL_MS = 10 * 60 * 1000;
@@ -1150,6 +1153,36 @@ export async function loadWalletGovernance(
   return data;
 }
 
+export async function loadWalletVerification(
+  wallet: MobileWallet,
+  trackedDaoIds: string[]
+): Promise<MobileVerificationResponse> {
+  if (wallet.chain !== 'solana' || trackedDaoIds.length === 0) {
+    return {
+      trackedSpaces: normalizeTrackedVerificationSpaceIds(trackedDaoIds),
+      identities: [],
+      totalVerified: 0,
+      source: 'none',
+      refreshedAt: Date.now()
+    };
+  }
+
+  const normalizedDaoIds = normalizeTrackedVerificationSpaceIds(trackedDaoIds);
+  const cacheKey = `${wallet.address}:${normalizedDaoIds.join(',')}`;
+  const cached = mobileVerificationCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.data;
+  }
+
+  const { fetchMobileVerificationForWallet } = require('./verification') as typeof import('./verification');
+  const data = await fetchMobileVerificationForWallet(wallet.address, normalizedDaoIds);
+  mobileVerificationCache.set(cacheKey, {
+    expiresAt: Date.now() + MOBILE_VERIFICATION_CACHE_TTL_MS,
+    data
+  });
+  return data;
+}
+
 export async function castWalletGovernanceVote(input: {
   state: MobileWalletState;
   wallet: MobileWallet;
@@ -1304,6 +1337,7 @@ export async function castWalletGovernanceVote(input: {
   transaction.add(...instructions);
   const signature = await signAndSendTransaction(transaction, keypair, connection);
   mobileGovernanceCache.clear();
+  mobileVerificationCache.clear();
 
   return {
     signature,

@@ -28,7 +28,8 @@ const config: ExpoConfig = {
     bundleIdentifier: 'xyz.grape.wallet',
     associatedDomains: ['webcredentials:wallet.grape.app'],
     infoPlist: {
-      NSCameraUsageDescription: 'Allow Grape to use the camera to scan wallet restore QR codes.'
+      NSCameraUsageDescription: 'Allow Grape to use the camera to scan wallet restore QR codes.',
+      ITSAppUsesNonExemptEncryption: false
     }
   },
   extra: {

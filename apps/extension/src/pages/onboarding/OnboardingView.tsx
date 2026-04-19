@@ -22,9 +22,9 @@ import {
 } from '@grape/solana';
 import { sendRuntimeMessage } from '../../shared/chrome';
 import type { WalletStateResponse } from '../../shared/models';
-import { requestLedgerAccounts } from '../../../../../packages/solana/src/ledger';
-import { requestEthereumLedgerAccounts } from '../../../../../packages/ethereum/src/ledger';
-import { requestMonadLedgerAccounts } from '../../../../../packages/monad/src/ledger';
+import { authorizeLedgerTransport, requestLedgerAccounts } from '../../../../../packages/solana/src/ledger';
+import { authorizeEthereumLedgerTransport, requestEthereumLedgerAccounts } from '../../../../../packages/ethereum/src/ledger';
+import { authorizeMonadLedgerTransport, requestMonadLedgerAccounts } from '../../../../../packages/monad/src/ledger';
 
 type OnboardingViewProps = {
   compact?: boolean;
@@ -155,6 +155,7 @@ export function OnboardingView(props: OnboardingViewProps) {
   const [ledgerScanCount, setLedgerScanCount] = useState(LEDGER_ACCOUNT_SCAN_BATCH_SIZE);
   const [network, setNetwork] = useState<'mainnet-beta' | 'devnet'>('mainnet-beta');
   const [scanningLedger, setScanningLedger] = useState(false);
+  const [ledgerPermissionPrimed, setLedgerPermissionPrimed] = useState(false);
   const [importMethod, setImportMethod] = useState<ImportMethod>('mnemonic');
   const [ledgerChain, setLedgerChain] = useState<LedgerImportChain>('solana');
   const [privateKeyChain, setPrivateKeyChain] = useState<ImportChain>('solana');
@@ -346,7 +347,9 @@ export function OnboardingView(props: OnboardingViewProps) {
   const requiresPassword =
     isEasyRestorePath ||
     (!isEasyPasskeyPath && (mode === 'create' || importMethod === 'mnemonic' || importMethod === 'private-key' || importMethod === 'ledger'));
-  const isPasswordStepValid = !requiresPassword || (!submitting && password.length >= 8 && password === passwordConfirm);
+  const needsPasswordConfirmation = requiresPassword && !isAppendFlow;
+  const isPasswordStepValid =
+    !requiresPassword || (!submitting && password.length >= 8 && (!needsPasswordConfirmation || password === passwordConfirm));
   const isFinalStepValid = isEasyPasskeyPath
     ? biometricSupported &&
       !needsExistingWalletPasswordForPasskey &&
@@ -361,7 +364,8 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
       const accounts = await requestLedgerCandidates({
         chain: ledgerChain,
         network,
-        count: nextScanCount
+        count: nextScanCount,
+        promptForPermission: false
       });
       setLedgerScanCount(nextScanCount);
       setLedgerAccounts(accounts);
@@ -380,6 +384,41 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
     } finally {
       setScanningLedger(false);
     }
+  }
+
+  function handleLedgerScanClick(nextScanCount = ledgerScanCount) {
+    if (scanningLedger) {
+      return;
+    }
+
+    setError(null);
+    setScanningLedger(true);
+
+    const run = async () => {
+      if (!ledgerPermissionPrimed) {
+        switch (ledgerChain) {
+          case 'solana':
+            await authorizeLedgerTransport();
+            break;
+          case 'ethereum':
+            await authorizeEthereumLedgerTransport();
+            break;
+          case 'monad':
+            await authorizeMonadLedgerTransport();
+            break;
+        }
+        setLedgerPermissionPrimed(true);
+      }
+
+      await scanLedgerAccounts(nextScanCount);
+    };
+
+    void run().catch((nextError) => {
+      setLedgerAccounts([]);
+      setLedgerSelectedAccounts([]);
+      setError(nextError instanceof Error ? nextError.message : 'Unable to scan Ledger accounts.');
+      setScanningLedger(false);
+    });
   }
 
   async function handleSubmit() {
@@ -411,7 +450,7 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
         throw new Error('Password must be at least 8 characters.');
       }
 
-      if (requiresPassword && password !== passwordConfirm) {
+      if (needsPasswordConfirmation && password !== passwordConfirm) {
         throw new Error('Passwords do not match.');
       }
 
@@ -925,13 +964,13 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
                     coming separately.
                   </p>
                   <div className="inline wrap-actions">
-                    <Button tone="secondary" onClick={() => void scanLedgerAccounts()} disabled={scanningLedger}>
+                    <Button tone="secondary" onClick={() => handleLedgerScanClick()} disabled={scanningLedger}>
                       {scanningLedger ? 'Scanning...' : ledgerAccounts.length > 0 ? 'Rescan Ledger' : 'Scan Ledger accounts'}
                     </Button>
                     {ledgerAccounts.length > 0 ? (
                       <Button
                         tone="secondary"
-                        onClick={() => void scanLedgerAccounts(ledgerScanCount + LEDGER_ACCOUNT_SCAN_BATCH_SIZE)}
+                        onClick={() => handleLedgerScanClick(ledgerScanCount + LEDGER_ACCOUNT_SCAN_BATCH_SIZE)}
                         disabled={scanningLedger}
                       >
                         Scan more
@@ -986,7 +1025,19 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
     }
 
     return (
-      <Card title={isEasyPasskeyPath ? 'Finish passkey setup' : isEasyRestorePath ? 'Protect restored wallet' : requiresPassword ? 'Set password' : 'Watch-only ready'}>
+      <Card
+        title={
+          isEasyPasskeyPath
+            ? 'Finish passkey setup'
+            : isEasyRestorePath
+              ? 'Protect restored wallet'
+              : requiresPassword
+                ? isAppendFlow
+                  ? 'Use existing password'
+                  : 'Set password'
+                : 'Watch-only ready'
+        }
+      >
         <div className="stack">
           {isEasyPasskeyPath ? (
             <>
@@ -1009,13 +1060,15 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
           ) : requiresPassword ? (
             <>
               <label className="stack">
-                <span className="muted">Password</span>
+                <span className="muted">{isAppendFlow ? 'Existing password' : 'Password'}</span>
                 <Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
               </label>
-              <label className="stack">
-                <span className="muted">Confirm password</span>
-                <Input type="password" value={passwordConfirm} onChange={(event) => setPasswordConfirm(event.target.value)} />
-              </label>
+              {needsPasswordConfirmation ? (
+                <label className="stack">
+                  <span className="muted">Confirm password</span>
+                  <Input type="password" value={passwordConfirm} onChange={(event) => setPasswordConfirm(event.target.value)} />
+                </label>
+              ) : null}
               <p className="muted">
                 {isAppendFlow
                   ? 'Use your existing wallet password so this wallet can be unlocked alongside the others.'
@@ -1156,6 +1209,8 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
                 : requiresPassword
                   ? isEasyTrack
                     ? 'Secure this wallet'
+                    : isAppendFlow
+                      ? 'Use your existing password'
                     : 'Set your password'
                   : isEasyPasskeyPath
                     ? 'Finish passkey setup'
@@ -1200,6 +1255,7 @@ async function requestLedgerCandidates(input: {
   chain: LedgerImportChain;
   network: 'mainnet-beta' | 'devnet';
   count: number;
+  promptForPermission?: boolean;
 }): Promise<LedgerCandidate[]> {
   switch (input.chain) {
     case 'solana': {
@@ -1214,7 +1270,8 @@ async function requestLedgerCandidates(input: {
         try {
           accounts = await requestLedgerAccounts({
             rpcEndpoint,
-            count: input.count
+            count: input.count,
+            promptForPermission: input.promptForPermission
           });
           break;
         } catch (error) {
@@ -1243,7 +1300,8 @@ async function requestLedgerCandidates(input: {
       const network = input.network === 'devnet' ? 'sepolia' : 'mainnet';
       const accounts = await requestEthereumLedgerAccounts({
         network,
-        count: input.count
+        count: input.count,
+        promptForPermission: input.promptForPermission
       });
 
       return accounts.map((account: { index: number; publicKey: string; derivationPath: string; balanceLabel: string; label: string }) => ({
@@ -1258,7 +1316,8 @@ async function requestLedgerCandidates(input: {
       const network = input.network === 'devnet' ? 'testnet' : 'mainnet';
       const accounts = await requestMonadLedgerAccounts({
         network,
-        count: input.count
+        count: input.count,
+        promptForPermission: input.promptForPermission
       });
 
       return accounts.map((account: { index: number; publicKey: string; derivationPath: string; balanceLabel: string; label: string }) => ({

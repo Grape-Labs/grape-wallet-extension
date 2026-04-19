@@ -5686,9 +5686,17 @@ function PopupPage() {
         {renderSettingsSection({
           section: 'wallet',
           title: 'Wallet',
-          summary: `${selectedNetworkLabel} • ${permissions.length} connected site${permissions.length === 1 ? '' : 's'}`,
+          summary: selectedNetworkLabel,
           children: (
           <div className="stack">
+            <div className="settings-row">
+              <span className="muted">Connected sites</span>
+              <strong>{permissions.length}</strong>
+            </div>
+            <div className="settings-row">
+              <span className="muted">Version</span>
+              <strong className="mono">{APP_VERSION}</strong>
+            </div>
             <label className="stack">
               <span className="muted">Chain</span>
               {renderChainSwitcher()}
@@ -5837,14 +5845,6 @@ function PopupPage() {
                   </Button>
                 </div>
               ) : null}
-            </div>
-            <div className="settings-row">
-              <span className="muted">Connected sites</span>
-              <strong>{permissions.length}</strong>
-            </div>
-            <div className="settings-row">
-              <span className="muted">Version</span>
-              <strong className="mono">{APP_VERSION}</strong>
             </div>
             <label className="incident-toggle compact-settings-toggle">
               <input

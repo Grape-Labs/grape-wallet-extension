@@ -73,6 +73,7 @@ import {
   isValidMnemonic,
   loadMobileWalletState,
   loadWalletReputation,
+  loadWalletVerification,
   loadWalletGovernance,
   removeMobileWallet,
   loadWalletActivity,
@@ -94,6 +95,7 @@ import type {
 } from './src/governance';
 import { scanMobileGovernanceDaoEligibility } from './src/governance';
 import type { MobileReputationResponse } from './src/reputation';
+import type { MobileVerificationResponse } from './src/verification';
 import {
   createMobileDeterministicPasskeyWalletSetup,
   getMobileDeterministicPasskeyWalletSupportStatus,
@@ -589,6 +591,21 @@ function formatWholeNumberString(value: string | null | undefined) {
   }
 }
 
+function formatVerificationPlatformLabel(platform: MobileVerificationResponse['identities'][number]['platform']) {
+  switch (platform) {
+    case 'discord':
+      return 'Discord';
+    case 'telegram':
+      return 'Telegram';
+    case 'twitter':
+      return 'Twitter';
+    case 'email':
+      return 'Email';
+    default:
+      return 'Unknown';
+  }
+}
+
 function formatGovernanceVotingPowerType(
   type: MobileGovernanceResponse['proposals'][number]['votingPowerType']
 ) {
@@ -1004,6 +1021,15 @@ export default function App() {
   const [verificationSpaceInput, setVerificationSpaceInput] = useState('');
   const [verificationSaving, setVerificationSaving] = useState(false);
   const [verificationError, setVerificationError] = useState<string | null>(null);
+  const [verification, setVerification] = useState<MobileVerificationResponse>({
+    trackedSpaces: [],
+    identities: [],
+    totalVerified: 0,
+    source: 'none',
+    refreshedAt: Date.now()
+  });
+  const [verificationLoading, setVerificationLoading] = useState(false);
+  const [verificationLoadError, setVerificationLoadError] = useState<string | null>(null);
   const [governance, setGovernance] = useState<MobileGovernanceResponse>({
     trackedDaos: [],
     discoveredDaos: [],
@@ -1162,9 +1188,21 @@ export default function App() {
     () => formatWholeNumberString(reputation.totalEffectivePoints),
     [reputation.totalEffectivePoints]
   );
+  const totalLatestSeasonReputationPoints = useMemo(
+    () => formatWholeNumberString(reputation.spaces.reduce((sum, space) => sum + BigInt(space.latestSeasonPoints), BigInt(0)).toString()),
+    [reputation.spaces]
+  );
   const trackedVerificationSpaceCount = useMemo(
     () => walletState.trackedVerificationSpaceIds.length,
     [walletState.trackedVerificationSpaceIds]
+  );
+  const verifiedIdentityCount = useMemo(
+    () => verification.identities.filter((identity) => identity.verified).length,
+    [verification.identities]
+  );
+  const verifiedDaoCount = useMemo(
+    () => new Set(verification.identities.filter((identity) => identity.verified).map((identity) => identity.daoId)).size,
+    [verification.identities]
   );
   const trustedDappOrigins = useMemo(
     () => new Set((walletState.trustedDappOrigins ?? []).map((origin) => origin.toLowerCase())),
@@ -1689,6 +1727,73 @@ export default function App() {
       mounted = false;
     };
   }, [selectedWallet, unlocked, walletState.trackedReputationSpaceIds]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function refreshWalletVerification() {
+      if (!unlocked || !selectedWallet || selectedWallet.chain !== 'solana') {
+        if (mounted) {
+          setVerification({
+            trackedSpaces: walletState.trackedVerificationSpaceIds,
+            identities: [],
+            totalVerified: 0,
+            source: 'none',
+            refreshedAt: Date.now()
+          });
+          setVerificationLoadError(null);
+          setVerificationLoading(false);
+        }
+        return;
+      }
+
+      if (walletState.trackedVerificationSpaceIds.length === 0) {
+        if (mounted) {
+          setVerification({
+            trackedSpaces: [],
+            identities: [],
+            totalVerified: 0,
+            source: 'none',
+            refreshedAt: Date.now()
+          });
+          setVerificationLoadError(null);
+          setVerificationLoading(false);
+        }
+        return;
+      }
+
+      setVerificationLoading(true);
+      try {
+        const nextVerification = await loadWalletVerification(selectedWallet, walletState.trackedVerificationSpaceIds);
+        if (!mounted) {
+          return;
+        }
+        setVerification(nextVerification);
+        setVerificationLoadError(null);
+      } catch (unknownError) {
+        if (!mounted) {
+          return;
+        }
+        setVerification({
+          trackedSpaces: walletState.trackedVerificationSpaceIds,
+          identities: [],
+          totalVerified: 0,
+          source: 'none',
+          refreshedAt: Date.now()
+        });
+        setVerificationLoadError(unknownError instanceof Error ? unknownError.message : 'Unable to load verification identities.');
+      } finally {
+        if (mounted) {
+          setVerificationLoading(false);
+        }
+      }
+    }
+
+    void refreshWalletVerification();
+    return () => {
+      mounted = false;
+    };
+  }, [selectedWallet, unlocked, walletState.trackedVerificationSpaceIds]);
 
   useEffect(() => {
     let mounted = true;
@@ -2439,7 +2544,7 @@ export default function App() {
         .catch(() => {});
     }
     try {
-      const [nextAssets, nextActivity, nextReputation, nextGovernance] = await Promise.all([
+      const [nextAssets, nextActivity, nextReputation, nextVerification, nextGovernance] = await Promise.all([
         loadWalletAssets(selectedWallet),
         loadWalletActivity(selectedWallet).catch(() => []),
         selectedWallet.chain === 'solana'
@@ -2454,6 +2559,21 @@ export default function App() {
               spaces: [],
               totalPoints: '0',
               totalEffectivePoints: '0',
+              source: 'none' as const,
+              refreshedAt: Date.now()
+            }),
+        selectedWallet.chain === 'solana'
+          ? loadWalletVerification(selectedWallet, walletState.trackedVerificationSpaceIds).catch(() => ({
+              trackedSpaces: walletState.trackedVerificationSpaceIds,
+              identities: [],
+              totalVerified: 0,
+              source: 'none' as const,
+              refreshedAt: Date.now()
+            }))
+          : Promise.resolve({
+              trackedSpaces: walletState.trackedVerificationSpaceIds,
+              identities: [],
+              totalVerified: 0,
               source: 'none' as const,
               refreshedAt: Date.now()
             }),
@@ -2482,8 +2602,10 @@ export default function App() {
       setAssets(nextAssets);
       setRemoteActivity(nextActivity);
       setReputation(nextReputation);
+      setVerification(nextVerification);
       setGovernance(nextGovernance);
       setReputationError(null);
+      setVerificationLoadError(null);
       setGovernanceError(null);
       setError(null);
     } catch (unknownError) {
@@ -3621,7 +3743,9 @@ export default function App() {
         : walletState.trackedReputationSpaceIds.length > 0
           ? 'No points yet'
           : 'Add spaces';
-    const reputationMeta = `${reputation.spaces.length} space${reputation.spaces.length === 1 ? '' : 's'}`;
+    const reputationMeta = reputation.spaces.length > 0
+      ? `Latest season ${totalLatestSeasonReputationPoints} pts`
+      : `${reputation.spaces.length} space${reputation.spaces.length === 1 ? '' : 's'}`;
     const governanceValue = governanceLoading
       ? 'Loading...'
       : actionableGovernanceProposalCount > 0
@@ -3632,8 +3756,16 @@ export default function App() {
             ? 'Tracked'
             : 'Join DAOs';
     const governanceMeta = `${totalGovernanceDaoCount} DAO${totalGovernanceDaoCount === 1 ? '' : 's'}`;
-    const verificationValue = trackedVerificationSpaceCount > 0 ? 'Verify now' : 'Add spaces';
-    const verificationMeta = `${trackedVerificationSpaceCount} space${trackedVerificationSpaceCount === 1 ? '' : 's'}`;
+    const verificationValue = verificationLoading
+      ? 'Loading...'
+      : verifiedIdentityCount > 0
+        ? `${verifiedIdentityCount} verified`
+        : trackedVerificationSpaceCount > 0
+          ? 'Verify now'
+          : 'Add spaces';
+    const verificationMeta = verifiedDaoCount > 0
+      ? `${verifiedDaoCount} DAO${verifiedDaoCount === 1 ? '' : 's'} verified`
+      : `${trackedVerificationSpaceCount} space${trackedVerificationSpaceCount === 1 ? '' : 's'}`;
     const handleVerificationPress = () => {
       if (trackedVerificationSpaceCount === 1 && walletState.trackedVerificationSpaceIds[0]) {
         void openVerificationSpace(walletState.trackedVerificationSpaceIds[0]);
@@ -5651,11 +5783,64 @@ export default function App() {
         {renderSettingsSection(
           'verification',
           'Verification Spaces',
-          verificationTrackedCount > 0 ? `${verificationTrackedCount} tracked` : 'No spaces tracked',
+          verificationLoading
+            ? 'Loading verification...'
+            : verifiedIdentityCount > 0
+              ? `${verifiedIdentityCount} verified`
+              : verificationTrackedCount > 0
+                ? `${verificationTrackedCount} tracked`
+                : 'No spaces tracked',
           <>
             <Text style={styles.sectionHint}>
-              Add the DAO ids you want to verify against. Mobile opens Grape Verification directly for tracked spaces.
+              Add the DAO ids you want to verify against. Mobile checks tracked spaces against Grape Verification via Shyft and opens the verification flow directly when needed.
             </Text>
+          <View style={styles.reputationSummaryGrid}>
+            <View style={styles.reputationSummaryCard}>
+              <Text style={styles.reputationSummaryLabel}>Verified identities</Text>
+              <Text style={styles.reputationSummaryValue}>{verifiedIdentityCount}</Text>
+            </View>
+            <View style={styles.reputationSummaryCard}>
+              <Text style={styles.reputationSummaryLabel}>Tracked spaces</Text>
+              <Text style={styles.reputationSummaryValue}>{verificationTrackedCount}</Text>
+            </View>
+          </View>
+          {verificationLoading ? (
+            <View style={styles.loadingRow}>
+              <ActivityIndicator color={activeTheme.grape} />
+              <Text style={styles.sectionHint}>Checking Grape Verification identities...</Text>
+            </View>
+          ) : null}
+          {!verificationLoading && verificationLoadError ? <Text style={styles.errorText}>{verificationLoadError}</Text> : null}
+          {!verificationLoading && !verificationLoadError && verification.identities.length > 0 ? (
+            <View style={styles.stack}>
+              {verification.identities.map((identity) => (
+                <View key={identity.linkId} style={styles.governanceEligibilityCard}>
+                  <View style={styles.governanceProposalCopy}>
+                    <Text style={styles.governanceProposalTitle}>{formatVerificationPlatformLabel(identity.platform)}</Text>
+                    <View style={styles.governanceProposalBadges}>
+                      <View style={[styles.governanceStatusPill, identity.verified ? styles.governanceStatusPillSuccess : null]}>
+                        <Text style={[styles.governanceStatusPillText, identity.verified ? styles.governanceStatusPillTextSuccess : null]}>
+                          {identity.verified ? 'Verified' : 'Linked'}
+                        </Text>
+                      </View>
+                    </View>
+                    <Text style={styles.sectionHint}>{identity.daoId}</Text>
+                  </View>
+                  <View style={styles.governanceEligibilityActions}>
+                    <PaperButton
+                      mode="contained"
+                      style={styles.paperPrimaryButton}
+                      buttonColor={activeTheme.primaryButton}
+                      textColor={activeTheme.primaryButtonText}
+                      onPress={() => void openVerificationSpace(identity.daoId)}
+                    >
+                      Open
+                    </PaperButton>
+                  </View>
+                </View>
+              ))}
+            </View>
+          ) : null}
           <PaperTextInput
             value={verificationSpaceInput}
             onChangeText={setVerificationSpaceInput}
@@ -5792,11 +5977,27 @@ export default function App() {
         {renderSettingsSection(
           'reputation',
           'OG Reputation Spaces',
-          reputationTrackedCount > 0 ? `${reputationTrackedCount} tracked` : 'No spaces tracked',
+          reputation.spaces.length > 0
+            ? `${totalLatestSeasonReputationPoints} latest season`
+            : reputationTrackedCount > 0
+              ? `${reputationTrackedCount} tracked`
+              : 'No spaces tracked',
           <>
             <Text style={styles.sectionHint}>
-              Track Solana OG reputation by adding DAO space ids here. Home will then show the current wallet’s effective points per tracked space.
+              Track Solana OG reputation by adding DAO space ids here. Home will then show the current wallet’s effective and latest-season points per tracked space.
             </Text>
+          {reputation.spaces.length > 0 ? (
+            <View style={styles.reputationSummaryGrid}>
+              <View style={styles.reputationSummaryCard}>
+                <Text style={styles.reputationSummaryLabel}>Effective points</Text>
+                <Text style={styles.reputationSummaryValue}>{totalEffectiveReputationPoints}</Text>
+              </View>
+              <View style={styles.reputationSummaryCard}>
+                <Text style={styles.reputationSummaryLabel}>Latest season points</Text>
+                <Text style={styles.reputationSummaryValue}>{totalLatestSeasonReputationPoints}</Text>
+              </View>
+            </View>
+          ) : null}
           <PaperTextInput
             value={reputationSpaceInput}
             onChangeText={setReputationSpaceInput}
