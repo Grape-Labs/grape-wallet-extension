@@ -2866,8 +2866,10 @@ function PopupPage() {
   const wallet =
     state?.wallet ??
     ({
-      setup: 'idle',
+      setup: 'empty',
       wallets: [],
+      selectedTheme: 'grape',
+      dappApprovalMode: 'safe',
       privacyMode: false,
       trackedReputationSpaceIds: [],
       trackedVerificationSpaceIds: [GRAPE_VERIFICATION_REQUIRED_DAO_ID],
@@ -2877,11 +2879,12 @@ function PopupPage() {
       customRpcUrls: {},
       selectedWalletIds: {},
       chainState: {
-        solana: { selectedWalletId: undefined, selectedNetwork: 'mainnet-beta', customRpcUrl: null },
-        sui: { selectedWalletId: undefined, selectedNetwork: 'mainnet-beta', customRpcUrl: null },
-        monad: { selectedWalletId: undefined, selectedNetwork: 'mainnet-beta', customRpcUrl: null },
-        ethereum: { selectedWalletId: undefined, selectedNetwork: 'mainnet-beta', customRpcUrl: null }
-      }
+        solana: { selectedNetwork: 'mainnet-beta', customRpcUrls: {} },
+        sui: { selectedNetwork: 'mainnet-beta' },
+        monad: { selectedNetwork: 'mainnet-beta' },
+        ethereum: { selectedNetwork: 'mainnet-beta' }
+      },
+      idleTimeoutMs: 5 * 60_000
     } as WalletStateResponse['wallet']);
   const session = state?.session ?? ({ locked: true } as WalletStateResponse['session']);
   const permissions = state?.permissions ?? [];
@@ -5885,6 +5888,25 @@ function PopupPage() {
               </span>
             </label>
             <label className="stack">
+              <span className="muted">dApp signing mode</span>
+              <select
+                value={wallet.dappApprovalMode}
+                onChange={async (event) => {
+                  const nextState = await sendRuntimeMessage<WalletStateResponse>({
+                    type: 'wallet_set_dapp_approval_mode',
+                    mode: event.target.value as typeof wallet.dappApprovalMode
+                  });
+                  setState(nextState);
+                }}
+              >
+                <option value="safe">Safe · Ask for password / biometrics on each dApp transaction</option>
+                <option value="degen">Degen · Use the unlocked session for dApp transactions</option>
+              </select>
+              <p className="muted">
+                Safe mode re-authenticates transaction approvals. Degen mode skips the extra prompt while the wallet stays unlocked.
+              </p>
+            </label>
+            <label className="stack">
               <span className="muted">Theme</span>
               <select
                 value={wallet.selectedTheme}
@@ -5906,7 +5928,7 @@ function PopupPage() {
             <div className="stack">
               <div className="settings-row">
                 <span className="muted">Grape Verification</span>
-                <strong>{state.access.granted ? 'Verified' : 'Required'}</strong>
+                <strong>{state?.access.granted ? 'Verified' : 'Required'}</strong>
               </div>
               <p className="muted">
                 Verification is remembered on this device after one successful check.
@@ -5949,10 +5971,10 @@ function PopupPage() {
                   Clear verification
                 </Button>
               </div>
-              {state.access.grantedAt ? (
+              {state?.access.grantedAt ? (
                 <p className="muted">Granted {new Date(state.access.grantedAt).toLocaleString()}</p>
               ) : null}
-              {state.access.lastCheckedAt ? (
+              {state?.access.lastCheckedAt ? (
                 <p className="muted">Last checked {new Date(state.access.lastCheckedAt).toLocaleString()}</p>
               ) : null}
               {accessError ? <p className="danger-box">{accessError}</p> : null}

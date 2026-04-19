@@ -473,6 +473,25 @@ function OptionsPage() {
             <small className="muted">Hide total balance, token values, and token balances with ***.</small>
           </span>
         </label>
+        <label className="stack">
+          <span className="muted">dApp signing mode</span>
+          <select
+            value={state.wallet.dappApprovalMode}
+            onChange={async (event) => {
+              const nextState = await sendRuntimeMessage<WalletStateResponse>({
+                type: 'wallet_set_dapp_approval_mode',
+                mode: event.target.value as typeof state.wallet.dappApprovalMode
+              });
+              setState(nextState);
+            }}
+          >
+            <option value="safe">Safe · Ask for password / biometrics on each dApp transaction</option>
+            <option value="degen">Degen · Use the unlocked session for dApp transactions</option>
+          </select>
+          <p className="muted">
+            Safe mode re-authenticates each dApp transaction approval. Degen mode signs from the unlocked session until the wallet locks again.
+          </p>
+        </label>
         <div className="stack">
           <label className="inline checkbox-row">
             <input

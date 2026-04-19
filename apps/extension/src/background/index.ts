@@ -1880,6 +1880,15 @@ class WalletController {
     return this.getStateResponse();
   }
 
+  async setDappApprovalMode(mode: import('@grape/core').DappApprovalMode) {
+    const walletState = await this.getWalletState();
+    await walletStateStorage.set({
+      ...walletState,
+      dappApprovalMode: mode
+    });
+    return this.getStateResponse();
+  }
+
   async setCustomRpc(network: 'mainnet-beta' | 'devnet', rpcUrl: string | null) {
     const walletState = await this.getWalletState();
     const nextCustomRpcUrls = {
@@ -3287,6 +3296,7 @@ class WalletController {
       selectedChain: walletState.selectedChain,
       selectedNetwork: walletState.selectedNetwork,
       selectedTheme: walletState.selectedTheme,
+      dappApprovalMode: walletState.dappApprovalMode,
       privacyMode: walletState.privacyMode
     };
   }
@@ -3303,6 +3313,7 @@ class WalletController {
       selectedChain: preferences.selectedChain,
       selectedNetwork: preferences.selectedNetwork,
       selectedTheme: preferences.selectedTheme,
+      dappApprovalMode: preferences.dappApprovalMode,
       privacyMode: preferences.privacyMode
     };
   }
@@ -5075,8 +5086,10 @@ class WalletController {
     extras?: Pick<ApprovalRecord, 'requestedPermissions' | 'transactionSummary'>
   ) {
     const session = await this.getSessionState();
+    const walletState = await this.getWalletState();
     const unlockedWalletIds = await this.getUnlockedWalletIds(session.locked);
     const kind = toApprovalKind(request);
+    const approvalWallet = walletState.wallets.find((wallet) => wallet.id === walletId);
     const state = createPendingApproval(crypto.randomUUID(), kind);
     const approval: ApprovalRecord = {
       id: state.id,
@@ -5091,7 +5104,12 @@ class WalletController {
       network,
       requestedPermissions: extras?.requestedPermissions,
       transactionSummary: extras?.transactionSummary,
-      requiresPassword: !unlockedWalletIds.includes(walletId),
+      requiresPassword:
+        approvalWallet?.signer.kind === 'ledger'
+          ? false
+          : shouldRequireReauthForApproval(kind, walletState.dappApprovalMode)
+            ? true
+            : !unlockedWalletIds.includes(walletId),
       hostSurfaceId: getPreferredApprovalSurface()?.surfaceId
     };
 
@@ -5339,6 +5357,17 @@ function toApprovalKind(request: ProviderRequest) {
     default:
       throw new RpcError('UNKNOWN_REQUEST', 'Unsupported request type.');
   }
+}
+
+function shouldRequireReauthForApproval(
+  kind: ApprovalRecord['kind'],
+  mode: import('@grape/core').DappApprovalMode | undefined
+) {
+  if (mode !== 'safe') {
+    return false;
+  }
+
+  return kind === 'sign-transaction' || kind === 'sign-all-transactions' || kind === 'sign-and-send-transaction';
 }
 
 function getProviderRequestChain(
@@ -8491,6 +8520,9 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
           break;
         case 'wallet_set_privacy_mode':
           sendResponse(await controller.setPrivacyMode(message.enabled));
+          break;
+        case 'wallet_set_dapp_approval_mode':
+          sendResponse(await controller.setDappApprovalMode(message.mode));
           break;
         case 'wallet_set_custom_rpc':
           sendResponse(await controller.setCustomRpc(message.network, message.rpcUrl));

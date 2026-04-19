@@ -97,11 +97,9 @@ export function ApprovalView(props: {
   const biometricEnabled = biometricSupported && !!selectedWallet?.biometricUnlock;
   const requiresPassword =
     approval.kind !== 'connect' &&
-    (walletState
-      ? selectedWallet?.signer.kind === 'ledger'
-        ? false
-        : !selectedWallet || !walletState.unlockedWalletIds.includes(selectedWallet.id)
-      : (approval.requiresPassword ?? true));
+    (selectedWallet?.signer.kind === 'ledger'
+      ? false
+      : (approval.requiresPassword ?? (walletState ? !selectedWallet || !walletState.unlockedWalletIds.includes(selectedWallet.id) : true)));
   const successCopy = useMemo(() => {
     switch (approval.kind) {
       case 'connect':

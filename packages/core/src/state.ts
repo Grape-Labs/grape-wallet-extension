@@ -12,6 +12,7 @@ export const STORAGE_KEYS = {
 export type WalletSetupState = 'empty' | 'ready';
 export type GrapeChain = 'solana' | 'sui' | 'monad' | 'ethereum';
 export type GrapeNetwork = 'mainnet-beta' | 'devnet';
+export type DappApprovalMode = 'safe' | 'degen';
 export type GrapeTheme =
   | 'grape'
   | 'comic'
@@ -134,6 +135,7 @@ export type WalletState = {
   selectedWalletId?: string;
   selectedNetwork: GrapeNetwork;
   selectedTheme: GrapeTheme;
+  dappApprovalMode: DappApprovalMode;
   privacyMode: boolean;
   customRpcUrls: Partial<Record<GrapeNetwork, string>>;
   idleTimeoutMs: number;
@@ -152,6 +154,7 @@ export type LegacyWalletState = {
   chainState?: Partial<WalletState['chainState']>;
   selectedNetwork?: GrapeNetwork;
   selectedTheme?: GrapeTheme;
+  dappApprovalMode?: DappApprovalMode;
   privacyMode?: boolean;
   customRpcUrls?: Partial<Record<GrapeNetwork, string>>;
   idleTimeoutMs?: number;
@@ -165,6 +168,7 @@ export type SessionState = {
 export const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 export const MAX_RECENT_RECIPIENTS = 8;
 export const DEFAULT_THEME: GrapeTheme = 'grape';
+export const DEFAULT_DAPP_APPROVAL_MODE: DappApprovalMode = 'safe';
 export const DEFAULT_CHAIN: GrapeChain = 'solana';
 export const DEFAULT_TRACKED_VERIFICATION_SPACE_IDS = [GRAPE_VERIFICATION_REQUIRED_DAO_ID] as const;
 
@@ -220,6 +224,7 @@ export function createEmptyWalletState(): WalletState {
     },
     selectedNetwork: 'mainnet-beta',
     selectedTheme: DEFAULT_THEME,
+    dappApprovalMode: DEFAULT_DAPP_APPROVAL_MODE,
     privacyMode: false,
     customRpcUrls: {},
     idleTimeoutMs: DEFAULT_IDLE_TIMEOUT_MS
@@ -352,6 +357,7 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
       selectedWalletId: selectedWalletId ?? selectedWalletIds.solana ?? normalizedWallets.find((wallet) => wallet.chain === 'solana')?.id,
       selectedNetwork: chainState.solana.selectedNetwork,
       selectedTheme: normalizeTheme(input.selectedTheme),
+      dappApprovalMode: normalizeDappApprovalMode(input.dappApprovalMode),
       privacyMode: input.privacyMode ?? false,
       customRpcUrls: chainState.solana.customRpcUrls,
       idleTimeoutMs: input.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS
@@ -400,6 +406,7 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
       selectedWalletId: 'wallet-1',
       selectedNetwork: input.selectedNetwork ?? 'mainnet-beta',
       selectedTheme: normalizeTheme(input.selectedTheme),
+      dappApprovalMode: normalizeDappApprovalMode(input.dappApprovalMode),
       privacyMode: input.privacyMode ?? false,
       customRpcUrls: normalizeCustomRpcUrls(input.customRpcUrls),
       idleTimeoutMs: input.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS
@@ -417,10 +424,15 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
     chainState: normalizeChainState(input.chainState, input.selectedNetwork, input.customRpcUrls),
     selectedNetwork: input.selectedNetwork ?? 'mainnet-beta',
     selectedTheme: normalizeTheme(input.selectedTheme),
+    dappApprovalMode: normalizeDappApprovalMode(input.dappApprovalMode),
     privacyMode: input.privacyMode ?? false,
     customRpcUrls: normalizeCustomRpcUrls(input.customRpcUrls),
     idleTimeoutMs: input.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS
   };
+}
+
+export function normalizeDappApprovalMode(mode: unknown): DappApprovalMode {
+  return mode === 'degen' ? 'degen' : DEFAULT_DAPP_APPROVAL_MODE;
 }
 
 function normalizeTrackedReputationSpaceIds(value: string[] | undefined): string[] {

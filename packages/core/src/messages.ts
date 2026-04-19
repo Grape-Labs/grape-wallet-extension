@@ -429,6 +429,10 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     enabled: z.boolean()
   }),
   z.object({
+    type: z.literal('wallet_set_dapp_approval_mode'),
+    mode: z.enum(['safe', 'degen'])
+  }),
+  z.object({
     type: z.literal('wallet_set_custom_rpc'),
     network: z.enum(['mainnet-beta', 'devnet']),
     rpcUrl: z.string().url().nullable()

@@ -6,6 +6,7 @@ import {
   base64ToBytes,
   bytesToBase64,
   createDeviceLinkPayloadText,
+  DEFAULT_DAPP_APPROVAL_MODE,
   decryptText,
   DEFAULT_THEME,
   GRAPE_VERIFICATION_REQUIRED_DAO_ID,
@@ -14,6 +15,7 @@ import {
   type DeviceLinkHandoffPayload,
   type DeviceLinkPreferencesSnapshot,
   type DeviceLinkSessionRecord,
+  type DappApprovalMode,
   type GrapeChain,
   type GrapeTheme,
   type VaultSecret,
@@ -83,6 +85,7 @@ export type MobileWalletState = {
   setup: WalletSetupState;
   selectedChain: GrapeChain;
   selectedTheme: GrapeTheme;
+  dappApprovalMode: DappApprovalMode;
   selectedWalletIds: Partial<Record<GrapeChain, string>>;
   trustedDappOrigins: string[];
   trackedReputationSpaceIds: string[];
@@ -259,6 +262,7 @@ export function createEmptyMobileWalletState(): MobileWalletState {
     setup: 'empty',
     selectedChain: DEFAULT_CHAIN,
     selectedTheme: DEFAULT_THEME,
+    dappApprovalMode: DEFAULT_DAPP_APPROVAL_MODE,
     selectedWalletIds: {},
     trustedDappOrigins: [],
     trackedReputationSpaceIds: [],
@@ -333,6 +337,7 @@ export async function createWalletSet(input: {
     setup: 'ready',
     selectedChain: DEFAULT_CHAIN,
     selectedTheme: DEFAULT_THEME,
+    dappApprovalMode: DEFAULT_DAPP_APPROVAL_MODE,
     selectedWalletIds: Object.fromEntries(wallets.map((wallet) => [wallet.chain, wallet.id])),
     trustedDappOrigins: [],
     trackedReputationSpaceIds: [],
@@ -406,6 +411,7 @@ export async function createPrivateKeyWallet(input: {
     setup: 'ready',
     selectedChain: input.chain,
     selectedTheme: DEFAULT_THEME,
+    dappApprovalMode: DEFAULT_DAPP_APPROVAL_MODE,
     selectedWalletIds: {
       [input.chain]: wallet.id
     },
@@ -2032,6 +2038,7 @@ function getMobileDeviceLinkPreferencesSnapshot(state: MobileWalletState): Devic
     selectedChain: state.selectedChain,
     selectedNetwork: 'mainnet-beta',
     selectedTheme: state.selectedTheme,
+    dappApprovalMode: state.dappApprovalMode,
     privacyMode: state.privacyMode
   };
 }
@@ -2044,6 +2051,7 @@ function applyMobileDeviceLinkPreferences(state: MobileWalletState, preferences:
     trackedGovernanceDaoIds: Array.from(new Set([...state.trackedGovernanceDaoIds, ...preferences.trackedGovernanceDaoIds])),
     selectedChain: preferences.selectedChain,
     selectedTheme: preferences.selectedTheme,
+    dappApprovalMode: preferences.dappApprovalMode,
     privacyMode: preferences.privacyMode
   };
 }
