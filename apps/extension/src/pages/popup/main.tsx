@@ -169,6 +169,28 @@ function parseInitialAssetId(): string {
   return asset?.trim() ? asset : 'sol';
 }
 
+function WalletSplash(props: { title: string; status: string }) {
+  return (
+    <div className="wallet-splash-shell">
+      <div className="wallet-splash-card">
+        <div className="wallet-splash-halo wallet-splash-halo-primary" aria-hidden="true" />
+        <div className="wallet-splash-halo wallet-splash-halo-secondary" aria-hidden="true" />
+        <div className="wallet-splash-logo-orb">
+          <img className="wallet-splash-logo" src={GRAPE_LOGO_URL} alt="Grape" />
+        </div>
+        <div className="wallet-splash-copy">
+          <span className="wallet-splash-eyebrow">Grape Wallet</span>
+          <h1 className="wallet-splash-title">{props.title}</h1>
+          <p className="wallet-splash-status">{props.status}</p>
+        </div>
+        <div className="wallet-splash-progress" aria-hidden="true">
+          <div className="wallet-splash-progress-bar" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function buildWalletPagePath(view: PopupView, selectedAssetId: string): string {
   const params = new URLSearchParams();
   if (view !== 'home') {
@@ -3045,11 +3067,10 @@ function PopupPage() {
 
   if (!state) {
     return (
-      <PageShell title="Loading wallet" subtitle="Grape is starting up.">
-        <Card title="Wallet unavailable">
-          <p className="muted">{surfaceError ?? 'Loading wallet state...'}</p>
-        </Card>
-      </PageShell>
+      <WalletSplash
+        title="Opening Grape"
+        status={surfaceError ?? 'Reading your wallet state and preparing the popup.'}
+      />
     );
   }
 
@@ -6351,6 +6372,53 @@ function PopupPage() {
     );
   }
 
+  function resolveSecurityAssetPresentation(input: {
+    mint: string;
+    accountAddress?: string | null;
+    name?: string;
+    symbol?: string;
+  }) {
+    const matchedToken =
+      assets.tokens.find((token) => token.accountAddress === input.accountAddress) ??
+      assets.tokens.find((token) => token.mint === input.mint) ??
+      null;
+    const matchedCollectible =
+      collectibleItems.find((item) => item.accountAddress && item.accountAddress === input.accountAddress) ??
+      collectibleItems.find((item) => item.mint === input.mint) ??
+      null;
+
+    return {
+      title:
+        matchedCollectible?.name ??
+        matchedCollectible?.collectionName ??
+        matchedToken?.name ??
+        input.name ??
+        matchedToken?.symbol ??
+        matchedCollectible?.symbol ??
+        input.symbol ??
+        formatAddress(input.mint),
+      symbol:
+        matchedToken?.symbol ??
+        matchedCollectible?.symbol ??
+        input.symbol ??
+        null,
+      metadataName:
+        matchedCollectible?.name ??
+        matchedToken?.name ??
+        input.name ??
+        null,
+      metadataSymbol:
+        matchedCollectible?.symbol ??
+        matchedToken?.symbol ??
+        input.symbol ??
+        null,
+      imageUri: matchedCollectible?.imageUri ?? matchedToken?.logoUri ?? undefined,
+      kind: matchedCollectible ? 'Collectible' : 'Token',
+      collectionName: matchedCollectible?.collectionName ?? null,
+      collectionSymbol: matchedCollectible?.collectionSymbol ?? null
+    };
+  }
+
   function renderSecurity() {
     if (!isSolanaChain) {
       return (
@@ -6386,47 +6454,170 @@ function PopupPage() {
             {securityReport?.delegatedTokenAccounts.length ? (
               <div className="stack">
                 <strong>Delegated token accounts</strong>
-                {securityReport.delegatedTokenAccounts.map((item) => (
-                  <div key={item.accountAddress} className="security-list-item">
-                    <div>
-                      <strong>{item.name ?? item.symbol ?? formatAddress(item.mint)}</strong>
-                      <div className="muted mono">{formatAddress(item.delegate)}</div>
+                {securityReport.delegatedTokenAccounts.map((item) => {
+                  const presentation = resolveSecurityAssetPresentation(item);
+                  return (
+                    <div key={item.accountAddress} className="security-list-item">
+                      <div className="security-list-header">
+                        <div className="token-leading">
+                          <TokenAvatar
+                            token={{ symbol: presentation.symbol ?? undefined, logoUri: presentation.imageUri }}
+                            fallbackLabel={(presentation.symbol ?? presentation.title).slice(0, 1)}
+                          />
+                          <div className="security-list-copy">
+                            <strong>{presentation.title}</strong>
+                            <div className="security-list-subline">
+                              <span className="token-subtitle">{presentation.kind}</span>
+                              {presentation.collectionName ? <span className="token-subtitle">{presentation.collectionName}</span> : null}
+                              {presentation.symbol ? <span className="token-subtitle">{presentation.symbol}</span> : null}
+                            </div>
+                          </div>
+                        </div>
+                        <span className="muted security-list-value">{item.delegatedAmount ?? 'Delegated'}</span>
+                      </div>
+                      <div className="security-list-meta">
+                        {(presentation.metadataName || presentation.metadataSymbol) ? (
+                          <div>
+                            <span className="muted">Metadata</span>
+                            <span>
+                              {presentation.metadataName ?? 'Unnamed'}
+                              {presentation.metadataSymbol ? ` · ${presentation.metadataSymbol}` : ''}
+                            </span>
+                          </div>
+                        ) : null}
+                        {presentation.collectionName ? (
+                          <div>
+                            <span className="muted">Collection</span>
+                            <span>
+                              {presentation.collectionName}
+                              {presentation.collectionSymbol ? ` · ${presentation.collectionSymbol}` : ''}
+                            </span>
+                          </div>
+                        ) : null}
+                        <div><span className="muted">Token account</span> <span className="mono">{formatAddress(item.accountAddress)}</span></div>
+                        <div><span className="muted">Mint</span> <span className="mono">{formatAddress(item.mint)}</span></div>
+                        <div><span className="muted">Delegate</span> <span className="mono">{formatAddress(item.delegate)}</span></div>
+                        {item.closeAuthority ? (
+                          <div><span className="muted">Close authority</span> <span className="mono">{formatAddress(item.closeAuthority)}</span></div>
+                        ) : null}
+                      </div>
                     </div>
-                    <span className="muted">{item.delegatedAmount ?? 'Delegated'}</span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ) : null}
 
             {securityReport?.externalCloseAuthorities.length ? (
               <div className="stack">
                 <strong>External close authorities</strong>
-                {securityReport.externalCloseAuthorities.map((item) => (
-                  <div key={item.accountAddress} className="security-list-item">
-                    <div>
-                      <strong>{item.name ?? item.symbol ?? formatAddress(item.mint)}</strong>
-                      <div className="muted mono">{formatAddress(item.closeAuthority)}</div>
+                {securityReport.externalCloseAuthorities.map((item) => {
+                  const presentation = resolveSecurityAssetPresentation(item);
+                  return (
+                    <div key={item.accountAddress} className="security-list-item">
+                      <div className="security-list-header">
+                        <div className="token-leading">
+                          <TokenAvatar
+                            token={{ symbol: presentation.symbol ?? undefined, logoUri: presentation.imageUri }}
+                            fallbackLabel={(presentation.symbol ?? presentation.title).slice(0, 1)}
+                          />
+                          <div className="security-list-copy">
+                            <strong>{presentation.title}</strong>
+                            <div className="security-list-subline">
+                              <span className="token-subtitle">{presentation.kind}</span>
+                              {presentation.collectionName ? <span className="token-subtitle">{presentation.collectionName}</span> : null}
+                              {presentation.symbol ? <span className="token-subtitle">{presentation.symbol}</span> : null}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="security-list-meta">
+                        {(presentation.metadataName || presentation.metadataSymbol) ? (
+                          <div>
+                            <span className="muted">Metadata</span>
+                            <span>
+                              {presentation.metadataName ?? 'Unnamed'}
+                              {presentation.metadataSymbol ? ` · ${presentation.metadataSymbol}` : ''}
+                            </span>
+                          </div>
+                        ) : null}
+                        {presentation.collectionName ? (
+                          <div>
+                            <span className="muted">Collection</span>
+                            <span>
+                              {presentation.collectionName}
+                              {presentation.collectionSymbol ? ` · ${presentation.collectionSymbol}` : ''}
+                            </span>
+                          </div>
+                        ) : null}
+                        <div><span className="muted">Token account</span> <span className="mono">{formatAddress(item.accountAddress)}</span></div>
+                        <div><span className="muted">Mint</span> <span className="mono">{formatAddress(item.mint)}</span></div>
+                        <div><span className="muted">Close authority</span> <span className="mono">{formatAddress(item.closeAuthority)}</span></div>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ) : null}
 
             {securityReport?.controlledMints.length ? (
               <div className="stack">
                 <strong>Controlled mints</strong>
-                {securityReport.controlledMints.map((mint) => (
-                  <div key={mint.mint} className="security-list-item">
-                    <div>
-                      <strong>{mint.name ?? mint.symbol ?? formatAddress(mint.mint)}</strong>
-                      <div className="muted mono">
-                        {mint.controlsMintAuthority ? 'Mint authority' : ''}
-                        {mint.controlsMintAuthority && mint.controlsFreezeAuthority ? ' · ' : ''}
-                        {mint.controlsFreezeAuthority ? 'Freeze authority' : ''}
+                {securityReport.controlledMints.map((mint) => {
+                  const presentation = resolveSecurityAssetPresentation(mint);
+                  const authorityLabels = [
+                    mint.controlsMintAuthority ? 'Mint authority' : null,
+                    mint.controlsFreezeAuthority ? 'Freeze authority' : null
+                  ].filter((label): label is string => !!label);
+
+                  return (
+                    <div key={mint.mint} className="security-list-item">
+                      <div className="security-list-header">
+                        <div className="token-leading">
+                          <TokenAvatar
+                            token={{ symbol: presentation.symbol ?? undefined, logoUri: presentation.imageUri }}
+                            fallbackLabel={(presentation.symbol ?? presentation.title).slice(0, 1)}
+                          />
+                          <div className="security-list-copy">
+                            <strong>{presentation.title}</strong>
+                            <div className="security-list-subline">
+                              <span className="token-subtitle">Mint</span>
+                              {presentation.collectionName ? <span className="token-subtitle">{presentation.collectionName}</span> : null}
+                              {presentation.symbol ? <span className="token-subtitle">{presentation.symbol}</span> : null}
+                            </div>
+                          </div>
+                        </div>
+                        <span className="muted security-list-value">{authorityLabels.join(' · ')}</span>
+                      </div>
+                      <div className="security-list-meta">
+                        {(presentation.metadataName || presentation.metadataSymbol) ? (
+                          <div>
+                            <span className="muted">Metadata</span>
+                            <span>
+                              {presentation.metadataName ?? 'Unnamed'}
+                              {presentation.metadataSymbol ? ` · ${presentation.metadataSymbol}` : ''}
+                            </span>
+                          </div>
+                        ) : null}
+                        {presentation.collectionName ? (
+                          <div>
+                            <span className="muted">Collection</span>
+                            <span>
+                              {presentation.collectionName}
+                              {presentation.collectionSymbol ? ` · ${presentation.collectionSymbol}` : ''}
+                            </span>
+                          </div>
+                        ) : null}
+                        <div><span className="muted">Mint</span> <span className="mono">{formatAddress(mint.mint)}</span></div>
+                        {mint.mintAuthority ? (
+                          <div><span className="muted">Mint authority</span> <span className="mono">{formatAddress(mint.mintAuthority)}</span></div>
+                        ) : null}
+                        {mint.freezeAuthority ? (
+                          <div><span className="muted">Freeze authority</span> <span className="mono">{formatAddress(mint.freezeAuthority)}</span></div>
+                        ) : null}
                       </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ) : null}
           </div>

@@ -946,6 +946,7 @@ function parseOriginFromUrl(value: string) {
 export default function App() {
   const { width } = useWindowDimensions();
   const [screen, setScreen] = useState<Screen>('loading');
+  const [launchStatus, setLaunchStatus] = useState('Loading your wallet state');
   const [mainTab, setMainTab] = useState<MainTab>('home');
   const [walletState, setWalletState] = useState<MobileWalletState>(createEmptyMobileWalletState());
   const [error, setError] = useState<string | null>(null);
@@ -1340,16 +1341,21 @@ export default function App() {
 
     async function bootstrap() {
       try {
+        if (mounted) {
+          setLaunchStatus('Loading your encrypted wallet');
+        }
         const state = await loadMobileWalletState();
         if (!mounted) {
           return;
         }
+        setLaunchStatus('Preparing Grape');
         setWalletState(state);
         setScreen(state.setup === 'ready' ? 'locked' : 'setup');
       } catch (unknownError) {
         if (!mounted) {
           return;
         }
+        setLaunchStatus('Preparing wallet setup');
         setError(unknownError instanceof Error ? unknownError.message : 'Unable to load mobile wallet state.');
         setScreen('setup');
       }
@@ -6833,17 +6839,21 @@ export default function App() {
             ]}
           >
             <Animated.View style={[styles.launchHalo, { opacity: launchHalo }]} />
+            <View style={styles.launchBadgeRow}>
+              <Text style={styles.launchBadge}>GRAPE WALLET</Text>
+            </View>
             <View style={styles.logoOrb}>
               {renderBrandLogo(40)}
             </View>
             <View style={styles.launchWordmark}>{renderBrandWordmark()}</View>
-            <Text style={styles.launchTitle}>Your social wallet is getting ready</Text>
-            <Text style={styles.launchCopy}>
-              Unlock communities, assets, governance, and identity across every chain you use.
-            </Text>
-            <View style={styles.launchProgressRow}>
-                <ActivityIndicator color={activeTheme.grape} />
-              <Text style={styles.loadingText}>Loading Grape</Text>
+            <Text style={styles.launchTitle}>Opening Grape</Text>
+            <Text style={styles.launchCopy}>Preparing your wallet, communities, and connected accounts.</Text>
+            <View style={styles.launchStatusPill}>
+              <View style={styles.launchStatusDot} />
+              <Text style={styles.loadingText}>{launchStatus}</Text>
+            </View>
+            <View style={styles.launchProgressTrack}>
+              <View style={styles.launchProgressFill} />
             </View>
           </Animated.View>
         </View>
@@ -6905,8 +6915,8 @@ function createStyles(palette: MobileThemePalette) {
     maxWidth: 420,
     alignItems: 'center',
     paddingHorizontal: 24,
-    paddingVertical: 34,
-    borderRadius: 32,
+    paddingVertical: 30,
+    borderRadius: 34,
     backgroundColor: palette.id === 'apple' ? 'rgba(28, 36, 46, 0.48)' : 'rgba(19, 12, 30, 0.82)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.08)',
@@ -6919,19 +6929,28 @@ function createStyles(palette: MobileThemePalette) {
   },
   launchHalo: {
     position: 'absolute',
-    top: -72,
-    width: 220,
-    height: 220,
+    top: -84,
+    width: 240,
+    height: 240,
     borderRadius: 999,
     backgroundColor: 'rgba(181, 123, 255, 0.28)'
+  },
+  launchBadgeRow: {
+    marginBottom: 14
+  },
+  launchBadge: {
+    color: palette.subtle,
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 3.2
   },
   launchWordmark: {
     marginTop: 18
   },
   launchTitle: {
-    marginTop: 18,
+    marginTop: 14,
     color: palette.text,
-    fontSize: 26,
+    fontSize: 28,
     lineHeight: 32,
     fontWeight: '800',
     textAlign: 'center'
@@ -6939,15 +6958,41 @@ function createStyles(palette: MobileThemePalette) {
   launchCopy: {
     marginTop: 10,
     color: palette.muted,
-    fontSize: 15,
-    lineHeight: 23,
+    fontSize: 14,
+    lineHeight: 22,
     textAlign: 'center'
   },
-  launchProgressRow: {
+  launchStatusPill: {
     marginTop: 22,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.07)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)'
+  },
+  launchStatusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: palette.grape
+  },
+  launchProgressTrack: {
+    width: '100%',
+    marginTop: 16,
+    height: 8,
+    borderRadius: 999,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(255,255,255,0.08)'
+  },
+  launchProgressFill: {
+    width: '62%',
+    height: '100%',
+    borderRadius: 999,
+    backgroundColor: palette.grape
   },
   bgGlowTop: {
     position: 'absolute',
@@ -6985,9 +7030,8 @@ function createStyles(palette: MobileThemePalette) {
     elevation: 8
   },
   loadingText: {
-    marginTop: 12,
     color: palette.text,
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '600'
   },
   heroBlock: {
