@@ -1,12 +1,15 @@
 import { base64ToBytes, bytesToBase64 } from '@grape/core';
+import bs58 from 'bs58';
 import {
   SOLANA_DEVNET_CHAIN,
   SOLANA_MAINNET_CHAIN,
   type SolanaChain
 } from '@solana/wallet-standard-chains';
 import {
+  SolanaSignAndSendTransaction,
   SolanaSignMessage,
   SolanaSignTransaction,
+  type SolanaSignAndSendTransactionFeature,
   type SolanaSignMessageFeature,
   type SolanaSignTransactionFeature
 } from '@solana/wallet-standard-features';
@@ -37,6 +40,7 @@ declare global {
 type WalletStandardFeatures = StandardConnectFeature &
   StandardDisconnectFeature &
   StandardEventsFeature &
+  SolanaSignAndSendTransactionFeature &
   SolanaSignMessageFeature &
   SolanaSignTransactionFeature;
 
@@ -49,6 +53,7 @@ const ACCOUNT_FEATURES = [
   StandardConnect,
   StandardDisconnect,
   StandardEvents,
+  SolanaSignAndSendTransaction,
   SolanaSignMessage,
   SolanaSignTransaction
 ] as const;
@@ -174,6 +179,33 @@ export function createWalletStandardWallet(
           return signedBatch.transactions.map((transaction) => ({
             signedTransaction: base64ToBytes(transaction)
           }));
+        }
+      },
+      [SolanaSignAndSendTransaction]: {
+        version: '1.0.0',
+        supportedTransactionVersions: ['legacy', 0] as const,
+        signAndSendTransaction: async (...inputs) => {
+          const outputs = [];
+          for (const input of inputs) {
+            if (input.account.address !== provider.publicKey?.toBase58()) {
+              throw new Error('Requested account does not match the active Grape account.');
+            }
+
+            const sent = await provider.transport.request<{ signature: string }>({
+              id: crypto.randomUUID(),
+              method: 'signAndSendTransaction',
+              origin: provider.origin,
+              params: {
+                transaction: bytesToBase64(input.transaction)
+              }
+            });
+
+            outputs.push({
+              signature: bs58.decode(sent.signature)
+            });
+          }
+
+          return outputs;
         }
       }
     },

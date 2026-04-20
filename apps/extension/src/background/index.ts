@@ -2563,6 +2563,8 @@ class WalletController {
       qualifyingWalletPublicKey: verificationTarget.publicKey
     });
 
+    await ensureProviderInjectedIntoExistingTabs();
+
     return this.getStateResponse();
   }
 
@@ -8419,8 +8421,48 @@ function extractSwapRouteLabels(quoteResponse: JupiterQuoteResponse): string[] {
 
 const controller = new WalletController();
 
+const WEB_PROVIDER_TAB_PATTERNS = ['http://*/*', 'https://*/*'];
+
+function isInjectableProviderTab(url?: string | null): boolean {
+  if (!url) {
+    return false;
+  }
+
+  return url.startsWith('http://') || url.startsWith('https://');
+}
+
+async function ensureProviderInjectedIntoTab(tabId: number): Promise<void> {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['assets/content-script.js']
+    });
+  } catch {
+    // Ignore unsupported or closed tabs. The declarative content script still
+    // covers future page loads for the same origin.
+  }
+}
+
+async function ensureProviderInjectedIntoExistingTabs(): Promise<void> {
+  try {
+    const tabs = await chrome.tabs.query({ url: WEB_PROVIDER_TAB_PATTERNS });
+    await Promise.all(
+      tabs
+        .filter((tab): tab is chrome.tabs.Tab & { id: number } => typeof tab.id === 'number' && isInjectableProviderTab(tab.url))
+        .map((tab) => ensureProviderInjectedIntoTab(tab.id))
+    );
+  } catch {
+    // If tab enumeration is unavailable, fall back to normal page-load injection.
+  }
+}
+
 chrome.runtime.onInstalled.addListener(async () => {
   await Promise.all([walletStateStorage.get(), permissionsStorage.get(), sessionStorage.get()]);
+  await ensureProviderInjectedIntoExistingTabs();
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  void ensureProviderInjectedIntoExistingTabs();
 });
 
 chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendResponse) => {

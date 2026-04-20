@@ -5255,6 +5255,56 @@ body[data-surface='popup'] .receive-address-value {
   line-height: 1.35;
 }
 
+.dapp-mode-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.dapp-mode-card {
+  width: 100%;
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 16px;
+  border: 1px solid var(--theme-divider);
+  background: var(--theme-surface-soft);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 160ms ease, background-color 160ms ease, transform 160ms ease;
+}
+
+.dapp-mode-card:hover,
+.dapp-mode-card:focus-visible {
+  border-color: color-mix(in srgb, var(--theme-accent) 28%, transparent);
+  background: color-mix(in srgb, var(--theme-accent-soft) 82%, var(--theme-surface-soft) 18%);
+}
+
+.dapp-mode-card.active {
+  border-color: color-mix(in srgb, var(--theme-accent) 40%, transparent);
+  background: color-mix(in srgb, var(--theme-accent-soft) 90%, var(--theme-surface-soft) 10%);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--theme-accent) 14%, transparent);
+}
+
+.dapp-mode-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.dapp-mode-card-meta {
+  font-size: 0.72rem;
+  color: var(--theme-muted);
+  white-space: nowrap;
+}
+
+.dapp-mode-card-copy {
+  color: var(--theme-muted);
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
 .bottom-nav {
   position: absolute;
   left: 16px;

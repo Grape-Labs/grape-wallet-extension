@@ -5887,25 +5887,53 @@ function PopupPage() {
                 <small className="muted">Hide portfolio values and token balances with ***</small>
               </span>
             </label>
-            <label className="stack">
+            <div className="stack">
               <span className="muted">dApp signing mode</span>
-              <select
-                value={wallet.dappApprovalMode}
-                onChange={async (event) => {
-                  const nextState = await sendRuntimeMessage<WalletStateResponse>({
-                    type: 'wallet_set_dapp_approval_mode',
-                    mode: event.target.value as typeof wallet.dappApprovalMode
-                  });
-                  setState(nextState);
-                }}
-              >
-                <option value="safe">Safe · Ask for password / biometrics on each dApp transaction</option>
-                <option value="degen">Degen · Use the unlocked session for dApp transactions</option>
-              </select>
-              <p className="muted">
-                Safe mode re-authenticates transaction approvals. Degen mode skips the extra prompt while the wallet stays unlocked.
-              </p>
-            </label>
+              <div className="dapp-mode-grid" role="radiogroup" aria-label="dApp signing mode">
+                {[
+                  {
+                    id: 'safe' as const,
+                    title: 'Safe',
+                    detail: 'Ask for password or biometrics on each dApp transaction.',
+                    meta: 'Best for normal use'
+                  },
+                  {
+                    id: 'degen' as const,
+                    title: 'Degen',
+                    detail: 'Use the unlocked session until the wallet locks again.',
+                    meta: 'Fastest signing flow'
+                  }
+                ].map((mode) => {
+                  const active = wallet.dappApprovalMode === mode.id;
+                  return (
+                    <button
+                      key={mode.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={active}
+                      className={`dapp-mode-card ${active ? 'active' : ''}`.trim()}
+                      onClick={async () => {
+                        if (active) {
+                          return;
+                        }
+                        const nextState = await sendRuntimeMessage<WalletStateResponse>({
+                          type: 'wallet_set_dapp_approval_mode',
+                          mode: mode.id
+                        });
+                        setState(nextState);
+                      }}
+                    >
+                      <span className="dapp-mode-card-header">
+                        <strong>{mode.title}</strong>
+                        <span className="dapp-mode-card-meta">{active ? 'Active' : mode.meta}</span>
+                      </span>
+                      <span className="dapp-mode-card-copy">{mode.detail}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="muted">This only changes dApp transaction approvals. Direct wallet actions keep their existing signing rules.</p>
+            </div>
             <label className="stack">
               <span className="muted">Theme</span>
               <select

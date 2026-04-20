@@ -5,6 +5,10 @@ const FROM_CONTENT_DEBUG = 'grape:content:debug';
 const PROVIDER_PORT_NAME = 'grape-provider';
 const PROVIDER_RECONNECT_DELAY_MS = 250;
 const PROVIDER_MAX_RECONNECT_DELAY_MS = 5_000;
+const CONTENT_INIT_FLAG = '__grapeWalletContentScriptInitialized__' as const;
+const contentWindow = window as Window & {
+  __grapeWalletContentScriptInitialized__?: boolean;
+};
 
 type ProviderErrorResponse = {
   id: string;
@@ -75,131 +79,109 @@ function buildDisconnectedResponse(id: string, message = 'Grape lost its backgro
   };
 }
 
-injectInpageScript();
+if (!contentWindow[CONTENT_INIT_FLAG]) {
+  contentWindow[CONTENT_INIT_FLAG] = true;
 
-const pendingRequestIds = new Set<string>();
-let port: chrome.runtime.Port | null = null;
-let reconnectTimer: number | null = null;
-let reconnectDelayMs = PROVIDER_RECONNECT_DELAY_MS;
+  injectInpageScript();
 
-function flushPendingRequestsWithError(message?: string) {
-  for (const requestId of pendingRequestIds) {
-    postToInpage(buildDisconnectedResponse(requestId, message));
-  }
-  pendingRequestIds.clear();
-}
+  const pendingRequestIds = new Set<string>();
+  let port: chrome.runtime.Port | null = null;
+  let reconnectTimer: number | null = null;
+  let reconnectDelayMs = PROVIDER_RECONNECT_DELAY_MS;
 
-function scheduleReconnect() {
-  if (reconnectTimer !== null) {
-    return;
+  function flushPendingRequestsWithError(message?: string) {
+    for (const requestId of pendingRequestIds) {
+      postToInpage(buildDisconnectedResponse(requestId, message));
+    }
+    pendingRequestIds.clear();
   }
 
-  reconnectTimer = window.setTimeout(() => {
-    reconnectTimer = null;
-    connectProviderPort();
-  }, reconnectDelayMs);
-  reconnectDelayMs = Math.min(reconnectDelayMs * 2, PROVIDER_MAX_RECONNECT_DELAY_MS);
-}
+  function scheduleReconnect() {
+    if (reconnectTimer !== null) {
+      return;
+    }
 
-function handleProviderDisconnect(disconnectPort: chrome.runtime.Port) {
-  if (port !== disconnectPort) {
-    return;
+    reconnectTimer = window.setTimeout(() => {
+      reconnectTimer = null;
+      connectProviderPort();
+    }, reconnectDelayMs);
+    reconnectDelayMs = Math.min(reconnectDelayMs * 2, PROVIDER_MAX_RECONNECT_DELAY_MS);
   }
 
-  const disconnectMessage = chrome.runtime.lastError?.message;
-  port = null;
-  flushPendingRequestsWithError(
-    disconnectMessage
-      ? `Grape lost its background connection (${disconnectMessage}). Retry the request.`
-      : undefined
-  );
-  scheduleReconnect();
-}
+  function handleProviderDisconnect(disconnectPort: chrome.runtime.Port) {
+    if (port !== disconnectPort) {
+      return;
+    }
 
-function connectProviderPort(): chrome.runtime.Port | null {
-  if (port) {
-    return port;
-  }
-
-  try {
-    const nextPort = chrome.runtime.connect({ name: PROVIDER_PORT_NAME });
-    port = nextPort;
-    reconnectDelayMs = PROVIDER_RECONNECT_DELAY_MS;
-
-    nextPort.onMessage.addListener((message) => {
-      if (message?.__grapeDebug === true) {
-        window.postMessage(
-          {
-            source: FROM_CONTENT_DEBUG,
-            payload: message.payload
-          },
-          '*'
-        );
-        return;
-      }
-
-      const requestId = getRequestId(message);
-      if (requestId) {
-        pendingRequestIds.delete(requestId);
-      }
-      postToInpage(message);
-    });
-
-    nextPort.onDisconnect.addListener(() => {
-      handleProviderDisconnect(nextPort);
-    });
-
-    return nextPort;
-  } catch {
+    const disconnectMessage = chrome.runtime.lastError?.message;
+    port = null;
+    flushPendingRequestsWithError(
+      disconnectMessage
+        ? `Grape lost its background connection (${disconnectMessage}). Retry the request.`
+        : undefined
+    );
     scheduleReconnect();
-    return null;
-  }
-}
-
-function buildProviderMessage(payload: unknown) {
-  const normalizedPayload = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
-
-  return {
-    ...normalizedPayload,
-    origin: {
-      origin: window.location.origin,
-      href: window.location.href,
-      title: document.title,
-      faviconUrl: getFaviconUrl()
-    }
-  };
-}
-
-function sendProviderMessage(payload: unknown) {
-  const message = buildProviderMessage(payload);
-  const requestId = getRequestId(message);
-  let nextPort = connectProviderPort();
-
-  if (!nextPort) {
-    if (requestId) {
-      postToInpage(buildDisconnectedResponse(requestId));
-    }
-    return;
   }
 
-  try {
-    if (requestId) {
-      pendingRequestIds.add(requestId);
-    }
-    nextPort.postMessage(message);
-  } catch {
-    if (requestId) {
-      pendingRequestIds.delete(requestId);
+  function connectProviderPort(): chrome.runtime.Port | null {
+    if (port) {
+      return port;
     }
 
     try {
-      nextPort.disconnect();
-    } catch {
-      // No-op: the port is already unusable.
-    }
+      const nextPort = chrome.runtime.connect({ name: PROVIDER_PORT_NAME });
+      port = nextPort;
+      reconnectDelayMs = PROVIDER_RECONNECT_DELAY_MS;
 
-    port = null;
-    nextPort = connectProviderPort();
+      nextPort.onMessage.addListener((message) => {
+        if (message?.__grapeDebug === true) {
+          window.postMessage(
+            {
+              source: FROM_CONTENT_DEBUG,
+              payload: message.payload
+            },
+            '*'
+          );
+          return;
+        }
+
+        const requestId = getRequestId(message);
+        if (requestId) {
+          pendingRequestIds.delete(requestId);
+        }
+        postToInpage(message);
+      });
+
+      nextPort.onDisconnect.addListener(() => {
+        handleProviderDisconnect(nextPort);
+      });
+
+      return nextPort;
+    } catch {
+      scheduleReconnect();
+      return null;
+    }
+  }
+
+  function buildProviderMessage(payload: unknown) {
+    const normalizedPayload = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+
+    return {
+      ...normalizedPayload,
+      origin: {
+        origin: window.location.origin,
+        href: window.location.href,
+        title: document.title,
+        faviconUrl: getFaviconUrl()
+      }
+    };
+  }
+
+  function sendProviderMessage(payload: unknown) {
+    const message = buildProviderMessage(payload);
+    const requestId = getRequestId(message);
+    let nextPort = connectProviderPort();
+
     if (!nextPort) {
       if (requestId) {
         postToInpage(buildDisconnectedResponse(requestId));
@@ -215,35 +197,61 @@ function sendProviderMessage(payload: unknown) {
     } catch {
       if (requestId) {
         pendingRequestIds.delete(requestId);
-        postToInpage(buildDisconnectedResponse(requestId));
       }
-      scheduleReconnect();
+
+      try {
+        nextPort.disconnect();
+      } catch {
+        // No-op: the port is already unusable.
+      }
+
+      port = null;
+      nextPort = connectProviderPort();
+      if (!nextPort) {
+        if (requestId) {
+          postToInpage(buildDisconnectedResponse(requestId));
+        }
+        return;
+      }
+
+      try {
+        if (requestId) {
+          pendingRequestIds.add(requestId);
+        }
+        nextPort.postMessage(message);
+      } catch {
+        if (requestId) {
+          pendingRequestIds.delete(requestId);
+          postToInpage(buildDisconnectedResponse(requestId));
+        }
+        scheduleReconnect();
+      }
     }
   }
+
+  connectProviderPort();
+
+  window.addEventListener('message', (event) => {
+    if (event.source !== window || event.data?.source !== FROM_INPAGE) {
+      return;
+    }
+
+    sendProviderMessage(event.data.payload);
+  });
+
+  window.addEventListener('beforeunload', () => {
+    if (reconnectTimer !== null) {
+      window.clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+
+    pendingRequestIds.clear();
+    const currentPort = port;
+    port = null;
+    try {
+      currentPort?.disconnect();
+    } catch {
+      // Ignore unload-time disconnect errors.
+    }
+  });
 }
-
-connectProviderPort();
-
-window.addEventListener('message', (event) => {
-  if (event.source !== window || event.data?.source !== FROM_INPAGE) {
-    return;
-  }
-
-  sendProviderMessage(event.data.payload);
-});
-
-window.addEventListener('beforeunload', () => {
-  if (reconnectTimer !== null) {
-    window.clearTimeout(reconnectTimer);
-    reconnectTimer = null;
-  }
-
-  pendingRequestIds.clear();
-  const currentPort = port;
-  port = null;
-  try {
-    currentPort?.disconnect();
-  } catch {
-    // Ignore unload-time disconnect errors.
-  }
-});
