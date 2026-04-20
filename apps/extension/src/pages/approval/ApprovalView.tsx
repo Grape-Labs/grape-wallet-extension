@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 
 import { Fingerprint } from 'lucide-react';
 
@@ -185,6 +185,14 @@ export function ApprovalView(props: {
     } finally {
       setBiometricUnlocking(false);
     }
+  }
+
+  async function handleApproveSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (submitting || (requiresPassword && !password.trim())) {
+      return;
+    }
+    await approveRequest();
   }
 
   if (submitting) {
@@ -456,58 +464,61 @@ export function ApprovalView(props: {
         ) : null}
       </Card>
 
-      {requiresPassword ? (
-        <Card title="Confirm password">
-          <div className="stack">
-            <div className="send-input-shell send-input-shell-sign">
-              <Input
-                type="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                placeholder="Enter password to sign"
-              />
-              {biometricEnabled ? (
-                <button
-                  type="button"
-                  className="biometric-inline-button"
-                  onClick={() => void handleBiometricUnlock()}
-                  aria-label="Approve with device"
-                  title="Approve with device"
-                  disabled={biometricUnlocking || submitting}
-                >
-                  <Fingerprint size={16} />
-                </button>
-              ) : null}
+      <form onSubmit={(event) => void handleApproveSubmit(event)}>
+        {requiresPassword ? (
+          <Card title="Confirm password">
+            <div className="stack">
+              <div className="send-input-shell send-input-shell-sign">
+                <Input
+                  type="password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  placeholder="Enter password to sign"
+                />
+                {biometricEnabled ? (
+                  <button
+                    type="button"
+                    className="biometric-inline-button"
+                    onClick={() => void handleBiometricUnlock()}
+                    aria-label="Approve with device"
+                    title="Approve with device"
+                    disabled={biometricUnlocking || submitting}
+                  >
+                    <Fingerprint size={16} />
+                  </button>
+                ) : null}
+              </div>
+              <p className="muted">Approve this request with your password or device.</p>
             </div>
-            <p className="muted">Approve this request with your password or device.</p>
-          </div>
-        </Card>
-      ) : null}
+          </Card>
+        ) : null}
 
-      {error ? <p className="danger-box">{error}</p> : null}
+        {error ? <p className="danger-box">{error}</p> : null}
 
-      <div className="inline approval-action-row">
-        <Button
-          tone="danger"
-          disabled={submitting}
-          onClick={async () => {
-            await sendRuntimeMessage({
-              type: 'approval_respond',
-              approvalId,
-              approved: false
-            });
-            await handleResolved();
-          }}
-        >
-          Reject
-        </Button>
-        <Button
-          disabled={submitting || (requiresPassword && !password.trim())}
-          onClick={() => void approveRequest()}
-        >
-          Approve
-        </Button>
-      </div>
+        <div className="inline approval-action-row">
+          <Button
+            type="button"
+            tone="danger"
+            disabled={submitting}
+            onClick={async () => {
+              await sendRuntimeMessage({
+                type: 'approval_respond',
+                approvalId,
+                approved: false
+              });
+              await handleResolved();
+            }}
+          >
+            Reject
+          </Button>
+          <Button
+            type="submit"
+            disabled={submitting || (requiresPassword && !password.trim())}
+          >
+            Approve
+          </Button>
+        </div>
+      </form>
     </>
   );
 }
