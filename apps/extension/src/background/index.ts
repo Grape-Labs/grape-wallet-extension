@@ -71,7 +71,9 @@ import {
   PublicKey,
   StakeProgram,
   Transaction,
-  TransactionInstruction
+  TransactionInstruction,
+  VALIDATOR_INFO_KEY,
+  ValidatorInfo
 } from '@solana/web3.js';
 import {
   getMaxVoterWeightRecordAddress,
@@ -176,6 +178,8 @@ import {
   fetchShyftWalletTokens,
   hasShyftApiKey
 } from '../shared/shyft';
+
+const SOLANA_CONFIG_PROGRAM_ID = new PublicKey('Config1111111111111111111111111111111111111');
 
 const approvalsStorage = new ChromeStorageArea<Record<string, ApprovalRecord>>(chrome.storage.local, STORAGE_KEYS.approvals, {});
 const deviceLinkStorage = new ChromeStorageArea<Record<string, DeviceLinkSessionRecord>>(
@@ -3138,10 +3142,38 @@ class WalletController {
 
     const connection = this.createConnection(walletState.selectedNetwork, walletState);
     const voteAccounts = await connection.getVoteAccounts('confirmed');
+    const validatorNames = new Map<string, string>();
+
+    try {
+      const validatorInfoAccounts = await connection.getProgramAccounts(SOLANA_CONFIG_PROGRAM_ID, {
+        commitment: 'confirmed',
+        filters: [
+          {
+            memcmp: {
+              offset: 1,
+              bytes: VALIDATOR_INFO_KEY.toBase58()
+            }
+          }
+        ]
+      });
+
+      for (const account of validatorInfoAccounts) {
+        const validatorInfo = ValidatorInfo.fromConfigData(account.account.data);
+        const validatorName = validatorInfo?.info?.name?.trim();
+        if (!validatorInfo || !validatorName) {
+          continue;
+        }
+        validatorNames.set(validatorInfo.key.toBase58(), validatorName);
+      }
+    } catch {
+      // Name lookup is best-effort. The validator list still works with raw vote accounts.
+    }
+
     const validators: StakeValidatorRow[] = voteAccounts.current
       .map((entry) => ({
         voteAccount: entry.votePubkey,
         nodePubkey: entry.nodePubkey,
+        name: validatorNames.get(entry.nodePubkey) ?? null,
         commission: entry.commission,
         activatedStakeLamports: Number(entry.activatedStake ?? 0),
         lastVote: entry.lastVote,
@@ -5109,6 +5141,8 @@ class WalletController {
       requiresPassword:
         approvalWallet?.signer.kind === 'ledger'
           ? false
+          : walletState.dappApprovalMode === 'degen' && kind !== 'connect'
+            ? session.locked
           : shouldRequireReauthForApproval(kind, walletState.dappApprovalMode)
             ? true
             : !unlockedWalletIds.includes(walletId),

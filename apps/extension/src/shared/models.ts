@@ -402,6 +402,7 @@ export type WalletStakeAccountsResponse = {
 export type StakeValidatorRow = {
   voteAccount: string;
   nodePubkey: string;
+  name?: string | null;
   commission: number;
   activatedStakeLamports: number;
   lastVote: number;

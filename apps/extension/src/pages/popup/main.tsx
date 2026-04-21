@@ -4929,12 +4929,13 @@ function PopupPage() {
                     </option>
                     {stakeValidators.map((validator) => (
                       <option key={validator.voteAccount} value={validator.voteAccount}>
-                        {`${formatAddress(validator.voteAccount)} • ${formatSolAmountFromLamports(validator.activatedStakeLamports)} SOL • ${validator.commission}% commission`}
+                        {`${validator.name ? `${validator.name} • ` : ''}${formatAddress(validator.voteAccount)} • ${formatSolAmountFromLamports(validator.activatedStakeLamports)} SOL • ${validator.commission}% commission`}
                       </option>
                     ))}
                   </select>
                   {selectedStakeValidator ? (
                     <p className="muted">
+                      {selectedStakeValidator.name ? `${selectedStakeValidator.name} • ` : ''}
                       Active stake {formatSolAmountFromLamports(selectedStakeValidator.activatedStakeLamports)} SOL • Commission {selectedStakeValidator.commission}% • Node {formatAddress(selectedStakeValidator.nodePubkey)}
                     </p>
                   ) : (
