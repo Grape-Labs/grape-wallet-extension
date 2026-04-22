@@ -40,7 +40,7 @@ function OptionsPage() {
   const [exportPassword, setExportPassword] = useState('');
   const [exportedWallet, setExportedWallet] = useState<WalletExportResponse | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
-  const [copiedField, setCopiedField] = useState<'mnemonic' | 'private-key' | null>(null);
+  const [copiedField, setCopiedField] = useState<'mnemonic' | 'private-key-array' | 'private-key-base58' | null>(null);
   const [exporting, setExporting] = useState(false);
   const [biometricSupported, setBiometricSupported] = useState(false);
   const [biometricLoading, setBiometricLoading] = useState(false);
@@ -57,9 +57,14 @@ function OptionsPage() {
   const [deviceLinkQr, setDeviceLinkQr] = useState<string | null>(null);
   const [deviceLinkQrExpanded, setDeviceLinkQrExpanded] = useState(false);
   const [copiedDeviceLinkField, setCopiedDeviceLinkField] = useState<'code' | 'payload' | null>(null);
-  const [revealedFields, setRevealedFields] = useState<{ mnemonic: boolean; privateKey: boolean }>({
+  const [revealedFields, setRevealedFields] = useState<{
+    mnemonic: boolean;
+    privateKeyArray: boolean;
+    privateKeyBase58: boolean;
+  }>({
     mnemonic: false,
-    privateKey: false
+    privateKeyArray: false,
+    privateKeyBase58: false
   });
   const isWatchOnlyWallet = state?.activeWallet?.signerKind === 'watch-only';
 
@@ -94,7 +99,7 @@ function OptionsPage() {
       setExportPassword('');
       setExportError(null);
       setCopiedField(null);
-      setRevealedFields({ mnemonic: false, privateKey: false });
+      setRevealedFields({ mnemonic: false, privateKeyArray: false, privateKeyBase58: false });
     }
   }, [state?.session.locked]);
 
@@ -102,7 +107,7 @@ function OptionsPage() {
     setExportedWallet(null);
     setExportError(null);
     setCopiedField(null);
-    setRevealedFields({ mnemonic: false, privateKey: false });
+    setRevealedFields({ mnemonic: false, privateKeyArray: false, privateKeyBase58: false });
   }, [state?.activeWallet?.id]);
 
   useEffect(() => {
@@ -211,6 +216,7 @@ function OptionsPage() {
           derivationPath: exportedWallet.derivationPath,
           kind: exportedWallet.kind,
           mnemonic: exportedWallet.mnemonic,
+          privateKeyBytes: exportedWallet.privateKeyBytes,
           privateKeyBase58: exportedWallet.privateKeyBase58,
           exportedAt: new Date().toISOString()
         },
@@ -218,8 +224,12 @@ function OptionsPage() {
         2
       )
     : '';
+  const privateKeyArrayValue = exportedWallet ? JSON.stringify(exportedWallet.privateKeyBytes) : '';
 
-  async function handleCopySecret(kind: 'mnemonic' | 'private-key', value: string | undefined) {
+  async function handleCopySecret(
+    kind: 'mnemonic' | 'private-key-array' | 'private-key-base58',
+    value: string | undefined
+  ) {
     if (!value) {
       return;
     }
@@ -237,11 +247,11 @@ function OptionsPage() {
         password: exportPassword
       });
       setExportedWallet(nextExport);
-      setRevealedFields({ mnemonic: false, privateKey: false });
+      setRevealedFields({ mnemonic: false, privateKeyArray: false, privateKeyBase58: false });
     } catch (error) {
       setExportedWallet(null);
       setExportError(error instanceof Error ? error.message : 'Unable to export wallet.');
-      setRevealedFields({ mnemonic: false, privateKey: false });
+      setRevealedFields({ mnemonic: false, privateKeyArray: false, privateKeyBase58: false });
     } finally {
       setExporting(false);
     }
@@ -261,12 +271,12 @@ function OptionsPage() {
         password: unlockedPassword
       });
       setExportedWallet(nextExport);
-      setRevealedFields({ mnemonic: false, privateKey: false });
+      setRevealedFields({ mnemonic: false, privateKeyArray: false, privateKeyBase58: false });
       setExportPassword('');
     } catch (error) {
       setExportedWallet(null);
       setExportError(error instanceof Error ? error.message : 'Unable to export wallet with device unlock.');
-      setRevealedFields({ mnemonic: false, privateKey: false });
+      setRevealedFields({ mnemonic: false, privateKeyArray: false, privateKeyBase58: false });
     } finally {
       setExporting(false);
     }
@@ -656,7 +666,7 @@ function OptionsPage() {
                   onClick={() => {
                     setExportedWallet(null);
                     setExportError(null);
-                    setRevealedFields({ mnemonic: false, privateKey: false });
+                    setRevealedFields({ mnemonic: false, privateKeyArray: false, privateKeyBase58: false });
                   }}
                 >
                   Clear
@@ -702,28 +712,73 @@ function OptionsPage() {
                 ) : null}
                 <div className="stack">
                   <div className="space-between">
+                    <span className="muted">Private key (JSON array)</span>
+                    <div className="inline">
+                      <Button
+                        tone="secondary"
+                        className="mini-button"
+                        onClick={() =>
+                          setRevealedFields((current) => ({
+                            ...current,
+                            privateKeyArray: !current.privateKeyArray
+                          }))
+                        }
+                      >
+                        {revealedFields.privateKeyArray ? 'Hide' : 'Show'}
+                      </Button>
+                      <Button
+                        tone="secondary"
+                        className="mini-button"
+                        onClick={() => void handleCopySecret('private-key-array', privateKeyArrayValue)}
+                        disabled={!revealedFields.privateKeyArray}
+                      >
+                        {copiedField === 'private-key-array' ? 'Copied' : 'Copy'}
+                      </Button>
+                    </div>
+                  </div>
+                  <TextArea
+                    readOnly
+                    value={
+                      revealedFields.privateKeyArray
+                        ? privateKeyArrayValue
+                        : '••••••••••••••••••••••••••••••••••••••••••••'
+                    }
+                  />
+                </div>
+                <div className="stack">
+                  <div className="space-between">
                     <span className="muted">Private key (base58)</span>
                     <div className="inline">
                       <Button
                         tone="secondary"
                         className="mini-button"
                         onClick={() =>
-                          setRevealedFields((current) => ({ ...current, privateKey: !current.privateKey }))
+                          setRevealedFields((current) => ({
+                            ...current,
+                            privateKeyBase58: !current.privateKeyBase58
+                          }))
                         }
                       >
-                        {revealedFields.privateKey ? 'Hide' : 'Show'}
+                        {revealedFields.privateKeyBase58 ? 'Hide' : 'Show'}
                       </Button>
                       <Button
                         tone="secondary"
                         className="mini-button"
-                        onClick={() => void handleCopySecret('private-key', exportedWallet.privateKeyBase58)}
-                        disabled={!revealedFields.privateKey}
+                        onClick={() => void handleCopySecret('private-key-base58', exportedWallet.privateKeyBase58)}
+                        disabled={!revealedFields.privateKeyBase58}
                       >
-                        {copiedField === 'private-key' ? 'Copied' : 'Copy'}
+                        {copiedField === 'private-key-base58' ? 'Copied' : 'Copy'}
                       </Button>
                     </div>
                   </div>
-                  <TextArea readOnly value={revealedFields.privateKey ? exportedWallet.privateKeyBase58 : '••••••••••••••••••••••••••••••••••••••••••••'} />
+                  <TextArea
+                    readOnly
+                    value={
+                      revealedFields.privateKeyBase58
+                        ? exportedWallet.privateKeyBase58
+                        : '••••••••••••••••••••••••••••••••••••••••••••'
+                    }
+                  />
                 </div>
                 <Button tone="secondary" onClick={handleDownloadExport}>
                   Download JSON export

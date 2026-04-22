@@ -27,6 +27,7 @@ export type ExportedSoftwareWalletSecret = {
   publicKey: string;
   derivationPath: string;
   privateKeyBase58: string;
+  privateKeyBytes: number[];
   mnemonic?: string;
 };
 
@@ -104,6 +105,7 @@ export function exportSolanaSoftwareWalletSecret(
       publicKey: derived.publicKey,
       derivationPath: derived.derivationPath,
       privateKeyBase58: bs58.encode(derived.keypair.secretKey),
+      privateKeyBytes: Array.from(derived.keypair.secretKey),
       mnemonic: derived.mnemonic
     };
   }
@@ -114,7 +116,8 @@ export function exportSolanaSoftwareWalletSecret(
       kind: 'private-key',
       publicKey: imported.publicKey,
       derivationPath: imported.derivationPath,
-      privateKeyBase58: bs58.encode(imported.keypair.secretKey)
+      privateKeyBase58: bs58.encode(imported.keypair.secretKey),
+      privateKeyBytes: Array.from(imported.keypair.secretKey)
     };
   }
 

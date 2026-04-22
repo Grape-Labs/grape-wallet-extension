@@ -3595,6 +3595,7 @@ class WalletController {
       derivationPath: exported.derivationPath,
       kind: exported.kind,
       privateKeyBase58: exported.privateKeyBase58,
+      privateKeyBytes: exported.privateKeyBytes,
       mnemonic: exported.mnemonic
     };
   }

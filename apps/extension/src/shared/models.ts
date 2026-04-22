@@ -324,6 +324,7 @@ export type WalletExportResponse = {
   derivationPath: string;
   kind: 'mnemonic' | 'private-key';
   privateKeyBase58: string;
+  privateKeyBytes: number[];
   mnemonic?: string;
 };
 

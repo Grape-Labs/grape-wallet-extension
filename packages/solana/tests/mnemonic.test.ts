@@ -39,10 +39,12 @@ describe('mnemonic and derivation', () => {
   it('exports mnemonic-backed software wallets', () => {
     const mnemonic = 'pill tomorrow foster begin walnut borrow virtual kick shift mutual shoe scatter';
     const exported = exportSolanaSoftwareWalletSecret({ kind: 'mnemonic', mnemonic });
+    const imported = importSolanaPrivateKey(exported.privateKeyBase58);
 
     expect(exported.kind).toBe('mnemonic');
     expect(exported.mnemonic).toBe(mnemonic);
     expect(validateSolanaPrivateKey(exported.privateKeyBase58)).toBe(true);
+    expect(exported.privateKeyBytes).toEqual(Array.from(imported.keypair.secretKey));
   });
 
   it('exports imported private-key wallets as base58', () => {
@@ -53,5 +55,6 @@ describe('mnemonic and derivation', () => {
     expect(exported.kind).toBe('private-key');
     expect(exported.publicKey).toBe(keypair.publicKey.toBase58());
     expect(exported.privateKeyBase58).toBe(privateKey);
+    expect(exported.privateKeyBytes).toEqual(Array.from(keypair.secretKey));
   });
 });
