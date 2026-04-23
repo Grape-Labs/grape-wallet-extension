@@ -7,6 +7,7 @@ import {
   derivePasskeyWalletMaterialFromPrf,
   encryptText,
   getPasskeyWalletPrfInput,
+  resolveBiometricUnlockConfig as resolveSharedBiometricUnlockConfig,
   utf8ToBytes,
   type BiometricUnlockConfig
 } from '@grape/core';
@@ -18,6 +19,7 @@ import {
 } from './passkey-handoff';
 
 type StoredBiometricConfig = BiometricUnlockConfig;
+const BIOMETRIC_UNLOCK_SCOPE = 'global';
 
 function bytesToBase64Url(bytes: Uint8Array): string {
   return bytesToBase64(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
@@ -67,9 +69,9 @@ function resolveDeterministicPasskeyWalletRpId(): string | undefined {
   return undefined;
 }
 
-function buildCreationOptions(walletId: string) {
+function buildCreationOptions(scope = BIOMETRIC_UNLOCK_SCOPE) {
   const challenge = randomBytes(32);
-  const userId = utf8ToBytes(`grape:${walletId}`);
+  const userId = utf8ToBytes(`grape:biometric:${scope}`);
   const rpId = resolveRpId();
 
   return {
@@ -80,7 +82,7 @@ function buildCreationOptions(walletId: string) {
     },
     user: {
       id: new Uint8Array(userId),
-      name: `grape-${walletId}`,
+      name: `grape-biometric-${scope}`,
       displayName: 'Grape unlock'
     },
     pubKeyCredParams: [
@@ -190,14 +192,14 @@ async function evaluatePrf(credentialId: Uint8Array, prfInput: Uint8Array, rpId?
   return prfBytes;
 }
 
-export async function createBiometricUnlock(walletId: string, password: string): Promise<StoredBiometricConfig> {
+export async function createBiometricUnlock(password: string): Promise<StoredBiometricConfig> {
   const supported = await isBiometricUnlockSupported();
   if (!supported) {
     throw new Error('Biometric unlock is not available on this device.');
   }
 
   const credential = (await navigator.credentials.create({
-    publicKey: buildCreationOptions(walletId)
+    publicKey: buildCreationOptions()
   })) as PublicKeyCredential | null;
 
   if (!credential || !(credential.rawId instanceof ArrayBuffer)) {
@@ -315,3 +317,5 @@ export async function unlockWithBiometric(config: StoredBiometricConfig): Promis
   const prfBytes = await evaluatePrf(credentialId, base64ToBytes(config.keySalt));
   return decryptText(config.wrappedPassword, bytesToBase64(prfBytes));
 }
+
+export const resolveBiometricUnlockConfig = resolveSharedBiometricUnlockConfig;

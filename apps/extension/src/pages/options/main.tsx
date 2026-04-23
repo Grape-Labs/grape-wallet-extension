@@ -6,7 +6,7 @@ import { Button, Card, Input, KeyValueRow, PageShell, StatusPill, TextArea } fro
 
 import type { WalletDeviceLinkSessionResponse, WalletExportResponse, WalletStateResponse } from '../../shared/models';
 
-import { createBiometricUnlock, isBiometricUnlockSupported, unlockWithBiometric } from '../../shared/biometric';
+import { createBiometricUnlock, isBiometricUnlockSupported, resolveBiometricUnlockConfig, unlockWithBiometric } from '../../shared/biometric';
 import { sendRuntimeMessage } from '../../shared/chrome';
 import { applyDocumentTheme, THEMES } from '../../shared/theme';
 import { mountPage } from '../lib';
@@ -204,6 +204,7 @@ function OptionsPage() {
     state.wallet.wallets.find((wallet) => wallet.id === selectedWalletId) ??
     state.wallet.wallets.find((wallet) => wallet.chain === state.wallet.selectedChain) ??
     state.wallet.wallets[0];
+  const biometricUnlockConfig = resolveBiometricUnlockConfig(state.wallet, selectedWallet);
   const exportIsAvailable = selectedWallet?.signer?.kind === 'software';
   const deviceLinkIsAvailable = selectedWallet?.signer?.kind === 'software';
   const activeDeviceLinkSession = deviceLinkSessions.find((session) => session.status === 'ready') ?? null;
@@ -258,14 +259,14 @@ function OptionsPage() {
   }
 
   async function handleExportWithBiometric() {
-    if (!selectedWallet?.biometricUnlock) {
+    if (!biometricUnlockConfig) {
       return;
     }
 
     try {
       setExporting(true);
       setExportError(null);
-      const unlockedPassword = await unlockWithBiometric(selectedWallet.biometricUnlock);
+      const unlockedPassword = await unlockWithBiometric(biometricUnlockConfig);
       const nextExport = await sendRuntimeMessage<WalletExportResponse>({
         type: 'wallet_export_secret',
         password: unlockedPassword
@@ -304,7 +305,7 @@ function OptionsPage() {
     try {
       setBiometricLoading(true);
       setBiometricError(null);
-      const config = await createBiometricUnlock(selectedWallet.id, biometricPassword);
+      const config = await createBiometricUnlock(biometricPassword);
       await sendRuntimeMessage({
         type: 'wallet_set_biometric_unlock',
         config
@@ -374,14 +375,14 @@ function OptionsPage() {
   }
 
   async function handleCreateDeviceLinkWithBiometric() {
-    if (!selectedWallet?.biometricUnlock) {
+    if (!biometricUnlockConfig) {
       return;
     }
 
     try {
       setDeviceLinkLoading(true);
       setDeviceLinkError(null);
-      const unlockedPassword = await unlockWithBiometric(selectedWallet.biometricUnlock);
+      const unlockedPassword = await unlockWithBiometric(biometricUnlockConfig);
       await handleCreateDeviceLink(unlockedPassword);
     } catch (error) {
       setDeviceLinkError(error instanceof Error ? error.message : 'Unable to verify with device.');
@@ -586,14 +587,14 @@ function OptionsPage() {
           ) : biometricSupported ? (
             state.activeWallet?.biometricEnabled ? (
               <div className="stack">
-                <p className="muted">Use Touch ID, Face ID, Windows Hello, or the platform authenticator when available.</p>
+                <p className="muted">Use Touch ID, Face ID, Windows Hello, or the platform authenticator across all software wallets.</p>
                 <Button tone="secondary" onClick={() => void handleDisableBiometric()} disabled={biometricLoading}>
                   {biometricLoading ? 'Updating...' : 'Disable biometric unlock'}
                 </Button>
               </div>
             ) : (
               <div className="stack">
-                <p className="muted">Enable fast unlock with the device authenticator. Your password remains the fallback.</p>
+                <p className="muted">Enable fast unlock once for all software wallets. Your password remains the fallback.</p>
                 <Input
                   type="password"
                   value={biometricPassword}
@@ -629,8 +630,8 @@ function OptionsPage() {
             <KeyValueRow label="Selected wallet" value={selectedWallet.name} />
             <KeyValueRow label="Wallet type" value={formatWalletSourceLabel(selectedWallet.source, selectedWallet.signer?.kind)} />
             <KeyValueRow label="Public key" value={<span className="mono transfer-signature">{state.activeWallet?.publicKey ?? 'Unknown'}</span>} />
-            {biometricSupported && selectedWallet.biometricUnlock ? (
-              <p className="muted">This wallet can be exported after device unlock. Password entry remains available as fallback.</p>
+            {biometricSupported && biometricUnlockConfig ? (
+              <p className="muted">Biometric unlock is available here using the shared wallet password. Password entry remains available as fallback.</p>
             ) : null}
             <label className="stack">
               <span className="muted">Password</span>
@@ -642,7 +643,7 @@ function OptionsPage() {
                   placeholder="Confirm password to reveal export"
                   className="send-recipient-input"
                 />
-                {biometricSupported && selectedWallet.biometricUnlock ? (
+                {biometricSupported && biometricUnlockConfig ? (
                   <button
                     type="button"
                     className="biometric-inline-button"
@@ -815,7 +816,7 @@ function OptionsPage() {
                   placeholder="Verify password to create link"
                   className="send-recipient-input"
                 />
-                {biometricSupported && selectedWallet.biometricUnlock ? (
+                {biometricSupported && biometricUnlockConfig ? (
                   <button
                     type="button"
                     className="biometric-inline-button"

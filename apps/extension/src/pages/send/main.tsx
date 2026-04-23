@@ -6,7 +6,7 @@ import { Button, Card, Input, KeyValueRow, PageShell, StatusPill } from '@grape/
 import type { SendTransferResponse, TokenHolding, WalletAssetsResponse, WalletStateResponse } from '../../shared/models';
 
 import { sendRuntimeMessage } from '../../shared/chrome';
-import { isBiometricUnlockSupported, unlockWithBiometric } from '../../shared/biometric';
+import { isBiometricUnlockSupported, resolveBiometricUnlockConfig, unlockWithBiometric } from '../../shared/biometric';
 import { mountPage } from '../lib';
 
 type AssetOption =
@@ -223,14 +223,15 @@ function SendPage() {
       state.wallet.wallets.find((entry) => entry.id === state.wallet.selectedWalletIdByChain?.[state.wallet.selectedChain]) ??
       state.wallet.wallets.find((entry) => entry.chain === state.wallet.selectedChain) ??
       state.wallet.wallets[0];
-    if (!selectedWallet?.biometricUnlock) {
+    const biometricUnlockConfig = resolveBiometricUnlockConfig(state.wallet, selectedWallet);
+    if (!biometricUnlockConfig) {
       return;
     }
 
     try {
       setBiometricUnlocking(true);
       setError(null);
-      const unlockedPassword = await unlockWithBiometric(selectedWallet.biometricUnlock);
+      const unlockedPassword = await unlockWithBiometric(biometricUnlockConfig);
       await sendRuntimeMessage<WalletStateResponse>({
         type: 'wallet_unlock',
         password: unlockedPassword

@@ -121,6 +121,7 @@ export type MonadChainState = {
 export type WalletState = {
   setup: WalletSetupState;
   wallets: WalletProfile[];
+  sharedBiometricUnlock?: BiometricUnlockConfig;
   selectedChain: GrapeChain;
   selectedWalletIds: Partial<Record<GrapeChain, string>>;
   trackedReputationSpaceIds: string[];
@@ -145,6 +146,7 @@ export type LegacyWalletState = {
   setup: WalletSetupState;
   vault?: VaultRecord;
   accounts?: WalletAccount[];
+  sharedBiometricUnlock?: BiometricUnlockConfig;
   selectedAccountId?: string;
   selectedChain?: GrapeChain;
   selectedWalletIds?: Partial<Record<GrapeChain, string>>;
@@ -202,6 +204,7 @@ export function createEmptyWalletState(): WalletState {
   return {
     setup: 'empty',
     wallets: [],
+    sharedBiometricUnlock: undefined,
     selectedChain: DEFAULT_CHAIN,
     selectedWalletIds: {},
     trackedReputationSpaceIds: [],
@@ -261,6 +264,13 @@ export function getSelectedWalletIdForChain(state: WalletState, chain: GrapeChai
 
 export function getSelectedSolanaChainState(state: WalletState): SolanaChainState {
   return state.chainState.solana;
+}
+
+export function resolveBiometricUnlockConfig(
+  state: Pick<WalletState, 'sharedBiometricUnlock'> | undefined,
+  wallet?: Pick<WalletProfile, 'biometricUnlock'> | undefined
+): BiometricUnlockConfig | undefined {
+  return state?.sharedBiometricUnlock ?? wallet?.biometricUnlock;
 }
 
 export function rememberWalletRecipient(wallet: WalletProfile, address: string, lastUsedAt = Date.now()): WalletProfile {
@@ -348,6 +358,8 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
     return {
       setup: normalizedWallets.length > 0 ? 'ready' : input.setup,
       wallets: normalizedWallets,
+      sharedBiometricUnlock:
+        input.sharedBiometricUnlock ?? normalizedWallets.find((wallet) => !!wallet.biometricUnlock)?.biometricUnlock,
       selectedChain,
       selectedWalletIds,
       trackedReputationSpaceIds: normalizeTrackedReputationSpaceIds(input.trackedReputationSpaceIds),
@@ -381,6 +393,7 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
           recentRecipients: []
         }
       ],
+      sharedBiometricUnlock: input.sharedBiometricUnlock,
       selectedChain: DEFAULT_CHAIN,
       selectedWalletIds: {
         solana: 'wallet-1'
@@ -416,6 +429,7 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
   return {
     setup: 'empty',
     wallets: [],
+    sharedBiometricUnlock: input.sharedBiometricUnlock,
     selectedChain: input.selectedChain ?? DEFAULT_CHAIN,
     selectedWalletIds: {},
     trackedReputationSpaceIds: normalizeTrackedReputationSpaceIds(input.trackedReputationSpaceIds),

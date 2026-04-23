@@ -7,7 +7,7 @@ import { Button, Card, Input, KeyValueRow, StatusPill } from '@grape/ui';
 import type { ApprovalRecord, WalletStateResponse } from '../../shared/models';
 
 import { sendRuntimeMessage } from '../../shared/chrome';
-import { isBiometricUnlockSupported, unlockWithBiometric } from '../../shared/biometric';
+import { isBiometricUnlockSupported, resolveBiometricUnlockConfig, unlockWithBiometric } from '../../shared/biometric';
 import { closeCurrentWindow } from '../../shared/window';
 
 function formatAddress(address: string | undefined, start = 6, end = 6): string {
@@ -94,7 +94,8 @@ export function ApprovalView(props: {
     walletState?.wallet.wallets.find((entry) => entry.id === selectedWalletId) ??
     walletState?.wallet.wallets.find((entry) => entry.chain === walletState?.wallet.selectedChain) ??
     walletState?.wallet.wallets[0];
-  const biometricEnabled = biometricSupported && !!selectedWallet?.biometricUnlock;
+  const biometricUnlockConfig = resolveBiometricUnlockConfig(walletState?.wallet, selectedWallet);
+  const biometricEnabled = biometricSupported && !!biometricUnlockConfig;
   const passwordOnlyForRelockedDegen =
     walletState?.wallet.dappApprovalMode === 'degen' && !!walletState?.session.locked;
   const requiresPassword =
@@ -167,14 +168,14 @@ export function ApprovalView(props: {
   }
 
   async function handleBiometricUnlock() {
-    if (!selectedWallet?.biometricUnlock) {
+    if (!biometricUnlockConfig) {
       return;
     }
 
     try {
       setBiometricUnlocking(true);
       setError(null);
-      const nextPassword = await unlockWithBiometric(selectedWallet.biometricUnlock);
+      const nextPassword = await unlockWithBiometric(biometricUnlockConfig);
       const nextState = await sendRuntimeMessage<WalletStateResponse>({
         type: 'wallet_unlock',
         password: nextPassword

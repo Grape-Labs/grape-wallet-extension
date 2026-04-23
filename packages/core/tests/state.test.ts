@@ -54,7 +54,7 @@ describe('wallet state', () => {
     });
 
     expect(migrated.wallets[0]?.recentRecipients).toEqual([]);
-    expect(migrated.selectedTheme).toBe('aurora');
+    expect(migrated.selectedTheme).toBe('grape');
   });
 
   it('stores recent recipients uniquely and most-recent-first', () => {
@@ -165,6 +165,9 @@ describe('wallet state', () => {
         selectedWalletIds: {
           solana: 'wallet-1'
         },
+        trackedReputationSpaceIds: [],
+        trackedVerificationSpaceIds: [],
+        trackedGovernanceDaoIds: [],
         chainState: {
           solana: {
             selectedNetwork: 'devnet',
@@ -183,6 +186,7 @@ describe('wallet state', () => {
         selectedWalletId: 'wallet-1',
         selectedNetwork: 'devnet',
         selectedTheme: 'aurora',
+        dappApprovalMode: 'safe',
         privacyMode: false,
         customRpcUrls: {},
         idleTimeoutMs: 1_000
@@ -223,6 +227,9 @@ describe('wallet state', () => {
         selectedWalletIds: {
           solana: 'wallet-1'
         },
+        trackedReputationSpaceIds: [],
+        trackedVerificationSpaceIds: [],
+        trackedGovernanceDaoIds: [],
         chainState: {
           solana: {
             selectedNetwork: 'devnet',
@@ -241,6 +248,7 @@ describe('wallet state', () => {
         selectedWalletId: 'wallet-1',
         selectedNetwork: 'devnet',
         selectedTheme: 'aurora',
+        dappApprovalMode: 'safe',
         privacyMode: false,
         customRpcUrls: {},
         idleTimeoutMs: 1_000

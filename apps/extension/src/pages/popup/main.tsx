@@ -72,7 +72,7 @@ import type {
 } from '../../shared/models';
 
 import { sendRuntimeMessage } from '../../shared/chrome';
-import { createBiometricUnlock, isBiometricUnlockSupported, unlockWithBiometric } from '../../shared/biometric';
+import { createBiometricUnlock, isBiometricUnlockSupported, resolveBiometricUnlockConfig, unlockWithBiometric } from '../../shared/biometric';
 import { JUPITER_SOL_MINT } from '../../shared/jupiter';
 import { getSupportedBridgeDestinations, LIFI_NATIVE_SYMBOL } from '../../shared/lifi';
 import { applyDocumentTheme, THEMES } from '../../shared/theme';
@@ -1355,6 +1355,14 @@ function PopupPage() {
       setAssetsLoading(false);
       setSurfaceError(error instanceof Error ? error.message : 'Unable to load wallet state.');
     }
+  };
+
+  const setPrivacyMode = async (enabled: boolean) => {
+    await sendRuntimeMessage({
+      type: 'wallet_set_privacy_mode',
+      enabled
+    });
+    await refresh();
   };
 
   const applyUnlockedState = (nextState: WalletStateResponse) => {
@@ -2909,6 +2917,11 @@ function PopupPage() {
   const privacyMode = wallet.privacyMode;
   const selectedChain = wallet.selectedChain;
   const selectedWalletIdForChain = getSelectedWalletIdForChain(wallet, selectedChain);
+  const selectedWalletProfile =
+    wallet.wallets.find((entry) => entry.id === selectedWalletIdForChain) ??
+    wallet.wallets.find((entry) => entry.chain === selectedChain) ??
+    wallet.wallets[0];
+  const biometricUnlockConfig = resolveBiometricUnlockConfig(wallet, selectedWalletProfile);
   const isSolanaChain = selectedChain === 'solana';
   const isSuiChain = selectedChain === 'sui';
   const isMonadChain = selectedChain === 'monad';
@@ -3726,22 +3739,14 @@ function PopupPage() {
   }
 
   async function handleBiometricUnlockInline() {
-    if (!wallet.wallets.length) {
-      return;
-    }
-
-    const selectedWallet =
-      wallet.wallets.find((entry) => entry.id === selectedWalletIdForChain) ??
-      wallet.wallets.find((entry) => entry.chain === wallet.selectedChain) ??
-      wallet.wallets[0];
-    if (!selectedWallet?.biometricUnlock) {
+    if (!biometricUnlockConfig) {
       return;
     }
 
     try {
       setBiometricUnlocking(true);
       setUnlockError(null);
-      const password = await unlockWithBiometric(selectedWallet.biometricUnlock);
+      const password = await unlockWithBiometric(biometricUnlockConfig);
       const nextState = await sendRuntimeMessage<WalletStateResponse>({
         type: 'wallet_unlock',
         password
@@ -3756,15 +3761,7 @@ function PopupPage() {
   }
 
   async function handleBiometricUnlockForSigning() {
-    if (!wallet.wallets.length) {
-      return;
-    }
-
-    const selectedWallet =
-      wallet.wallets.find((entry) => entry.id === selectedWalletIdForChain) ??
-      wallet.wallets.find((entry) => entry.chain === wallet.selectedChain) ??
-      wallet.wallets[0];
-    if (!selectedWallet?.biometricUnlock) {
+    if (!biometricUnlockConfig) {
       return;
     }
 
@@ -3775,7 +3772,7 @@ function PopupPage() {
       setTokenActionError(null);
       setIncidentError(null);
       setGovernanceVoteError(null);
-      const password = await unlockWithBiometric(selectedWallet.biometricUnlock);
+      const password = await unlockWithBiometric(biometricUnlockConfig);
       const nextState = await sendRuntimeMessage<WalletStateResponse>({
         type: 'wallet_unlock',
         password
@@ -3802,22 +3799,14 @@ function PopupPage() {
   }
 
   async function handleBiometricUnlockForGovernance() {
-    if (!wallet.wallets.length) {
-      return;
-    }
-
-    const selectedWallet =
-      wallet.wallets.find((entry) => entry.id === selectedWalletIdForChain) ??
-      wallet.wallets.find((entry) => entry.chain === wallet.selectedChain) ??
-      wallet.wallets[0];
-    if (!selectedWallet?.biometricUnlock) {
+    if (!biometricUnlockConfig) {
       return;
     }
 
     try {
       setBiometricUnlocking(true);
       setGovernanceVoteError(null);
-      const password = await unlockWithBiometric(selectedWallet.biometricUnlock);
+      const password = await unlockWithBiometric(biometricUnlockConfig);
       setGovernancePassword(password);
     } catch (error) {
       setGovernanceVoteError(error instanceof Error ? error.message : 'Unable to unlock with device.');
@@ -3827,14 +3816,14 @@ function PopupPage() {
   }
 
   async function handleEnableBiometricFromSettings() {
-    if (!activeWallet?.id || !biometricSettingsPassword.trim()) {
+    if (!activeWallet?.publicKey || !biometricSettingsPassword.trim()) {
       return;
     }
 
     try {
       setBiometricSettingsBusy(true);
       setBiometricSettingsError(null);
-      const config = await createBiometricUnlock(activeWallet.id, biometricSettingsPassword);
+      const config = await createBiometricUnlock(biometricSettingsPassword);
       await sendRuntimeMessage({
         type: 'wallet_set_biometric_unlock',
         config
@@ -4224,7 +4213,18 @@ function PopupPage() {
           </div>
 
           <div className="portfolio-copy">
-            <div className="portfolio-label">Total Balance</div>
+            <div className="portfolio-label-row">
+              <div className="portfolio-label">Total Balance</div>
+              <button
+                type="button"
+                className={`mini-icon-button subtle privacy-toggle-button ${privacyMode ? 'active' : ''}`.trim()}
+                onClick={() => void setPrivacyMode(!privacyMode)}
+                aria-label={privacyMode ? 'Show balances' : 'Hide balances'}
+                title={privacyMode ? 'Show balances' : 'Hide balances'}
+              >
+                {privacyMode ? <EyeOff size={13} /> : <Eye size={13} />}
+              </button>
+            </div>
             {assetsLoading ? (
               <div className="skeleton-block skeleton-line skeleton-hero-balance" />
             ) : (
@@ -5875,13 +5875,7 @@ function PopupPage() {
               <input
                 type="checkbox"
                 checked={wallet.privacyMode}
-                onChange={async (event) => {
-                  await sendRuntimeMessage({
-                    type: 'wallet_set_privacy_mode',
-                    enabled: event.target.checked
-                  });
-                  await refresh();
-                }}
+                onChange={(event) => void setPrivacyMode(event.target.checked)}
               />
               <span>
                 <strong>Privacy mode</strong>

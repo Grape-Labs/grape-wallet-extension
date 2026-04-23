@@ -5,7 +5,7 @@ import { Button, Card, Input, PageShell } from '@grape/ui';
 
 import type { WalletStateResponse } from '../../shared/models';
 
-import { isBiometricUnlockSupported, unlockWithBiometric } from '../../shared/biometric';
+import { isBiometricUnlockSupported, resolveBiometricUnlockConfig, unlockWithBiometric } from '../../shared/biometric';
 import { sendRuntimeMessage } from '../../shared/chrome';
 import { closeCurrentWindow } from '../../shared/window';
 import { mountPage } from '../lib';
@@ -54,14 +54,15 @@ function UnlockPage() {
       state?.wallet.wallets.find((entry) => entry.id === selectedWalletId) ??
       state?.wallet.wallets.find((entry) => entry.chain === state?.wallet.selectedChain) ??
       state?.wallet.wallets[0];
-    if (!selectedWallet?.biometricUnlock) {
+    const biometricUnlockConfig = resolveBiometricUnlockConfig(state?.wallet, selectedWallet);
+    if (!biometricUnlockConfig) {
       return;
     }
 
     try {
       setBiometricUnlocking(true);
       setError(null);
-      const unlockedPassword = await unlockWithBiometric(selectedWallet.biometricUnlock);
+      const unlockedPassword = await unlockWithBiometric(biometricUnlockConfig);
       await sendRuntimeMessage<WalletStateResponse>({
         type: 'wallet_unlock',
         password: unlockedPassword

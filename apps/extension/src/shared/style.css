@@ -1749,11 +1749,24 @@ body[data-theme='grape'] .wallet-home-card::after {
   margin-bottom: 16px;
 }
 
+.portfolio-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .portfolio-label {
   color: var(--theme-subtle);
   font-size: 0.78rem;
   letter-spacing: 0.16em;
   text-transform: uppercase;
+}
+
+.privacy-toggle-button.active {
+  color: var(--theme-text);
+  border-color: color-mix(in srgb, var(--theme-accent) 24%, transparent);
+  background: color-mix(in srgb, var(--theme-accent) 10%, var(--theme-surface-soft));
 }
 
 .mini-icon-button {

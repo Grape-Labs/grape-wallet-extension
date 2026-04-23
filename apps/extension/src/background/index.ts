@@ -12,6 +12,7 @@ import {
   getSelectedWallet,
   getSelectedWalletForChain,
   parseDeviceLinkPayloadText,
+  resolveBiometricUnlockConfig,
   type DeviceLinkHandoffPayload,
   type DeviceLinkPreferencesSnapshot,
   type DeviceLinkSessionRecord,
@@ -1568,6 +1569,7 @@ class WalletController {
       ...current,
       setup: 'ready' as const,
       wallets: [...current.wallets, solanaProfile, suiProfile, monadProfile, ethereumProfile],
+      sharedBiometricUnlock: biometricUnlock ?? current.sharedBiometricUnlock,
       selectedChain: 'solana' as const,
       selectedWalletIds: {
         ...current.selectedWalletIds,
@@ -1825,7 +1827,7 @@ class WalletController {
               name: activeWallet.name,
               publicKey: activeAccount.publicKey,
               chain: activeWallet.chain,
-              biometricEnabled: !!activeWallet.biometricUnlock,
+              biometricEnabled: !!activeWallet.vault && activeWallet.signer.kind !== 'watch-only' && !!resolveBiometricUnlockConfig(wallet, activeWallet),
               source: activeWallet.source,
               signerKind: activeWallet.signer.kind
             }
@@ -2088,11 +2090,12 @@ class WalletController {
     }
     await walletStateStorage.set({
       ...walletState,
+      sharedBiometricUnlock: config ?? undefined,
       wallets: walletState.wallets.map((wallet) =>
-        wallet.id === selectedWallet.id
+        wallet.biometricUnlock
           ? {
               ...wallet,
-              biometricUnlock: config ?? undefined
+              biometricUnlock: undefined
             }
           : wallet
       )
