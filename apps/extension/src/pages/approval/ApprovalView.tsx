@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 
 import { Fingerprint } from 'lucide-react';
+import { PublicKey } from '@solana/web3.js';
 
 import { Button, Card, Input, KeyValueRow, StatusPill } from '@grape/ui';
 
@@ -9,6 +10,10 @@ import type { ApprovalRecord, WalletStateResponse } from '../../shared/models';
 import { sendRuntimeMessage } from '../../shared/chrome';
 import { isBiometricUnlockSupported, resolveBiometricUnlockConfig, unlockWithBiometric } from '../../shared/biometric';
 import { closeCurrentWindow } from '../../shared/window';
+
+const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+const TOKEN_2022_PROGRAM_ID = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
+const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
 
 function formatAddress(address: string | undefined, start = 6, end = 6): string {
   if (!address) {
@@ -20,6 +25,29 @@ function formatAddress(address: string | undefined, start = 6, end = 6): string 
   }
 
   return `${address.slice(0, start)}...${address.slice(-end)}`;
+}
+
+function normalizeAddress(address: string | undefined): string {
+  return address?.trim().toLowerCase() ?? '';
+}
+
+function deriveAssociatedTokenCandidates(owner: string | undefined, mint: string | undefined): string[] {
+  if (!owner || !mint) {
+    return [];
+  }
+
+  try {
+    const ownerKey = new PublicKey(owner);
+    const mintKey = new PublicKey(mint);
+    return [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID].map((tokenProgramId) =>
+      PublicKey.findProgramAddressSync(
+        [ownerKey.toBuffer(), tokenProgramId.toBuffer(), mintKey.toBuffer()],
+        ASSOCIATED_TOKEN_PROGRAM_ID
+      )[0].toBase58()
+    );
+  } catch {
+    return [];
+  }
 }
 
 function summarizeMessage(base64Message: string): string {
@@ -69,6 +97,12 @@ function renderInstructionValue(value: string, isAddress?: boolean) {
     </span>
   );
 }
+
+type WalletImpactPreviewItem = {
+  direction: 'in' | 'out';
+  amountText: string;
+  meta?: string;
+};
 
 export function ApprovalView(props: {
   approvalId: string;
@@ -133,6 +167,81 @@ export function ApprovalView(props: {
         };
     }
   }, [approval.kind]);
+  const walletImpactChanges = useMemo(() => {
+    if (!approval.transactionSummary) {
+      return [];
+    }
+
+    const relevantAccounts = new Set(
+      [approval.publicKey, approval.transactionSummary.feePayer]
+        .map((value) => normalizeAddress(value))
+        .filter((value) => !!value)
+    );
+
+    return approval.transactionSummary.balanceChanges.filter((change) => {
+      if (relevantAccounts.has(normalizeAddress(change.account))) {
+        return true;
+      }
+
+      return deriveAssociatedTokenCandidates(approval.publicKey, change.assetAddress).some(
+        (candidate) => normalizeAddress(candidate) === normalizeAddress(change.account)
+      );
+    });
+  }, [approval.publicKey, approval.transactionSummary]);
+  const feePayerMatchesWallet =
+    !!approval.transactionSummary?.feePayer &&
+    normalizeAddress(approval.transactionSummary.feePayer) === normalizeAddress(approval.publicKey);
+  const walletImpactPreviewItems = useMemo<WalletImpactPreviewItem[]>(() => {
+    if (walletImpactChanges.length) {
+      return walletImpactChanges.map((change) => ({
+        direction: change.direction,
+        amountText: `${change.amount} ${change.assetLabel}`,
+        meta: change.assetAddress ? formatAddress(change.assetAddress) : undefined
+      }));
+    }
+
+    if (!approval.transactionSummary || !approval.publicKey) {
+      return [];
+    }
+
+    const walletAddress = normalizeAddress(approval.publicKey);
+    return approval.transactionSummary.instructions.flatMap<WalletImpactPreviewItem>((instruction) => {
+      if (instruction.title === 'Deposit governing tokens') {
+        const owner = normalizeAddress(instruction.details?.find((detail) => detail.label === 'Owner')?.value);
+        const authority = normalizeAddress(instruction.details?.find((detail) => detail.label === 'Source authority')?.value);
+        if (walletAddress !== owner && walletAddress !== authority) {
+          return [];
+        }
+
+        const amount = instruction.details?.find((detail) => detail.label === 'Amount')?.value;
+        return [
+          {
+            direction: 'out',
+            amountText: amount ? `${amount} governance tokens` : 'Governance tokens',
+            meta: 'Deposited into governance'
+          }
+        ];
+      }
+
+      if (instruction.title === 'Withdraw governing tokens') {
+        const owner = normalizeAddress(instruction.details?.find((detail) => detail.label === 'Owner')?.value);
+        const destination = normalizeAddress(instruction.details?.find((detail) => detail.label === 'Destination')?.value);
+        if (walletAddress !== owner && walletAddress !== destination) {
+          return [];
+        }
+
+        return [
+          {
+            direction: 'in',
+            amountText: 'Deposited governance tokens',
+            meta: 'Amount depends on your current governance deposit'
+          }
+        ];
+      }
+
+      return [];
+    });
+  }, [approval.publicKey, approval.transactionSummary, walletImpactChanges]);
 
   async function handleResolved() {
     if (inline) {
@@ -324,9 +433,41 @@ export function ApprovalView(props: {
             {approval.transactionSummary.estimatedFeeLamports != null ? (
               <KeyValueRow label="Estimated fee" value={formatLamports(approval.transactionSummary.estimatedFeeLamports)} />
             ) : null}
+            {walletImpactPreviewItems.length ? (
+              <div className="stack approval-impact-summary">
+                <div className="approval-impact-header">
+                  <span className="muted">Your wallet impact</span>
+                  {feePayerMatchesWallet && approval.transactionSummary.estimatedFeeLamports != null ? (
+                    <span className="muted approval-impact-fee">
+                      Network fee {formatLamports(approval.transactionSummary.estimatedFeeLamports)}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="approval-impact-list">
+                  {walletImpactPreviewItems.map((item, index) => (
+                    <div key={`impact-preview-${index}`} className="approval-impact-row">
+                      <div className="approval-impact-copy">
+                        <div className="approval-impact-label">
+                          {item.direction === 'in' ? 'You receive' : 'You send'}
+                        </div>
+                        <div className={`approval-impact-amount ${item.direction === 'in' ? 'positive' : 'negative'}`.trim()}>
+                          {item.direction === 'in' ? '+' : '-'}
+                          {item.amountText}
+                        </div>
+                        {item.meta ? (
+                          <div className="muted approval-impact-meta" title={item.meta}>
+                            {item.meta}
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             {approval.transactionSummary.balanceChanges.length ? (
               <div className="stack approval-balance-summary">
-                <span className="muted">Balance changes</span>
+                <span className="muted">All decoded changes</span>
                 <div className="approval-balance-change-list">
                   {approval.transactionSummary.balanceChanges.map((change, index) => (
                     <div key={`${change.account}-${change.assetAddress ?? change.assetLabel}-${index}`} className="approval-balance-change-row">
@@ -467,7 +608,7 @@ export function ApprovalView(props: {
         ) : null}
       </Card>
 
-      <form onSubmit={(event) => void handleApproveSubmit(event)}>
+      <form className="approval-form" onSubmit={(event) => void handleApproveSubmit(event)}>
         {requiresPassword ? (
           <Card title="Confirm password">
             <div className="stack">

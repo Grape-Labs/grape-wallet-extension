@@ -1,5 +1,4 @@
 import type { EncryptedPayload } from './crypto';
-import { GRAPE_VERIFICATION_REQUIRED_DAO_ID } from './access';
 
 export const STORAGE_KEYS = {
   state: 'grape:state',
@@ -172,7 +171,6 @@ export const MAX_RECENT_RECIPIENTS = 8;
 export const DEFAULT_THEME: GrapeTheme = 'grape';
 export const DEFAULT_DAPP_APPROVAL_MODE: DappApprovalMode = 'safe';
 export const DEFAULT_CHAIN: GrapeChain = 'solana';
-export const DEFAULT_TRACKED_VERIFICATION_SPACE_IDS = [GRAPE_VERIFICATION_REQUIRED_DAO_ID] as const;
 
 export function normalizeTheme(theme: unknown): GrapeTheme {
   switch (theme) {
@@ -208,7 +206,7 @@ export function createEmptyWalletState(): WalletState {
     selectedChain: DEFAULT_CHAIN,
     selectedWalletIds: {},
     trackedReputationSpaceIds: [],
-    trackedVerificationSpaceIds: [...DEFAULT_TRACKED_VERIFICATION_SPACE_IDS],
+    trackedVerificationSpaceIds: [],
     trackedGovernanceDaoIds: [],
     chainState: {
       solana: {
@@ -454,7 +452,7 @@ function normalizeTrackedReputationSpaceIds(value: string[] | undefined): string
 }
 
 function normalizeTrackedVerificationSpaceIds(value: string[] | undefined): string[] {
-  return normalizeTrackedDaoIds([...(Array.isArray(value) ? value : []), ...DEFAULT_TRACKED_VERIFICATION_SPACE_IDS]);
+  return normalizeTrackedDaoIds(value);
 }
 
 function normalizeTrackedDaoIds(value: string[] | undefined): string[] {

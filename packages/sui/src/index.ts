@@ -221,6 +221,21 @@ export async function sendSuiCoin(
   return response.digest;
 }
 
+export async function resolveSuiTransactionBytes(
+  transaction: string,
+  client: SuiJsonRpcClient,
+  sender: string
+): Promise<Uint8Array> {
+  const trimmed = transaction.trim();
+  if (trimmed.startsWith('{')) {
+    const nextTransaction = Transaction.from(trimmed);
+    nextTransaction.setSenderIfNotSet(sender);
+    return nextTransaction.build({ client });
+  }
+
+  return base64ToBytes(transaction);
+}
+
 export function formatSuiAmount(rawAmount: string, decimals: number): string {
   const numeric = BigInt(rawAmount);
   const divisor = 10n ** BigInt(decimals);

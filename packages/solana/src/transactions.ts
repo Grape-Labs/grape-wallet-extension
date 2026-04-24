@@ -1,11 +1,15 @@
 import './runtime-polyfills';
 
 import { Buffer } from 'buffer';
+import bs58 from 'bs58';
 
 import {
   AddressLookupTableProgram,
   ComputeBudgetProgram,
   Connection,
+  type ParsedInnerInstruction,
+  type ParsedInstruction,
+  type PartiallyDecodedInstruction,
   PublicKey,
   StakeProgram,
   SystemInstruction,
@@ -91,6 +95,11 @@ type BalanceChangeAggregate = {
   amount: bigint;
 };
 
+type GovernanceInstructionSummary = {
+  title: string;
+  details: TransactionInstructionDetail[];
+};
+
 function formatUiAmount(rawAmount: bigint, decimals = 0): string {
   if (decimals <= 0) {
     return rawAmount.toString();
@@ -158,6 +167,97 @@ function addBalanceChange(
   });
 }
 
+function finalizeBalanceChanges(changes: Map<string, BalanceChangeAggregate>): TransactionBalanceChange[] {
+  return Array.from(changes.values())
+    .filter((change) => change.amount !== 0n)
+    .sort((left, right) => {
+      const leftAbs = left.amount < 0n ? -left.amount : left.amount;
+      const rightAbs = right.amount < 0n ? -right.amount : right.amount;
+      if (leftAbs === rightAbs) {
+        return left.account.localeCompare(right.account);
+      }
+      return rightAbs > leftAbs ? 1 : -1;
+    })
+    .map((change) => ({
+      account: change.account,
+      direction: change.amount < 0n ? 'out' : 'in',
+      amount: formatUiAmount(change.amount < 0n ? -change.amount : change.amount, change.decimals),
+      rawAmount: (change.amount < 0n ? -change.amount : change.amount).toString(),
+      decimals: change.decimals,
+      assetLabel: change.assetLabel,
+      assetAddress: change.assetAddress
+    }));
+}
+
+function mergeBalanceChanges(
+  existing: TransactionBalanceChange[],
+  next: TransactionBalanceChange[]
+): TransactionBalanceChange[] {
+  const changes = new Map<string, BalanceChangeAggregate>();
+
+  for (const change of [...existing, ...next]) {
+    const signedAmount = BigInt(change.rawAmount) * (change.direction === 'out' ? -1n : 1n);
+    const key = [change.account, change.assetLabel, change.assetAddress ?? '', change.decimals.toString()].join(':');
+    const current = changes.get(key);
+
+    if (current) {
+      current.amount += signedAmount;
+      continue;
+    }
+
+    changes.set(key, {
+      account: change.account,
+      assetLabel: change.assetLabel,
+      assetAddress: change.assetAddress,
+      decimals: change.decimals,
+      amount: signedAmount
+    });
+  }
+
+  return finalizeBalanceChanges(changes);
+}
+
+function isSystemProgramKey(account: PublicKey | null | undefined): boolean {
+  return account?.equals(SystemProgram.programId) ?? false;
+}
+
+function isTokenProgramKey(account: PublicKey | null | undefined): boolean {
+  return (account?.equals(TOKEN_PROGRAM_ID) ?? false) || (account?.equals(TOKEN_2022_PROGRAM_ID) ?? false);
+}
+
+function summarizeGovernanceInstruction(instruction: ResolvedInstruction): GovernanceInstructionSummary | null {
+  const opcode = instruction.data[0];
+
+  if (opcode === 1 && instruction.keys.length >= 9 && isSystemProgramKey(instruction.keys[7]) && isTokenProgramKey(instruction.keys[8])) {
+    const amount = instruction.data.length >= 9 ? readU64Le(instruction.data, 1).toString() : 'Unknown';
+    return {
+      title: 'Deposit governing tokens',
+      details: [
+        { label: 'Realm', value: accountLabel(instruction.keys[0]), address: true },
+        { label: 'Holding account', value: accountLabel(instruction.keys[1]), address: true },
+        { label: 'Source', value: accountLabel(instruction.keys[2]), address: true },
+        { label: 'Owner', value: accountLabel(instruction.keys[3]), address: true },
+        { label: 'Source authority', value: accountLabel(instruction.keys[4]), address: true },
+        { label: 'Amount', value: amount }
+      ]
+    };
+  }
+
+  if (opcode === 2 && instruction.keys.length >= 6 && isTokenProgramKey(instruction.keys[5])) {
+    return {
+      title: 'Withdraw governing tokens',
+      details: [
+        { label: 'Realm', value: accountLabel(instruction.keys[0]), address: true },
+        { label: 'Holding account', value: accountLabel(instruction.keys[1]), address: true },
+        { label: 'Destination', value: accountLabel(instruction.keys[2]), address: true },
+        { label: 'Owner', value: accountLabel(instruction.keys[3]), address: true }
+      ]
+    };
+  }
+
+  return null;
+}
+
 function summarizeBalanceChanges(instructions: ResolvedInstruction[]): TransactionBalanceChange[] {
   const changes = new Map<string, BalanceChangeAggregate>();
 
@@ -221,9 +321,9 @@ function summarizeBalanceChanges(instructions: ResolvedInstruction[]): Transacti
         const amount = readU64Le(instruction.data, 1);
         const decimals = tag === 12 ? (instruction.data[9] ?? 0) : 0;
         const mintAddress = tag === 12 ? accountLabel(instruction.keys[1]) : undefined;
-        const sourceIndex = 0;
+        const authorityIndex = tag === 12 ? 3 : 2;
         const destinationIndex = tag === 12 ? 2 : 1;
-        addBalanceChange(changes, instruction.keys[sourceIndex], 'Token', decimals, -amount, mintAddress);
+        addBalanceChange(changes, instruction.keys[authorityIndex] ?? instruction.keys[0], 'Token', decimals, -amount, mintAddress);
         addBalanceChange(changes, instruction.keys[destinationIndex], 'Token', decimals, amount, mintAddress);
         continue;
       }
@@ -240,30 +340,149 @@ function summarizeBalanceChanges(instructions: ResolvedInstruction[]): Transacti
         const amount = readU64Le(instruction.data, 1);
         const decimals = tag === 15 ? (instruction.data[9] ?? 0) : 0;
         const mintAddress = accountLabel(instruction.keys[1]);
-        addBalanceChange(changes, instruction.keys[0], 'Token', decimals, -amount, mintAddress);
+        addBalanceChange(changes, instruction.keys[2] ?? instruction.keys[0], 'Token', decimals, -amount, mintAddress);
+      }
+    }
+
+    const governanceInstruction = summarizeGovernanceInstruction(instruction);
+    if (governanceInstruction?.title === 'Deposit governing tokens') {
+      if (instruction.data.length >= 9) {
+        addBalanceChange(
+          changes,
+          instruction.keys[4] ?? instruction.keys[3],
+          'Governance token',
+          0,
+          -readU64Le(instruction.data, 1)
+        );
+      }
+      continue;
+    }
+  }
+
+  return finalizeBalanceChanges(changes);
+}
+
+function summarizeParsedTokenInstruction(
+  instruction: ParsedInstruction,
+  changes: Map<string, BalanceChangeAggregate>
+) {
+  const parsed = instruction.parsed;
+  if (!parsed || typeof parsed !== 'object' || !('type' in parsed) || !('info' in parsed)) {
+    return;
+  }
+
+  const type = typeof parsed.type === 'string' ? parsed.type : '';
+  const info = parsed.info;
+  if (!info || typeof info !== 'object') {
+    return;
+  }
+
+  if (type === 'transferChecked') {
+    const amount = typeof info.tokenAmount === 'object' && info.tokenAmount && 'amount' in info.tokenAmount ? BigInt(String(info.tokenAmount.amount)) : 0n;
+    const decimals =
+      typeof info.tokenAmount === 'object' && info.tokenAmount && 'decimals' in info.tokenAmount
+        ? Number(info.tokenAmount.decimals)
+        : 0;
+    const mintAddress = typeof info.mint === 'string' ? info.mint : undefined;
+    addBalanceChange(
+      changes,
+      typeof info.authority === 'string' ? new PublicKey(info.authority) : undefined,
+      'Token',
+      decimals,
+      -amount,
+      mintAddress
+    );
+    addBalanceChange(
+      changes,
+      typeof info.destination === 'string' ? new PublicKey(info.destination) : undefined,
+      'Token',
+      decimals,
+      amount,
+      mintAddress
+    );
+    return;
+  }
+
+  if (type === 'mintToChecked') {
+    const amount = typeof info.tokenAmount === 'object' && info.tokenAmount && 'amount' in info.tokenAmount ? BigInt(String(info.tokenAmount.amount)) : 0n;
+    const decimals =
+      typeof info.tokenAmount === 'object' && info.tokenAmount && 'decimals' in info.tokenAmount
+        ? Number(info.tokenAmount.decimals)
+        : 0;
+    addBalanceChange(
+      changes,
+      typeof info.account === 'string' ? new PublicKey(info.account) : undefined,
+      'Token',
+      decimals,
+      amount,
+      typeof info.mint === 'string' ? info.mint : undefined
+    );
+    return;
+  }
+
+  if (type === 'burnChecked') {
+    const amount = typeof info.tokenAmount === 'object' && info.tokenAmount && 'amount' in info.tokenAmount ? BigInt(String(info.tokenAmount.amount)) : 0n;
+    const decimals =
+      typeof info.tokenAmount === 'object' && info.tokenAmount && 'decimals' in info.tokenAmount
+        ? Number(info.tokenAmount.decimals)
+        : 0;
+    addBalanceChange(
+      changes,
+      typeof info.authority === 'string' ? new PublicKey(info.authority) : undefined,
+      'Token',
+      decimals,
+      -amount,
+      typeof info.mint === 'string' ? info.mint : undefined
+    );
+  }
+}
+
+function summarizeSimulationInnerBalanceChanges(innerInstructions?: ParsedInnerInstruction[] | null): TransactionBalanceChange[] {
+  if (!innerInstructions?.length) {
+    return [];
+  }
+
+  const changes = new Map<string, BalanceChangeAggregate>();
+
+  for (const group of innerInstructions) {
+    for (const instruction of group.instructions) {
+      const programId = instruction.programId.toBase58();
+
+      if ('parsed' in instruction) {
+        if (programId === TOKEN_PROGRAM_ID.toBase58() || programId === TOKEN_2022_PROGRAM_ID.toBase58()) {
+          summarizeParsedTokenInstruction(instruction as ParsedInstruction, changes);
+        }
+        continue;
+      }
+
+      const partiallyDecoded = instruction as PartiallyDecodedInstruction;
+      let data: Uint8Array;
+      try {
+        data = bs58.decode(partiallyDecoded.data);
+      } catch {
+        continue;
+      }
+
+      const resolved: ResolvedInstruction = {
+        programId: partiallyDecoded.programId,
+        keys: partiallyDecoded.accounts.map((account) => new PublicKey(account)),
+        data
+      };
+
+      for (const change of summarizeBalanceChanges([resolved])) {
+        addBalanceChange(
+          changes,
+          new PublicKey(change.account),
+          change.assetLabel,
+          change.decimals,
+          BigInt(change.rawAmount) * (change.direction === 'out' ? -1n : 1n),
+          change.assetAddress
+        );
       }
     }
   }
 
-  return Array.from(changes.values())
-    .filter((change) => change.amount !== 0n)
-    .sort((left, right) => {
-      const leftAbs = left.amount < 0n ? -left.amount : left.amount;
-      const rightAbs = right.amount < 0n ? -right.amount : right.amount;
-      if (leftAbs === rightAbs) {
-        return left.account.localeCompare(right.account);
-      }
-      return rightAbs > leftAbs ? 1 : -1;
-    })
-    .map((change) => ({
-      account: change.account,
-      direction: change.amount < 0n ? 'out' : 'in',
-      amount: formatUiAmount(change.amount < 0n ? -change.amount : change.amount, change.decimals),
-      rawAmount: (change.amount < 0n ? -change.amount : change.amount).toString(),
-      decimals: change.decimals,
-      assetLabel: change.assetLabel,
-      assetAddress: change.assetAddress
-    }));
+  return finalizeBalanceChanges(changes);
 }
 
 function summarizeProgram(programId: PublicKey, accountCount: number, dataLength: number): TransactionInstructionSummary {
@@ -532,6 +751,8 @@ function summarizeInstruction(instruction: ResolvedInstruction): TransactionInst
   const base = summarizeProgram(instruction.programId, instruction.keys.length, instruction.data.length);
   const programId = instruction.programId.toBase58();
   let decoded: Pick<TransactionInstructionSummary, 'title' | 'details' | 'warning'> = {};
+  let programName = base.programName;
+  let warning = base.warning;
 
   if (programId === SystemProgram.programId.toBase58()) {
     decoded = summarizeSystemInstruction(
@@ -553,13 +774,21 @@ function summarizeInstruction(instruction: ResolvedInstruction): TransactionInst
     decoded = summarizeComputeBudgetInstruction(instruction);
   } else if (programId === MEMO_PROGRAM_ID.toBase58()) {
     decoded = summarizeMemoInstruction(instruction);
+  } else {
+    const governanceInstruction = summarizeGovernanceInstruction(instruction);
+    if (governanceInstruction) {
+      decoded = governanceInstruction;
+      programName = 'SPL Governance Program';
+      warning = undefined;
+    }
   }
 
   return {
     ...base,
+    programName,
     accounts: instruction.keys.map((key) => accountLabel(key)),
     ...decoded,
-    warning: decoded.warning ?? base.warning
+    warning: decoded.warning ?? warning
   };
 }
 
@@ -604,6 +833,7 @@ export async function inspectTransaction(serialized: string, connection: Connect
       parsed.kind === 'versioned'
         ? await connection.simulateTransaction(parsed.transaction, {
             commitment: 'processed',
+            innerInstructions: true,
             replaceRecentBlockhash: true,
             sigVerify: false
           })
@@ -613,6 +843,7 @@ export async function inspectTransaction(serialized: string, connection: Connect
                 transaction: typeof parsed.transaction,
                 config: {
                   commitment: 'processed';
+                  innerInstructions: true;
                   replaceRecentBlockhash: true;
                   sigVerify: false;
                 }
@@ -620,15 +851,21 @@ export async function inspectTransaction(serialized: string, connection: Connect
                 value: {
                   err: unknown;
                   logs?: string[];
+                  innerInstructions?: ParsedInnerInstruction[] | null;
                   unitsConsumed?: number;
                 };
               }>;
             }
           ).simulateTransaction(parsed.transaction, {
             commitment: 'processed',
+            innerInstructions: true,
             replaceRecentBlockhash: true,
             sigVerify: false
           });
+    const simulationBalanceChanges = summarizeSimulationInnerBalanceChanges(response.value.innerInstructions);
+    if (simulationBalanceChanges.length > 0) {
+      summary.balanceChanges = mergeBalanceChanges(summary.balanceChanges, simulationBalanceChanges);
+    }
     summary.simulation = {
       attempted: true,
       ok: !response.value.err,

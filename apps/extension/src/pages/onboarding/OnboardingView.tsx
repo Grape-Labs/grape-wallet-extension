@@ -25,6 +25,7 @@ import type { WalletStateResponse } from '../../shared/models';
 import { authorizeLedgerTransport, requestLedgerAccounts } from '../../../../../packages/solana/src/ledger';
 import { authorizeEthereumLedgerTransport, requestEthereumLedgerAccounts } from '../../../../../packages/ethereum/src/ledger';
 import { authorizeMonadLedgerTransport, requestMonadLedgerAccounts } from '../../../../../packages/monad/src/ledger';
+import { authorizeSuiLedgerTransport, requestSuiLedgerAccounts } from '../../../../../packages/sui/src/ledger';
 
 type OnboardingViewProps = {
   compact?: boolean;
@@ -37,7 +38,7 @@ type EasyRecoveryMode = 'passkey-only' | 'passkey-phrase' | 'trusted-recovery';
 type SetupMode = 'create' | 'import';
 type ImportMethod = 'mnemonic' | 'private-key' | 'watch-only' | 'ledger';
 type ImportChain = 'solana' | 'sui' | 'monad' | 'ethereum';
-type LedgerImportChain = 'solana' | 'monad' | 'ethereum';
+type LedgerImportChain = 'solana' | 'sui' | 'monad' | 'ethereum';
 type SetupStep = 1 | 2 | 3;
 type LedgerCandidate = {
   index: number;
@@ -399,6 +400,9 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
         switch (ledgerChain) {
           case 'solana':
             await authorizeLedgerTransport();
+            break;
+          case 'sui':
+            await authorizeSuiLedgerTransport();
             break;
           case 'ethereum':
             await authorizeEthereumLedgerTransport();
@@ -935,6 +939,17 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
                         Solana
                       </Button>
                       <Button
+                        tone={ledgerChain === 'sui' ? 'primary' : 'secondary'}
+                        onClick={() => {
+                          setLedgerChain('sui');
+                          setLedgerAccounts([]);
+                          setLedgerSelectedAccounts([]);
+                          setLedgerScanCount(LEDGER_ACCOUNT_SCAN_BATCH_SIZE);
+                        }}
+                      >
+                        Sui
+                      </Button>
+                      <Button
                         tone={ledgerChain === 'monad' ? 'primary' : 'secondary'}
                         onClick={() => {
                           setLedgerChain('monad');
@@ -960,8 +975,7 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
                   </label>
                   <p className="muted">
                     Connect your Ledger, unlock it, open the {getChainLabel(ledgerChain)} app, then scan derived accounts on{' '}
-                    {ledgerChain === 'solana' ? network : network === 'devnet' ? 'testnet' : 'mainnet'}. Sui Ledger support is
-                    coming separately.
+                    {ledgerChain === 'solana' ? network : ledgerChain === 'sui' ? (network === 'devnet' ? 'devnet' : 'mainnet') : network === 'devnet' ? 'testnet' : 'mainnet'}.
                   </p>
                   <div className="inline wrap-actions">
                     <Button tone="secondary" onClick={() => handleLedgerScanClick()} disabled={scanningLedger}>
@@ -1299,6 +1313,22 @@ async function requestLedgerCandidates(input: {
     case 'ethereum': {
       const network = input.network === 'devnet' ? 'sepolia' : 'mainnet';
       const accounts = await requestEthereumLedgerAccounts({
+        network,
+        count: input.count,
+        promptForPermission: input.promptForPermission
+      });
+
+      return accounts.map((account: { index: number; publicKey: string; derivationPath: string; balanceLabel: string; label: string }) => ({
+        index: account.index,
+        publicKey: account.publicKey,
+        derivationPath: account.derivationPath,
+        balanceLabel: account.balanceLabel,
+        label: account.label
+      }));
+    }
+    case 'sui': {
+      const network = input.network === 'devnet' ? 'devnet' : 'mainnet';
+      const accounts = await requestSuiLedgerAccounts({
         network,
         count: input.count,
         promptForPermission: input.promptForPermission

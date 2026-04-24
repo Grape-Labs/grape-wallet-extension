@@ -212,7 +212,18 @@ export const providerRequestSchema = z.discriminatedUnion('method', [
     method: z.literal('sui_signAndExecuteTransaction'),
     origin: pageOriginSchema,
     params: z.object({
-      transaction: bytesSchema
+      transaction: bytesSchema,
+      options: z
+        .object({
+          showBalanceChanges: z.boolean().optional(),
+          showEffects: z.boolean().optional(),
+          showEvents: z.boolean().optional(),
+          showInput: z.boolean().optional(),
+          showObjectChanges: z.boolean().optional(),
+          showRawEffects: z.boolean().optional(),
+          showRawInput: z.boolean().optional()
+        })
+        .optional()
     })
   }),
   z.object({
@@ -362,14 +373,14 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('wallet_import_ledger'),
-    chain: z.enum(['solana', 'monad', 'ethereum']),
+    chain: z.enum(['solana', 'sui', 'monad', 'ethereum']),
     derivationPath: z.string().min(1),
     password: z.string(),
     publicKey: z.string()
   }),
   z.object({
     type: z.literal('wallet_import_ledger_batch'),
-    chain: z.enum(['solana', 'monad', 'ethereum']),
+    chain: z.enum(['solana', 'sui', 'monad', 'ethereum']),
     password: z.string(),
     accounts: z
       .array(
@@ -387,7 +398,7 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('wallet_scan_ledger_accounts'),
-    chain: z.enum(['solana', 'monad', 'ethereum']),
+    chain: z.enum(['solana', 'sui', 'monad', 'ethereum']),
     network: z.enum(['mainnet-beta', 'devnet']),
     count: z.number().int().positive().max(128).optional()
   }),

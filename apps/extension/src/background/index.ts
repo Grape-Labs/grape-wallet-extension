@@ -1,6 +1,4 @@
 import {
-  GRAPE_VERIFICATION_REQUIRED_DAO_ID,
-  hasRequiredGrapeVerificationAccess,
   createEmptyWalletState,
   createInitialSessionState,
   createDeviceLinkPayloadText,
@@ -104,11 +102,13 @@ import {
 } from '@solana/spl-governance';
 import { sendEthereumTokenWithLedger, sendEthereumWithLedger } from '../../../../packages/ethereum/src/ledger';
 import { sendMonadTokenWithLedger, sendMonadWithLedger } from '../../../../packages/monad/src/ledger';
+import { sendSuiCoinWithLedger, sendSuiWithLedger, signSuiTransactionBytesWithLedger } from '../../../../packages/sui/src/ledger';
 import {
   createSuiClient,
   deriveSuiAccount0,
   getSuiHoldings,
   importSuiPrivateKey,
+  resolveSuiTransactionBytes,
   resolveSuiVaultSecret,
   sendSui,
   sendSuiCoin,
@@ -192,8 +192,8 @@ const accessSessionStorage = new ChromeStorageArea<import('@grape/core').AccessS
   chrome.storage.local,
   'grape:access-session',
   {
-    granted: false,
-    requiredDaoId: GRAPE_VERIFICATION_REQUIRED_DAO_ID,
+    granted: true,
+    requiredDaoId: '',
     grantedAt: null,
     lastCheckedAt: null
   }
@@ -1814,12 +1814,17 @@ class WalletController {
       )
     );
     const unlockedWalletIds = await this.getUnlockedWalletIds(session.locked);
+    const normalizedAccess = {
+      ...access,
+      granted: true,
+      requiredDaoId: ''
+    };
 
     return {
       wallet,
       session,
       permissions: listPermissions(permissions),
-      access,
+      access: normalizedAccess,
       activeWallet:
         activeWallet && activeAccount
           ? {
@@ -2531,43 +2536,17 @@ class WalletController {
   }
 
   async refreshAccessSession() {
-    const walletState = await this.getWalletState();
     const currentAccess = await accessSessionStorage.get();
-    const verificationTarget = this.getAccessVerificationTarget(walletState);
-    if (!verificationTarget) {
-      throw new RpcError('ACCESS_UNAVAILABLE', 'Create or import a Solana wallet before checking Grape access.');
-    }
-
-    const owner = tryParseSolanaPublicKey(verificationTarget.publicKey);
-    if (!owner) {
-      throw new RpcError('ACCESS_UNAVAILABLE', 'The selected Solana wallet address is invalid.');
-    }
-    const identities = await fetchVerificationForWalletIndexed(owner, [GRAPE_VERIFICATION_REQUIRED_DAO_ID]);
     const now = Date.now();
-
-    if (!hasRequiredGrapeVerificationAccess(identities)) {
-      await accessSessionStorage.set({
-        ...currentAccess,
-        granted: currentAccess.granted,
-        lastCheckedAt: now
-      });
-
-      if (currentAccess.granted) {
-        return this.getStateResponse();
-      }
-
-      throw new RpcError(
-        'ACCESS_REQUIRED',
-        'Verify one of your Solana wallets in Grape Verification to unlock Grape on this device.'
-      );
-    }
+    const walletState = await this.getWalletState();
+    const verificationTarget = this.getAccessVerificationTarget(walletState);
 
     await accessSessionStorage.set({
       granted: true,
-      requiredDaoId: GRAPE_VERIFICATION_REQUIRED_DAO_ID,
+      requiredDaoId: '',
       grantedAt: currentAccess.grantedAt ?? now,
       lastCheckedAt: now,
-      qualifyingWalletPublicKey: verificationTarget.publicKey
+      qualifyingWalletPublicKey: verificationTarget?.publicKey
     });
 
     await ensureProviderInjectedIntoExistingTabs();
@@ -2577,8 +2556,8 @@ class WalletController {
 
   async clearAccessSession() {
     await accessSessionStorage.set({
-      granted: false,
-      requiredDaoId: GRAPE_VERIFICATION_REQUIRED_DAO_ID,
+      granted: true,
+      requiredDaoId: '',
       grantedAt: null,
       lastCheckedAt: Date.now()
     });
@@ -3753,10 +3732,25 @@ class WalletController {
       }
 
       try {
-        const client = await this.createSuiClient(walletState.selectedNetwork, walletState);
         if (selectedWallet.signer.kind === 'ledger') {
-          throw new RpcError('LEDGER_UNSUPPORTED', 'Sui Ledger support is not available in this build yet.');
+          if (input.asset.kind === 'sui') {
+            signature = await sendSuiWithLedger(this.resolveSuiNetwork(walletState.selectedNetwork), selectedWallet.signer.derivationPath, {
+              recipient: input.recipient,
+              amountMist: parseDecimalAmount(input.amount, 9),
+              customRpcUrl: walletState.chainState.sui.customRpcUrl
+            });
+          } else if (input.asset.kind === 'sui-coin') {
+            signature = await sendSuiCoinWithLedger(this.resolveSuiNetwork(walletState.selectedNetwork), selectedWallet.signer.derivationPath, {
+              recipient: input.recipient,
+              amountBaseUnits: parseDecimalAmount(input.amount, input.asset.decimals),
+              coinType: input.asset.coinType,
+              customRpcUrl: walletState.chainState.sui.customRpcUrl
+            });
+          } else {
+            throw new RpcError('UNSUPPORTED_ASSET', 'Use the matching chain wallet to send this asset.');
+          }
         } else {
+          const client = await this.createSuiClient(walletState.selectedNetwork, walletState);
           const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
           const signer = resolveSuiVaultSecret(secret);
           if (input.asset.kind === 'sui') {
@@ -5004,14 +4998,18 @@ class WalletController {
         };
       }
       case 'sui_signTransaction': {
-        if (approvalWallet.signer.kind === 'ledger') {
-          throw new RpcError('LEDGER_UNSUPPORTED', 'Ledger transaction signing is not supported for Sui dapps.');
-        }
-
-        const signer = resolveSuiVaultSecret(secret);
-        const signed = await signer.signTransaction(atobBytes(approval.request.params.transaction));
+        const client = await this.createSuiClient(approval.network, walletState);
+        const sender =
+          approvalWallet.signer.kind === 'ledger'
+            ? approvalAccount.publicKey
+            : resolveSuiVaultSecret(secret).toSuiAddress();
+        const transactionBytes = await resolveSuiTransactionBytes(approval.request.params.transaction, client, sender);
+        const signed =
+          approvalWallet.signer.kind === 'ledger'
+            ? await signSuiTransactionBytesWithLedger(approvalWallet.signer.derivationPath, transactionBytes)
+            : await resolveSuiVaultSecret(secret).signTransaction(transactionBytes);
         return {
-          address: signer.toSuiAddress(),
+          address: approvalWallet.signer.kind === 'ledger' ? signed.address : sender,
           bytes: signed.bytes,
           signature: signed.signature
         };
@@ -5050,27 +5048,49 @@ class WalletController {
         }
       }
       case 'sui_signAndExecuteTransaction': {
-        if (approvalWallet.signer.kind === 'ledger') {
-          throw new RpcError('LEDGER_UNSUPPORTED', 'Ledger transaction execution is not supported for Sui dapps.');
-        }
-
-        const signer = resolveSuiVaultSecret(secret);
         const client = await this.createSuiClient(approval.network, walletState);
-        const signed = await signer.signTransaction(atobBytes(approval.request.params.transaction));
-        const result = await client.executeTransactionBlock({
+        const sender =
+          approvalWallet.signer.kind === 'ledger'
+            ? approvalAccount.publicKey
+            : resolveSuiVaultSecret(secret).toSuiAddress();
+        const transactionBytes = await resolveSuiTransactionBytes(approval.request.params.transaction, client, sender);
+        const signed =
+          approvalWallet.signer.kind === 'ledger'
+            ? await signSuiTransactionBytesWithLedger(approvalWallet.signer.derivationPath, transactionBytes)
+            : await resolveSuiVaultSecret(secret).signTransaction(transactionBytes);
+        const requestedOptions = approval.request.params.options ?? {};
+        const executionOptions = {
+          ...requestedOptions,
+          showRawEffects: true
+        };
+        let result = await client.executeTransactionBlock({
           transactionBlock: signed.bytes,
           signature: signed.signature,
-          options: {
-            showRawEffects: true
-          }
+          options: executionOptions
         });
+        if (!result.rawEffects?.length) {
+          result = await client.getTransactionBlock({
+            digest: result.digest,
+            options: executionOptions
+          });
+        }
 
         return {
-          address: signer.toSuiAddress(),
+          address: approvalWallet.signer.kind === 'ledger' ? signed.address : sender,
+          balanceChanges: result.balanceChanges ?? null,
           bytes: signed.bytes,
+          checkpoint: result.checkpoint ?? null,
+          confirmedLocalExecution: result.confirmedLocalExecution ?? null,
           signature: signed.signature,
           digest: result.digest,
-          effects: result.rawEffects ? arrayBufferToBase64(new Uint8Array(result.rawEffects)) : undefined
+          effects: result.rawEffects?.length ? arrayBufferToBase64(new Uint8Array(result.rawEffects)) : undefined,
+          errors: result.errors,
+          events: result.events ?? null,
+          objectChanges: result.objectChanges ?? null,
+          rawEffects: result.rawEffects,
+          rawTransaction: result.rawTransaction,
+          timestampMs: result.timestampMs ?? null,
+          transaction: result.transaction ?? null
         };
       }
       case 'monad_sendTransaction': {

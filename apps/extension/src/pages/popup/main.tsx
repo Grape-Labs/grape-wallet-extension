@@ -37,7 +37,7 @@ import QRCode from 'qrcode';
 import extensionPackage from '../../../package.json';
 
 import { Button, Card, Input, KeyValueRow, PageShell, StatusPill } from '@grape/ui';
-import { GRAPE_VERIFICATION_REQUIRED_DAO_ID, STORAGE_KEYS } from '@grape/core';
+import { STORAGE_KEYS } from '@grape/core';
 
 import type {
   ApprovalRecord,
@@ -1298,9 +1298,6 @@ function PopupPage() {
     rotateMintAuthorities: true
   });
   const [activeApproval, setActiveApproval] = useState<ApprovalRecord | null>(null);
-  const [accessRefreshing, setAccessRefreshing] = useState(false);
-  const [accessError, setAccessError] = useState<string | null>(null);
-  const [accessSettingsBusy, setAccessSettingsBusy] = useState(false);
   const assetActionCardRef = useRef<HTMLDivElement | null>(null);
   const communitySectionRef = useRef<HTMLDivElement | null>(null);
   const verificationSectionRef = useRef<HTMLDivElement | null>(null);
@@ -1967,32 +1964,6 @@ function PopupPage() {
     state?.wallet.trackedVerificationSpaceIds,
     state?.wallet.setup
   ]);
-
-  useEffect(() => {
-    if (!state?.access.granted || state.session.locked) {
-      return;
-    }
-
-    const lastCheckedAt = state.access.lastCheckedAt ?? 0;
-    if (Date.now() - lastCheckedAt < 12 * 60 * 60 * 1000) {
-      return;
-    }
-
-    let cancelled = false;
-    void sendRuntimeMessage<WalletStateResponse>({ type: 'wallet_refresh_access' })
-      .then((nextState) => {
-        if (!cancelled) {
-          setState(nextState);
-        }
-      })
-      .catch(() => {
-        // Keep the current local grant and avoid interrupting the user.
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [state?.access.granted, state?.access.lastCheckedAt, state?.session.locked]);
 
   const homeBalance = useMemo(
     () => formatBaseUnitAmount(assets.lamports, assets.nativeDecimals ?? 9, assets.nativeSymbol),
@@ -2880,7 +2851,7 @@ function PopupPage() {
       dappApprovalMode: 'safe',
       privacyMode: false,
       trackedReputationSpaceIds: [],
-      trackedVerificationSpaceIds: [GRAPE_VERIFICATION_REQUIRED_DAO_ID],
+      trackedVerificationSpaceIds: [],
       trackedGovernanceDaoIds: [],
       selectedChain: 'solana',
       selectedNetwork: 'mainnet-beta',
@@ -3120,60 +3091,6 @@ function PopupPage() {
     return (
       <PageShell eyebrow={null} title="" subtitle="">
         {renderLockedWelcome()}
-      </PageShell>
-    );
-  }
-
-  if (!state.access.granted) {
-    return (
-      <PageShell
-        title="Complete Grape Verification"
-        subtitle="Verify once with a qualifying Solana wallet and Grape will remember access on this device."
-      >
-        <Card title="Verification">
-          <div className="stack">
-            <p className="muted access-required-copy">
-              Use one wallet verified in Grape Verification DAO{' '}
-              <span className="mono access-required-dao">{GRAPE_VERIFICATION_REQUIRED_DAO_ID}</span>
-              After verification succeeds, Grape will not ask you to repeat this flow on each open.
-            </p>
-            {state.wallet.wallets.some((walletEntry) => walletEntry.chain === 'solana') ? (
-              <p className="success-box">
-                A Solana wallet is available in this extension. Verify it in Grape Verification, then return here and check verification.
-              </p>
-            ) : (
-              <p className="warning-box">
-                Add a Solana wallet first. Grape Verification currently checks eligibility against a Solana wallet.
-              </p>
-            )}
-            {accessError ? <p className="danger-box">{accessError}</p> : null}
-            <Button
-              className="button-block"
-              onClick={() => window.open(buildVerificationSpaceUrl(GRAPE_VERIFICATION_REQUIRED_DAO_ID), '_blank', 'noopener,noreferrer')}
-            >
-              Open Grape Verification
-            </Button>
-            <Button
-              tone="secondary"
-              className="button-block"
-              disabled={accessRefreshing}
-              onClick={async () => {
-                try {
-                  setAccessRefreshing(true);
-                  setAccessError(null);
-                  await sendRuntimeMessage<WalletStateResponse>({ type: 'wallet_refresh_access' });
-                  await refresh();
-                } catch (error) {
-                  setAccessError(error instanceof Error ? error.message : 'Unable to check Grape Verification.');
-                } finally {
-                  setAccessRefreshing(false);
-                }
-              }}
-            >
-              {accessRefreshing ? 'Checking verification…' : 'Check verification'}
-            </Button>
-          </div>
-        </Card>
       </PageShell>
     );
   }
@@ -4207,6 +4124,16 @@ function PopupPage() {
               <StatusPill tone={wallet.selectedNetwork === 'devnet' ? 'warning' : 'success'}>{selectedNetworkLabel}</StatusPill>
             </div>
             <div className="wallet-home-controls">
+              <button
+                type="button"
+                className={`mini-icon-button subtle ${assetsLoading ? 'mini-icon-button-loading' : ''}`.trim()}
+                onClick={() => void refresh()}
+                aria-label={assetsLoading ? 'Refreshing wallet' : 'Refresh wallet'}
+                title={assetsLoading ? 'Refreshing...' : 'Refresh'}
+                disabled={assetsLoading}
+              >
+                <RefreshCcw size={13} />
+              </button>
               {renderWalletSwitcher()}
               {renderWalletMenu()}
             </div>
@@ -4376,29 +4303,29 @@ function PopupPage() {
         ) : null}
 
         <Tabs.Root value={activeHomeTab} onValueChange={(value) => setHomeTab(value as HomeTab)}>
-          <Tabs.List className="content-tabs" aria-label="Wallet content">
-            <Tabs.Trigger className="content-tab" value="tokens">
+          <Tabs.List className="content-tabs wallet-home-tabs" aria-label="Wallet content">
+            <Tabs.Trigger className="content-tab content-tab-primary" value="tokens">
               <span className="content-tab-copy">Tokens</span>
             </Tabs.Trigger>
             {isSolanaChain ? (
-              <Tabs.Trigger className="content-tab" value="community">
+              <Tabs.Trigger className="content-tab content-tab-primary" value="community">
                 <span className="content-tab-copy">Community</span>
               </Tabs.Trigger>
             ) : null}
             {isSolanaChain ? (
-              <Tabs.Trigger className="content-tab" value="governance">
+              <Tabs.Trigger className="content-tab content-tab-primary" value="governance">
                 <span className="content-tab-copy">Governance</span>
               </Tabs.Trigger>
             ) : null}
-            <Tabs.Trigger className="content-tab" value="activity">
+            <Tabs.Trigger className="content-tab content-tab-primary" value="activity">
               <span className="content-tab-copy">Activity</span>
             </Tabs.Trigger>
             {isSolanaChain ? (
               <>
-                <Tabs.Trigger className="content-tab" value="collectibles">
+                <Tabs.Trigger className="content-tab content-tab-secondary" value="collectibles">
                   <span className="content-tab-copy">Collectibles</span>
                 </Tabs.Trigger>
-                <Tabs.Trigger className="content-tab" value="staking">
+                <Tabs.Trigger className="content-tab content-tab-secondary" value="staking">
                   <span className="content-tab-copy">Staking</span>
                 </Tabs.Trigger>
               </>
@@ -5950,57 +5877,10 @@ function PopupPage() {
             </label>
             <div className="stack">
               <div className="settings-row">
-                <span className="muted">Grape Verification</span>
-                <strong>{state?.access.granted ? 'Verified' : 'Required'}</strong>
+                <span className="muted">Grape Verification Gate</span>
+                <strong>Disabled</strong>
               </div>
-              <p className="muted">
-                Verification is remembered on this device after one successful check.
-              </p>
-              <div className="inline wrap-actions">
-                <Button
-                  tone="secondary"
-                  onClick={async () => {
-                    try {
-                      setAccessSettingsBusy(true);
-                      setAccessError(null);
-                      await sendRuntimeMessage<WalletStateResponse>({ type: 'wallet_refresh_access' });
-                      await refresh();
-                    } catch (error) {
-                      setAccessError(error instanceof Error ? error.message : 'Unable to re-check Grape Verification.');
-                    } finally {
-                      setAccessSettingsBusy(false);
-                    }
-                  }}
-                  disabled={accessSettingsBusy}
-                >
-                  {accessSettingsBusy ? 'Checking...' : 'Re-check verification'}
-                </Button>
-                <Button
-                  tone="secondary"
-                  onClick={async () => {
-                      setAccessSettingsBusy(true);
-                    try {
-                      setAccessError(null);
-                      await sendRuntimeMessage<WalletStateResponse>({ type: 'wallet_clear_access' });
-                      await refresh();
-                    } catch (error) {
-                      setAccessError(error instanceof Error ? error.message : 'Unable to clear remembered verification.');
-                    } finally {
-                      setAccessSettingsBusy(false);
-                    }
-                  }}
-                  disabled={accessSettingsBusy}
-                >
-                  Clear verification
-                </Button>
-              </div>
-              {state?.access.grantedAt ? (
-                <p className="muted">Granted {new Date(state.access.grantedAt).toLocaleString()}</p>
-              ) : null}
-              {state?.access.lastCheckedAt ? (
-                <p className="muted">Last checked {new Date(state.access.lastCheckedAt).toLocaleString()}</p>
-              ) : null}
-              {accessError ? <p className="danger-box">{accessError}</p> : null}
+              <p className="muted">The global Grape verification requirement is turned off for now.</p>
             </div>
             <div className="stack">
               <div className="settings-row">
