@@ -313,6 +313,63 @@ export function OnboardingView(props: OnboardingViewProps) {
     () => normalizeMnemonic(mode === 'create' || importMethod === 'mnemonic' ? (mode === 'create' ? generatedMnemonic : importMnemonic) : ''),
     [generatedMnemonic, importMnemonic, importMethod, mode]
   );
+  const mnemonicWords = useMemo(() => (mnemonic ? mnemonic.split(' ') : []), [mnemonic]);
+  const importMnemonicPreviewCount = useMemo(() => {
+    if (importMethod !== 'mnemonic') {
+      return 12;
+    }
+
+    if (mnemonicWords.length > 12) {
+      return Math.max(24, mnemonicWords.length);
+    }
+
+    return 12;
+  }, [importMethod, mnemonicWords.length]);
+  const importMnemonicStatus = useMemo(() => {
+    if (importMethod !== 'mnemonic') {
+      return null;
+    }
+
+    if (mnemonicWords.length === 0) {
+      return {
+        tone: 'muted' as const,
+        message: 'Enter each word in order. Grape accepts 12-word and 24-word recovery phrases.'
+      };
+    }
+
+    if (validateWalletMnemonic(mnemonic)) {
+      return {
+        tone: 'success' as const,
+        message: `Valid ${mnemonicWords.length}-word recovery phrase.`
+      };
+    }
+
+    if (mnemonicWords.length < 12) {
+      return {
+        tone: 'muted' as const,
+        message: `${mnemonicWords.length} of 12 words entered.`
+      };
+    }
+
+    if (mnemonicWords.length === 12) {
+      return {
+        tone: 'warning' as const,
+        message: '12 words entered. If Continue is still disabled, double-check the spelling of each word.'
+      };
+    }
+
+    if (mnemonicWords.length < 24) {
+      return {
+        tone: 'warning' as const,
+        message: `${mnemonicWords.length} words entered. Recovery phrases are usually exactly 12 or 24 words.`
+      };
+    }
+
+    return {
+      tone: 'danger' as const,
+      message: `${mnemonicWords.length} words entered. Recovery phrases must be exactly 12 or 24 words.`
+    };
+  }, [importMethod, mnemonic, mnemonicWords]);
   const isEasyTrack = setupTrack === 'easy';
   const isEasyPasskeyPath = isEasyTrack && easySetupMethod === 'passkey';
   const isEasyApprovalPath = isEasyTrack && easySetupMethod === 'approval';
@@ -839,9 +896,18 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
                     value={importMnemonic}
                     onChange={(event) => setImportMnemonic(event.target.value)}
                   />
-                  {importMnemonic.trim().length > 0 && !validateWalletMnemonic(mnemonic) ? (
-                    <p className="danger-box">That recovery phrase is not valid.</p>
+                  {importMnemonicStatus ? (
+                    importMnemonicStatus.tone === 'success' ? (
+                      <p className="success-box">{importMnemonicStatus.message}</p>
+                    ) : importMnemonicStatus.tone === 'warning' ? (
+                      <p className="warning-box">{importMnemonicStatus.message}</p>
+                    ) : importMnemonicStatus.tone === 'danger' ? (
+                      <p className="danger-box">{importMnemonicStatus.message}</p>
+                    ) : (
+                      <p className="muted">{importMnemonicStatus.message}</p>
+                    )
                   ) : null}
+                  <MnemonicGrid words={mnemonicWords} totalWords={importMnemonicPreviewCount} emptyLabel="Empty" />
                 </label>
               ) : importMethod === 'private-key' ? (
                 <div className="stack">

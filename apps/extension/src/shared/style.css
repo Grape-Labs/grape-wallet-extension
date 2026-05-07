@@ -1459,6 +1459,16 @@ select {
   background: rgba(255, 255, 255, 0.05);
 }
 
+.mnemonic-grid li.empty {
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px dashed rgba(255, 255, 255, 0.08);
+}
+
+.mnemonic-grid li.empty strong {
+  opacity: 0.48;
+  font-weight: 600;
+}
+
 .stack {
   display: grid;
   gap: 12px;
@@ -3378,6 +3388,16 @@ body[data-surface='popup'] .asset-panel-card {
   font: inherit;
 }
 
+.staking-select option {
+  background: color-mix(in srgb, var(--theme-surface-strong) 88%, var(--theme-input-bg) 12%);
+  color: var(--theme-text);
+}
+
+.staking-select option:checked {
+  background: color-mix(in srgb, var(--theme-accent) 26%, var(--theme-surface-strong));
+  color: var(--theme-text);
+}
+
 .staking-password-shell {
   position: relative;
 }
@@ -3537,7 +3557,7 @@ body[data-surface='popup'] .staking-summary-grid {
   max-width: 100%;
   flex: 1 1 auto;
   display: grid;
-  gap: 3px;
+  gap: 4px;
   justify-items: start;
   text-align: left;
 }
@@ -3545,9 +3565,13 @@ body[data-surface='popup'] .staking-summary-grid {
 .token-subline {
   display: flex;
   gap: 8px;
-  align-items: center;
+  align-items: baseline;
   min-width: 0;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+}
+
+.token-subline > * {
+  min-width: 0;
 }
 
 .token-avatar {
@@ -5202,6 +5226,8 @@ body[data-surface='popup'] .swap-slippage-chip {
   gap: 4px;
   justify-items: end;
   flex: 0 0 auto;
+  min-width: max-content;
+  padding-left: 10px;
 }
 
 .token-item-skeleton {
@@ -5217,8 +5243,8 @@ body[data-surface='popup'] .swap-slippage-chip {
 }
 
 body[data-surface='popup'] .token-item {
-  gap: 10px;
-  padding: 10px 11px;
+  gap: 12px;
+  padding: 12px 11px;
 }
 
 body[data-surface='popup'] .token-subline {

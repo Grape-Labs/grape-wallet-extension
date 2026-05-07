@@ -92,6 +92,7 @@ export type MobileWalletState = {
   trackedVerificationSpaceIds: string[];
   trackedGovernanceDaoIds: string[];
   wallets: MobileWallet[];
+  credentialKind: MobileCredentialKind;
   passwordSalt: string;
   passwordHash: string;
   passkeyWallet?: MobilePasskeyWalletConfig;
@@ -99,6 +100,8 @@ export type MobileWalletState = {
   biometricEnabled: boolean;
   activities: MobileActivity[];
 };
+
+export type MobileCredentialKind = 'password' | 'passcode';
 
 export type MobileAsset = {
   id: string;
@@ -174,10 +177,12 @@ type StoredSecretPayload =
 const STORAGE_KEY = 'grape:mobile:state';
 const SECRET_PREFIX = 'grapemobilesecret';
 const DEFAULT_CHAIN: GrapeChain = 'solana';
+const DEFAULT_MOBILE_CREDENTIAL_KIND: MobileCredentialKind = 'passcode';
 const DEFAULT_SOLANA_NETWORK = 'mainnet-beta';
 const DEFAULT_SUI_NETWORK = 'mainnet';
 const DEFAULT_EVM_NETWORK = 'mainnet';
 const SOLANA_LEGACY_TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+export const MOBILE_WALLET_PASSCODE_LENGTH = 6;
 const SOLANA_TOKEN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
 const JUPITER_SOL_MINT = 'So11111111111111111111111111111111111111112';
 const MOBILE_SOLANA_ASSET_CACHE_TTL_MS = 30_000;
@@ -269,6 +274,7 @@ export function createEmptyMobileWalletState(): MobileWalletState {
     trackedVerificationSpaceIds: [GRAPE_VERIFICATION_REQUIRED_DAO_ID],
     trackedGovernanceDaoIds: [],
     wallets: [],
+    credentialKind: DEFAULT_MOBILE_CREDENTIAL_KIND,
     passwordSalt: '',
     passwordHash: '',
     passkeyWallet: undefined,
@@ -317,11 +323,20 @@ export async function createWalletSet(input: {
   mnemonic: string;
   password: string;
   source: MobileWalletSource;
+  credentialKind?: MobileCredentialKind;
   passkeyWallet?: MobilePasskeyWalletConfig;
 }): Promise<MobileWalletState> {
   const mnemonic = input.mnemonic.trim();
   if (!validateWalletMnemonic(mnemonic)) {
     throw new Error('Recovery phrase is invalid.');
+  }
+  const credentialKind = resolveMobileCredentialKind(
+    input.credentialKind,
+    false,
+    Boolean(input.passkeyWallet)
+  );
+  if (!input.passkeyWallet && !validateMobileWalletCredential(input.password, credentialKind)) {
+    throw new Error(getInvalidMobileCredentialMessage(credentialKind));
   }
 
   const secretRef = createSecretRef();
@@ -344,6 +359,7 @@ export async function createWalletSet(input: {
     trackedVerificationSpaceIds: [GRAPE_VERIFICATION_REQUIRED_DAO_ID],
     trackedGovernanceDaoIds: [],
     wallets,
+    credentialKind,
     passwordSalt,
     passwordHash,
     passkeyWallet: input.passkeyWallet,
@@ -396,8 +412,13 @@ export async function createPrivateKeyWallet(input: {
   chain: GrapeChain;
   privateKey: string;
   password: string;
+  credentialKind?: MobileCredentialKind;
 }): Promise<MobileWalletState> {
   const importedWallet = await importPrivateKeyWallet(input.chain, input.privateKey.trim());
+  const credentialKind = resolveMobileCredentialKind(input.credentialKind, false, false);
+  if (!validateMobileWalletCredential(input.password, credentialKind)) {
+    throw new Error(getInvalidMobileCredentialMessage(credentialKind));
+  }
   const secretRef = createSecretRef();
   const payload: StoredSecretPayload = { kind: 'private-key', secretKey: importedWallet.secretKey };
   await setItemAsync(toSecureStoreKey(secretRef), JSON.stringify(payload));
@@ -420,6 +441,7 @@ export async function createPrivateKeyWallet(input: {
     trackedVerificationSpaceIds: [GRAPE_VERIFICATION_REQUIRED_DAO_ID],
     trackedGovernanceDaoIds: [],
     wallets: [wallet],
+    credentialKind,
     passwordSalt,
     passwordHash,
     passkeyWallet: undefined,
@@ -1506,13 +1528,14 @@ export async function exportMobileWalletPrivateKey(input: {
   allowUnlockedSession?: boolean;
 }): Promise<MobileWalletExport> {
   const password = input.password?.trim() ?? '';
+  const credentialLabel = getMobileCredentialLabel(input.state.credentialKind);
   if (password) {
     const valid = await unlockMobileWalletState(input.state, password);
     if (!valid) {
-      throw new Error('Password is incorrect.');
+      throw new Error(`${credentialLabel} is incorrect.`);
     }
   } else if (!input.allowUnlockedSession) {
-    throw new Error('Password is required.');
+    throw new Error(`${capitalizeWord(credentialLabel)} is required.`);
   }
 
   const secret = await loadWalletSecretWithWalletFallback(input.state, input.wallet);
@@ -1661,13 +1684,14 @@ export async function createMobileDeviceLinkSession(input: {
   password?: string;
   allowUnlockedSession?: boolean;
 }): Promise<MobileDeviceLinkSession> {
+  const credentialLabel = getMobileCredentialLabel(input.state.credentialKind);
   if (!input.allowUnlockedSession) {
     if (!input.password?.trim()) {
-      throw new Error('Password is required to link a new device.');
+      throw new Error(`${capitalizeWord(credentialLabel)} is required to link a new device.`);
     }
     const valid = await unlockMobileWalletState(input.state, input.password);
     if (!valid) {
-      throw new Error('Password is incorrect.');
+      throw new Error(`${capitalizeWord(credentialLabel)} is incorrect.`);
     }
   }
 
@@ -1755,8 +1779,8 @@ export async function importMobileDeviceLink(input: {
   }
 
   const hasExistingWallets = input.state.setup === 'ready' && input.state.wallets.length > 0;
-  if (!hasExistingWallets && (!input.password || input.password.length < 8)) {
-    throw new Error('Use a password with at least 8 characters.');
+  if (!hasExistingWallets && !validateMobileWalletCredential(input.password ?? '', DEFAULT_MOBILE_CREDENTIAL_KIND)) {
+    throw new Error(getInvalidMobileCredentialMessage(DEFAULT_MOBILE_CREDENTIAL_KIND));
   }
   let nextState: MobileWalletState;
 
@@ -1770,6 +1794,7 @@ export async function importMobileDeviceLink(input: {
       : await createWalletSet({
           mnemonic: payload.wallet.secret.mnemonic,
           password: input.password ?? '',
+          credentialKind: DEFAULT_MOBILE_CREDENTIAL_KIND,
           source: payload.wallet.source === 'created' ? 'created' : 'imported-mnemonic'
         });
   } else {
@@ -1782,7 +1807,8 @@ export async function importMobileDeviceLink(input: {
       : await createPrivateKeyWallet({
           chain: payload.wallet.chain,
           privateKey: payload.wallet.secret.secretKey,
-          password: input.password ?? ''
+          password: input.password ?? '',
+          credentialKind: DEFAULT_MOBILE_CREDENTIAL_KIND
         });
   }
 
@@ -2368,12 +2394,58 @@ function normalizeMobileWalletState(state: MobileWalletState): MobileWalletState
     wallets,
     selectedChain,
     selectedWalletIds,
+    credentialKind: resolveMobileCredentialKind(state.credentialKind, Boolean(state.passwordHash), Boolean(state.passkeyWallet)),
     passkeyWallet: normalizePasskeyWalletConfig(state.passkeyWallet),
     trustedDappOrigins: normalizeTrustedDappOrigins(state.trustedDappOrigins),
     trackedReputationSpaceIds: normalizeTrackedReputationSpaceIds(state.trackedReputationSpaceIds),
     trackedVerificationSpaceIds: normalizeTrackedVerificationSpaceIds(state.trackedVerificationSpaceIds),
     trackedGovernanceDaoIds: normalizeTrackedDaoIds(state.trackedGovernanceDaoIds)
   };
+}
+
+export function validateMobileWalletCredential(value: string, credentialKind: MobileCredentialKind): boolean {
+  const normalized = value.trim();
+  if (credentialKind === 'passcode') {
+    return new RegExp(`^\\d{${MOBILE_WALLET_PASSCODE_LENGTH}}$`).test(normalized);
+  }
+
+  return normalized.length >= 8;
+}
+
+function getInvalidMobileCredentialMessage(credentialKind: MobileCredentialKind) {
+  if (credentialKind === 'passcode') {
+    return `Use a ${MOBILE_WALLET_PASSCODE_LENGTH}-digit passcode.`;
+  }
+
+  return 'Use a password with at least 8 characters.';
+}
+
+function getMobileCredentialLabel(credentialKind: MobileCredentialKind) {
+  return credentialKind === 'passcode' ? 'passcode' : 'password';
+}
+
+function resolveMobileCredentialKind(
+  value: MobileCredentialKind | null | undefined,
+  hasPasswordHash: boolean,
+  hasPasskeyWallet: boolean
+): MobileCredentialKind {
+  if (value === 'password' || value === 'passcode') {
+    return value;
+  }
+
+  if (hasPasskeyWallet) {
+    return DEFAULT_MOBILE_CREDENTIAL_KIND;
+  }
+
+  if (hasPasswordHash) {
+    return 'password';
+  }
+
+  return DEFAULT_MOBILE_CREDENTIAL_KIND;
+}
+
+function capitalizeWord(value: string) {
+  return value.length > 0 ? `${value[0]!.toUpperCase()}${value.slice(1)}` : value;
 }
 
 function normalizePasskeyWalletConfig(value: MobilePasskeyWalletConfig | null | undefined): MobilePasskeyWalletConfig | undefined {

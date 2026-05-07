@@ -130,8 +130,6 @@ export function ApprovalView(props: {
     walletState?.wallet.wallets[0];
   const biometricUnlockConfig = resolveBiometricUnlockConfig(walletState?.wallet, selectedWallet);
   const biometricEnabled = biometricSupported && !!biometricUnlockConfig;
-  const passwordOnlyForRelockedDegen =
-    walletState?.wallet.dappApprovalMode === 'degen' && !!walletState?.session.locked;
   const requiresPassword =
     approval.kind !== 'connect' &&
     (selectedWallet?.signer.kind === 'ledger'
@@ -619,7 +617,7 @@ export function ApprovalView(props: {
                   onChange={(event) => setPassword(event.target.value)}
                   placeholder="Enter password to sign"
                 />
-                {biometricEnabled && !passwordOnlyForRelockedDegen ? (
+                {biometricEnabled ? (
                   <button
                     type="button"
                     className="biometric-inline-button"

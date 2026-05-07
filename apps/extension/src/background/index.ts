@@ -237,6 +237,11 @@ const GOVERNANCE_PROGRAM_VERSION_V3 = 3;
 const GOVERNANCE_GRAPHQL_URL = 'https://grape.shyft.to/v1/graphql/';
 const VERIFICATION_GRAPHQL_NAMESPACE = 'grape_verification_registry';
 const GRAPHQL_RETRYABLE_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);
+const COINGECKO_SIMPLE_PRICE_URL = 'https://api.coingecko.com/api/v3/simple/price';
+const GECKOTERMINAL_BASE_URL = 'https://api.geckoterminal.com/api/v2';
+const GECKOTERMINAL_TOKEN_BATCH_SIZE = 50;
+const ETHEREUM_BLOCKSCOUT_BASE_URL = 'https://eth.blockscout.com/api/v2';
+const ETHEREUM_SEPOLIA_BLOCKSCOUT_BASE_URL = 'https://eth-sepolia.blockscout.com/api/v2';
 const KNOWN_TOKEN_SYMBOLS: Record<string, string> = {
   [JUPITER_SOL_MINT]: 'SOL',
   EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v: 'USDC'
@@ -284,6 +289,11 @@ type CollectibleMetadataHint = {
   name?: string;
   symbol?: string;
   imageUri?: string;
+};
+
+type NativeUsdPriceQuote = {
+  usdPrice: number | null;
+  priceChange24h: number | null;
 };
 
 type VineSpaceConfig = {
@@ -887,9 +897,36 @@ class WalletController {
     const holdings = await getSuiHoldings(client, publicKey);
     const totalMist = BigInt(holdings.totalMist);
     const safeLamports = totalMist > BigInt(Number.MAX_SAFE_INTEGER) ? null : Number(totalMist);
-    const result: WalletAssetsResponse = {
-      lamports: safeLamports,
-      tokens: holdings.coins.map((coin) => ({
+    let nativePricing: NativeUsdPriceQuote = {
+      usdPrice: null,
+      priceChange24h: null
+    };
+    if (network === 'mainnet-beta') {
+      try {
+        nativePricing = await fetchSuiNativePrice();
+      } catch {
+        nativePricing = {
+          usdPrice: null,
+          priceChange24h: null
+        };
+      }
+    }
+    let tokenPricing: Record<string, { usdPrice: number | null; priceChange24h: number | null }> = {};
+    if (network === 'mainnet-beta') {
+      try {
+        tokenPricing = await fetchSuiTokenPrices(holdings.coins.map((coin) => coin.coinType));
+      } catch {
+        tokenPricing = {};
+      }
+    }
+
+    const nativeUsdPrice = nativePricing.usdPrice;
+    const nativeValueUsd =
+      nativeUsdPrice === null || safeLamports === null ? null : (safeLamports / 1_000_000_000) * nativeUsdPrice;
+    const pricedTokens = holdings.coins.map((coin) => {
+      const pricing = tokenPricing[coin.coinType.trim().toLowerCase()];
+      const usdPrice = pricing?.usdPrice ?? getSuiStablecoinPriceUsd(coin.symbol);
+      return {
         mint: coin.coinType,
         amount: coin.amount,
         decimals: coin.decimals,
@@ -898,21 +935,28 @@ class WalletController {
         name: coin.name,
         symbol: coin.symbol,
         logoUri: coin.logoUri,
-        priceUsd: null,
-        valueUsd: null,
-        priceChange24h: null,
+        priceUsd: usdPrice,
+        valueUsd: usdPrice === null ? null : Number(coin.amount) * usdPrice,
+        priceChange24h: pricing?.priceChange24h ?? null,
         delegate: null,
         delegatedAmount: null,
         closeAuthority: null
-      })),
+      };
+    });
+    const totalUsdValue = [nativeValueUsd, ...pricedTokens.map((token) => token.valueUsd ?? null)]
+      .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+      .reduce((sum, value) => sum + value, 0);
+    const result: WalletAssetsResponse = {
+      lamports: safeLamports,
+      tokens: sortWalletTokens(pricedTokens),
       collections: [],
       nativeName: 'Sui',
       nativeSymbol: 'SUI',
       nativeDecimals: 9,
-      totalUsdValue: null,
-      nativePriceUsd: null,
-      nativeValueUsd: null,
-      nativePriceChange24h: null
+      totalUsdValue: Number.isFinite(totalUsdValue) ? totalUsdValue : null,
+      nativePriceUsd: nativeUsdPrice,
+      nativeValueUsd,
+      nativePriceChange24h: nativePricing.priceChange24h
     };
 
     const cache = await assetCacheStorage.get();
@@ -966,17 +1010,43 @@ class WalletController {
     const client = await this.createEthereumClient(network, walletState);
     const holdings = await getEthereumHoldings(client, publicKey);
     const safeBaseUnits = holdings.totalWei > BigInt(Number.MAX_SAFE_INTEGER) ? null : Number(holdings.totalWei);
+    let nativePricing: NativeUsdPriceQuote = {
+      usdPrice: null,
+      priceChange24h: null
+    };
+    try {
+      nativePricing = await fetchEthereumNativePrice(network);
+    } catch {
+      nativePricing = {
+        usdPrice: null,
+        priceChange24h: null
+      };
+    }
+
+    let tokenHoldings: TokenHolding[] = [];
+    try {
+      tokenHoldings = await fetchEthereumTokenBalances(network, publicKey);
+    } catch {
+      tokenHoldings = [];
+    }
+
+    const nativeUsdPrice = nativePricing.usdPrice;
+    const nativeValueUsd =
+      nativeUsdPrice === null || safeBaseUnits === null ? null : (safeBaseUnits / 1_000_000_000_000_000_000) * nativeUsdPrice;
+    const totalUsdValue = [nativeValueUsd, ...tokenHoldings.map((token) => token.valueUsd ?? null)]
+      .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+      .reduce((sum, value) => sum + value, 0);
     const result: WalletAssetsResponse = {
       lamports: safeBaseUnits,
-      tokens: [],
+      tokens: sortWalletTokens(tokenHoldings),
       collections: [],
       nativeName: 'Ethereum',
       nativeSymbol: 'ETH',
       nativeDecimals: 18,
-      totalUsdValue: null,
-      nativePriceUsd: null,
-      nativeValueUsd: null,
-      nativePriceChange24h: null
+      totalUsdValue: Number.isFinite(totalUsdValue) ? totalUsdValue : null,
+      nativePriceUsd: nativeUsdPrice,
+      nativeValueUsd,
+      nativePriceChange24h: nativePricing.priceChange24h
     };
 
     const cache = await assetCacheStorage.get();
@@ -4860,7 +4930,12 @@ class WalletController {
         origin: approval.origin.origin,
         network: approval.network
       });
-      const result = await this.executeApproval(approval, password);
+      const trimmedPassword = password?.trim() || undefined;
+      const session = await this.getSessionState();
+      if (session.locked && trimmedPassword) {
+        await this.unlockWallet(trimmedPassword);
+      }
+      const result = await this.executeApproval(approval, trimmedPassword);
       this.emitPendingApprovalDebug(approvalId, {
         phase: 'approval_execute_success',
         requestId: approval.request.id,
@@ -8467,6 +8542,261 @@ function formatUiAmount(rawAmount: string, decimals: number): string {
     minimumFractionDigits: 0,
     maximumFractionDigits: Math.min(Math.max(decimals, 0), 6)
   });
+}
+
+function chunkStrings(values: string[], size: number): string[][] {
+  const chunks: string[][] = [];
+  for (let index = 0; index < values.length; index += size) {
+    chunks.push(values.slice(index, index + size));
+  }
+  return chunks;
+}
+
+async function fetchSuiNativePrice(): Promise<NativeUsdPriceQuote> {
+  const url = new URL(COINGECKO_SIMPLE_PRICE_URL);
+  url.searchParams.set('ids', 'sui');
+  url.searchParams.set('vs_currencies', 'usd');
+  url.searchParams.set('include_24hr_change', 'true');
+
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Sui pricing request failed with ${response.status}.`);
+  }
+
+  const payload = (await response.json()) as {
+    sui?: {
+      usd?: unknown;
+      usd_24h_change?: unknown;
+    };
+  };
+
+  return {
+    usdPrice: typeof payload.sui?.usd === 'number' ? payload.sui.usd : null,
+    priceChange24h: typeof payload.sui?.usd_24h_change === 'number' ? payload.sui.usd_24h_change : null
+  };
+}
+
+function getSuiStablecoinPriceUsd(symbol?: string): number | null {
+  const normalized = symbol?.trim().toUpperCase();
+  if (!normalized) {
+    return null;
+  }
+
+  return normalized === 'USDC' || normalized === 'USDT' ? 1 : null;
+}
+
+function getEvmStablecoinPriceUsd(symbol?: string): number | null {
+  const normalized = symbol?.trim().toUpperCase();
+  if (!normalized) {
+    return null;
+  }
+
+  return normalized === 'USDC' || normalized === 'USDT' ? 1 : null;
+}
+
+async function fetchSuiTokenPrices(
+  coinTypes: string[]
+): Promise<Record<string, { usdPrice: number | null; priceChange24h: number | null }>> {
+  const uniqueCoinTypes = [...new Set(coinTypes.map((coinType) => coinType.trim()).filter(Boolean))];
+  if (uniqueCoinTypes.length === 0) {
+    return {};
+  }
+
+  const responses = await Promise.all(
+    chunkStrings(uniqueCoinTypes, GECKOTERMINAL_TOKEN_BATCH_SIZE).map(async (batch) => {
+      const url = `${GECKOTERMINAL_BASE_URL}/networks/sui-network/tokens/multi/${encodeURIComponent(batch.join(','))}`;
+      const response = await fetch(url, {
+        headers: {
+          accept: 'application/json'
+        }
+      });
+      if (!response.ok) {
+        throw new Error(`Sui token pricing request failed with ${response.status}.`);
+      }
+      return (await response.json()) as {
+        data?: Array<{
+          attributes?: {
+            address?: string;
+            price_usd?: string | null;
+            price_change_percentage?: {
+              h24?: string | null;
+            } | null;
+          } | null;
+        }>;
+      };
+    })
+  );
+
+  return Object.assign(
+    {},
+    ...responses.map((response) =>
+      Object.fromEntries(
+        (response.data ?? [])
+          .map((entry) => {
+            const address = entry.attributes?.address?.trim();
+            if (!address) {
+              return null;
+            }
+
+            const usdPriceRaw = entry.attributes?.price_usd;
+            const priceChangeRaw = entry.attributes?.price_change_percentage?.h24;
+            const usdPrice = usdPriceRaw === null || usdPriceRaw === undefined ? null : Number(usdPriceRaw);
+            const priceChange24h = priceChangeRaw === null || priceChangeRaw === undefined ? null : Number(priceChangeRaw);
+
+            return [
+              address.toLowerCase(),
+              {
+                usdPrice: Number.isFinite(usdPrice) ? usdPrice : null,
+                priceChange24h: Number.isFinite(priceChange24h) ? priceChange24h : null
+              }
+            ] as const;
+          })
+          .filter((entry): entry is readonly [string, { usdPrice: number | null; priceChange24h: number | null }] => entry !== null)
+      )
+    )
+  );
+}
+
+function getEthereumBlockscoutBaseUrl(network: 'mainnet-beta' | 'devnet'): string {
+  return network === 'devnet' ? ETHEREUM_SEPOLIA_BLOCKSCOUT_BASE_URL : ETHEREUM_BLOCKSCOUT_BASE_URL;
+}
+
+function normalizeNumber(value: unknown): number | null {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function formatBaseUnitDecimal(rawAmount: string, decimals: number): string {
+  const normalizedRaw = rawAmount.trim().replace(/^0+/, '') || '0';
+  if (decimals <= 0) {
+    return normalizedRaw;
+  }
+
+  const padded = normalizedRaw.padStart(decimals + 1, '0');
+  const whole = padded.slice(0, -decimals).replace(/^0+(?=\d)/, '') || '0';
+  const fraction = padded.slice(-decimals).replace(/0+$/, '');
+  return fraction ? `${whole}.${fraction}` : whole;
+}
+
+async function fetchEthereumNativePrice(network: 'mainnet-beta' | 'devnet'): Promise<NativeUsdPriceQuote> {
+  if (network !== 'mainnet-beta') {
+    return {
+      usdPrice: null,
+      priceChange24h: null
+    };
+  }
+
+  const response = await fetch(`${getEthereumBlockscoutBaseUrl(network)}/stats`, {
+    headers: {
+      accept: 'application/json'
+    }
+  });
+  if (!response.ok) {
+    throw new Error(`Ethereum pricing request failed with ${response.status}.`);
+  }
+
+  const payload = (await response.json()) as {
+    coin_price?: unknown;
+  };
+
+  return {
+    usdPrice: normalizeNumber(payload.coin_price),
+    priceChange24h: null
+  };
+}
+
+type EthereumBlockscoutToken = {
+  name?: string | null;
+  symbol?: string | null;
+  decimals?: string | number | null;
+  type?: string | null;
+  exchange_rate?: string | number | null;
+  address_hash?: string | null;
+  icon_url?: string | null;
+};
+
+type EthereumBlockscoutTokenBalance = {
+  value?: string | null;
+  token?: EthereumBlockscoutToken | null;
+  token_instance?: {
+    token?: EthereumBlockscoutToken | null;
+  } | null;
+};
+
+async function fetchEthereumTokenBalances(
+  network: 'mainnet-beta' | 'devnet',
+  owner: string
+): Promise<TokenHolding[]> {
+  const url = new URL(`${getEthereumBlockscoutBaseUrl(network)}/addresses/${owner}/tokens`);
+  url.searchParams.set('type', 'ERC-20');
+
+  const response = await fetch(url, {
+    headers: {
+      accept: 'application/json'
+    }
+  });
+  if (!response.ok) {
+    throw new Error(`Ethereum token balance request failed with ${response.status}.`);
+  }
+
+  const payload = (await response.json()) as {
+    items?: EthereumBlockscoutTokenBalance[];
+  };
+
+  return (payload.items ?? []).reduce<TokenHolding[]>((tokens, entry) => {
+    const token = entry.token_instance?.token ?? entry.token;
+    const tokenType = token?.type?.trim().toUpperCase();
+    if (tokenType !== 'ERC-20') {
+      return tokens;
+    }
+
+    const mint = token?.address_hash?.trim();
+    if (!mint) {
+      return tokens;
+    }
+
+    const decimals = normalizeNumber(token?.decimals);
+    if (decimals === null || !Number.isInteger(decimals) || decimals < 0) {
+      return tokens;
+    }
+
+    const rawAmount = entry.value?.trim();
+    if (!rawAmount || rawAmount === '0') {
+      return tokens;
+    }
+
+    const amount = formatBaseUnitDecimal(rawAmount, decimals);
+    const amountNumber = Number(amount);
+    const priceUsd = normalizeNumber(token?.exchange_rate) ?? getEvmStablecoinPriceUsd(token?.symbol ?? undefined);
+
+    tokens.push({
+      mint,
+      amount,
+      decimals,
+      programId: 'erc20',
+      accountAddress: owner,
+      name: token?.name?.trim() || token?.symbol?.trim() || undefined,
+      symbol: token?.symbol?.trim() || undefined,
+      logoUri: token?.icon_url?.trim() || undefined,
+      priceUsd,
+      valueUsd: priceUsd === null || !Number.isFinite(amountNumber) ? null : amountNumber * priceUsd,
+      priceChange24h: null,
+      delegate: null,
+      delegatedAmount: null,
+      closeAuthority: null
+    } satisfies TokenHolding);
+    return tokens;
+  }, []);
 }
 
 function extractSwapRouteLabels(quoteResponse: JupiterQuoteResponse): string[] {

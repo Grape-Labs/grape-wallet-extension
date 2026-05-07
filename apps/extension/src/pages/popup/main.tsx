@@ -844,9 +844,10 @@ function TokenRow(props: { token: TokenHolding; onSelect?: () => void; privacyMo
   const quantityLabel = `${formatTokenAmount(props.token)}${props.token.symbol ? ` ${props.token.symbol}` : ''}`;
   const primaryLabel = props.token.name ?? props.token.symbol ?? formatAddress(props.token.mint);
   const unitPriceLabel = formatUnitPrice(props.token.priceUsd);
-  const secondaryLabel = unitPriceLabel ?? props.token.symbol ?? formatAddress(props.token.mint);
-  const addressLabel = formatAddress(props.token.mint);
-  const shouldShowAddressFallback = !changeLabel && !unitPriceLabel && secondaryLabel !== addressLabel;
+  const subtitleParts = [
+    unitPriceLabel ? unitPriceLabel : props.token.symbol && props.token.symbol !== primaryLabel ? props.token.symbol : null
+  ].filter((value, index, values): value is string => !!value && values.indexOf(value) === index);
+  const secondaryLabel = subtitleParts.join(' • ');
 
   const content = (
     <div className="token-item token-item-interactive">
@@ -857,18 +858,18 @@ function TokenRow(props: { token: TokenHolding; onSelect?: () => void; privacyMo
             {primaryLabel}
           </strong>
           <div className="token-subline">
-            <span className={`token-subtitle ${unitPriceLabel ? '' : 'mono'}`.trim()}>{secondaryLabel}</span>
+            {secondaryLabel ? <span className={`token-subtitle ${unitPriceLabel ? '' : 'mono'}`.trim()}>{secondaryLabel}</span> : null}
             {changeLabel ? (
               <span className={`token-change ${props.token.priceChange24h && props.token.priceChange24h < 0 ? 'negative' : 'positive'}`.trim()}>
                 {changeLabel}
               </span>
-            ) : shouldShowAddressFallback ? <span className="token-subtitle mono">{addressLabel}</span> : null}
+            ) : null}
           </div>
         </div>
       </div>
       <div className="token-amount-group">
-        <div className="token-amount">{maskSensitiveValue(valueLabel ?? quantityLabel, !!props.privacyMode)}</div>
-        {valueLabel ? <div className="token-subtitle token-amount-subtitle">{maskSensitiveValue(quantityLabel, !!props.privacyMode)}</div> : null}
+        <div className="token-amount">{maskSensitiveValue(valueLabel ?? '-', !!props.privacyMode)}</div>
+        <div className="token-subtitle token-amount-subtitle">{maskSensitiveValue(quantityLabel, !!props.privacyMode)}</div>
       </div>
     </div>
   );

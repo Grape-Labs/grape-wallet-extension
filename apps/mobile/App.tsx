@@ -79,12 +79,14 @@ import {
   loadWalletActivity,
   loadWalletAssets,
   loadWalletAssetsFast,
+  MOBILE_WALLET_PASSCODE_LENGTH,
   persistMobileWalletState,
   sendWalletAsset,
   updateTrackedGovernanceDaos,
   updateTrackedReputationSpaces,
   updateTrackedVerificationSpaces,
-  unlockMobileWalletState
+  unlockMobileWalletState,
+  validateMobileWalletCredential
 } from './src/wallet';
 import type { MobileBridgeQuoteSummary } from './src/config';
 import { getMobileSupportedBridgeDestinations } from './src/config';
@@ -580,6 +582,22 @@ function maskValue(value: string, privacyMode: boolean) {
   return privacyMode ? '***' : value;
 }
 
+function getCredentialLabel(kind: MobileWalletState['credentialKind']) {
+  return kind === 'passcode' ? 'passcode' : 'password';
+}
+
+function getCredentialTitle(kind: MobileWalletState['credentialKind']) {
+  return kind === 'passcode' ? 'Passcode' : 'Password';
+}
+
+function getCredentialInvalidMessage(kind: MobileWalletState['credentialKind']) {
+  if (kind === 'passcode') {
+    return `Use a ${MOBILE_WALLET_PASSCODE_LENGTH}-digit passcode.`;
+  }
+
+  return 'Use a password with at least 8 characters.';
+}
+
 function formatWholeNumberString(value: string | null | undefined) {
   if (!value) {
     return '0';
@@ -885,6 +903,26 @@ function normalizeDiscoverUrlInput(input: string) {
   }
 }
 
+function formatDiscoverUrlDisplay(input: string) {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return 'grape.app';
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    const host = parsed.host.replace(/^www\./i, '');
+    const normalizedPath = parsed.pathname === '/' ? '' : parsed.pathname.replace(/\/+$/, '');
+    const compactPath =
+      normalizedPath.length > 18 ? `${normalizedPath.slice(0, 15)}...` : normalizedPath;
+    const querySuffix = parsed.search ? '?...' : '';
+    const hashSuffix = parsed.hash ? '#...' : '';
+    return `${host}${compactPath}${querySuffix}${hashSuffix}`;
+  } catch {
+    return trimmed.replace(/^https?:\/\//i, '').replace(/^www\./i, '');
+  }
+}
+
 function normalizeScannedRecipientInput(input: string) {
   const trimmed = input.trim();
   if (!trimmed) {
@@ -1080,6 +1118,7 @@ export default function App() {
   const [discoverControlsExpanded, setDiscoverControlsExpanded] = useState(false);
   const [discoverConnectedOrigins, setDiscoverConnectedOrigins] = useState<string[]>([]);
   const [discoverApproval, setDiscoverApproval] = useState<DiscoverApproval | null>(null);
+  const [discoverApprovalPassword, setDiscoverApprovalPassword] = useState('');
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const discoverWebViewRef = useRef<WebView>(null);
   const parsedRestorePayload = useMemo(() => {
@@ -1103,6 +1142,13 @@ export default function App() {
     () => getMobileTheme(walletState.selectedTheme ?? DEFAULT_THEME),
     [walletState.selectedTheme]
   );
+  const setupCredentialKind: MobileWalletState['credentialKind'] = 'passcode';
+  const setupCredentialLabel = getCredentialLabel(setupCredentialKind);
+  const setupCredentialTitle = getCredentialTitle(setupCredentialKind);
+  const setupCredentialInvalidMessage = getCredentialInvalidMessage(setupCredentialKind);
+  const walletCredentialLabel = getCredentialLabel(walletState.credentialKind);
+  const walletCredentialTitle = getCredentialTitle(walletState.credentialKind);
+  const biometricFallbackLabel = walletState.passkeyWallet ? 'Use passkey' : `Use ${walletCredentialLabel}`;
   const styles = useMemo(() => createStyles(activeTheme), [activeTheme]);
   const backgroundAsset = THEME_BACKGROUND_ASSETS[activeTheme.id];
   const isCompact = width < 390;
@@ -1122,6 +1168,7 @@ export default function App() {
           background: activeTheme.bg,
           surface: activeTheme.panel,
           surfaceVariant: 'rgba(255,255,255,0.06)',
+          backdrop: Platform.OS === 'android' ? 'rgba(4, 6, 12, 0.76)' : MD3DarkTheme.colors.backdrop,
           outline: activeTheme.panelBorder,
           onSurface: activeTheme.text,
           onSurfaceVariant: activeTheme.muted,
@@ -1209,6 +1256,8 @@ export default function App() {
     () => new Set((walletState.trustedDappOrigins ?? []).map((origin) => origin.toLowerCase())),
     [walletState.trustedDappOrigins]
   );
+  const discoverApprovalRequiresReauth =
+    !!discoverApproval && walletState.dappApprovalMode === 'safe' && discoverApproval.request.method !== 'connect';
   const actionableGovernanceProposalCount = useMemo(
     () => governance.proposals.filter((proposal) => proposal.canVote).length,
     [governance.proposals]
@@ -1966,6 +2015,17 @@ export default function App() {
     });
   }
 
+  async function handleSetDappApprovalMode(mode: MobileWalletState['dappApprovalMode']) {
+    if (mode === walletState.dappApprovalMode) {
+      return;
+    }
+
+    await saveState({
+      ...walletState,
+      dappApprovalMode: mode
+    });
+  }
+
   function handleDiscoverNavigate(rawInput?: string) {
     const normalized = normalizeDiscoverUrlInput(rawInput ?? discoverUrlInput);
     if (!normalized.url) {
@@ -2093,9 +2153,82 @@ export default function App() {
         originHost,
         rememberOrigin: request.method === 'connect'
       });
+      setDiscoverApprovalPassword('');
     } catch (unknownError) {
       setError(unknownError instanceof Error ? unknownError.message : 'Unable to handle Grape Discover request.');
     }
+  }
+
+  async function executeApprovedDiscoverRequest(approval: DiscoverApproval) {
+    if (!discoverWallet) {
+      throw new Error('Add a Solana wallet to use Grape Discover.');
+    }
+
+    const { request, origin, rememberOrigin } = approval;
+    if (request.method === 'connect') {
+      if (rememberOrigin) {
+        await rememberTrustedDappOrigin(origin);
+      }
+      setDiscoverConnectedOrigins((currentValue) => (currentValue.includes(origin) ? currentValue : [...currentValue, origin]));
+      sendDiscoverProviderResponse({
+        id: request.id,
+        success: true,
+        result: { publicKey: discoverWallet.address }
+      });
+      return;
+    }
+
+    if (request.method === 'signMessage') {
+      const message = typeof request.params?.message === 'string' ? request.params.message : '';
+      const result = await signMobileSolanaProviderMessage({
+        state: walletState,
+        wallet: discoverWallet,
+        message
+      });
+      sendDiscoverProviderResponse({ id: request.id, success: true, result });
+      return;
+    }
+
+    if (request.method === 'signTransaction') {
+      const transaction = typeof request.params?.transaction === 'string' ? request.params.transaction : '';
+      const result = await signMobileSolanaProviderTransaction({
+        state: walletState,
+        wallet: discoverWallet,
+        transaction
+      });
+      sendDiscoverProviderResponse({ id: request.id, success: true, result });
+      return;
+    }
+
+    if (request.method === 'signAllTransactions') {
+      const transactions = Array.isArray(request.params?.transactions)
+        ? request.params.transactions.filter((entry): entry is string => typeof entry === 'string')
+        : [];
+      const result = await signMobileSolanaProviderTransactions({
+        state: walletState,
+        wallet: discoverWallet,
+        transactions
+      });
+      sendDiscoverProviderResponse({ id: request.id, success: true, result });
+      return;
+    }
+
+    if (request.method === 'signAndSendTransaction' || request.method === 'sendTransaction') {
+      const transaction = typeof request.params?.transaction === 'string' ? request.params.transaction : '';
+      const result = await signAndSendMobileSolanaProviderTransaction({
+        state: walletState,
+        wallet: discoverWallet,
+        transaction
+      });
+      sendDiscoverProviderResponse({
+        id: request.id,
+        success: true,
+        result: request.method === 'sendTransaction' ? result.signature : result
+      });
+      return;
+    }
+
+    rejectDiscoverProviderRequest(request, 'UNSUPPORTED', `Unsupported request method: ${request.method}`);
   }
 
   async function handleApproveDiscoverRequest() {
@@ -2103,83 +2236,138 @@ export default function App() {
       return;
     }
 
-    const { request, origin, rememberOrigin } = discoverApproval;
-    setDiscoverApproval(null);
     setSubmitLoading(true);
     setError(null);
 
     try {
-      if (request.method === 'connect') {
-        if (rememberOrigin) {
-          await rememberTrustedDappOrigin(origin);
-        }
-        setDiscoverConnectedOrigins((currentValue) => (currentValue.includes(origin) ? currentValue : [...currentValue, origin]));
-        sendDiscoverProviderResponse({
-          id: request.id,
-          success: true,
-          result: { publicKey: discoverWallet.address }
-        });
-        return;
-      }
-
-      if (request.method === 'signMessage') {
-        const message = typeof request.params?.message === 'string' ? request.params.message : '';
-        const result = await signMobileSolanaProviderMessage({
-          state: walletState,
-          wallet: discoverWallet,
-          message
-        });
-        sendDiscoverProviderResponse({ id: request.id, success: true, result });
-        return;
-      }
-
-      if (request.method === 'signTransaction') {
-        const transaction = typeof request.params?.transaction === 'string' ? request.params.transaction : '';
-        const result = await signMobileSolanaProviderTransaction({
-          state: walletState,
-          wallet: discoverWallet,
-          transaction
-        });
-        sendDiscoverProviderResponse({ id: request.id, success: true, result });
-        return;
-      }
-
-      if (request.method === 'signAllTransactions') {
-        const transactions = Array.isArray(request.params?.transactions)
-          ? request.params.transactions.filter((entry): entry is string => typeof entry === 'string')
-          : [];
-        const result = await signMobileSolanaProviderTransactions({
-          state: walletState,
-          wallet: discoverWallet,
-          transactions
-        });
-        sendDiscoverProviderResponse({ id: request.id, success: true, result });
-        return;
-      }
-
-      if (request.method === 'signAndSendTransaction' || request.method === 'sendTransaction') {
-        const transaction = typeof request.params?.transaction === 'string' ? request.params.transaction : '';
-        const result = await signAndSendMobileSolanaProviderTransaction({
-          state: walletState,
-          wallet: discoverWallet,
-          transaction
-        });
-        sendDiscoverProviderResponse({
-          id: request.id,
-          success: true,
-          result: request.method === 'sendTransaction' ? result.signature : result
-        });
-        return;
-      }
-
-      rejectDiscoverProviderRequest(request, 'UNSUPPORTED', `Unsupported request method: ${request.method}`);
+      await executeApprovedDiscoverRequest(discoverApproval);
+      setDiscoverApproval(null);
+      setDiscoverApprovalPassword('');
     } catch (unknownError) {
       rejectDiscoverProviderRequest(
-        request,
+        discoverApproval.request,
         'REQUEST_FAILED',
         unknownError instanceof Error ? unknownError.message : 'Unable to approve this request.'
       );
+      setDiscoverApproval(null);
+      setDiscoverApprovalPassword('');
     } finally {
+      setSubmitLoading(false);
+    }
+  }
+
+  async function handleApproveDiscoverRequestWithPassword() {
+    if (!discoverApproval || !discoverWallet) {
+      return;
+    }
+
+    const password = discoverApprovalPassword.trim();
+    if (!password) {
+      setError(`${walletCredentialTitle} is required to approve this dApp request.`);
+      return;
+    }
+
+    setSubmitLoading(true);
+    setError(null);
+
+    try {
+      const valid = await unlockMobileWalletState(walletState, password);
+      if (!valid) {
+        setError(`${walletCredentialTitle} is incorrect.`);
+        return;
+      }
+
+      await executeApprovedDiscoverRequest(discoverApproval);
+      setDiscoverApproval(null);
+      setDiscoverApprovalPassword('');
+    } catch (unknownError) {
+      rejectDiscoverProviderRequest(
+        discoverApproval.request,
+        'REQUEST_FAILED',
+        unknownError instanceof Error ? unknownError.message : 'Unable to approve this request.'
+      );
+      setDiscoverApproval(null);
+      setDiscoverApprovalPassword('');
+    } finally {
+      setSubmitLoading(false);
+    }
+  }
+
+  async function handleApproveDiscoverRequestWithPasskey() {
+    if (!discoverApproval || !discoverWallet || !walletState.passkeyWallet || biometricLoading || submitLoading) {
+      return;
+    }
+
+    setSubmitLoading(true);
+    setBiometricLoading(true);
+    setError(null);
+
+    try {
+      const password = await deriveCurrentPasskeyWalletPassword();
+      const valid = await unlockMobileWalletState(walletState, password);
+      if (!valid) {
+        throw new Error('The passkey-derived wallet secret did not match this local wallet state.');
+      }
+
+      try {
+        await executeApprovedDiscoverRequest(discoverApproval);
+        setDiscoverApproval(null);
+        setDiscoverApprovalPassword('');
+      } catch (unknownError) {
+        rejectDiscoverProviderRequest(
+          discoverApproval.request,
+          'REQUEST_FAILED',
+          unknownError instanceof Error ? unknownError.message : 'Unable to approve this request.'
+        );
+        setDiscoverApproval(null);
+        setDiscoverApprovalPassword('');
+      }
+    } catch (unknownError) {
+      setError(unknownError instanceof Error ? unknownError.message : 'Unable to approve this request with passkey.');
+    } finally {
+      setBiometricLoading(false);
+      setSubmitLoading(false);
+    }
+  }
+
+  async function handleApproveDiscoverRequestWithBiometric() {
+    if (!discoverApproval || !discoverWallet || !walletState.biometricEnabled || !biometricAvailable || biometricLoading || submitLoading) {
+      return;
+    }
+
+    setBiometricLoading(true);
+    setError(null);
+
+    try {
+      const result = await LocalAuthentication.authenticateAsync({
+        promptMessage: 'Verify to approve dApp request',
+        fallbackLabel: biometricFallbackLabel,
+        disableDeviceFallback: false
+      });
+
+      if (!result.success) {
+        setError('Biometric verification was cancelled.');
+        return;
+      }
+
+      setSubmitLoading(true);
+      try {
+        await executeApprovedDiscoverRequest(discoverApproval);
+        setDiscoverApproval(null);
+        setDiscoverApprovalPassword('');
+      } catch (unknownError) {
+        rejectDiscoverProviderRequest(
+          discoverApproval.request,
+          'REQUEST_FAILED',
+          unknownError instanceof Error ? unknownError.message : 'Unable to approve this request.'
+        );
+        setDiscoverApproval(null);
+        setDiscoverApprovalPassword('');
+      }
+    } catch (unknownError) {
+      setError(unknownError instanceof Error ? unknownError.message : 'Unable to approve this request with biometrics.');
+    } finally {
+      setBiometricLoading(false);
       setSubmitLoading(false);
     }
   }
@@ -2191,6 +2379,7 @@ export default function App() {
 
     rejectDiscoverProviderRequest(discoverApproval.request, 'USER_REJECTED', 'The request was rejected.');
     setDiscoverApproval(null);
+    setDiscoverApprovalPassword('');
   }
 
   async function handleCreateWallet() {
@@ -2198,12 +2387,12 @@ export default function App() {
       setError('Confirm that you backed up the recovery phrase.');
       return;
     }
-    if (setupPassword.length < 8) {
-      setError('Use a password with at least 8 characters.');
+    if (!validateMobileWalletCredential(setupPassword, setupCredentialKind)) {
+      setError(setupCredentialInvalidMessage);
       return;
     }
     if (setupPassword !== setupPasswordConfirm) {
-      setError('Passwords do not match.');
+      setError(`${setupCredentialTitle}s do not match.`);
       return;
     }
 
@@ -2214,6 +2403,7 @@ export default function App() {
       const nextState = await createWalletSet({
         mnemonic: generatedMnemonic,
         password: setupPassword,
+        credentialKind: setupCredentialKind,
         source: 'created'
       });
       setWalletState(nextState);
@@ -2286,12 +2476,12 @@ export default function App() {
       setError('Pairing code is required.');
       return;
     }
-    if (setupPassword.length < 8) {
-      setError('Use a password with at least 8 characters.');
+    if (!validateMobileWalletCredential(setupPassword, setupCredentialKind)) {
+      setError(setupCredentialInvalidMessage);
       return;
     }
     if (setupPassword !== setupPasswordConfirm) {
-      setError('Passwords do not match.');
+      setError(`${setupCredentialTitle}s do not match.`);
       return;
     }
 
@@ -2312,12 +2502,14 @@ export default function App() {
           ? await createWalletSet({
               mnemonic: importMnemonic.trim(),
               password: setupPassword,
+              credentialKind: setupCredentialKind,
               source: 'imported-mnemonic'
             })
           : await createPrivateKeyWallet({
               chain: importPrivateKeyChain,
               privateKey: importPrivateKey.trim(),
-              password: setupPassword
+              password: setupPassword,
+              credentialKind: setupCredentialKind
             });
       completed = true;
       setSubmitStatus(null);
@@ -2462,7 +2654,7 @@ export default function App() {
     try {
       const valid = await unlockMobileWalletState(walletState, unlockPassword);
       if (!valid) {
-        setError('Password is incorrect.');
+        setError(`${walletCredentialTitle} is incorrect.`);
         return;
       }
 
@@ -3335,7 +3527,7 @@ export default function App() {
       return;
     }
     if (walletState.passkeyWallet) {
-      setError('This wallet set does not use a user-entered password. Verify with the passkey instead.');
+      setError('This wallet set is backed by a deterministic passkey. Verify with the passkey instead.');
       return;
     }
 
@@ -3355,7 +3547,7 @@ export default function App() {
       setExportVerifiedWalletId(null);
       setExportedPrivateKey(null);
       setExportReveal(false);
-      setError(unknownError instanceof Error ? unknownError.message : 'Unable to verify password for export.');
+      setError(unknownError instanceof Error ? unknownError.message : `Unable to verify ${walletCredentialLabel} for export.`);
     } finally {
       setExportLoading(false);
     }
@@ -3402,7 +3594,7 @@ export default function App() {
     try {
       const result = await LocalAuthentication.authenticateAsync({
         promptMessage: 'Verify to reveal export key',
-        fallbackLabel: 'Use password',
+        fallbackLabel: biometricFallbackLabel,
         disableDeviceFallback: false
       });
 
@@ -3435,7 +3627,7 @@ export default function App() {
       return;
     }
     if (walletState.passkeyWallet) {
-      setError('This wallet set does not use a user-entered password. Verify with the passkey instead.');
+      setError('This wallet set is backed by a deterministic passkey. Verify with the passkey instead.');
       return;
     }
 
@@ -3493,7 +3685,7 @@ export default function App() {
     try {
       const result = await LocalAuthentication.authenticateAsync({
         promptMessage: 'Verify to link a new device',
-        fallbackLabel: 'Use password',
+        fallbackLabel: biometricFallbackLabel,
         disableDeviceFallback: false
       });
 
@@ -3576,7 +3768,7 @@ export default function App() {
     try {
       const result = await LocalAuthentication.authenticateAsync({
         promptMessage: 'Unlock Grape',
-        fallbackLabel: 'Use password',
+        fallbackLabel: biometricFallbackLabel,
         disableDeviceFallback: false
       });
 
@@ -3959,9 +4151,7 @@ export default function App() {
                   {renderPasskeyRecoveryChoices()}
                   {passkeyRecoveryMode === 'passkey-only' ? (
                     <>
-                      <Text style={styles.sectionHint}>
-                        No separate recovery phrase or user-entered password is created in this mode.
-                      </Text>
+                      <Text style={styles.sectionHint}>No separate recovery phrase or user-entered app passcode is created in this mode.</Text>
                       <Pressable style={styles.checkboxRow} onPress={() => setConfirmPasskeyOnlyAccess((value) => !value)}>
                         <Checkbox status={confirmPasskeyOnlyAccess ? 'checked' : 'unchecked'} color={activeTheme.grape} />
                         <Text style={styles.checkboxLabel}>I understand that losing this passkey may permanently lock me out of this wallet.</Text>
@@ -4082,24 +4272,28 @@ export default function App() {
                   <PaperTextInput
                     value={setupPassword}
                     onChangeText={setSetupPassword}
-                    placeholder="Password"
+                    placeholder={setupCredentialTitle}
                     secureTextEntry
                     mode="outlined"
                     style={styles.paperInput}
                     contentStyle={styles.paperInputContent}
                     outlineStyle={styles.paperOutline}
                     textColor={activeTheme.text}
+                    keyboardType="number-pad"
+                    maxLength={MOBILE_WALLET_PASSCODE_LENGTH}
                   />
                   <PaperTextInput
                     value={setupPasswordConfirm}
                     onChangeText={setSetupPasswordConfirm}
-                    placeholder="Confirm password"
+                    placeholder={`Confirm ${setupCredentialLabel}`}
                     secureTextEntry
                     mode="outlined"
                     style={styles.paperInput}
                     contentStyle={styles.paperInputContent}
                     outlineStyle={styles.paperOutline}
                     textColor={activeTheme.text}
+                    keyboardType="number-pad"
+                    maxLength={MOBILE_WALLET_PASSCODE_LENGTH}
                   />
                 </>
               ) : null}
@@ -4195,7 +4389,7 @@ export default function App() {
             <Text style={styles.sectionHint}>
               {walletState.passkeyWallet
                 ? 'Unlock once per session with the same passkey that deterministically recreates this wallet.'
-                : 'Unlock once per session to use your multi-chain wallet on mobile.'}
+                : `Unlock once per session to use your multi-chain wallet on mobile with your ${walletCredentialLabel} or device biometric.`}
             </Text>
             {walletState.passkeyWallet ? (
               <>
@@ -4215,13 +4409,15 @@ export default function App() {
               <PaperTextInput
                 value={unlockPassword}
                 onChangeText={setUnlockPassword}
-                placeholder="Password"
+                placeholder={walletCredentialTitle}
                 secureTextEntry
                 mode="outlined"
                 style={styles.paperInput}
                 contentStyle={styles.paperInputContent}
                 outlineStyle={styles.paperOutline}
                 textColor={activeTheme.text}
+                keyboardType={walletState.credentialKind === 'passcode' ? 'number-pad' : 'default'}
+                maxLength={walletState.credentialKind === 'passcode' ? MOBILE_WALLET_PASSCODE_LENGTH : undefined}
                 right={
                   walletState.biometricEnabled && biometricAvailable ? (
                     <PaperTextInput.Icon
@@ -4259,8 +4455,10 @@ export default function App() {
         <View style={styles.discoverBrowserBar}>
           <View style={styles.discoverBrowserBarPrimary}>
             <View style={styles.discoverHeaderCopy}>
-              <Text style={styles.sectionTitle}>Grape Discover</Text>
-              <Text style={styles.discoverWebviewMeta}>{discoverCurrentUrl || discoverUrl}</Text>
+              <Text style={styles.discoverBrowserTitle}>Grape Discover</Text>
+              <Text style={styles.discoverWebviewMeta} numberOfLines={1} ellipsizeMode="middle">
+                {formatDiscoverUrlDisplay(discoverCurrentUrl || discoverUrl)}
+              </Text>
             </View>
             <View style={styles.discoverBrowserBarActions}>
               <View style={styles.discoverBetaPill}>
@@ -4537,7 +4735,7 @@ export default function App() {
               </Pressable>
               <View style={styles.walletIdentityCopy}>
                 <Text style={styles.cardName}>{selectedWallet?.name ?? '--'}</Text>
-                <Text style={styles.walletIdentityMeta}>{selectedChainMeta.label} · Tap icon to switch</Text>
+                <Text style={styles.walletIdentityMeta}>{selectedChainMeta.label}</Text>
               </View>
             </View>
             <Pressable style={styles.refreshChip} onPress={() => void handleRefreshAssets()}>
@@ -4547,10 +4745,22 @@ export default function App() {
             </Pressable>
           </View>
 
-          <Text style={styles.cardAddress}>{selectedWallet ? shortenAddress(selectedWallet.address) : '--'}</Text>
+          <View style={styles.addressRow}>
+            <Text style={styles.cardAddress}>{selectedWallet ? shortenAddress(selectedWallet.address) : '--'}</Text>
+          </View>
 
           <View style={styles.balanceBlock}>
-            <Text style={styles.cardLabel}>Holdings</Text>
+            <View style={styles.balanceHeaderRow}>
+              <Text style={styles.cardLabel}>Holdings</Text>
+              <Pressable
+                style={[styles.privacyToggleButton, walletState.privacyMode ? styles.privacyToggleButtonActive : null]}
+                onPress={() => void handleSetPrivacyMode(!walletState.privacyMode)}
+                accessibilityRole="button"
+                accessibilityLabel={walletState.privacyMode ? 'Show balances' : 'Hide balances'}
+              >
+                <Feather name={walletState.privacyMode ? 'eye-off' : 'eye'} size={16} color={activeTheme.text} />
+              </Pressable>
+            </View>
             <Text style={styles.cardBalance}>{maskValue(holdingsSummary, walletState.privacyMode)}</Text>
             <Text style={styles.cardSubtle}>{assets.length} asset{assets.length === 1 ? '' : 's'} in this wallet</Text>
           </View>
@@ -4587,48 +4797,39 @@ export default function App() {
 
         {renderSolanaCommunityShortcuts()}
 
-        <Pressable style={styles.discoverPromoCard} onPress={() => setMainTab('discover')}>
-          <View style={styles.discoverPromoCopy}>
-            <Text style={styles.discoverPromoEyebrow}>Grape Discover</Text>
-            <Text style={styles.discoverPromoTitle}>Open Solana apps directly inside Grape.</Text>
-            <Text style={styles.sectionHint}>Connect, sign, and stay in the wallet with a native approval flow.</Text>
+        {chainWallets.length > 1 ? (
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Wallets</Text>
+              <Text style={styles.sectionHint}>{chainWallets.length} on {selectedChainMeta.label}</Text>
+            </View>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.walletSwitchRow}
+            >
+              {chainWallets.map((wallet) => {
+                const active = wallet.id === selectedWallet?.id;
+                return (
+                  <Pressable
+                    key={wallet.id}
+                    style={[styles.walletSwitchChip, active ? styles.walletSwitchChipActive : null]}
+                    onPress={() => void handleSelectWallet(wallet.id, wallet.chain)}
+                  >
+                    <Text style={[styles.walletSwitchChipTitle, active ? styles.walletSwitchChipTitleActive : null]}>
+                      {wallet.name}
+                    </Text>
+                    <Text style={styles.walletSwitchChipAddress}>{shortenAddress(wallet.address)}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
           </View>
-          <View style={styles.discoverPromoGlyph}>
-            <MaterialCommunityIcons name="compass-outline" size={26} color={activeTheme.text} />
-          </View>
-        </Pressable>
+        ) : null}
 
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Wallets</Text>
-            <Text style={styles.sectionHint}>{chainWallets.length} on {selectedChainMeta.label}</Text>
-          </View>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.walletSwitchRow}
-          >
-            {chainWallets.map((wallet) => {
-              const active = wallet.id === selectedWallet?.id;
-              return (
-                <Pressable
-                  key={wallet.id}
-                  style={[styles.walletSwitchChip, active ? styles.walletSwitchChipActive : null]}
-                  onPress={() => void handleSelectWallet(wallet.id, wallet.chain)}
-                >
-                  <Text style={[styles.walletSwitchChipTitle, active ? styles.walletSwitchChipTitleActive : null]}>
-                    {wallet.name}
-                  </Text>
-                  <Text style={styles.walletSwitchChipAddress}>{shortenAddress(wallet.address)}</Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
-        </View>
-
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Holdings</Text>
+            <Text style={styles.sectionTitle}>Assets</Text>
             <Text style={styles.sectionHint}>
               {assetsLoading ? 'Refreshing' : `${assets.length} asset${assets.length === 1 ? '' : 's'}`}
             </Text>
@@ -4684,8 +4885,8 @@ export default function App() {
               <QRCode
                 value={selectedWallet.address}
                 size={220}
-                color="#F8F4FF"
-                backgroundColor="transparent"
+                color="#11131a"
+                backgroundColor="#ffffff"
               />
             </View>
           ) : (
@@ -4698,8 +4899,9 @@ export default function App() {
           <Text style={styles.receiveAddressLabel}>{selectedWallet?.name ?? 'Wallet'}</Text>
           <Text style={styles.receiveAddressValue}>{selectedWallet?.address ?? '--'}</Text>
         </View>
-        <Pressable style={styles.primaryButton} onPress={() => void handleShareAddress()}>
-          <Text style={styles.primaryButtonText}>Share address</Text>
+        <Pressable style={styles.receiveActionButton} onPress={() => void handleShareAddress()}>
+          <Feather name="share-2" size={16} color={activeTheme.text} />
+          <Text style={styles.receiveActionText}>Share address</Text>
         </Pressable>
       </View>
     );
@@ -5581,7 +5783,7 @@ export default function App() {
                 ? 'Biometric on'
                 : 'Biometric off'
               : 'Biometric unavailable'
-          }`,
+          } • ${walletState.dappApprovalMode === 'degen' ? 'Degen mode' : 'Safe mode'}`,
           <>
             <View style={styles.settingsRow}>
               <View style={styles.settingsCopy}>
@@ -5599,7 +5801,9 @@ export default function App() {
               <View style={styles.settingsCopy}>
                 <Text style={styles.settingsTitle}>Biometric unlock</Text>
                 <Text style={styles.sectionHint}>
-                  {biometricAvailable ? 'Unlock the wallet with your device biometric if available.' : 'Biometric unlock is not available on this device.'}
+                  {biometricAvailable
+                    ? `Unlock the wallet with your device biometric instead of entering your ${walletCredentialLabel}.`
+                    : 'Biometric unlock is not available on this device.'}
                 </Text>
               </View>
               <Switch
@@ -5609,6 +5813,40 @@ export default function App() {
                 trackColor={{ true: activeTheme.primaryButton, false: 'rgba(255,255,255,0.16)' }}
                 thumbColor={walletState.biometricEnabled ? '#f7f2ff' : '#d0c0df'}
               />
+            </View>
+            <View style={styles.stack}>
+              <View style={styles.settingsCopy}>
+                <Text style={styles.settingsTitle}>dApp signing mode</Text>
+                <Text style={styles.sectionHint}>
+                  Safe mode re-verifies each Discover signature or transaction. Degen mode uses the unlocked session until you lock the app again.
+                </Text>
+              </View>
+              <View style={styles.dappModeGrid}>
+                {[
+                  {
+                    id: 'safe' as const,
+                    title: 'Safe',
+                    detail: 'Verify each dApp signature or transaction.'
+                  },
+                  {
+                    id: 'degen' as const,
+                    title: 'Degen',
+                    detail: 'Keep signing from the unlocked session.'
+                  }
+                ].map((mode) => {
+                  const active = walletState.dappApprovalMode === mode.id;
+                  return (
+                    <Pressable
+                      key={mode.id}
+                      style={[styles.dappModeCard, active ? styles.dappModeCardActive : null]}
+                      onPress={() => void handleSetDappApprovalMode(mode.id)}
+                    >
+                      <Text style={[styles.dappModeTitle, active ? styles.dappModeTitleActive : null]}>{mode.title}</Text>
+                      <Text style={[styles.dappModeDetail, active ? styles.dappModeDetailActive : null]}>{mode.detail}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
             </View>
           </>
         )}
@@ -5628,21 +5866,23 @@ export default function App() {
           exportedPrivateKey && exportVerifiedWalletId === selectedWallet?.id ? 'Verified for export' : 'Private key export',
           <>
             <Text style={styles.sectionHint}>
-              Export the current wallet private key only if you have a secure destination. A successful passkey, password, or biometric check reveals it immediately.
+              Export the current wallet private key only if you have a secure destination. A successful passkey, {walletCredentialLabel}, or biometric check reveals it immediately.
             </Text>
           {walletState.passkeyWallet ? (
-            <Text style={styles.sectionHint}>This wallet set uses a deterministic passkey instead of a user-entered password on this device.</Text>
+            <Text style={styles.sectionHint}>This wallet set uses a deterministic passkey instead of a user-entered app secret on this device.</Text>
           ) : (
             <PaperTextInput
               value={exportPassword}
               onChangeText={setExportPassword}
-              placeholder="Password"
+              placeholder={walletCredentialTitle}
               secureTextEntry
               mode="outlined"
               style={styles.paperInput}
               contentStyle={styles.paperInputContent}
               outlineStyle={styles.paperOutline}
               textColor={activeTheme.text}
+              keyboardType={walletState.credentialKind === 'passcode' ? 'number-pad' : 'default'}
+              maxLength={walletState.credentialKind === 'passcode' ? MOBILE_WALLET_PASSCODE_LENGTH : undefined}
               right={
                 walletState.biometricEnabled && biometricAvailable ? (
                   <PaperTextInput.Icon
@@ -5664,7 +5904,7 @@ export default function App() {
               disabled={exportLoading || !selectedWallet || (walletState.passkeyWallet ? !passkeyAvailable : !exportPassword.trim())}
               onPress={() => void (walletState.passkeyWallet ? handleVerifyExportWithPasskey() : handleVerifyExportPassword())}
             >
-              {exportLoading ? 'Checking...' : walletState.passkeyWallet ? 'Reveal with passkey' : 'Reveal with password'}
+              {exportLoading ? 'Checking...' : walletState.passkeyWallet ? 'Reveal with passkey' : `Reveal with ${walletCredentialLabel}`}
             </PaperButton>
             {walletState.passkeyWallet && walletState.biometricEnabled && biometricAvailable ? (
               <PaperButton
@@ -5713,7 +5953,7 @@ export default function App() {
               disabled={deviceLinkLoading || !selectedWallet || (walletState.passkeyWallet ? !passkeyAvailable : !exportPassword.trim())}
               onPress={() => void (walletState.passkeyWallet ? handleCreateDeviceLinkWithPasskey() : handleCreateDeviceLinkWithPassword())}
             >
-              {deviceLinkLoading ? 'Creating...' : walletState.passkeyWallet ? 'Link with passkey' : 'Link with password'}
+              {deviceLinkLoading ? 'Creating...' : walletState.passkeyWallet ? 'Link with passkey' : `Link with ${walletCredentialLabel}`}
             </PaperButton>
             {walletState.biometricEnabled && biometricAvailable ? (
               <PaperButton
@@ -6257,24 +6497,28 @@ export default function App() {
                   <PaperTextInput
                     value={setupPassword}
                     onChangeText={setSetupPassword}
-                    placeholder="Password"
+                    placeholder={setupCredentialTitle}
                     secureTextEntry
                     mode="outlined"
                     style={styles.paperInput}
                     contentStyle={styles.paperInputContent}
                     outlineStyle={styles.paperOutline}
                     textColor={activeTheme.text}
+                    keyboardType="number-pad"
+                    maxLength={MOBILE_WALLET_PASSCODE_LENGTH}
                   />
                   <PaperTextInput
                     value={setupPasswordConfirm}
                     onChangeText={setSetupPasswordConfirm}
-                    placeholder="Confirm password"
+                    placeholder={`Confirm ${setupCredentialLabel}`}
                     secureTextEntry
                     mode="outlined"
                     style={styles.paperInput}
                     contentStyle={styles.paperInputContent}
                     outlineStyle={styles.paperOutline}
                     textColor={activeTheme.text}
+                    keyboardType="number-pad"
+                    maxLength={MOBILE_WALLET_PASSCODE_LENGTH}
                   />
                 </>
               ) : null}
@@ -6353,7 +6597,7 @@ export default function App() {
           'Session',
           unlocked ? 'Unlocked' : 'Locked',
           <>
-            <Text style={styles.sectionHint}>Lock the app and require password unlock again.</Text>
+            <Text style={styles.sectionHint}>Lock the app and require {walletCredentialLabel} unlock again.</Text>
             <Pressable style={styles.secondaryButton} onPress={handleLock}>
               <Text style={styles.secondaryButtonText}>Lock wallet</Text>
             </Pressable>
@@ -6542,6 +6786,14 @@ export default function App() {
                   <Text style={styles.exportSecretLabel}>Wallet</Text>
                   <Text style={styles.settingsMono}>{discoverWallet ? `${discoverWallet.name} • ${discoverWallet.address}` : 'No Solana wallet selected'}</Text>
                 </View>
+                {discoverApprovalRequiresReauth ? (
+                  <View style={styles.exportSecretCard}>
+                    <Text style={styles.exportSecretLabel}>Signing mode</Text>
+                    <Text style={styles.sectionHint}>
+                      Safe mode is on. Verify this dApp request before Grape signs or sends anything from your wallet.
+                    </Text>
+                  </View>
+                ) : null}
                 {discoverApproval.request.method === 'connect' ? (
                   <Pressable
                     style={styles.checkboxRow}
@@ -6555,20 +6807,78 @@ export default function App() {
                     <Text style={styles.checkboxLabel}>Trust this site for future connects</Text>
                   </Pressable>
                 ) : null}
+                {discoverApprovalRequiresReauth && !walletState.passkeyWallet ? (
+                  <PaperTextInput
+                    value={discoverApprovalPassword}
+                    onChangeText={setDiscoverApprovalPassword}
+                    placeholder={`Enter wallet ${walletCredentialLabel}`}
+                    mode="outlined"
+                    style={styles.paperInput}
+                    contentStyle={styles.paperInputContent}
+                    outlineStyle={styles.paperOutline}
+                    textColor={activeTheme.text}
+                    secureTextEntry
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    keyboardType={walletState.credentialKind === 'passcode' ? 'number-pad' : 'default'}
+                    maxLength={walletState.credentialKind === 'passcode' ? MOBILE_WALLET_PASSCODE_LENGTH : undefined}
+                    onSubmitEditing={() => void handleApproveDiscoverRequestWithPassword()}
+                  />
+                ) : null}
+                {discoverApprovalRequiresReauth && walletState.passkeyWallet && !passkeyAvailable && passkeyUnavailableMessage ? (
+                  <Text style={styles.sectionHint}>{passkeyUnavailableMessage}</Text>
+                ) : null}
                 <View style={styles.walletToolsRow}>
                   <PaperButton mode="outlined" style={[styles.paperSecondaryButton, styles.walletToolButton]} onPress={handleRejectDiscoverRequest}>
                     Reject
                   </PaperButton>
-                  <PaperButton
-                    mode="contained"
-                    style={[styles.paperPrimaryButton, styles.walletToolButton]}
-                    buttonColor={activeTheme.primaryButton}
-                    textColor={activeTheme.primaryButtonText}
-                    disabled={submitLoading}
-                    onPress={() => void handleApproveDiscoverRequest()}
-                  >
-                    {submitLoading ? 'Approving...' : 'Approve'}
-                  </PaperButton>
+                  {discoverApprovalRequiresReauth ? (
+                    <>
+                      {walletState.biometricEnabled && biometricAvailable && !walletState.passkeyWallet ? (
+                        <PaperButton
+                          mode="outlined"
+                          style={[styles.paperSecondaryButton, styles.walletToolButton]}
+                          disabled={submitLoading || biometricLoading}
+                          onPress={() => void handleApproveDiscoverRequestWithBiometric()}
+                        >
+                          {biometricLoading ? 'Checking...' : 'Approve with biometrics'}
+                        </PaperButton>
+                      ) : null}
+                      <PaperButton
+                        mode="contained"
+                        style={[styles.paperPrimaryButton, styles.walletToolButton]}
+                        buttonColor={activeTheme.primaryButton}
+                        textColor={activeTheme.primaryButtonText}
+                        disabled={
+                          submitLoading ||
+                          biometricLoading ||
+                          (walletState.passkeyWallet ? !passkeyAvailable : !discoverApprovalPassword.trim())
+                        }
+                        onPress={() =>
+                          void (walletState.passkeyWallet
+                            ? handleApproveDiscoverRequestWithPasskey()
+                            : handleApproveDiscoverRequestWithPassword())
+                        }
+                      >
+                        {submitLoading || biometricLoading
+                          ? 'Approving...'
+                          : walletState.passkeyWallet
+                            ? 'Approve with passkey'
+                            : `Approve with ${walletCredentialLabel}`}
+                      </PaperButton>
+                    </>
+                  ) : (
+                    <PaperButton
+                      mode="contained"
+                      style={[styles.paperPrimaryButton, styles.walletToolButton]}
+                      buttonColor={activeTheme.primaryButton}
+                      textColor={activeTheme.primaryButtonText}
+                      disabled={submitLoading}
+                      onPress={() => void handleApproveDiscoverRequest()}
+                    >
+                      {submitLoading ? 'Approving...' : 'Approve'}
+                    </PaperButton>
+                  )}
                 </View>
               </View>
             ) : null}
@@ -6654,7 +6964,7 @@ export default function App() {
                     return (
                       <Pressable
                         key={asset.id}
-                        style={[styles.assetRow, active ? styles.assetRowActive : null]}
+                        style={[styles.assetRow, styles.pickerAssetRow, active ? styles.assetRowActive : null, active ? styles.pickerAssetRowActive : null]}
                         onPress={() => {
                           setSendAssetId(asset.id);
                           setSendAssetPickerVisible(false);
@@ -6714,7 +7024,7 @@ export default function App() {
                     return (
                       <Pressable
                         key={asset.id}
-                        style={[styles.assetRow, active ? styles.assetRowActive : null]}
+                        style={[styles.assetRow, styles.pickerAssetRow, active ? styles.assetRowActive : null, active ? styles.pickerAssetRowActive : null]}
                         onPress={() => {
                           setSwapInputAssetId(asset.id);
                           if (swapOutputAssetId === asset.id) {
@@ -6779,7 +7089,7 @@ export default function App() {
                       return (
                         <Pressable
                           key={asset.id}
-                          style={[styles.assetRow, active ? styles.assetRowActive : null]}
+                          style={[styles.assetRow, styles.pickerAssetRow, active ? styles.assetRowActive : null, active ? styles.pickerAssetRowActive : null]}
                           onPress={() => {
                             setSwapOutputAssetId(asset.id);
                             setSwapQuote(null);
@@ -6868,6 +7178,31 @@ export default function App() {
 }
 
 function createStyles(palette: MobileThemePalette) {
+  const isAndroid = Platform.OS === 'android';
+  const pickerModalBackground =
+    isAndroid
+      ? palette.id === 'apple'
+        ? 'rgba(20, 24, 32, 0.98)'
+        : palette.id === 'champagne'
+          ? 'rgba(255, 248, 240, 0.99)'
+          : 'rgba(12, 8, 20, 0.98)'
+      : palette.panel;
+  const pickerRowBackground =
+    isAndroid
+      ? palette.id === 'apple'
+        ? 'rgba(255,255,255,0.14)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.9)'
+          : 'rgba(255,255,255,0.1)'
+      : undefined;
+  const pickerRowActiveBackground =
+    isAndroid
+      ? palette.id === 'apple'
+        ? 'rgba(255,255,255,0.18)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.96)'
+          : 'rgba(255,255,255,0.15)'
+      : undefined;
   return StyleSheet.create({
   safe: {
     flex: 1,
@@ -7358,9 +7693,9 @@ function createStyles(palette: MobileThemePalette) {
     backgroundColor: palette.panel,
     borderColor: palette.panelBorder,
     borderWidth: 1,
-    borderRadius: 36,
-    padding: 24,
-    gap: 18,
+    borderRadius: 32,
+    padding: 20,
+    gap: 14,
     shadowColor: '#000',
     shadowOpacity: palette.id === 'apple' || palette.id === 'champagne' ? 0 : 0.26,
     shadowRadius: palette.id === 'apple' || palette.id === 'champagne' ? 0 : 28,
@@ -7407,7 +7742,7 @@ function createStyles(palette: MobileThemePalette) {
   },
   walletIdentityMeta: {
     color: palette.muted,
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '600'
   },
   cardTopRow: {
@@ -7416,9 +7751,9 @@ function createStyles(palette: MobileThemePalette) {
     alignItems: 'center'
   },
   refreshChip: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: palette.id === 'apple' ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.08)',
     borderWidth: 1,
     borderColor:
@@ -7452,41 +7787,76 @@ function createStyles(palette: MobileThemePalette) {
   },
   cardName: {
     color: palette.text,
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: '800'
+  },
+  addressRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12
   },
   cardAddress: {
     color: palette.text,
-    fontSize: 31,
-    fontWeight: '900',
-    textAlign: 'center',
-    letterSpacing: -0.3
+    fontSize: 20,
+    fontWeight: '800',
+    letterSpacing: -0.2,
+    flex: 1
   },
   balanceBlock: {
-    gap: 6
+    gap: 4
+  },
+  balanceHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10
   },
   cardBalance: {
     color: palette.text,
-    fontSize: 34,
+    fontSize: 30,
     fontWeight: '800'
   },
   cardSubtle: {
     color: palette.muted,
-    fontSize: 14,
+    fontSize: 13,
     flexShrink: 1
+  },
+  privacyToggleButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: palette.panelBorder,
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.08)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.72)'
+          : 'rgba(255,255,255,0.06)'
+  },
+  privacyToggleButtonActive: {
+    borderColor: palette.primaryButton,
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.14)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.88)'
+          : 'rgba(255,255,255,0.12)'
   },
   quickActionsRow: {
     flexDirection: 'row',
-    gap: 10,
+    gap: 8,
     flexWrap: 'nowrap'
   },
   quickActionButton: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
-    borderRadius: 22,
-    paddingVertical: 15,
+    gap: 5,
+    borderRadius: 18,
+    paddingVertical: 12,
     backgroundColor:
       palette.id === 'apple'
         ? 'rgba(255,255,255,0.09)'
@@ -7505,9 +7875,9 @@ function createStyles(palette: MobileThemePalette) {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
-    borderRadius: 22,
-    paddingVertical: 15,
+    gap: 5,
+    borderRadius: 18,
+    paddingVertical: 12,
     backgroundColor:
       palette.id === 'apple'
         ? 'rgba(255,255,255,0.06)'
@@ -7522,54 +7892,13 @@ function createStyles(palette: MobileThemePalette) {
   },
   quickActionLabel: {
     color: palette.text,
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '700'
   },
   quickActionLabelMuted: {
     color: palette.muted,
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '700'
-  },
-  discoverPromoCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 16,
-    padding: 18,
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: palette.panelBorder,
-    backgroundColor:
-      palette.id === 'apple'
-        ? 'rgba(255,255,255,0.1)'
-        : palette.id === 'champagne'
-          ? 'rgba(255,255,255,0.76)'
-          : 'rgba(255,255,255,0.06)'
-  },
-  discoverPromoCopy: {
-    flex: 1,
-    gap: 4
-  },
-  discoverPromoEyebrow: {
-    color: palette.grape,
-    fontSize: 12,
-    fontWeight: '800',
-    letterSpacing: 1.2,
-    textTransform: 'uppercase'
-  },
-  discoverPromoTitle: {
-    color: palette.text,
-    fontSize: 18,
-    fontWeight: '900'
-  },
-  discoverPromoGlyph: {
-    width: 54,
-    height: 54,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: palette.panelBorder,
-    backgroundColor: 'rgba(255,255,255,0.08)'
   },
   discoverScreen: {
     flex: 1,
@@ -7579,9 +7908,9 @@ function createStyles(palette: MobileThemePalette) {
   },
   discoverBrowserBar: {
     paddingHorizontal: 14,
-    paddingBottom: 14,
-    paddingTop: Platform.OS === 'android' ? 36 : 20,
-    borderRadius: 24,
+    paddingBottom: 10,
+    paddingTop: Platform.OS === 'android' ? 28 : 16,
+    borderRadius: 22,
     borderWidth: 1,
     borderColor: palette.panelBorder,
     backgroundColor:
@@ -7590,18 +7919,18 @@ function createStyles(palette: MobileThemePalette) {
         : palette.id === 'champagne'
           ? 'rgba(255,255,255,0.76)'
           : 'rgba(255,255,255,0.06)',
-    gap: 12
+    gap: 10
   },
   discoverBrowserBarPrimary: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 12
+    gap: 10
   },
   discoverBrowserBarActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8
+    gap: 6
   },
   discoverHeaderRow: {
     flexDirection: 'row',
@@ -7611,11 +7940,16 @@ function createStyles(palette: MobileThemePalette) {
   },
   discoverHeaderCopy: {
     flex: 1,
-    gap: 4
+    gap: 2
+  },
+  discoverBrowserTitle: {
+    color: palette.text,
+    fontSize: 17,
+    fontWeight: '800'
   },
   discoverBetaPill: {
-    paddingHorizontal: 10,
-    paddingVertical: 7,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
     borderRadius: 999,
     backgroundColor: 'rgba(139,247,198,0.12)',
     borderWidth: 1,
@@ -7623,7 +7957,7 @@ function createStyles(palette: MobileThemePalette) {
   },
   discoverBetaPillText: {
     color: palette.mint,
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '800'
   },
   discoverEmptyCard: {
@@ -7643,7 +7977,7 @@ function createStyles(palette: MobileThemePalette) {
   discoverToolbar: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10
+    gap: 8
   },
   discoverAddressInput: {
     flex: 1,
@@ -7654,13 +7988,13 @@ function createStyles(palette: MobileThemePalette) {
   },
   discoverControls: {
     flexDirection: 'row',
-    gap: 10,
-    marginTop: 12
+    gap: 8,
+    marginTop: 10
   },
   discoverControlButton: {
-    width: 42,
-    height: 42,
-    borderRadius: 14,
+    width: 38,
+    height: 38,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
@@ -7710,7 +8044,8 @@ function createStyles(palette: MobileThemePalette) {
   },
   discoverWebviewMeta: {
     color: palette.muted,
-    fontSize: 12
+    fontSize: 11,
+    lineHeight: 14
   },
   discoverInlineError: {
     paddingHorizontal: 16,
@@ -8078,7 +8413,7 @@ function createStyles(palette: MobileThemePalette) {
     borderRadius: 28,
     borderWidth: 1,
     borderColor: palette.panelBorder,
-    backgroundColor: palette.panel,
+    backgroundColor: pickerModalBackground,
     maxHeight: '76%'
   },
   chainPickerModal: {
@@ -8103,6 +8438,12 @@ function createStyles(palette: MobileThemePalette) {
   },
   sendAssetPickerList: {
     marginTop: 14
+  },
+  pickerAssetRow: {
+    backgroundColor: pickerRowBackground
+  },
+  pickerAssetRowActive: {
+    backgroundColor: pickerRowActiveBackground
   },
   routePicker: {
     gap: 10,
@@ -8388,14 +8729,14 @@ function createStyles(palette: MobileThemePalette) {
   qrCard: {
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 18,
+    padding: 16,
     borderRadius: 28,
     backgroundColor:
       palette.id === 'apple'
-        ? 'rgba(255,255,255,0.09)'
+        ? 'rgba(255,255,255,0.08)'
         : palette.id === 'champagne'
-          ? 'rgba(255,255,255,0.72)'
-          : 'rgba(255,255,255,0.05)',
+          ? 'rgba(255,255,255,0.66)'
+          : 'rgba(255,255,255,0.04)',
     borderWidth: 1,
     borderColor: palette.panelBorder
   },
@@ -8405,8 +8746,8 @@ function createStyles(palette: MobileThemePalette) {
     justifyContent: 'center',
     backgroundColor: '#ffffff',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.06)',
-    padding: 16
+    borderColor: 'rgba(17,19,26,0.08)',
+    padding: 18
   },
   qrPlaceholder: {
     width: 220,
@@ -8420,6 +8761,28 @@ function createStyles(palette: MobileThemePalette) {
   },
   qrPlaceholderText: {
     color: palette.muted,
+    fontSize: 14,
+    fontWeight: '700'
+  },
+  receiveActionButton: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    minHeight: 40,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: palette.panelBorder,
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.08)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.7)'
+          : 'rgba(255,255,255,0.05)'
+  },
+  receiveActionText: {
+    color: palette.text,
     fontSize: 14,
     fontWeight: '700'
   },
@@ -8694,6 +9057,49 @@ function createStyles(palette: MobileThemePalette) {
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 12
+  },
+  dappModeGrid: {
+    flexDirection: 'row',
+    gap: 10
+  },
+  dappModeCard: {
+    flex: 1,
+    gap: 6,
+    padding: 14,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: palette.panelBorder,
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.08)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.72)'
+          : 'rgba(255,255,255,0.04)'
+  },
+  dappModeCardActive: {
+    borderColor: palette.primaryButton,
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.14)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.88)'
+          : 'rgba(255,255,255,0.1)'
+  },
+  dappModeTitle: {
+    color: palette.text,
+    fontSize: 15,
+    fontWeight: '800'
+  },
+  dappModeTitleActive: {
+    color: palette.text
+  },
+  dappModeDetail: {
+    color: palette.muted,
+    fontSize: 13,
+    lineHeight: 18
+  },
+  dappModeDetailActive: {
+    color: palette.text
   },
   themeGrid: {
     flexDirection: 'row',

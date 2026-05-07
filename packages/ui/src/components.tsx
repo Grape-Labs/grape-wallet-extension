@@ -68,15 +68,22 @@ export function KeyValueRow(props: { label: string; value: React.ReactNode }) {
   );
 }
 
-export function MnemonicGrid(props: { words: string[] }) {
+export function MnemonicGrid(props: { words: string[]; totalWords?: number; emptyLabel?: string }) {
+  const totalWords = Math.max(props.totalWords ?? props.words.length, props.words.length);
+
   return (
     <ol className="mnemonic-grid">
-      {props.words.map((word, index) => (
-        <li key={`${word}-${index}`}>
-          <span className="muted">{index + 1}</span>
-          <strong>{word}</strong>
-        </li>
-      ))}
+      {Array.from({ length: totalWords }, (_, index) => {
+        const word = props.words[index] ?? '';
+        const empty = !word;
+
+        return (
+          <li key={`${word || 'empty'}-${index}`} className={empty ? 'empty' : undefined}>
+            <span className="muted">{index + 1}</span>
+            <strong>{word || props.emptyLabel || '—'}</strong>
+          </li>
+        );
+      })}
     </ol>
   );
 }
