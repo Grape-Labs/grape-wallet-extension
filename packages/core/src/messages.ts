@@ -440,6 +440,10 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     enabled: z.boolean()
   }),
   z.object({
+    type: z.literal('wallet_set_auto_connect'),
+    enabled: z.boolean()
+  }),
+  z.object({
     type: z.literal('wallet_set_dapp_approval_mode'),
     mode: z.enum(['safe', 'degen'])
   }),

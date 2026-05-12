@@ -1289,6 +1289,7 @@ function PopupPage() {
   const [incidentError, setIncidentError] = useState<string | null>(null);
   const [unlockWelcomeMenuOpen, setUnlockWelcomeMenuOpen] = useState(false);
   const [walletSwitcherOpen, setWalletSwitcherOpen] = useState(false);
+  const [walletSwitcherChain, setWalletSwitcherChain] = useState<WalletStateResponse['wallet']['selectedChain']>('solana');
   const [walletMenuOpen, setWalletMenuOpen] = useState(false);
   const [copiedWalletId, setCopiedWalletId] = useState<string | null>(null);
   const [incidentOptions, setIncidentOptions] = useState({
@@ -1358,6 +1359,14 @@ function PopupPage() {
   const setPrivacyMode = async (enabled: boolean) => {
     await sendRuntimeMessage({
       type: 'wallet_set_privacy_mode',
+      enabled
+    });
+    await refresh();
+  };
+
+  const setAutoConnect = async (enabled: boolean) => {
+    await sendRuntimeMessage({
+      type: 'wallet_set_auto_connect',
       enabled
     });
     await refresh();
@@ -1534,6 +1543,23 @@ function PopupPage() {
       setView('home');
     }
   }, [selectedChainValue, view]);
+
+  useEffect(() => {
+    const walletEntries = state?.wallet.wallets ?? [];
+    const availableChains = VISIBLE_CHAIN_OPTIONS.filter((chain) =>
+      walletEntries.some((walletEntry) => walletEntry.chain === chain.id)
+    );
+    if (availableChains.length === 0) {
+      return;
+    }
+
+    const defaultChain = availableChains.some((chain) => chain.id === selectedChainValue)
+      ? selectedChainValue
+      : availableChains[0].id;
+    if (!availableChains.some((chain) => chain.id === walletSwitcherChain) || (!walletSwitcherOpen && walletSwitcherChain !== defaultChain)) {
+      setWalletSwitcherChain(defaultChain);
+    }
+  }, [selectedChainValue, state?.wallet.wallets, walletSwitcherChain, walletSwitcherOpen]);
 
   useEffect(() => {
     if (selectedChainValue !== 'ethereum' && selectedChainValue !== 'monad') {
@@ -2849,6 +2875,7 @@ function PopupPage() {
       setup: 'empty',
       wallets: [],
       selectedTheme: 'grape',
+      autoConnectEnabled: true,
       dappApprovalMode: 'safe',
       privacyMode: false,
       trackedReputationSpaceIds: [],
@@ -3929,6 +3956,17 @@ function PopupPage() {
   }
 
   function renderWalletSwitcher() {
+    const availableChains = VISIBLE_CHAIN_OPTIONS.filter((chain) =>
+      wallet.wallets.some((walletEntry) => walletEntry.chain === chain.id)
+    );
+    const visibleChain = availableChains.find((chain) => chain.id === walletSwitcherChain) ?? availableChains[0];
+    const walletCountByChain = new Map(
+      availableChains.map((chain) => [
+        chain.id,
+        wallet.wallets.filter((walletEntry) => walletEntry.chain === chain.id).length
+      ])
+    );
+    const selectedWalletIdForVisibleChain = visibleChain ? getSelectedWalletIdForChain(wallet, visibleChain.id) : undefined;
     const groupedWallets = [
       { key: 'hardware', label: 'Hardware Wallets' },
       { key: 'imported', label: 'Imported Wallets' },
@@ -3938,7 +3976,8 @@ function PopupPage() {
       .map((group) => ({
         ...group,
         wallets: wallet.wallets.filter(
-          (walletEntry) => getWalletGroupKey(walletEntry.source, walletEntry.signer.kind) === group.key
+          (walletEntry) =>
+            walletEntry.chain === visibleChain?.id && getWalletGroupKey(walletEntry.source, walletEntry.signer.kind) === group.key
         )
       }))
       .filter((group) => group.wallets.length > 0);
@@ -3958,6 +3997,35 @@ function PopupPage() {
         <DropdownMenu.Portal>
           <DropdownMenu.Content sideOffset={8} align="end" className="popup-menu-content wallet-switcher-menu">
             <div className="popup-menu-section">Wallets</div>
+            {availableChains.length > 1 ? (
+              <div className="wallet-switcher-chain-tabs" role="tablist" aria-label="Wallet chains">
+                {availableChains.map((chain) => {
+                  const active = visibleChain?.id === chain.id;
+                  return (
+                    <button
+                      key={chain.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={active}
+                      className={`wallet-switcher-chain-tab ${active ? 'active' : ''}`.trim()}
+                      title={chain.label}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setWalletSwitcherChain(chain.id);
+                      }}
+                    >
+                      <span className="wallet-switcher-chain-copy">
+                        <span className="wallet-switcher-chain-code" aria-hidden="true">
+                          {chain.shortLabel}
+                        </span>
+                      </span>
+                      <span className="wallet-switcher-chain-count">{walletCountByChain.get(chain.id) ?? 0}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
             {groupedWallets.map((group) => (
               <div key={group.key} className="wallet-menu-group">
                 <div className="wallet-menu-group-label">{group.label}</div>
@@ -3966,7 +4034,7 @@ function PopupPage() {
                     const walletPublicKey =
                       walletEntry.accounts.find((account) => account.id === walletEntry.selectedAccountId)?.publicKey ??
                       walletEntry.accounts[0]?.publicKey;
-                    const isActiveWallet = selectedWalletIdForChain === walletEntry.id;
+                    const isActiveWallet = selectedWalletIdForVisibleChain === walletEntry.id;
                     const sourceBadge = getWalletSourceBadge(walletEntry.source, walletEntry.signer.kind);
 
                     return (
@@ -3980,9 +4048,6 @@ function PopupPage() {
                           <div className="wallet-menu-copy">
                             <div className="wallet-menu-heading">
                               <strong>{walletEntry.name}</strong>
-                              <span className="wallet-chain-badge" title={`${walletEntry.chain} wallet`}>
-                                {walletEntry.chain === 'sui' ? 'SUI' : walletEntry.chain === 'monad' ? 'MON' : walletEntry.chain === 'ethereum' ? 'ETH' : 'SOL'}
-                              </span>
                               <span
                                 className={`wallet-source-badge ${sourceBadge.tone}`.trim()}
                                 title={sourceBadge.label}
@@ -5808,6 +5873,17 @@ function PopupPage() {
               <span>
                 <strong>Privacy mode</strong>
                 <small className="muted">Hide portfolio values and token balances with ***</small>
+              </span>
+            </label>
+            <label className="incident-toggle compact-settings-toggle">
+              <input
+                type="checkbox"
+                checked={wallet.autoConnectEnabled}
+                onChange={(event) => void setAutoConnect(event.target.checked)}
+              />
+              <span>
+                <strong>Auto-connect trusted dApps</strong>
+                <small className="muted">Reconnect approved sites automatically until you close the page or disconnect.</small>
               </span>
             </label>
             <div className="stack">

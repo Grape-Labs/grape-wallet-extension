@@ -25,6 +25,7 @@ describe('wallet state', () => {
     expect(state.chainState.sui.selectedNetwork).toBe('mainnet-beta');
     expect(state.chainState.monad.selectedNetwork).toBe('mainnet-beta');
     expect(state.chainState.ethereum.selectedNetwork).toBe('mainnet-beta');
+    expect(state.autoConnectEnabled).toBe(true);
   });
 
   it('migrates wallet profiles without recipients', () => {
@@ -48,6 +49,7 @@ describe('wallet state', () => {
       ],
       selectedWalletId: 'wallet-1',
       selectedNetwork: 'devnet',
+      autoConnectEnabled: false,
       privacyMode: false,
       customRpcUrls: {},
       idleTimeoutMs: 1_000
@@ -55,6 +57,7 @@ describe('wallet state', () => {
 
     expect(migrated.wallets[0]?.recentRecipients).toEqual([]);
     expect(migrated.selectedTheme).toBe('grape');
+    expect(migrated.autoConnectEnabled).toBe(false);
   });
 
   it('stores recent recipients uniquely and most-recent-first', () => {
@@ -186,6 +189,7 @@ describe('wallet state', () => {
         selectedWalletId: 'wallet-1',
         selectedNetwork: 'devnet',
         selectedTheme: 'aurora',
+        autoConnectEnabled: true,
         dappApprovalMode: 'safe',
         privacyMode: false,
         customRpcUrls: {},
@@ -248,6 +252,7 @@ describe('wallet state', () => {
         selectedWalletId: 'wallet-1',
         selectedNetwork: 'devnet',
         selectedTheme: 'aurora',
+        autoConnectEnabled: true,
         dappApprovalMode: 'safe',
         privacyMode: false,
         customRpcUrls: {},

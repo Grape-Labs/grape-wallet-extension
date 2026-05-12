@@ -135,6 +135,7 @@ export type WalletState = {
   selectedWalletId?: string;
   selectedNetwork: GrapeNetwork;
   selectedTheme: GrapeTheme;
+  autoConnectEnabled: boolean;
   dappApprovalMode: DappApprovalMode;
   privacyMode: boolean;
   customRpcUrls: Partial<Record<GrapeNetwork, string>>;
@@ -155,6 +156,7 @@ export type LegacyWalletState = {
   chainState?: Partial<WalletState['chainState']>;
   selectedNetwork?: GrapeNetwork;
   selectedTheme?: GrapeTheme;
+  autoConnectEnabled?: boolean;
   dappApprovalMode?: DappApprovalMode;
   privacyMode?: boolean;
   customRpcUrls?: Partial<Record<GrapeNetwork, string>>;
@@ -169,6 +171,7 @@ export type SessionState = {
 export const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 export const MAX_RECENT_RECIPIENTS = 8;
 export const DEFAULT_THEME: GrapeTheme = 'grape';
+export const DEFAULT_AUTO_CONNECT_ENABLED = true;
 export const DEFAULT_DAPP_APPROVAL_MODE: DappApprovalMode = 'safe';
 export const DEFAULT_CHAIN: GrapeChain = 'solana';
 
@@ -225,6 +228,7 @@ export function createEmptyWalletState(): WalletState {
     },
     selectedNetwork: 'mainnet-beta',
     selectedTheme: DEFAULT_THEME,
+    autoConnectEnabled: DEFAULT_AUTO_CONNECT_ENABLED,
     dappApprovalMode: DEFAULT_DAPP_APPROVAL_MODE,
     privacyMode: false,
     customRpcUrls: {},
@@ -367,6 +371,7 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
       selectedWalletId: selectedWalletId ?? selectedWalletIds.solana ?? normalizedWallets.find((wallet) => wallet.chain === 'solana')?.id,
       selectedNetwork: chainState.solana.selectedNetwork,
       selectedTheme: normalizeTheme(input.selectedTheme),
+      autoConnectEnabled: input.autoConnectEnabled ?? DEFAULT_AUTO_CONNECT_ENABLED,
       dappApprovalMode: normalizeDappApprovalMode(input.dappApprovalMode),
       privacyMode: input.privacyMode ?? false,
       customRpcUrls: chainState.solana.customRpcUrls,
@@ -417,6 +422,7 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
       selectedWalletId: 'wallet-1',
       selectedNetwork: input.selectedNetwork ?? 'mainnet-beta',
       selectedTheme: normalizeTheme(input.selectedTheme),
+      autoConnectEnabled: input.autoConnectEnabled ?? DEFAULT_AUTO_CONNECT_ENABLED,
       dappApprovalMode: normalizeDappApprovalMode(input.dappApprovalMode),
       privacyMode: input.privacyMode ?? false,
       customRpcUrls: normalizeCustomRpcUrls(input.customRpcUrls),
@@ -436,6 +442,7 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
     chainState: normalizeChainState(input.chainState, input.selectedNetwork, input.customRpcUrls),
     selectedNetwork: input.selectedNetwork ?? 'mainnet-beta',
     selectedTheme: normalizeTheme(input.selectedTheme),
+    autoConnectEnabled: input.autoConnectEnabled ?? DEFAULT_AUTO_CONNECT_ENABLED,
     dappApprovalMode: normalizeDappApprovalMode(input.dappApprovalMode),
     privacyMode: input.privacyMode ?? false,
     customRpcUrls: normalizeCustomRpcUrls(input.customRpcUrls),

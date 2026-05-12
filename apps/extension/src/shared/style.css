@@ -1995,6 +1995,74 @@ body[data-surface='panel'] .popup-menu-content {
   letter-spacing: 0.08em;
 }
 
+.wallet-switcher-chain-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.wallet-switcher-chain-tab {
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--theme-divider) 90%, transparent);
+  border-radius: 999px;
+  padding: 7px 10px;
+  background: color-mix(in srgb, var(--theme-surface-strong) 98.5%, transparent);
+  color: inherit;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: pointer;
+  transition: background-color 160ms ease, border-color 160ms ease, transform 160ms ease;
+}
+
+.wallet-switcher-chain-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wallet-switcher-chain-code {
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--theme-text);
+}
+
+.wallet-switcher-chain-count {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--theme-subtle);
+  background: color-mix(in srgb, var(--theme-surface-soft) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-divider) 84%, transparent);
+}
+
+.wallet-switcher-chain-tab.active {
+  background: color-mix(in srgb, var(--theme-accent-soft) 78%, var(--theme-surface-strong));
+  border-color: color-mix(in srgb, var(--theme-accent) 34%, transparent);
+}
+
+.wallet-switcher-chain-tab.active .wallet-switcher-chain-count {
+  color: var(--theme-accent);
+  border-color: color-mix(in srgb, var(--theme-accent) 24%, transparent);
+  background: color-mix(in srgb, var(--theme-accent-soft) 58%, transparent);
+}
+
+.wallet-switcher-chain-tab:hover,
+.wallet-switcher-chain-tab:focus-visible {
+  outline: none;
+  transform: translateY(-1px);
+  background: color-mix(in srgb, var(--theme-surface-soft-hover) 92%, var(--theme-surface-strong));
+}
+
 .wallet-menu-list {
   display: grid;
   gap: 10px;
@@ -2047,6 +2115,11 @@ body[data-surface='panel'] .popup-menu-content {
 body[data-surface='popup'] .wallet-switcher-menu .wallet-menu-item,
 body[data-surface='popup'] .wallet-switcher-menu .wallet-menu-action,
 body[data-surface='popup'] .chain-selector-menu .wallet-menu-action {
+  background: color-mix(in srgb, var(--theme-surface-strong) 99.2%, black 0.8%);
+  border-color: color-mix(in srgb, var(--theme-divider) 96%, black 4%);
+}
+
+body[data-surface='popup'] .wallet-switcher-chain-tab {
   background: color-mix(in srgb, var(--theme-surface-strong) 99.2%, black 0.8%);
   border-color: color-mix(in srgb, var(--theme-divider) 96%, black 4%);
 }
@@ -2202,6 +2275,11 @@ body[data-surface='popup'] .chain-selector-menu .wallet-menu-action.active {
   border-color: color-mix(in srgb, var(--theme-accent) 38%, var(--theme-divider));
 }
 
+body[data-surface='popup'] .wallet-switcher-chain-tab.active {
+  background: color-mix(in srgb, var(--theme-accent-soft) 68%, var(--theme-surface-strong));
+  border-color: color-mix(in srgb, var(--theme-accent) 38%, var(--theme-divider));
+}
+
 .wallet-menu-item[data-highlighted],
 .wallet-menu-action[data-highlighted] {
   outline: none;
@@ -2223,6 +2301,11 @@ body[data-surface='popup'] .chain-selector-menu .wallet-menu-action.active {
 body[data-surface='popup'] .chain-selector-menu .wallet-menu-action[data-highlighted],
 body[data-surface='popup'] .wallet-switcher-menu .wallet-menu-item[data-highlighted],
 body[data-surface='popup'] .wallet-switcher-menu .wallet-menu-action[data-highlighted] {
+  background: color-mix(in srgb, var(--theme-surface-soft-hover) 72%, var(--theme-surface-strong));
+}
+
+body[data-surface='popup'] .wallet-switcher-chain-tab:hover,
+body[data-surface='popup'] .wallet-switcher-chain-tab:focus-visible {
   background: color-mix(in srgb, var(--theme-surface-soft-hover) 72%, var(--theme-surface-strong));
 }
 

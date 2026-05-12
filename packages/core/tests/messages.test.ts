@@ -92,6 +92,18 @@ describe('message routing contracts', () => {
     expect(message.type).toBe('approval_respond');
   });
 
+  it('validates the auto-connect runtime message used by settings surfaces', () => {
+    const message = runtimeMessageSchema.parse({
+      type: 'wallet_set_auto_connect',
+      enabled: false
+    });
+
+    expect(message).toMatchObject({
+      type: 'wallet_set_auto_connect',
+      enabled: false
+    });
+  });
+
   it('validates governance vote runtime messages with an explicit governance program', () => {
     const message = runtimeMessageSchema.parse({
       type: 'wallet_cast_governance_vote',

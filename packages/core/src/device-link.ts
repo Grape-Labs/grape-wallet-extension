@@ -10,6 +10,7 @@ export type DeviceLinkPreferencesSnapshot = {
   selectedChain: GrapeChain;
   selectedNetwork: GrapeNetwork;
   selectedTheme: GrapeTheme;
+  autoConnectEnabled: boolean;
   dappApprovalMode: DappApprovalMode;
   privacyMode: boolean;
 };

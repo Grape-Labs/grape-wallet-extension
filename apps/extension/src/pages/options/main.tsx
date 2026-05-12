@@ -484,6 +484,23 @@ function OptionsPage() {
             <small className="muted">Hide total balance, token values, and token balances with ***.</small>
           </span>
         </label>
+        <label className="inline checkbox-row">
+          <input
+            type="checkbox"
+            checked={state.wallet.autoConnectEnabled}
+            onChange={async (event) => {
+              const nextState = await sendRuntimeMessage<WalletStateResponse>({
+                type: 'wallet_set_auto_connect',
+                enabled: event.target.checked
+              });
+              setState(nextState);
+            }}
+          />
+          <span>
+            <strong>Auto-connect trusted dApps</strong>
+            <small className="muted">Reconnect approved sites automatically. Turn this off to require a fresh connect approval on each page session.</small>
+          </span>
+        </label>
         <label className="stack">
           <span className="muted">dApp signing mode</span>
           <select

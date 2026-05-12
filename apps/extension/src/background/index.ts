@@ -209,6 +209,7 @@ const unlockedPasswordSessionStorage = new ChromeStorageArea<{ value: string | n
   'grape:unlocked-password',
   { value: null }
 );
+const providerConnectionState = new WeakMap<chrome.runtime.Port, Set<string>>();
 const assetCacheStorage = new ChromeStorageArea<Record<string, { cachedAt: number; data: WalletAssetsResponse }>>(
   chrome.storage.session,
   'grape:asset-cache',
@@ -501,6 +502,32 @@ class WalletController {
   private readonly verificationCache = new Map<string, { cachedAt: number; data: WalletVerificationResponse }>();
   private readonly governanceRefreshes = new Map<string, Promise<WalletGovernanceResponse>>();
   private readonly governanceCache = new Map<string, { cachedAt: number; data: WalletGovernanceResponse }>();
+
+  private getProviderConnectionKey(origin: string, chain: GrapeChain) {
+    return `${origin}::${chain}`;
+  }
+
+  private isProviderOriginConnected(port: chrome.runtime.Port, origin: string, chain: GrapeChain) {
+    return providerConnectionState.get(port)?.has(this.getProviderConnectionKey(origin, chain)) ?? false;
+  }
+
+  private setProviderOriginConnected(port: chrome.runtime.Port, origin: string, chain: GrapeChain, connected: boolean) {
+    const key = this.getProviderConnectionKey(origin, chain);
+    const current = providerConnectionState.get(port) ?? new Set<string>();
+
+    if (connected) {
+      current.add(key);
+      providerConnectionState.set(port, current);
+      return;
+    }
+
+    current.delete(key);
+    if (current.size === 0) {
+      providerConnectionState.delete(port);
+    } else {
+      providerConnectionState.set(port, current);
+    }
+  }
 
   private getAssetCacheKey(walletId: string, network: 'mainnet-beta' | 'devnet', publicKey: string) {
     return `${walletId}:${network}:${publicKey}`;
@@ -1962,6 +1989,15 @@ class WalletController {
     return this.getStateResponse();
   }
 
+  async setAutoConnect(enabled: boolean) {
+    const walletState = await this.getWalletState();
+    await walletStateStorage.set({
+      ...walletState,
+      autoConnectEnabled: enabled
+    });
+    return this.getStateResponse();
+  }
+
   async setDappApprovalMode(mode: import('@grape/core').DappApprovalMode) {
     const walletState = await this.getWalletState();
     await walletStateStorage.set({
@@ -3383,6 +3419,7 @@ class WalletController {
       selectedChain: walletState.selectedChain,
       selectedNetwork: walletState.selectedNetwork,
       selectedTheme: walletState.selectedTheme,
+      autoConnectEnabled: walletState.autoConnectEnabled,
       dappApprovalMode: walletState.dappApprovalMode,
       privacyMode: walletState.privacyMode
     };
@@ -3400,6 +3437,7 @@ class WalletController {
       selectedChain: preferences.selectedChain,
       selectedNetwork: preferences.selectedNetwork,
       selectedTheme: preferences.selectedTheme,
+      autoConnectEnabled: preferences.autoConnectEnabled,
       dappApprovalMode: preferences.dappApprovalMode,
       privacyMode: preferences.privacyMode
     };
@@ -4748,7 +4786,11 @@ class WalletController {
       : estimate?.toToken?.symbol ?? LIFI_NATIVE_SYMBOL[chain];
   }
 
-  async handleProviderRequest(request: ProviderRequest, debug?: (payload: ProviderDebugPayload) => void): Promise<unknown> {
+  async handleProviderRequest(
+    request: ProviderRequest,
+    port: chrome.runtime.Port,
+    debug?: (payload: ProviderDebugPayload) => void
+  ): Promise<unknown> {
     debug?.({
       phase: 'handle_provider_request_start',
       requestId: request.id,
@@ -4768,8 +4810,12 @@ class WalletController {
     const selectedNetwork = this.getSelectedNetworkForChain(walletState, requestChain);
     const permissions = await permissionsStorage.get();
     const accountPermission = getAccountPermissionForChain(requestChain);
+    const isTrusted = hasPermission(permissions, request.origin.origin, accountPermission);
+    const isConnected = this.isProviderOriginConnected(port, request.origin.origin, requestChain);
+    const allowsAutoConnect = isTrusted && walletState.autoConnectEnabled;
 
     if (request.method === 'disconnect' || request.method === 'sui_disconnect') {
+      this.setProviderOriginConnected(port, request.origin.origin, requestChain, false);
       return { disconnected: true };
     }
 
@@ -4785,14 +4831,12 @@ class WalletController {
       return null;
     }
 
-    const isTrusted = hasPermission(permissions, request.origin.origin, accountPermission);
-
     if (request.method === 'sui_getAccounts') {
-      return isTrusted ? [await this.getSuiProviderAccount(selectedWallet, activeAccount)] : [];
+      return allowsAutoConnect || isConnected ? [await this.getSuiProviderAccount(selectedWallet, activeAccount)] : [];
     }
 
     if (request.method === 'monad_accounts') {
-      return isTrusted ? [activeAccount.publicKey] : [];
+      return allowsAutoConnect || isConnected ? [activeAccount.publicKey] : [];
     }
 
     if (isProviderConnectRequest(request)) {
@@ -4803,6 +4847,10 @@ class WalletController {
         if (!isTrusted) {
           throw new RpcError('NOT_CONNECTED', 'This site has not been approved yet.');
         }
+        if (!walletState.autoConnectEnabled) {
+          throw new RpcError('NOT_CONNECTED', 'Auto-connect is turned off for trusted sites.');
+        }
+        this.setProviderOriginConnected(port, request.origin.origin, requestChain, true);
         debug?.({
           phase: 'connect_silent_trusted',
           requestId: request.id,
@@ -4813,7 +4861,8 @@ class WalletController {
         return this.buildProviderConnectResult(request, selectedWallet, activeAccount);
       }
 
-      if (isTrusted) {
+      if (allowsAutoConnect) {
+        this.setProviderOriginConnected(port, request.origin.origin, requestChain, true);
         debug?.({
           phase: 'connect_already_trusted',
           requestId: request.id,
@@ -4825,7 +4874,7 @@ class WalletController {
       }
 
       const approval = await this.createApproval(request, requestChain, selectedNetwork, selectedWallet.id, activeAccount.publicKey, {
-        requestedPermissions: getRequestedPermissionLabels(requestChain, selectedWallet.signer.kind)
+        requestedPermissions: getRequestedPermissionLabels(requestChain, selectedWallet.signer)
       });
       debug?.({
         phase: 'approval_created',
@@ -4836,10 +4885,12 @@ class WalletController {
         origin: request.origin.origin,
         network: selectedNetwork
       });
-      return this.awaitApproval(approval.id, debug);
+      const result = await this.awaitApproval(approval.id, debug);
+      this.setProviderOriginConnected(port, request.origin.origin, requestChain, true);
+      return result;
     }
 
-    if (!hasPermission(permissions, request.origin.origin, accountPermission)) {
+    if (!isTrusted || (!walletState.autoConnectEnabled && !isConnected)) {
       throw new RpcError('NOT_CONNECTED', 'Connect this site before signing.');
     }
 
@@ -9265,6 +9316,9 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
         case 'wallet_set_privacy_mode':
           sendResponse(await controller.setPrivacyMode(message.enabled));
           break;
+        case 'wallet_set_auto_connect':
+          sendResponse(await controller.setAutoConnect(message.enabled));
+          break;
         case 'wallet_set_dapp_approval_mode':
           sendResponse(await controller.setDappApprovalMode(message.mode));
           break;
@@ -9579,7 +9633,7 @@ chrome.runtime.onConnect.addListener((port) => {
           method: request.method,
           origin: request.origin.origin
         });
-        const result = await controller.handleProviderRequest(request, (payload) => emitProviderDebug(port, payload));
+        const result = await controller.handleProviderRequest(request, port, (payload) => emitProviderDebug(port, payload));
         emitProviderDebug(port, {
           phase: 'provider_request_resolved',
           requestId: request.id,
@@ -9611,6 +9665,9 @@ chrome.runtime.onConnect.addListener((port) => {
         });
       }
     })();
+  });
+  port.onDisconnect.addListener(() => {
+    providerConnectionState.delete(port);
   });
 });
 
