@@ -62,6 +62,7 @@ export type TransactionSimulationSummary = {
 
 export type TransactionBalanceChange = {
   account: string;
+  ownerAddress?: string;
   direction: 'in' | 'out';
   amount: string;
   rawAmount: string;
@@ -92,6 +93,7 @@ type ResolvedInstruction = {
 
 type BalanceChangeAggregate = {
   account: string;
+  ownerAddress?: string;
   assetLabel: string;
   assetAddress?: string;
   decimals: number;
@@ -147,7 +149,8 @@ function addBalanceChange(
   assetLabel: string,
   decimals: number,
   delta: bigint,
-  assetAddress?: string
+  assetAddress?: string,
+  ownerAddress?: PublicKey | null
 ) {
   if (!account || delta === 0n) {
     return;
@@ -158,11 +161,15 @@ function addBalanceChange(
 
   if (current) {
     current.amount += delta;
+    if (!current.ownerAddress && ownerAddress) {
+      current.ownerAddress = ownerAddress.toBase58();
+    }
     return;
   }
 
   changes.set(key, {
     account: account.toBase58(),
+    ownerAddress: ownerAddress?.toBase58(),
     assetLabel,
     assetAddress,
     decimals,
@@ -183,6 +190,7 @@ function finalizeBalanceChanges(changes: Map<string, BalanceChangeAggregate>): T
     })
     .map((change) => ({
       account: change.account,
+      ownerAddress: change.ownerAddress,
       direction: change.amount < 0n ? 'out' : 'in',
       amount: formatUiAmount(change.amount < 0n ? -change.amount : change.amount, change.decimals),
       rawAmount: (change.amount < 0n ? -change.amount : change.amount).toString(),
@@ -210,6 +218,7 @@ function mergeBalanceChanges(
 
     changes.set(key, {
       account: change.account,
+      ownerAddress: change.ownerAddress,
       assetLabel: change.assetLabel,
       assetAddress: change.assetAddress,
       decimals: change.decimals,
@@ -324,9 +333,9 @@ function summarizeBalanceChanges(instructions: ResolvedInstruction[]): Transacti
         const amount = readU64Le(instruction.data, 1);
         const decimals = tag === 12 ? (instruction.data[9] ?? 0) : 0;
         const mintAddress = tag === 12 ? accountLabel(instruction.keys[1]) : undefined;
-        const authorityIndex = tag === 12 ? 3 : 2;
         const destinationIndex = tag === 12 ? 2 : 1;
-        addBalanceChange(changes, instruction.keys[authorityIndex] ?? instruction.keys[0], 'Token', decimals, -amount, mintAddress);
+        const authorityIndex = tag === 12 ? 3 : 2;
+        addBalanceChange(changes, instruction.keys[0], 'Token', decimals, -amount, mintAddress, instruction.keys[authorityIndex]);
         addBalanceChange(changes, instruction.keys[destinationIndex], 'Token', decimals, amount, mintAddress);
         continue;
       }
@@ -343,7 +352,7 @@ function summarizeBalanceChanges(instructions: ResolvedInstruction[]): Transacti
         const amount = readU64Le(instruction.data, 1);
         const decimals = tag === 15 ? (instruction.data[9] ?? 0) : 0;
         const mintAddress = accountLabel(instruction.keys[1]);
-        addBalanceChange(changes, instruction.keys[2] ?? instruction.keys[0], 'Token', decimals, -amount, mintAddress);
+        addBalanceChange(changes, instruction.keys[0], 'Token', decimals, -amount, mintAddress, instruction.keys[2]);
       }
     }
 
@@ -380,8 +389,13 @@ function summarizeParsedTokenInstruction(
     return;
   }
 
-  if (type === 'transferChecked') {
-    const amount = typeof info.tokenAmount === 'object' && info.tokenAmount && 'amount' in info.tokenAmount ? BigInt(String(info.tokenAmount.amount)) : 0n;
+  if (type === 'transfer' || type === 'transferChecked') {
+    const amount =
+      typeof info.tokenAmount === 'object' && info.tokenAmount && 'amount' in info.tokenAmount
+        ? BigInt(String(info.tokenAmount.amount))
+        : 'amount' in info
+          ? BigInt(String(info.amount))
+          : 0n;
     const decimals =
       typeof info.tokenAmount === 'object' && info.tokenAmount && 'decimals' in info.tokenAmount
         ? Number(info.tokenAmount.decimals)
@@ -389,11 +403,12 @@ function summarizeParsedTokenInstruction(
     const mintAddress = typeof info.mint === 'string' ? info.mint : undefined;
     addBalanceChange(
       changes,
-      typeof info.authority === 'string' ? new PublicKey(info.authority) : undefined,
+      typeof info.source === 'string' ? new PublicKey(info.source) : undefined,
       'Token',
       decimals,
       -amount,
-      mintAddress
+      mintAddress,
+      typeof info.authority === 'string' ? new PublicKey(info.authority) : undefined
     );
     addBalanceChange(
       changes,
@@ -406,8 +421,13 @@ function summarizeParsedTokenInstruction(
     return;
   }
 
-  if (type === 'mintToChecked') {
-    const amount = typeof info.tokenAmount === 'object' && info.tokenAmount && 'amount' in info.tokenAmount ? BigInt(String(info.tokenAmount.amount)) : 0n;
+  if (type === 'mintTo' || type === 'mintToChecked') {
+    const amount =
+      typeof info.tokenAmount === 'object' && info.tokenAmount && 'amount' in info.tokenAmount
+        ? BigInt(String(info.tokenAmount.amount))
+        : 'amount' in info
+          ? BigInt(String(info.amount))
+          : 0n;
     const decimals =
       typeof info.tokenAmount === 'object' && info.tokenAmount && 'decimals' in info.tokenAmount
         ? Number(info.tokenAmount.decimals)
@@ -423,19 +443,25 @@ function summarizeParsedTokenInstruction(
     return;
   }
 
-  if (type === 'burnChecked') {
-    const amount = typeof info.tokenAmount === 'object' && info.tokenAmount && 'amount' in info.tokenAmount ? BigInt(String(info.tokenAmount.amount)) : 0n;
+  if (type === 'burn' || type === 'burnChecked') {
+    const amount =
+      typeof info.tokenAmount === 'object' && info.tokenAmount && 'amount' in info.tokenAmount
+        ? BigInt(String(info.tokenAmount.amount))
+        : 'amount' in info
+          ? BigInt(String(info.amount))
+          : 0n;
     const decimals =
       typeof info.tokenAmount === 'object' && info.tokenAmount && 'decimals' in info.tokenAmount
         ? Number(info.tokenAmount.decimals)
         : 0;
     addBalanceChange(
       changes,
-      typeof info.authority === 'string' ? new PublicKey(info.authority) : undefined,
+      typeof info.account === 'string' ? new PublicKey(info.account) : undefined,
       'Token',
       decimals,
       -amount,
-      typeof info.mint === 'string' ? info.mint : undefined
+      typeof info.mint === 'string' ? info.mint : undefined,
+      typeof info.authority === 'string' ? new PublicKey(info.authority) : undefined
     );
   }
 }
@@ -479,7 +505,8 @@ function summarizeSimulationInnerBalanceChanges(innerInstructions?: ParsedInnerI
           change.assetLabel,
           change.decimals,
           BigInt(change.rawAmount) * (change.direction === 'out' ? -1n : 1n),
-          change.assetAddress
+          change.assetAddress,
+          change.ownerAddress ? new PublicKey(change.ownerAddress) : undefined
         );
       }
     }

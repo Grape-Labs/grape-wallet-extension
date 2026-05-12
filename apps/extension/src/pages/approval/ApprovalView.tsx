@@ -113,6 +113,7 @@ function renderInstructionValue(value: string, isAddress?: boolean) {
 
 type WalletImpactPreviewItem = {
   direction: 'in' | 'out';
+  assetLabel: string;
   amountText: string;
   fiatText?: string | null;
   meta?: string;
@@ -195,6 +196,10 @@ export function ApprovalView(props: {
         return true;
       }
 
+      if (relevantAccounts.has(normalizeAddress(change.ownerAddress))) {
+        return true;
+      }
+
       return deriveAssociatedTokenCandidates(approval.publicKey, change.assetAddress).some(
         (candidate) => normalizeAddress(candidate) === normalizeAddress(change.account)
       );
@@ -203,10 +208,67 @@ export function ApprovalView(props: {
   const feePayerMatchesWallet =
     !!approval.transactionSummary?.feePayer &&
     normalizeAddress(approval.transactionSummary.feePayer) === normalizeAddress(approval.publicKey);
+  const normalizedWalletImpactChanges = useMemo(() => {
+    const hasConcreteSolSend = walletImpactChanges.some(
+      (change) => change.direction === 'out' && (change.assetLabel === 'SOL' || change.assetAddress === 'So11111111111111111111111111111111111111112')
+    );
+
+    return walletImpactChanges
+      .filter((change) => {
+        if (!hasConcreteSolSend) {
+          return true;
+        }
+
+        return !(
+          change.direction === 'out' &&
+          change.assetLabel === 'Token' &&
+          !change.assetAddress &&
+          normalizeAddress(change.ownerAddress) === normalizeAddress(approval.publicKey)
+        );
+      })
+      .sort((left, right) => {
+        if (left.direction !== right.direction) {
+          return left.direction === 'out' ? -1 : 1;
+        }
+
+        const leftValue = Number(left.valueUsd ?? 0);
+        const rightValue = Number(right.valueUsd ?? 0);
+        return rightValue - leftValue;
+      });
+  }, [approval.publicKey, walletImpactChanges]);
+  const heroWalletImpactChanges = useMemo(() => {
+    if (normalizedWalletImpactChanges.length <= 2) {
+      return normalizedWalletImpactChanges;
+    }
+
+    const outs = normalizedWalletImpactChanges
+      .filter((change) => change.direction === 'out')
+      .sort((left, right) => Number(right.valueUsd ?? 0) - Number(left.valueUsd ?? 0));
+    const ins = normalizedWalletImpactChanges
+      .filter((change) => change.direction === 'in')
+      .sort((left, right) => Number(right.valueUsd ?? 0) - Number(left.valueUsd ?? 0));
+
+    if (!outs.length || !ins.length) {
+      return normalizedWalletImpactChanges;
+    }
+
+    const primaryOut = outs[0];
+    const primaryIn = ins[0];
+    const outUsd = typeof primaryOut.valueUsd === 'number' ? primaryOut.valueUsd : null;
+    const inUsd = typeof primaryIn.valueUsd === 'number' ? primaryIn.valueUsd : null;
+    const looksLikeSwap =
+      outUsd !== null &&
+      inUsd !== null &&
+      Math.min(outUsd, inUsd) > 0 &&
+      Math.max(outUsd, inUsd) / Math.min(outUsd, inUsd) <= 1.35;
+
+    return looksLikeSwap ? [primaryOut, primaryIn] : normalizedWalletImpactChanges;
+  }, [normalizedWalletImpactChanges]);
   const walletImpactPreviewItems = useMemo<WalletImpactPreviewItem[]>(() => {
-    if (walletImpactChanges.length) {
-      return walletImpactChanges.map((change) => ({
+    if (heroWalletImpactChanges.length) {
+      return heroWalletImpactChanges.map((change) => ({
         direction: change.direction,
+        assetLabel: change.assetLabel,
         amountText: `${change.amount} ${change.assetLabel}`,
         fiatText: formatUsd(change.valueUsd),
         meta: change.assetAddress ? formatAddress(change.assetAddress) : undefined
@@ -230,6 +292,7 @@ export function ApprovalView(props: {
         return [
           {
             direction: 'out',
+            assetLabel: 'Governance tokens',
             amountText: amount ? `${amount} governance tokens` : 'Governance tokens',
             meta: 'Deposited into governance'
           }
@@ -246,6 +309,7 @@ export function ApprovalView(props: {
         return [
           {
             direction: 'in',
+            assetLabel: 'Governance tokens',
             amountText: 'Deposited governance tokens',
             meta: 'Amount depends on your current governance deposit'
           }
@@ -254,7 +318,7 @@ export function ApprovalView(props: {
 
       return [];
     });
-  }, [approval.publicKey, approval.transactionSummary, walletImpactChanges]);
+  }, [approval.publicKey, approval.transactionSummary, heroWalletImpactChanges]);
 
   async function handleResolved() {
     if (inline) {
@@ -363,133 +427,115 @@ export function ApprovalView(props: {
         <StatusPill tone="warning">{approval.kind}</StatusPill>
       </div>
 
-      <Card title="Origin">
+      <Card className="approval-origin-card">
         <div className="origin-box">
           {approval.origin.faviconUrl ? <img src={approval.origin.faviconUrl} alt="" /> : null}
           <div>
+            <div className="approval-origin-eyebrow">Review request</div>
             <strong>{approval.origin.title ?? approval.origin.origin}</strong>
-            <div className="mono muted">{approval.origin.origin}</div>
+            <div className="mono muted approval-origin-url">{approval.origin.origin}</div>
           </div>
         </div>
       </Card>
 
-      <Card title="Request details">
-        <KeyValueRow label="Chain" value={approval.chain} />
-        <KeyValueRow label="Network" value={approval.network} />
-        <KeyValueRow
-          label="Account"
-          value={
-            <span className="mono approval-address" title={approval.publicKey}>
-              {formatAddress(approval.publicKey)}
-            </span>
-          }
-        />
-        {approval.requestedPermissions?.length ? (
-          <div className="stack">
-            <span className="muted">Requested permissions</span>
-            {approval.requestedPermissions.map((permission) => (
-              <StatusPill key={permission}>{permission}</StatusPill>
-            ))}
-          </div>
-        ) : null}
-        {approval.request.method === 'signMessage' || approval.request.method === 'sui_signPersonalMessage' ? (
-          <p className="warning-box">{summarizeMessage(approval.request.params.message)}</p>
-        ) : null}
-        {approval.request.method === 'monad_signMessage' ? (
-          <p className="warning-box">{summarizeHexMessage(approval.request.params.message)}</p>
-        ) : null}
-        {approval.request.method === 'signAllTransactions' ? (
-          <p className="warning-box">
-            This request asks to sign {approval.request.params.transactions.length} transactions.
-          </p>
-        ) : null}
-        {approval.request.method === 'monad_sendTransaction' ? (
-          <div className="stack">
-            {approval.request.params.transaction.from ? (
-              <KeyValueRow
-                label="From"
-                value={
-                  <span className="mono approval-address" title={approval.request.params.transaction.from}>
-                    {formatAddress(approval.request.params.transaction.from)}
-                  </span>
-                }
-              />
-            ) : null}
-            {approval.request.params.transaction.to ? (
-              <KeyValueRow
-                label="To"
-                value={
-                  <span className="mono approval-address" title={approval.request.params.transaction.to}>
-                    {formatAddress(approval.request.params.transaction.to)}
-                  </span>
-                }
-              />
-            ) : null}
-            {approval.request.params.transaction.value ? (
-              <KeyValueRow label="Value" value={approval.request.params.transaction.value} />
-            ) : null}
-            {approval.request.params.transaction.data ? (
-              <KeyValueRow label="Data" value={<span className="mono">{formatAddress(approval.request.params.transaction.data, 10, 8)}</span>} />
-            ) : null}
-          </div>
-        ) : null}
-        {approval.transactionSummary ? (
-          <div className="stack">
-            <KeyValueRow
-              label="Fee payer"
-              value={
-                <span className="mono approval-address" title={approval.transactionSummary.feePayer ?? 'Unknown'}>
-                  {formatAddress(approval.transactionSummary.feePayer)}
-                </span>
-              }
-            />
-            {approval.transactionSummary.estimatedFeeLamports != null ? (
-              <KeyValueRow
-                label="Estimated fee"
-                value={
-                  approval.transactionSummary.feeUsd != null
-                    ? `${formatLamports(approval.transactionSummary.estimatedFeeLamports)} (${formatUsd(approval.transactionSummary.feeUsd)})`
-                    : formatLamports(approval.transactionSummary.estimatedFeeLamports)
-                }
-              />
-            ) : null}
+      {approval.transactionSummary ? (
+        <>
+          <Card className="approval-summary-card">
             {walletImpactPreviewItems.length ? (
-              <div className="stack approval-impact-summary">
-                <div className="approval-impact-header">
-                  <span className="muted">Your wallet impact</span>
-                  {feePayerMatchesWallet && approval.transactionSummary.estimatedFeeLamports != null ? (
-                    <span className="muted approval-impact-fee">
-                      Network fee {formatLamports(approval.transactionSummary.estimatedFeeLamports)}
-                      {approval.transactionSummary.feeUsd != null ? ` (${formatUsd(approval.transactionSummary.feeUsd)})` : ''}
-                    </span>
-                  ) : null}
-                </div>
-                <div className="approval-impact-list">
+              <div className="stack approval-hero-summary">
+                <div className="approval-section-kicker">Estimated balance changes</div>
+                <div className="approval-hero-list">
                   {walletImpactPreviewItems.map((item, index) => (
-                    <div key={`impact-preview-${index}`} className="approval-impact-row">
-                      <div className="approval-impact-copy">
-                        <div className="approval-impact-label">
+                    <div key={`impact-preview-${index}`} className="approval-hero-row">
+                      <div className="approval-hero-copy">
+                        <div className="approval-hero-label">{item.assetLabel}</div>
+                        <div className="approval-hero-subtitle">
                           {item.direction === 'in' ? 'You receive' : 'You send'}
                         </div>
-                        <div className={`approval-impact-amount ${item.direction === 'in' ? 'positive' : 'negative'}`.trim()}>
+                      </div>
+                      <div className="approval-hero-values">
+                        <div className={`approval-hero-amount ${item.direction === 'in' ? 'positive' : 'negative'}`.trim()}>
                           {item.direction === 'in' ? '+' : '-'}
                           {item.amountText}
-                          {item.fiatText ? ` (${item.fiatText})` : ''}
                         </div>
-                        {item.meta ? (
-                          <div className="muted approval-impact-meta" title={item.meta}>
-                            {item.meta}
-                          </div>
-                        ) : null}
+                        {item.fiatText ? <div className="muted approval-hero-fiat">{item.fiatText}</div> : null}
                       </div>
                     </div>
                   ))}
                 </div>
               </div>
+            ) : (
+              <div className="stack approval-hero-summary">
+                <div className="approval-section-kicker">Request summary</div>
+                <p className="muted">Review the transaction details and decoded instructions before approving.</p>
+              </div>
+            )}
+            {feePayerMatchesWallet && approval.transactionSummary.estimatedFeeLamports != null ? (
+              <div className="approval-fee-row">
+                <span className="muted">Network fee</span>
+                <span className="approval-fee-value">
+                  {approval.transactionSummary.feeUsd != null
+                    ? formatUsd(approval.transactionSummary.feeUsd)
+                    : formatLamports(approval.transactionSummary.estimatedFeeLamports)}
+                </span>
+              </div>
             ) : null}
-            {approval.transactionSummary.balanceChanges.length ? (
-              <div className="stack approval-balance-summary">
-                <span className="muted">All decoded changes</span>
+            {approval.transactionSummary.warnings.slice(0, 2).map((warning) => (
+              <p key={warning} className="warning-box">
+                {warning}
+              </p>
+            ))}
+          </Card>
+
+          <details className="approval-disclosure" open={!walletImpactPreviewItems.length}>
+            <summary>Request details</summary>
+            <div className="approval-disclosure-body">
+              <KeyValueRow label="Chain" value={approval.chain} />
+              <KeyValueRow label="Network" value={approval.network} />
+              <KeyValueRow
+                label="Account"
+                value={
+                  <span className="mono approval-address" title={approval.publicKey}>
+                    {formatAddress(approval.publicKey)}
+                  </span>
+                }
+              />
+              <KeyValueRow
+                label="Fee payer"
+                value={
+                  <span className="mono approval-address" title={approval.transactionSummary.feePayer ?? 'Unknown'}>
+                    {formatAddress(approval.transactionSummary.feePayer)}
+                  </span>
+                }
+              />
+              {approval.transactionSummary.estimatedFeeLamports != null ? (
+                <KeyValueRow
+                  label="Estimated fee"
+                  value={
+                    approval.transactionSummary.feeUsd != null
+                      ? `${formatLamports(approval.transactionSummary.estimatedFeeLamports)} (${formatUsd(approval.transactionSummary.feeUsd)})`
+                      : formatLamports(approval.transactionSummary.estimatedFeeLamports)
+                  }
+                />
+              ) : null}
+              {approval.requestedPermissions?.length ? (
+                <div className="stack">
+                  <span className="muted">Requested permissions</span>
+                  {approval.requestedPermissions.map((permission) => (
+                    <StatusPill key={permission}>{permission}</StatusPill>
+                  ))}
+                </div>
+              ) : null}
+              {(approval.request.method === 'signAndSendTransaction' || approval.request.method === 'sendTransaction') ? (
+                <p className="warning-box">This will sign and broadcast the transaction to the selected RPC endpoint.</p>
+              ) : null}
+            </div>
+          </details>
+
+          {approval.transactionSummary.balanceChanges.length ? (
+            <details className="approval-disclosure">
+              <summary>All decoded changes</summary>
+              <div className="approval-disclosure-body">
                 <div className="approval-balance-change-list">
                   {approval.transactionSummary.balanceChanges.map((change, index) => (
                     <div key={`${change.account}-${change.assetAddress ?? change.assetLabel}-${index}`} className="approval-balance-change-row">
@@ -512,124 +558,189 @@ export function ApprovalView(props: {
                   ))}
                 </div>
               </div>
-            ) : null}
-            <KeyValueRow label="Instructions" value={approval.transactionSummary.instructionCount} />
-            {approval.transactionSummary.instructions.map((instruction, index) => (
-              <div key={`${instruction.programId}-${index}`} className="card">
-                <KeyValueRow label="Program" value={instruction.programName} />
-                {instruction.title ? <KeyValueRow label="Action" value={instruction.title} /> : null}
+            </details>
+          ) : null}
+
+          <details className="approval-disclosure">
+            <summary>Instructions and simulation</summary>
+            <div className="approval-disclosure-body">
+              <KeyValueRow label="Instructions" value={approval.transactionSummary.instructionCount} />
+              {approval.transactionSummary.instructions.map((instruction, index) => (
+                <div key={`${instruction.programId}-${index}`} className="card approval-instruction-card">
+                  <KeyValueRow label="Program" value={instruction.programName} />
+                  {instruction.title ? <KeyValueRow label="Action" value={instruction.title} /> : null}
+                  <KeyValueRow
+                    label="Program ID"
+                    value={
+                      <span className="mono approval-address" title={instruction.programId}>
+                        {formatAddress(instruction.programId)}
+                      </span>
+                    }
+                  />
+                  <KeyValueRow label="Accounts" value={instruction.accountCount} />
+                  {instruction.accounts?.length ? (
+                    <div className="approval-instruction-accounts">
+                      <div className="approval-instruction-accounts-header">
+                        <span className="muted">Instruction accounts</span>
+                        <button
+                          type="button"
+                          className="button secondary mini-button"
+                          onClick={() =>
+                            setExpandedInstructionAccounts((current) => ({
+                              ...current,
+                              [`${instruction.programId}-${index}`]: !current[`${instruction.programId}-${index}`]
+                            }))
+                          }
+                        >
+                          {expandedInstructionAccounts[`${instruction.programId}-${index}`] ? 'Hide accounts' : 'Show accounts'}
+                        </button>
+                      </div>
+                      {expandedInstructionAccounts[`${instruction.programId}-${index}`] ? (
+                        <div className="approval-instruction-account-list">
+                          {instruction.accounts.map((account, accountIndex) => (
+                            <div key={`${instruction.programId}-${index}-account-${accountIndex}`} className="approval-instruction-account-row">
+                              <span className="muted">#{accountIndex + 1}</span>
+                              <span className="mono approval-address" title={account}>
+                                {formatAddress(account)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {instruction.details?.map((detail) => (
+                    <KeyValueRow key={`${instruction.programId}-${index}-${detail.label}`} label={detail.label} value={renderInstructionValue(detail.value, detail.address)} />
+                  ))}
+                  {instruction.warning ? <p className="warning-box">{instruction.warning}</p> : null}
+                </div>
+              ))}
+              {approval.transactionSummary.simulation ? (
+                <div className="card approval-simulation-card">
+                  <div className="inline approval-simulation-header">
+                    <span>Simulation</span>
+                    <StatusPill tone={approval.transactionSummary.simulation.ok ? 'success' : 'danger'}>
+                      {approval.transactionSummary.simulation.ok ? 'Passed' : 'Failed'}
+                    </StatusPill>
+                  </div>
+                  {approval.transactionSummary.simulation.error ? (
+                    <p className="warning-box">{approval.transactionSummary.simulation.error}</p>
+                  ) : (
+                    <p className="muted approval-simulation-copy">
+                      Grape simulated this transaction on the selected RPC before approval.
+                    </p>
+                  )}
+                  {approval.transactionSummary.simulation.unitsConsumed != null ? (
+                    <KeyValueRow label="Compute units" value={approval.transactionSummary.simulation.unitsConsumed.toLocaleString()} />
+                  ) : null}
+                  {approval.transactionSummary.simulation.logs.length > 0 ? (
+                    <div className="stack">
+                      <div className="approval-simulation-actions">
+                        <button
+                          type="button"
+                          className="button secondary mini-button approval-simulation-toggle"
+                          onClick={() => setShowSimulationLogs((current) => !current)}
+                        >
+                          {showSimulationLogs ? 'Hide logs' : 'Show logs'}
+                        </button>
+                        <p className="muted approval-simulation-hint">
+                          {approval.transactionSummary.simulation.logs.length} log
+                          {approval.transactionSummary.simulation.logs.length === 1 ? '' : 's'} available
+                        </p>
+                      </div>
+                      {showSimulationLogs ? (
+                        <div className="approval-log-box">
+                          {approval.transactionSummary.simulation.logs.map((line, lineIndex) => (
+                            <div key={`${approval.id}-simulation-log-${lineIndex}`} className="approval-log-line">
+                              {line}
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+              {approval.transactionSummary.warnings.slice(2).map((warning) => (
+                <p key={warning} className="warning-box">
+                  {warning}
+                </p>
+              ))}
+            </div>
+          </details>
+        </>
+      ) : (
+        <Card title="Request details">
+          <KeyValueRow label="Chain" value={approval.chain} />
+          <KeyValueRow label="Network" value={approval.network} />
+          <KeyValueRow
+            label="Account"
+            value={
+              <span className="mono approval-address" title={approval.publicKey}>
+                {formatAddress(approval.publicKey)}
+              </span>
+            }
+          />
+          {approval.requestedPermissions?.length ? (
+            <div className="stack">
+              <span className="muted">Requested permissions</span>
+              {approval.requestedPermissions.map((permission) => (
+                <StatusPill key={permission}>{permission}</StatusPill>
+              ))}
+            </div>
+          ) : null}
+          {approval.request.method === 'signMessage' || approval.request.method === 'sui_signPersonalMessage' ? (
+            <p className="warning-box">{summarizeMessage(approval.request.params.message)}</p>
+          ) : null}
+          {approval.request.method === 'monad_signMessage' ? (
+            <p className="warning-box">{summarizeHexMessage(approval.request.params.message)}</p>
+          ) : null}
+          {approval.request.method === 'signAllTransactions' ? (
+            <p className="warning-box">
+              This request asks to sign {approval.request.params.transactions.length} transactions.
+            </p>
+          ) : null}
+          {approval.request.method === 'monad_sendTransaction' ? (
+            <div className="stack">
+              {approval.request.params.transaction.from ? (
                 <KeyValueRow
-                  label="Program ID"
+                  label="From"
                   value={
-                    <span className="mono approval-address" title={instruction.programId}>
-                      {formatAddress(instruction.programId)}
+                    <span className="mono approval-address" title={approval.request.params.transaction.from}>
+                      {formatAddress(approval.request.params.transaction.from)}
                     </span>
                   }
                 />
-                <KeyValueRow label="Accounts" value={instruction.accountCount} />
-                {instruction.accounts?.length ? (
-                  <div className="approval-instruction-accounts">
-                    <div className="approval-instruction-accounts-header">
-                      <span className="muted">Instruction accounts</span>
-                      <button
-                        type="button"
-                        className="button secondary mini-button"
-                        onClick={() =>
-                          setExpandedInstructionAccounts((current) => ({
-                            ...current,
-                            [`${instruction.programId}-${index}`]: !current[`${instruction.programId}-${index}`]
-                          }))
-                        }
-                      >
-                        {expandedInstructionAccounts[`${instruction.programId}-${index}`] ? 'Hide accounts' : 'Show accounts'}
-                      </button>
-                    </div>
-                    {expandedInstructionAccounts[`${instruction.programId}-${index}`] ? (
-                      <div className="approval-instruction-account-list">
-                        {instruction.accounts.map((account, accountIndex) => (
-                          <div key={`${instruction.programId}-${index}-account-${accountIndex}`} className="approval-instruction-account-row">
-                            <span className="muted">#{accountIndex + 1}</span>
-                            <span className="mono approval-address" title={account}>
-                              {formatAddress(account)}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
-                {instruction.details?.map((detail) => (
-                  <KeyValueRow key={`${instruction.programId}-${index}-${detail.label}`} label={detail.label} value={renderInstructionValue(detail.value, detail.address)} />
-                ))}
-                {instruction.warning ? <p className="warning-box">{instruction.warning}</p> : null}
-              </div>
-            ))}
-            {approval.transactionSummary.simulation ? (
-              <div className="card approval-simulation-card">
-                <div className="inline approval-simulation-header">
-                  <span>Simulation</span>
-                  <StatusPill tone={approval.transactionSummary.simulation.ok ? 'success' : 'danger'}>
-                    {approval.transactionSummary.simulation.ok ? 'Passed' : 'Failed'}
-                  </StatusPill>
-                </div>
-                {approval.transactionSummary.simulation.error ? (
-                  <p className="warning-box">{approval.transactionSummary.simulation.error}</p>
-                ) : (
-                  <p className="muted approval-simulation-copy">
-                    Grape simulated this transaction on the selected RPC before approval.
-                  </p>
-                )}
-                {approval.transactionSummary.simulation.unitsConsumed != null ? (
-                  <KeyValueRow label="Compute units" value={approval.transactionSummary.simulation.unitsConsumed.toLocaleString()} />
-                ) : null}
-                {approval.transactionSummary.simulation.logs.length > 0 ? (
-                  <div className="stack">
-                    <div className="approval-simulation-actions">
-                      <button
-                        type="button"
-                        className="button secondary mini-button approval-simulation-toggle"
-                        onClick={() => setShowSimulationLogs((current) => !current)}
-                      >
-                        {showSimulationLogs ? 'Hide logs' : 'Show logs'}
-                      </button>
-                      <p className="muted approval-simulation-hint">
-                        {approval.transactionSummary.simulation.logs.length} log
-                        {approval.transactionSummary.simulation.logs.length === 1 ? '' : 's'} available
-                      </p>
-                    </div>
-                    {showSimulationLogs ? (
-                      <div className="approval-log-box">
-                        {approval.transactionSummary.simulation.logs.map((line, lineIndex) => (
-                          <div key={`${approval.id}-simulation-log-${lineIndex}`} className="approval-log-line">
-                            {line}
-                          </div>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-            {approval.transactionSummary.warnings.map((warning) => (
-              <p key={warning} className="warning-box">
-                {warning}
-              </p>
-            ))}
-          </div>
-        ) : null}
-        {approval.request.method === 'signAndSendTransaction' || approval.request.method === 'sendTransaction' ? (
-          <p className="warning-box">This will sign and broadcast the transaction to the selected RPC endpoint.</p>
-        ) : null}
-        {approval.request.method === 'sui_signTransaction' ? (
-          <p className="warning-box">This request asks to sign a Sui transaction for the selected wallet.</p>
-        ) : null}
-        {approval.request.method === 'sui_signAndExecuteTransaction' ? (
-          <p className="warning-box">This will sign and execute a Sui transaction on the selected network.</p>
-        ) : null}
-        {approval.request.method === 'monad_sendTransaction' ? (
-          <p className="warning-box">This will sign and broadcast an EVM transaction to the selected RPC endpoint.</p>
-        ) : null}
-      </Card>
+              ) : null}
+              {approval.request.params.transaction.to ? (
+                <KeyValueRow
+                  label="To"
+                  value={
+                    <span className="mono approval-address" title={approval.request.params.transaction.to}>
+                      {formatAddress(approval.request.params.transaction.to)}
+                    </span>
+                  }
+                />
+              ) : null}
+              {approval.request.params.transaction.value ? (
+                <KeyValueRow label="Value" value={approval.request.params.transaction.value} />
+              ) : null}
+              {approval.request.params.transaction.data ? (
+                <KeyValueRow label="Data" value={<span className="mono">{formatAddress(approval.request.params.transaction.data, 10, 8)}</span>} />
+              ) : null}
+            </div>
+          ) : null}
+          {approval.request.method === 'sui_signTransaction' ? (
+            <p className="warning-box">This request asks to sign a Sui transaction for the selected wallet.</p>
+          ) : null}
+          {approval.request.method === 'sui_signAndExecuteTransaction' ? (
+            <p className="warning-box">This will sign and execute a Sui transaction on the selected network.</p>
+          ) : null}
+          {approval.request.method === 'monad_sendTransaction' ? (
+            <p className="warning-box">This will sign and broadcast an EVM transaction to the selected RPC endpoint.</p>
+          ) : null}
+        </Card>
+      )}
 
       <form className="approval-form" onSubmit={(event) => void handleApproveSubmit(event)}>
         {requiresPassword ? (

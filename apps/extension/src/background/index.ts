@@ -4865,17 +4865,25 @@ class WalletController {
       throw new RpcError('ACCOUNT_MISMATCH', 'The requested signer does not match the active Monad wallet.');
     }
 
+    const connection = this.createConnection(selectedNetwork, walletState);
     const transactionSummary =
       request.method === 'signTransaction' || request.method === 'signAndSendTransaction' || request.method === 'sendTransaction'
         ? await enrichSolanaTransactionSummaryWithUsd(
-            await inspectTransaction(request.params.transaction, this.createConnection(selectedNetwork, walletState))
+            await enrichSolanaTransactionSummaryWithWalletContext(
+              await inspectTransaction(request.params.transaction, connection),
+              connection,
+              selectedNetwork,
+              activeAccount.publicKey
+            )
           )
         : request.method === 'signAllTransactions'
           ? {
               ...(await enrichSolanaTransactionSummaryWithUsd(
-                await inspectTransaction(
-                  request.params.transactions[0],
-                  this.createConnection(selectedNetwork, walletState)
+                await enrichSolanaTransactionSummaryWithWalletContext(
+                  await inspectTransaction(request.params.transactions[0], connection),
+                  connection,
+                  selectedNetwork,
+                  activeAccount.publicKey
                 )
               )),
               warnings: ['Only the first transaction in this batch was decoded and simulated.']
@@ -8537,6 +8545,28 @@ async function getMintDecimals(connection: Connection, mint: string): Promise<nu
   return 'decimals' in parsed.info && typeof parsed.info.decimals === 'number' ? parsed.info.decimals : 9;
 }
 
+function formatUiAmountExact(rawAmount: string, decimals: number): string {
+  const normalized = rawAmount.trim();
+  if (!/^\d+$/.test(normalized)) {
+    return rawAmount;
+  }
+
+  const amount = BigInt(normalized);
+  if (decimals <= 0) {
+    return amount.toString();
+  }
+
+  const divisor = 10n ** BigInt(decimals);
+  const whole = amount / divisor;
+  const fraction = amount % divisor;
+  if (fraction === 0n) {
+    return whole.toString();
+  }
+
+  const fractionText = fraction.toString().padStart(decimals, '0').replace(/0+$/, '');
+  return `${whole.toString()}.${fractionText}`;
+}
+
 function formatUiAmount(rawAmount: string, decimals: number): string {
   const amount = Number(rawAmount);
   if (!Number.isFinite(amount)) {
@@ -8603,6 +8633,216 @@ function getSolanaStablecoinPriceUsd(mint?: string, symbol?: string): number | n
 
   const knownSymbol = KNOWN_TOKEN_SYMBOLS[normalizedMint]?.trim().toUpperCase();
   return knownSymbol === 'USDC' || knownSymbol === 'USDT' ? 1 : null;
+}
+
+type SolanaTokenAccountContext = {
+  accountAddress: string;
+  ownerAddress: string;
+  mint: string;
+  decimals: number;
+  name?: string;
+  symbol?: string;
+};
+
+async function fetchSolanaMintDisplayHints(
+  connection: Connection,
+  mints: string[]
+): Promise<Record<string, { name?: string; symbol?: string }>> {
+  const uniqueMints = [...new Set(mints.map((mint) => mint.trim()).filter(Boolean))];
+  const entries = await Promise.all(
+    uniqueMints.map(async (mint) => {
+      try {
+        const mintPublicKey = tryParseSolanaPublicKey(mint);
+        if (!mintPublicKey) {
+          return [mint, {}] as const;
+        }
+
+        const metadataPda = PublicKey.findProgramAddressSync(
+          [new TextEncoder().encode('metadata'), METADATA_PROGRAM_ID.toBytes(), mintPublicKey.toBytes()],
+          METADATA_PROGRAM_ID
+        )[0];
+        const metadataAccountInfo = await connection.getAccountInfo(metadataPda, 'confirmed');
+        const parsedMetadata = metadataAccountInfo?.data ? parseMetaplexMetadataAccount(metadataAccountInfo.data) : null;
+
+        return [
+          mint,
+          {
+            name: parsedMetadata?.name ?? undefined,
+            symbol: parsedMetadata?.symbol ?? undefined
+          }
+        ] as const;
+      } catch {
+        return [mint, {}] as const;
+      }
+    })
+  );
+
+  return Object.fromEntries(entries);
+}
+
+async function fetchSolanaWalletTokenAccountContexts(
+  connection: Connection,
+  network: string,
+  ownerAddress: string
+): Promise<Map<string, SolanaTokenAccountContext>> {
+  const owner = tryParseSolanaPublicKey(ownerAddress);
+  if (!owner) {
+    return new Map();
+  }
+
+  let shyftMetadata: Record<string, { name?: string; symbol?: string; logoUri?: string }> = {};
+  if (network === 'mainnet-beta' || network === 'devnet') {
+    try {
+      shyftMetadata = await fetchShyftWalletTokens(network, ownerAddress);
+    } catch {
+      shyftMetadata = {};
+    }
+  }
+
+  const tokenResponses = await Promise.all(
+    TOKEN_PROGRAM_IDS.map(async (programId) => {
+      try {
+        return await connection.getParsedTokenAccountsByOwner(owner, {
+          programId: new PublicKey(programId)
+        });
+      } catch {
+        return null;
+      }
+    })
+  );
+
+  const entries = tokenResponses.flatMap((response) =>
+    response?.value.map((accountInfo) => {
+      const parsed = accountInfo.account.data.parsed.info as {
+        mint: string;
+        tokenAmount: {
+          decimals: number;
+        };
+      };
+      const mint = parsed.mint;
+      return [
+        accountInfo.pubkey.toBase58(),
+        {
+          accountAddress: accountInfo.pubkey.toBase58(),
+          ownerAddress,
+          mint,
+          decimals: parsed.tokenAmount.decimals,
+          name: shyftMetadata[mint]?.name,
+          symbol: shyftMetadata[mint]?.symbol ?? KNOWN_TOKEN_SYMBOLS[mint]
+        } satisfies SolanaTokenAccountContext
+      ] as const;
+    }) ?? []
+  );
+
+  return new Map(entries);
+}
+
+function collectCreatedAssociatedTokenAccountContexts(
+  summary: TransactionSummary,
+  ownerAddress: string
+): Map<string, SolanaTokenAccountContext> {
+  const normalizedOwner = ownerAddress.trim().toLowerCase();
+  const entries = summary.instructions.flatMap((instruction) => {
+    if (
+      instruction.title !== 'Create associated token account' &&
+      instruction.title !== 'Create associated token account (idempotent)'
+    ) {
+      return [];
+    }
+
+    const accountAddress = instruction.details?.find((detail) => detail.label === 'Account')?.value;
+    const accountOwner = instruction.details?.find((detail) => detail.label === 'Owner')?.value;
+    const mint = instruction.details?.find((detail) => detail.label === 'Mint')?.value;
+    if (!accountAddress || !mint || accountOwner?.trim().toLowerCase() !== normalizedOwner) {
+      return [];
+    }
+
+    return [
+      [
+        accountAddress,
+        {
+          accountAddress,
+          ownerAddress,
+          mint,
+          decimals: 0,
+          symbol: KNOWN_TOKEN_SYMBOLS[mint]
+        } satisfies SolanaTokenAccountContext
+      ] as const
+    ];
+  });
+
+  return new Map(entries);
+}
+
+async function enrichSolanaTransactionSummaryWithWalletContext(
+  summary: TransactionSummary,
+  connection: Connection,
+  network: string,
+  ownerAddress: string
+): Promise<TransactionSummary> {
+  const tokenAccountContexts = collectCreatedAssociatedTokenAccountContexts(summary, ownerAddress);
+  const existingTokenAccountContexts = await fetchSolanaWalletTokenAccountContexts(connection, network, ownerAddress);
+  for (const [accountAddress, context] of existingTokenAccountContexts.entries()) {
+    tokenAccountContexts.set(accountAddress, context);
+  }
+
+  const contextValues = Array.from(tokenAccountContexts.values());
+  const relevantMints = [
+    ...new Set(
+      [
+        ...summary.balanceChanges.map((change) => change.assetAddress?.trim()).filter((mint): mint is string => !!mint),
+        ...contextValues.map((context) => context.mint)
+      ]
+    )
+  ];
+
+  const mintsNeedingDisplayHints = relevantMints.filter((mint) => {
+    if (KNOWN_TOKEN_SYMBOLS[mint]) {
+      return false;
+    }
+
+    return !contextValues.some((context) => context.mint === mint && context.symbol);
+  });
+  const [mintDisplayHints, mintDecimalsEntries] = await Promise.all([
+    fetchSolanaMintDisplayHints(connection, mintsNeedingDisplayHints),
+    Promise.all(
+      relevantMints.map(async (mint) => {
+        try {
+          return [mint, await getMintDecimals(connection, mint)] as const;
+        } catch {
+          return [mint, 0] as const;
+        }
+      })
+    )
+  ]);
+  const mintDecimals = Object.fromEntries(mintDecimalsEntries);
+
+  return {
+    ...summary,
+    balanceChanges: summary.balanceChanges.map((change) => {
+      const context = tokenAccountContexts.get(change.account);
+      const assetAddress = change.assetAddress?.trim() || context?.mint;
+      const decimals =
+        change.decimals > 0
+          ? change.decimals
+          : context?.decimals || (assetAddress ? mintDecimals[assetAddress] ?? change.decimals : change.decimals);
+      const symbolHint =
+        (assetAddress ? KNOWN_TOKEN_SYMBOLS[assetAddress] : undefined) ??
+        context?.symbol ??
+        (assetAddress ? mintDisplayHints[assetAddress]?.symbol : undefined);
+      const nameHint = context?.name ?? (assetAddress ? mintDisplayHints[assetAddress]?.name : undefined);
+
+      return {
+        ...change,
+        ownerAddress: change.ownerAddress ?? context?.ownerAddress,
+        assetAddress: assetAddress ?? change.assetAddress,
+        assetLabel:
+          change.assetLabel === 'Token' || !change.assetLabel ? symbolHint ?? nameHint ?? change.assetLabel : change.assetLabel,
+        decimals,
+        amount: decimals !== change.decimals ? formatUiAmountExact(change.rawAmount, decimals) : change.amount
+      };
+    })
+  };
 }
 
 function getEvmStablecoinPriceUsd(symbol?: string): number | null {
