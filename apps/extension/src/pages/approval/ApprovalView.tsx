@@ -86,6 +86,19 @@ function formatLamports(lamports: number | null | undefined): string {
   })} SOL`;
 }
 
+function formatUsd(value: number | null | undefined): string | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return null;
+  }
+
+  return new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: value >= 100 ? 0 : 2,
+    maximumFractionDigits: value >= 100 ? 0 : 2
+  }).format(value);
+}
+
 function renderInstructionValue(value: string, isAddress?: boolean) {
   if (!isAddress) {
     return value;
@@ -101,6 +114,7 @@ function renderInstructionValue(value: string, isAddress?: boolean) {
 type WalletImpactPreviewItem = {
   direction: 'in' | 'out';
   amountText: string;
+  fiatText?: string | null;
   meta?: string;
 };
 
@@ -194,6 +208,7 @@ export function ApprovalView(props: {
       return walletImpactChanges.map((change) => ({
         direction: change.direction,
         amountText: `${change.amount} ${change.assetLabel}`,
+        fiatText: formatUsd(change.valueUsd),
         meta: change.assetAddress ? formatAddress(change.assetAddress) : undefined
       }));
     }
@@ -429,7 +444,14 @@ export function ApprovalView(props: {
               }
             />
             {approval.transactionSummary.estimatedFeeLamports != null ? (
-              <KeyValueRow label="Estimated fee" value={formatLamports(approval.transactionSummary.estimatedFeeLamports)} />
+              <KeyValueRow
+                label="Estimated fee"
+                value={
+                  approval.transactionSummary.feeUsd != null
+                    ? `${formatLamports(approval.transactionSummary.estimatedFeeLamports)} (${formatUsd(approval.transactionSummary.feeUsd)})`
+                    : formatLamports(approval.transactionSummary.estimatedFeeLamports)
+                }
+              />
             ) : null}
             {walletImpactPreviewItems.length ? (
               <div className="stack approval-impact-summary">
@@ -438,6 +460,7 @@ export function ApprovalView(props: {
                   {feePayerMatchesWallet && approval.transactionSummary.estimatedFeeLamports != null ? (
                     <span className="muted approval-impact-fee">
                       Network fee {formatLamports(approval.transactionSummary.estimatedFeeLamports)}
+                      {approval.transactionSummary.feeUsd != null ? ` (${formatUsd(approval.transactionSummary.feeUsd)})` : ''}
                     </span>
                   ) : null}
                 </div>
@@ -451,6 +474,7 @@ export function ApprovalView(props: {
                         <div className={`approval-impact-amount ${item.direction === 'in' ? 'positive' : 'negative'}`.trim()}>
                           {item.direction === 'in' ? '+' : '-'}
                           {item.amountText}
+                          {item.fiatText ? ` (${item.fiatText})` : ''}
                         </div>
                         {item.meta ? (
                           <div className="muted approval-impact-meta" title={item.meta}>
@@ -473,6 +497,7 @@ export function ApprovalView(props: {
                         <div className={`approval-balance-change-amount ${change.direction === 'in' ? 'positive' : 'negative'}`.trim()}>
                           {change.direction === 'in' ? '+' : '-'}
                           {change.amount} {change.assetLabel}
+                          {change.valueUsd != null ? ` (${formatUsd(change.valueUsd)})` : ''}
                         </div>
                         {change.assetAddress ? (
                           <div className="mono muted approval-balance-change-asset" title={change.assetAddress}>

@@ -68,6 +68,8 @@ export type TransactionBalanceChange = {
   decimals: number;
   assetLabel: string;
   assetAddress?: string;
+  priceUsd?: number | null;
+  valueUsd?: number | null;
 };
 
 export type TransactionSummary = {
@@ -77,6 +79,7 @@ export type TransactionSummary = {
   instructions: TransactionInstructionSummary[];
   warnings: string[];
   estimatedFeeLamports?: number | null;
+  feeUsd?: number | null;
   balanceChanges: TransactionBalanceChange[];
   simulation?: TransactionSimulationSummary;
 };

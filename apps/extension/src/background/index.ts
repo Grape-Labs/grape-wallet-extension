@@ -58,7 +58,8 @@ import {
   signMessageBytes,
   inspectTransaction,
   signSerializedTransaction,
-  signSerializedTransactions
+  signSerializedTransactions,
+  type TransactionSummary
 } from '@grape/solana';
 import {
   Authorized,
@@ -4866,12 +4867,16 @@ class WalletController {
 
     const transactionSummary =
       request.method === 'signTransaction' || request.method === 'signAndSendTransaction' || request.method === 'sendTransaction'
-        ? await inspectTransaction(request.params.transaction, this.createConnection(selectedNetwork, walletState))
+        ? await enrichSolanaTransactionSummaryWithUsd(
+            await inspectTransaction(request.params.transaction, this.createConnection(selectedNetwork, walletState))
+          )
         : request.method === 'signAllTransactions'
           ? {
-              ...(await inspectTransaction(
-                request.params.transactions[0],
-                this.createConnection(selectedNetwork, walletState)
+              ...(await enrichSolanaTransactionSummaryWithUsd(
+                await inspectTransaction(
+                  request.params.transactions[0],
+                  this.createConnection(selectedNetwork, walletState)
+                )
               )),
               warnings: ['Only the first transaction in this batch was decoded and simulated.']
             }
@@ -8585,6 +8590,21 @@ function getSuiStablecoinPriceUsd(symbol?: string): number | null {
   return normalized === 'USDC' || normalized === 'USDT' ? 1 : null;
 }
 
+function getSolanaStablecoinPriceUsd(mint?: string, symbol?: string): number | null {
+  const normalizedSymbol = symbol?.trim().toUpperCase();
+  if (normalizedSymbol === 'USDC' || normalizedSymbol === 'USDT') {
+    return 1;
+  }
+
+  const normalizedMint = mint?.trim();
+  if (!normalizedMint) {
+    return null;
+  }
+
+  const knownSymbol = KNOWN_TOKEN_SYMBOLS[normalizedMint]?.trim().toUpperCase();
+  return knownSymbol === 'USDC' || knownSymbol === 'USDT' ? 1 : null;
+}
+
 function getEvmStablecoinPriceUsd(symbol?: string): number | null {
   const normalized = symbol?.trim().toUpperCase();
   if (!normalized) {
@@ -8592,6 +8612,60 @@ function getEvmStablecoinPriceUsd(symbol?: string): number | null {
   }
 
   return normalized === 'USDC' || normalized === 'USDT' ? 1 : null;
+}
+
+async function enrichSolanaTransactionSummaryWithUsd(summary: TransactionSummary): Promise<TransactionSummary> {
+  const pricingMints = [
+    ...new Set(
+      [
+        summary.estimatedFeeLamports != null ? JUPITER_SOL_MINT : null,
+        ...summary.balanceChanges.map((change) => change.assetAddress?.trim() || (change.assetLabel === 'SOL' ? JUPITER_SOL_MINT : null))
+      ].filter((mint): mint is string => !!mint)
+    )
+  ];
+
+  if (pricingMints.length === 0) {
+    return summary;
+  }
+
+  let pricing: Record<string, { usdPrice: number | null; priceChange24h: number | null }> = {};
+  try {
+    pricing = await fetchJupiterPrices(pricingMints);
+  } catch {
+    pricing = {};
+  }
+
+  const feeNativeUsdPrice = pricing[JUPITER_SOL_MINT]?.usdPrice ?? getSolanaStablecoinPriceUsd(JUPITER_SOL_MINT, 'SOL');
+  const feeUsd =
+    typeof summary.estimatedFeeLamports === 'number' &&
+    Number.isFinite(summary.estimatedFeeLamports) &&
+    typeof feeNativeUsdPrice === 'number' &&
+    Number.isFinite(feeNativeUsdPrice)
+      ? (summary.estimatedFeeLamports / LAMPORTS_PER_SOL) * feeNativeUsdPrice
+      : null;
+
+  return {
+    ...summary,
+    feeUsd,
+    balanceChanges: summary.balanceChanges.map((change) => {
+      const pricingMint = change.assetAddress?.trim() || (change.assetLabel === 'SOL' ? JUPITER_SOL_MINT : undefined);
+      const priceUsd =
+        (pricingMint ? pricing[pricingMint]?.usdPrice ?? null : null) ??
+        getSolanaStablecoinPriceUsd(pricingMint, change.assetLabel);
+      const rawAmountNumber = Number(change.rawAmount);
+      const amountUi = Number.isFinite(rawAmountNumber) ? rawAmountNumber / 10 ** change.decimals : null;
+      const valueUsd =
+        amountUi !== null && typeof priceUsd === 'number' && Number.isFinite(priceUsd)
+          ? amountUi * priceUsd
+          : null;
+
+      return {
+        ...change,
+        priceUsd,
+        valueUsd
+      };
+    })
+  };
 }
 
 async function fetchSuiTokenPrices(
