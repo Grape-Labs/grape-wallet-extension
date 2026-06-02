@@ -447,6 +447,9 @@ function OptionsPage() {
               await refresh();
             }}
           />
+          {state.wallet.dappApprovalMode === 'non-strict' ? (
+            <p className="muted">Non-strict mode keeps the unlocked session alive much longer. The manual lock button still locks immediately.</p>
+          ) : null}
         </label>
         <label className="stack">
           <span className="muted">Theme</span>
@@ -513,11 +516,11 @@ function OptionsPage() {
               setState(nextState);
             }}
           >
-            <option value="safe">Safe · Ask for password / biometrics on each dApp transaction</option>
-            <option value="degen">Degen · Use the unlocked session for dApp transactions</option>
+            <option value="strict">Strict · Ask for password / biometrics on each dApp transaction</option>
+            <option value="non-strict">Non-strict · Ask once per unlocked session</option>
           </select>
           <p className="muted">
-            Safe mode re-authenticates each dApp transaction approval. Degen mode signs from the unlocked session until the wallet locks again.
+            Strict mode re-authenticates each dApp transaction approval. Non-strict mode signs from the unlocked session until the wallet locks again.
           </p>
         </label>
         <div className="stack">

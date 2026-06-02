@@ -11,7 +11,7 @@ export const STORAGE_KEYS = {
 export type WalletSetupState = 'empty' | 'ready';
 export type GrapeChain = 'solana' | 'sui' | 'monad' | 'ethereum';
 export type GrapeNetwork = 'mainnet-beta' | 'devnet';
-export type DappApprovalMode = 'safe' | 'degen';
+export type DappApprovalMode = 'strict' | 'non-strict';
 export type GrapeTheme =
   | 'grape'
   | 'comic'
@@ -172,7 +172,7 @@ export const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 export const MAX_RECENT_RECIPIENTS = 8;
 export const DEFAULT_THEME: GrapeTheme = 'grape';
 export const DEFAULT_AUTO_CONNECT_ENABLED = true;
-export const DEFAULT_DAPP_APPROVAL_MODE: DappApprovalMode = 'safe';
+export const DEFAULT_DAPP_APPROVAL_MODE: DappApprovalMode = 'strict';
 export const DEFAULT_CHAIN: GrapeChain = 'solana';
 
 export function normalizeTheme(theme: unknown): GrapeTheme {
@@ -306,6 +306,7 @@ export function removeWalletProfile(state: WalletState, walletId: string): Walle
       ...state,
       setup: 'empty',
       wallets: [],
+      dappApprovalMode: normalizeDappApprovalMode(state.dappApprovalMode),
       selectedWalletIds: {},
       selectedWalletId: undefined
     };
@@ -314,6 +315,7 @@ export function removeWalletProfile(state: WalletState, walletId: string): Walle
   const nextState: WalletState = {
     ...state,
     setup: 'ready',
+    dappApprovalMode: normalizeDappApprovalMode(state.dappApprovalMode),
     wallets: nextWallets
   };
 
@@ -451,7 +453,15 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
 }
 
 export function normalizeDappApprovalMode(mode: unknown): DappApprovalMode {
-  return mode === 'degen' ? 'degen' : DEFAULT_DAPP_APPROVAL_MODE;
+  if (mode === 'non-strict' || mode === 'degen') {
+    return 'non-strict';
+  }
+
+  if (mode === 'strict' || mode === 'safe') {
+    return 'strict';
+  }
+
+  return DEFAULT_DAPP_APPROVAL_MODE;
 }
 
 function normalizeTrackedReputationSpaceIds(value: string[] | undefined): string[] {

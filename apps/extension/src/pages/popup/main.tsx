@@ -37,7 +37,7 @@ import QRCode from 'qrcode';
 import extensionPackage from '../../../package.json';
 
 import { Button, Card, Input, KeyValueRow, PageShell, StatusPill } from '@grape/ui';
-import { STORAGE_KEYS } from '@grape/core';
+import { hasExecutableBridgeTransaction, STORAGE_KEYS } from '@grape/core';
 
 import type {
   ApprovalRecord,
@@ -73,6 +73,7 @@ import type {
 
 import { sendRuntimeMessage } from '../../shared/chrome';
 import { createBiometricUnlock, isBiometricUnlockSupported, resolveBiometricUnlockConfig, unlockWithBiometric } from '../../shared/biometric';
+import { ChainLogoBadge } from '../../shared/chains';
 import { JUPITER_SOL_MINT } from '../../shared/jupiter';
 import { getSupportedBridgeDestinations, LIFI_NATIVE_SYMBOL } from '../../shared/lifi';
 import { applyDocumentTheme, THEMES } from '../../shared/theme';
@@ -139,10 +140,10 @@ const SOLANA_LOGO_URL =
 const GRAPE_LOGO_URL = chrome.runtime.getURL('icons/grape_logo_white.png');
 const ASSET_CACHE_STORAGE_KEY = 'grape:asset-cache';
 const CHAIN_OPTIONS = [
-  { id: 'solana', label: 'Solana', shortLabel: 'SOL', glyph: 'S', enabled: true },
-  { id: 'sui', label: 'Sui', shortLabel: 'SUI', glyph: 'S', enabled: true },
-  { id: 'monad', label: 'Monad', shortLabel: 'MON', glyph: 'M', enabled: true },
-  { id: 'ethereum', label: 'Ethereum', shortLabel: 'ETH', glyph: 'E', enabled: true }
+  { id: 'solana', label: 'Solana', shortLabel: 'SOL', enabled: true },
+  { id: 'sui', label: 'Sui', shortLabel: 'SUI', enabled: true },
+  { id: 'monad', label: 'Monad', shortLabel: 'MON', enabled: true },
+  { id: 'ethereum', label: 'Ethereum', shortLabel: 'ETH', enabled: true }
 ] as const;
 const VISIBLE_CHAIN_OPTIONS = CHAIN_OPTIONS.filter((chain) => chain.enabled);
 
@@ -515,45 +516,6 @@ function formatWalletSourceLabel(
     default:
       return 'Created in Grape';
   }
-}
-
-function hasExecutableBridgeTransaction(quoteResponse: Record<string, unknown> | undefined): boolean {
-  if (!quoteResponse || typeof quoteResponse !== 'object') {
-    return false;
-  }
-
-  const directTransactionRequest =
-    typeof quoteResponse.transactionRequest === 'object' && quoteResponse.transactionRequest
-      ? (quoteResponse.transactionRequest as { to?: string; data?: string })
-      : null;
-  if (directTransactionRequest?.to && directTransactionRequest.data) {
-    return true;
-  }
-
-  const candidateCollections = [quoteResponse.includedSteps, quoteResponse.steps];
-  for (const collection of candidateCollections) {
-    if (!Array.isArray(collection)) {
-      continue;
-    }
-
-    for (const step of collection) {
-      if (typeof step !== 'object' || !step) {
-        continue;
-      }
-
-      const transactionRequest =
-        typeof (step as { transactionRequest?: unknown }).transactionRequest === 'object' &&
-        (step as { transactionRequest?: unknown }).transactionRequest
-          ? ((step as { transactionRequest: { to?: string; data?: string } }).transactionRequest)
-          : null;
-
-      if (transactionRequest?.to && transactionRequest.data) {
-        return true;
-      }
-    }
-  }
-
-  return false;
 }
 
 function getWalletSourceBadge(
@@ -2876,7 +2838,7 @@ function PopupPage() {
       wallets: [],
       selectedTheme: 'grape',
       autoConnectEnabled: true,
-      dappApprovalMode: 'safe',
+      dappApprovalMode: 'strict',
       privacyMode: false,
       trackedReputationSpaceIds: [],
       trackedVerificationSpaceIds: [],
@@ -3138,9 +3100,7 @@ function PopupPage() {
             aria-label="Switch chain"
             title={selectedChainOption?.label ?? 'Switch chain'}
           >
-            <span className="chain-switcher-badge" aria-hidden="true">
-              {compact ? selectedChainOption?.glyph : selectedChainOption?.shortLabel}
-            </span>
+            {selectedChainOption ? <ChainLogoBadge chain={selectedChainOption.id} /> : null}
             <span className="chain-switcher-label">
               {compact ? selectedChainOption?.shortLabel : selectedChainOption?.label}
             </span>
@@ -3159,9 +3119,7 @@ function PopupPage() {
                 }}
               >
                 <span className="wallet-menu-action-copy">
-                  <span className="chain-switcher-badge" aria-hidden="true">
-                    {chain.shortLabel}
-                  </span>
+                  <ChainLogoBadge chain={chain.id} />
                   <span>{chain.label}</span>
                 </span>
                 {selectedChain === chain.id ? <Check size={14} /> : null}
@@ -4016,9 +3974,8 @@ function PopupPage() {
                       }}
                     >
                       <span className="wallet-switcher-chain-copy">
-                        <span className="wallet-switcher-chain-code" aria-hidden="true">
-                          {chain.shortLabel}
-                        </span>
+                        <ChainLogoBadge chain={chain.id} />
+                        <span className="wallet-switcher-chain-code">{chain.label}</span>
                       </span>
                       <span className="wallet-switcher-chain-count">{walletCountByChain.get(chain.id) ?? 0}</span>
                     </button>
@@ -4163,7 +4120,7 @@ function PopupPage() {
             </Button>
 
             <p className="muted unlock-welcome-helper">
-              Unlock once per session. Grape will ask again only after you lock it or the idle timeout expires.
+              Unlock once per session. In non-strict mode, Grape stays unlocked much longer and asks again mainly after you lock it.
             </p>
           </form>
         </Card>
@@ -5891,15 +5848,15 @@ function PopupPage() {
               <div className="dapp-mode-grid" role="radiogroup" aria-label="dApp signing mode">
                 {[
                   {
-                    id: 'safe' as const,
-                    title: 'Safe',
+                    id: 'strict' as const,
+                    title: 'Strict',
                     detail: 'Ask for password or biometrics on each dApp transaction.',
                     meta: 'Best for normal use'
                   },
                   {
-                    id: 'degen' as const,
-                    title: 'Degen',
-                    detail: 'Use the unlocked session until the wallet locks again.',
+                    id: 'non-strict' as const,
+                    title: 'Non-strict',
+                    detail: 'Ask once per unlocked session, then reuse it until the wallet locks again.',
                     meta: 'Fastest signing flow'
                   }
                 ].map((mode) => {
@@ -5931,7 +5888,7 @@ function PopupPage() {
                   );
                 })}
               </div>
-              <p className="muted">This only changes dApp transaction approvals. Direct wallet actions keep their existing signing rules.</p>
+              <p className="muted">This controls dApp transaction approvals. Non-strict mode reuses the current unlocked session instead of asking again each time.</p>
             </div>
             <label className="stack">
               <span className="muted">Theme</span>
@@ -7223,7 +7180,8 @@ function PopupPage() {
       bridgeQuote?.routes.find((route) => route.id === bridgeSelectedRouteId) ??
       bridgeQuote?.routes[0] ??
       null;
-    const bridgeCanExecute = activeBridgeRoute ? hasExecutableBridgeTransaction(activeBridgeRoute.quoteResponse) : false;
+    const bridgeCanExecute =
+      activeBridgeRoute ? hasExecutableBridgeTransaction(activeBridgeRoute.quoteResponse, selectedChain) : false;
 
     if (isWatchOnlyWallet) {
       return (
@@ -7364,7 +7322,7 @@ function PopupPage() {
                       aria-label="Select destination chain"
                     >
                       <div className="bridge-select-copy">
-                        <span className="chain-switcher-badge">{destinationChainOption?.shortLabel ?? '--'}</span>
+                        {destinationChainOption ? <ChainLogoBadge chain={destinationChainOption.id} /> : null}
                         <div className="bridge-select-text">
                           <strong>{destinationChainOption?.label ?? 'Select chain'}</strong>
                           <span className="muted">Destination chain</span>
@@ -7388,7 +7346,7 @@ function PopupPage() {
                           }}
                         >
                           <span className="wallet-menu-action-copy">
-                            <span className="chain-switcher-badge">{option.shortLabel}</span>
+                            <ChainLogoBadge chain={option.id} />
                             <span>{option.label}</span>
                           </span>
                         </DropdownMenu.Item>
@@ -7439,7 +7397,7 @@ function PopupPage() {
                               <div className="wallet-menu-copy">
                                 <div className="wallet-menu-heading">
                                   <strong>{walletEntry.name}</strong>
-                                  <span className="wallet-chain-badge">{destinationChainOption?.shortLabel ?? '--'}</span>
+                                  {destinationChainOption ? <ChainLogoBadge chain={destinationChainOption.id} className="wallet-chain-badge" /> : null}
                                 </div>
                                 <div className="mono muted">{formatAddress(account?.publicKey)}</div>
                               </div>

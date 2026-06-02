@@ -445,7 +445,9 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('wallet_set_dapp_approval_mode'),
-    mode: z.enum(['safe', 'degen'])
+    mode: z.enum(['strict', 'non-strict', 'safe', 'degen']).transform((mode) =>
+      mode === 'degen' ? 'non-strict' : mode === 'safe' ? 'strict' : mode
+    )
   }),
   z.object({
     type: z.literal('wallet_set_custom_rpc'),

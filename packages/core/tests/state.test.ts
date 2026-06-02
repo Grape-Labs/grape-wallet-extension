@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
-import { createEmptyWalletState, migrateWalletState, normalizeTheme, rememberWalletRecipient, removeWalletProfile, removeWalletRecipient, type WalletProfile } from '../src/state';
+import {
+  createEmptyWalletState,
+  migrateWalletState,
+  normalizeDappApprovalMode,
+  normalizeTheme,
+  rememberWalletRecipient,
+  removeWalletProfile,
+  removeWalletRecipient,
+  type WalletProfile
+} from '../src/state';
 
 const vaultRecord = {
   version: 1 as const,
@@ -26,6 +35,14 @@ describe('wallet state', () => {
     expect(state.chainState.monad.selectedNetwork).toBe('mainnet-beta');
     expect(state.chainState.ethereum.selectedNetwork).toBe('mainnet-beta');
     expect(state.autoConnectEnabled).toBe(true);
+    expect(state.dappApprovalMode).toBe('strict');
+  });
+
+  it('normalizes legacy dapp approval mode values', () => {
+    expect(normalizeDappApprovalMode('safe')).toBe('strict');
+    expect(normalizeDappApprovalMode('degen')).toBe('non-strict');
+    expect(normalizeDappApprovalMode('strict')).toBe('strict');
+    expect(normalizeDappApprovalMode('non-strict')).toBe('non-strict');
   });
 
   it('migrates wallet profiles without recipients', () => {
@@ -201,6 +218,7 @@ describe('wallet state', () => {
     expect(nextState.wallets.map((wallet) => wallet.id)).toEqual(['wallet-2']);
     expect(nextState.selectedWalletId).toBe('wallet-2');
     expect(nextState.setup).toBe('ready');
+    expect(nextState.dappApprovalMode).toBe('strict');
   });
 
   it('removes the final wallet and returns to empty setup', () => {
@@ -264,5 +282,6 @@ describe('wallet state', () => {
     expect(nextState.wallets).toEqual([]);
     expect(nextState.selectedWalletId).toBeUndefined();
     expect(nextState.setup).toBe('empty');
+    expect(nextState.dappApprovalMode).toBe('strict');
   });
 });

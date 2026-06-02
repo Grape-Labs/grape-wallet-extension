@@ -9,6 +9,7 @@ import {
   DEFAULT_DAPP_APPROVAL_MODE,
   decryptText,
   DEFAULT_THEME,
+  extractExecutableBridgeTransactionRequest,
   GRAPE_VERIFICATION_REQUIRED_DAO_ID,
   encryptText,
   parseDeviceLinkPayloadText,
@@ -799,42 +800,6 @@ function resolveBridgeDestination(state: MobileWalletState, chain: GrapeChain, w
   return wallet;
 }
 
-function extractBridgeTransactionRequest(quoteResponse: Record<string, unknown>) {
-  const directTransactionRequest =
-    typeof quoteResponse.transactionRequest === 'object' && quoteResponse.transactionRequest
-      ? (quoteResponse.transactionRequest as { to?: string; data?: string; value?: string })
-      : null;
-
-  if (directTransactionRequest?.to && directTransactionRequest.data) {
-    return directTransactionRequest;
-  }
-
-  const candidateCollections = [quoteResponse.includedSteps, quoteResponse.steps];
-  for (const collection of candidateCollections) {
-    if (!Array.isArray(collection)) {
-      continue;
-    }
-
-    for (const step of collection) {
-      if (typeof step !== 'object' || !step) {
-        continue;
-      }
-
-      const transactionRequest =
-        typeof (step as { transactionRequest?: unknown }).transactionRequest === 'object' &&
-        (step as { transactionRequest?: unknown }).transactionRequest
-          ? ((step as { transactionRequest: { to?: string; data?: string; value?: string } }).transactionRequest)
-          : null;
-
-      if (transactionRequest?.to && transactionRequest.data) {
-        return transactionRequest;
-      }
-    }
-  }
-
-  return null;
-}
-
 function getBridgeAmountUi(
   quoteResponse: Record<string, unknown>,
   side: 'from' | 'to',
@@ -1024,8 +989,8 @@ export async function executeWalletBridge(input: {
   destinationWalletId?: string;
 }): Promise<MobileBridgeExecuteResponse> {
   const destinationWallet = resolveBridgeDestination(input.state, input.toChain, input.destinationWalletId);
-  const transactionRequest = extractBridgeTransactionRequest(input.quoteResponse);
-  if (!transactionRequest?.to || !transactionRequest.data) {
+  const transactionRequest = extractExecutableBridgeTransactionRequest(input.quoteResponse, input.wallet.chain);
+  if (!transactionRequest) {
     throw new Error('This bridge route requires an unsupported transaction format. Try a different route or amount.');
   }
 
@@ -1033,6 +998,9 @@ export async function executeWalletBridge(input: {
   let signature: string;
 
   if (input.wallet.chain === 'solana') {
+    if (!transactionRequest.data) {
+      throw new Error('This bridge route is missing the Solana transaction payload.');
+    }
     const { resolveSolanaVaultSecret } = loadSolanaDeriveModule();
     const { signAndSendSerializedTransaction } = loadSolanaSigningModule();
     const keypair =
@@ -1045,6 +1013,9 @@ export async function executeWalletBridge(input: {
       getMobileSolanaRpcUrl(DEFAULT_SOLANA_NETWORK)
     );
   } else if (input.wallet.chain === 'ethereum') {
+    if (!transactionRequest.to) {
+      throw new Error('This bridge route is missing the transaction target.');
+    }
     signature = await loadEthereumModule().sendEthereumTransactionRequest(
       DEFAULT_EVM_NETWORK,
       secret as VaultSecret,
@@ -1056,6 +1027,9 @@ export async function executeWalletBridge(input: {
       }
     );
   } else if (input.wallet.chain === 'monad') {
+    if (!transactionRequest.to) {
+      throw new Error('This bridge route is missing the transaction target.');
+    }
     signature = await loadMonadModule().sendMonadTransactionRequest(
       DEFAULT_EVM_NETWORK,
       secret as VaultSecret,

@@ -7,6 +7,7 @@ import {
   base64ToBytes,
   decryptText,
   encryptText,
+  extractExecutableBridgeTransactionRequest,
   getSelectedWallet,
   getSelectedWalletForChain,
   parseDeviceLinkPayloadText,
@@ -254,6 +255,7 @@ const REPUTATION_CACHE_TTL_MS = 120_000;
 const STAKE_RETRY_ATTEMPTS = 3;
 const DEVICE_LINK_TTL_MS = 10 * 60 * 1000;
 const DEVICE_LINK_KDF_ITERATIONS = 20_000;
+const NON_STRICT_IDLE_TIMEOUT_MS = 30 * 24 * 60 * 60 * 1000;
 
 function tryParseSolanaPublicKey(value: string): PublicKey | null {
   try {
@@ -571,6 +573,14 @@ class WalletController {
 
     await this.ensureUnlockedSecretsLoaded();
     return Object.keys(this.unlockedSecrets);
+  }
+
+  private getEffectiveIdleTimeoutMs(walletState: Awaited<ReturnType<WalletController['getWalletState']>>) {
+    if (walletState.dappApprovalMode === 'non-strict') {
+      return Math.max(walletState.idleTimeoutMs, NON_STRICT_IDLE_TIMEOUT_MS);
+    }
+
+    return walletState.idleTimeoutMs;
   }
 
   private async invalidateAssetCache(cacheKey?: string) {
@@ -1447,7 +1457,7 @@ class WalletController {
       }
       return session;
     }
-    if (isSessionExpired(session, wallet.idleTimeoutMs)) {
+    if (isSessionExpired(session, this.getEffectiveIdleTimeoutMs(wallet))) {
       await this.clearUnlockedSecrets();
       const locked = {
         ...session,
@@ -1668,7 +1678,7 @@ class WalletController {
       setup: 'ready' as const,
       wallets: [...current.wallets, solanaProfile, suiProfile, monadProfile, ethereumProfile],
       sharedBiometricUnlock: biometricUnlock ?? current.sharedBiometricUnlock,
-      selectedChain: 'solana' as const,
+      selectedChain: current.setup === 'ready' ? current.selectedChain : ('solana' as const),
       selectedWalletIds: {
         ...current.selectedWalletIds,
         solana: solanaProfile.id,
@@ -4583,6 +4593,9 @@ class WalletController {
     if (!activeAccount) {
       throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
     }
+    if (walletState.selectedNetwork !== 'mainnet-beta') {
+      throw new RpcError('BRIDGE_UNAVAILABLE', 'Bridge is currently available only on mainnet-beta.');
+    }
     if (selectedWallet.chain === 'sui') {
       throw new RpcError('UNSUPPORTED_CHAIN', 'Bridge source is coming soon for Sui wallets.');
     }
@@ -4629,6 +4642,9 @@ class WalletController {
     if (!activeAccount) {
       throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
     }
+    if (walletState.selectedNetwork !== 'mainnet-beta') {
+      throw new RpcError('BRIDGE_UNAVAILABLE', 'Bridge is currently available only on mainnet-beta.');
+    }
     if (selectedWallet.chain === 'sui') {
       throw new RpcError('UNSUPPORTED_CHAIN', 'Bridge source is coming soon for Sui wallets.');
     }
@@ -4644,9 +4660,9 @@ class WalletController {
       throw new RpcError('LEDGER_UNSUPPORTED', 'Bridge execution is not available for Ledger wallets yet.');
     }
 
-    const transactionRequest = this.extractBridgeTransactionRequest(input.quoteResponse);
+    const transactionRequest = extractExecutableBridgeTransactionRequest(input.quoteResponse, selectedWallet.chain);
 
-    if (!transactionRequest?.to || !transactionRequest.data) {
+    if (!transactionRequest) {
       throw new RpcError(
         'BRIDGE_UNSUPPORTED',
         'This bridge route requires an unsupported transaction format. Try a different route or amount.'
@@ -4659,12 +4675,18 @@ class WalletController {
     let signature: string;
     try {
       if (selectedWallet.chain === 'solana') {
+        if (!transactionRequest.data) {
+          throw new RpcError('BRIDGE_UNSUPPORTED', 'This bridge route is missing the Solana transaction payload.');
+        }
         signature = await signAndSendSerializedTransaction(
           transactionRequest.data,
           this.resolveSolanaSignerForWallet(secret, selectedWallet, activeAccount.publicKey),
           this.resolveRpcEndpoint(walletState.selectedNetwork, walletState)
         );
       } else if (selectedWallet.chain === 'ethereum') {
+        if (!transactionRequest.to) {
+          throw new RpcError('BRIDGE_UNSUPPORTED', 'This bridge route is missing the transaction target.');
+        }
         signature = await sendEthereumTransactionRequest(this.resolveEthereumNetwork(walletState.selectedNetwork), secret, {
           to: transactionRequest.to,
           data: transactionRequest.data,
@@ -4672,6 +4694,9 @@ class WalletController {
           customRpcUrl: walletState.chainState.ethereum.customRpcUrl
         });
       } else if (selectedWallet.chain === 'monad') {
+        if (!transactionRequest.to) {
+          throw new RpcError('BRIDGE_UNSUPPORTED', 'This bridge route is missing the transaction target.');
+        }
         signature = await sendMonadTransactionRequest(this.resolveMonadNetwork(walletState.selectedNetwork), secret, {
           to: transactionRequest.to,
           data: transactionRequest.data,
@@ -4713,42 +4738,6 @@ class WalletController {
     }
 
     return { wallet, account };
-  }
-
-  private extractBridgeTransactionRequest(quoteResponse: Record<string, unknown>) {
-    const directTransactionRequest =
-      typeof quoteResponse.transactionRequest === 'object' && quoteResponse.transactionRequest
-        ? (quoteResponse.transactionRequest as { to?: string; data?: string; value?: string })
-        : null;
-
-    if (directTransactionRequest?.to && directTransactionRequest.data) {
-      return directTransactionRequest;
-    }
-
-    const candidateCollections = [quoteResponse.includedSteps, quoteResponse.steps];
-    for (const collection of candidateCollections) {
-      if (!Array.isArray(collection)) {
-        continue;
-      }
-
-      for (const step of collection) {
-        if (typeof step !== 'object' || !step) {
-          continue;
-        }
-
-        const transactionRequest =
-          typeof (step as { transactionRequest?: unknown }).transactionRequest === 'object' &&
-          (step as { transactionRequest?: unknown }).transactionRequest
-            ? ((step as { transactionRequest: { to?: string; data?: string; value?: string } }).transactionRequest)
-            : null;
-
-        if (transactionRequest?.to && transactionRequest.data) {
-          return transactionRequest;
-        }
-      }
-    }
-
-    return null;
   }
 
   private getBridgeAmountUi(
@@ -5304,7 +5293,7 @@ class WalletController {
       requiresPassword:
         approvalWallet?.signer.kind === 'ledger'
           ? false
-          : walletState.dappApprovalMode === 'degen' && kind !== 'connect'
+          : walletState.dappApprovalMode === 'non-strict' && kind !== 'connect'
             ? session.locked
           : shouldRequireReauthForApproval(kind, walletState.dappApprovalMode)
             ? true
@@ -5562,7 +5551,7 @@ function shouldRequireReauthForApproval(
   kind: ApprovalRecord['kind'],
   mode: import('@grape/core').DappApprovalMode | undefined
 ) {
-  if (mode !== 'safe') {
+  if (mode !== 'strict') {
     return false;
   }
 

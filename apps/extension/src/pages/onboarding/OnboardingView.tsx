@@ -6,6 +6,7 @@ import { Button, Card, Input, MnemonicGrid, PageShell, TextArea } from '@grape/u
 import { importEthereumPrivateKey, validateEthereumAddress, validateEthereumPrivateKey } from '@grape/ethereum';
 import { importMonadPrivateKey, validateMonadAddress, validateMonadPrivateKey } from '@grape/monad';
 import { importSuiPrivateKey, validateSuiAddress, validateSuiPrivateKey } from '@grape/sui';
+import { ChainLogoBadge } from '../../shared/chains';
 import {
   createDeterministicPasskeyWalletSetup,
   isDeterministicPasskeyWalletSupported,
@@ -50,6 +51,12 @@ type LedgerCandidate = {
 
 const LEDGER_ACCOUNT_SCAN_BATCH_SIZE = 16;
 const PASSKEY_WALLET_SETUP_ENABLED = false;
+const IMPORT_CHAIN_OPTIONS = [
+  { id: 'solana', label: 'Solana', shortLabel: 'SOL' },
+  { id: 'sui', label: 'Sui', shortLabel: 'SUI' },
+  { id: 'monad', label: 'Monad', shortLabel: 'MON' },
+  { id: 'ethereum', label: 'Ethereum', shortLabel: 'ETH' }
+] as const satisfies ReadonlyArray<{ id: ImportChain; label: string; shortLabel: string }>;
 
 function getLedgerCandidateKey(account: Pick<LedgerCandidate, 'publicKey' | 'derivationPath'>) {
   return `${account.publicKey}:${account.derivationPath}`;
@@ -118,6 +125,39 @@ function getChainLabel(chain: ImportChain) {
     case 'ethereum':
       return 'Ethereum';
   }
+}
+
+function renderChainOptionButtons<TChain extends ImportChain>(input: {
+  value: TChain;
+  onChange: (chain: TChain) => void;
+  onBeforeChange?: () => void;
+}) {
+  return (
+    <div className="inline wrap-actions chain-option-grid">
+      {IMPORT_CHAIN_OPTIONS.map((option) => {
+        const active = input.value === option.id;
+        return (
+          <Button
+            key={option.id}
+            tone={active ? 'primary' : 'secondary'}
+            className={`chain-option-button ${active ? 'active' : ''}`.trim()}
+            onClick={() => {
+              if (active) {
+                return;
+              }
+              input.onBeforeChange?.();
+              input.onChange(option.id as TChain);
+            }}
+          >
+            <span className="chain-option-button-copy">
+              <ChainLogoBadge chain={option.id} />
+              <span>{option.label}</span>
+            </span>
+          </Button>
+        );
+      })}
+    </div>
+  );
 }
 
 function generateSetupPassword() {
@@ -529,9 +569,11 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
       const pendingPasskeySetup = isEasyPasskeyPath ? await createDeterministicPasskeyWalletSetup() : null;
       const walletMnemonic = pendingPasskeySetup ? entropyToWalletMnemonic(pendingPasskeySetup.mnemonicEntropy) : mnemonic;
       const walletPassword = pendingPasskeySetup ? pendingPasskeySetup.vaultPassword : setupPassword;
+      let importedState: WalletStateResponse | null = null;
+      let importedChain: ImportChain | null = null;
 
       if (isEasyRestorePath) {
-        await sendRuntimeMessage<WalletStateResponse>({
+        importedState = await sendRuntimeMessage<WalletStateResponse>({
           type: 'wallet_import_device_link',
           payload: restorePayload.trim(),
           pairingCode: restorePairingCode.trim(),
@@ -539,7 +581,7 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
         });
       } else if (mode === 'create') {
         const account = deriveSolanaAccount0(walletMnemonic);
-        await sendRuntimeMessage<WalletStateResponse>({
+        importedState = await sendRuntimeMessage<WalletStateResponse>({
           type: 'wallet_create',
           mnemonic: walletMnemonic,
           password: walletPassword,
@@ -551,7 +593,7 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
           throw new Error('Enter a valid 12-word or 24-word recovery phrase.');
         }
         const account = deriveSolanaAccount0(walletMnemonic);
-        await sendRuntimeMessage<WalletStateResponse>({
+        importedState = await sendRuntimeMessage<WalletStateResponse>({
           type: 'wallet_import',
           mnemonic: walletMnemonic,
           password: walletPassword,
@@ -564,28 +606,30 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
             throw new Error(`Enter a valid ${getChainLabel(privateKeyChain)} private key.`);
           }
           const importedPublicKey = importPrivateKeyForChain(privateKeyChain, importPrivateKey);
-          await sendRuntimeMessage<WalletStateResponse>({
+          importedState = await sendRuntimeMessage<WalletStateResponse>({
             type: 'wallet_import_private_key',
             chain: privateKeyChain,
             privateKey: importPrivateKey.trim(),
             password: isEasyPasskeyPath && needsExistingWalletPasswordForPasskey ? password : setupPassword,
             publicKey: importedPublicKey
           });
+          importedChain = privateKeyChain;
         } else if (importMethod === 'watch-only') {
           if (!validateWatchOnlyAddress(watchOnlyChain, watchOnlyPublicKey)) {
             throw new Error(`Enter a valid ${getChainLabel(watchOnlyChain)} wallet address.`);
           }
-          await sendRuntimeMessage<WalletStateResponse>({
+          importedState = await sendRuntimeMessage<WalletStateResponse>({
             type: 'wallet_import_watch_only',
             chain: watchOnlyChain,
             publicKey: watchOnlyPublicKey.trim()
           });
+          importedChain = watchOnlyChain;
         } else {
           if (ledgerSelectedAccounts.length === 0) {
             throw new Error('Connect your Ledger and choose at least one account first.');
           }
           if (ledgerSelectedAccounts.length === 1) {
-            await sendRuntimeMessage<WalletStateResponse>({
+            importedState = await sendRuntimeMessage<WalletStateResponse>({
               type: 'wallet_import_ledger',
               chain: ledgerChain,
               derivationPath: ledgerSelectedAccounts[0].derivationPath,
@@ -593,13 +637,26 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
               publicKey: ledgerSelectedAccounts[0].publicKey
             });
           } else {
-            await sendRuntimeMessage<WalletStateResponse>({
+            importedState = await sendRuntimeMessage<WalletStateResponse>({
               type: 'wallet_import_ledger_batch',
               chain: ledgerChain,
               password: isEasyPasskeyPath && needsExistingWalletPasswordForPasskey ? password : setupPassword,
               accounts: ledgerSelectedAccounts
             });
           }
+          importedChain = ledgerChain;
+        }
+      }
+
+      if (importedState && importedChain) {
+        const importedWalletId =
+          importedState.wallet.selectedWalletIds[importedChain] ??
+          importedState.wallet.wallets.find((wallet) => wallet.chain === importedChain)?.id;
+        if (importedWalletId) {
+          importedState = await sendRuntimeMessage<WalletStateResponse>({
+            type: 'wallet_select',
+            walletId: importedWalletId
+          });
         }
       }
 
@@ -913,20 +970,10 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
                 <div className="stack">
                   <label className="stack">
                     <span className="muted">Chain</span>
-                    <div className="inline wrap-actions">
-                      <Button tone={privateKeyChain === 'solana' ? 'primary' : 'secondary'} onClick={() => setPrivateKeyChain('solana')}>
-                        Solana
-                      </Button>
-                      <Button tone={privateKeyChain === 'sui' ? 'primary' : 'secondary'} onClick={() => setPrivateKeyChain('sui')}>
-                        Sui
-                      </Button>
-                      <Button tone={privateKeyChain === 'monad' ? 'primary' : 'secondary'} onClick={() => setPrivateKeyChain('monad')}>
-                        Monad
-                      </Button>
-                      <Button tone={privateKeyChain === 'ethereum' ? 'primary' : 'secondary'} onClick={() => setPrivateKeyChain('ethereum')}>
-                        Ethereum
-                      </Button>
-                    </div>
+                    {renderChainOptionButtons({
+                      value: privateKeyChain,
+                      onChange: setPrivateKeyChain
+                    })}
                   </label>
                   <label className="stack">
                     <span className="muted">Private key</span>
@@ -952,20 +999,10 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
                 <div className="stack">
                   <label className="stack">
                     <span className="muted">Chain</span>
-                    <div className="inline wrap-actions">
-                      <Button tone={watchOnlyChain === 'solana' ? 'primary' : 'secondary'} onClick={() => setWatchOnlyChain('solana')}>
-                        Solana
-                      </Button>
-                      <Button tone={watchOnlyChain === 'sui' ? 'primary' : 'secondary'} onClick={() => setWatchOnlyChain('sui')}>
-                        Sui
-                      </Button>
-                      <Button tone={watchOnlyChain === 'monad' ? 'primary' : 'secondary'} onClick={() => setWatchOnlyChain('monad')}>
-                        Monad
-                      </Button>
-                      <Button tone={watchOnlyChain === 'ethereum' ? 'primary' : 'secondary'} onClick={() => setWatchOnlyChain('ethereum')}>
-                        Ethereum
-                      </Button>
-                    </div>
+                    {renderChainOptionButtons({
+                      value: watchOnlyChain,
+                      onChange: setWatchOnlyChain
+                    })}
                   </label>
                   <label className="stack">
                     <span className="muted">Public wallet address</span>
@@ -992,52 +1029,15 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
                 <div className="stack">
                   <label className="stack">
                     <span className="muted">Chain</span>
-                    <div className="inline wrap-actions">
-                      <Button
-                        tone={ledgerChain === 'solana' ? 'primary' : 'secondary'}
-                        onClick={() => {
-                          setLedgerChain('solana');
-                          setLedgerAccounts([]);
-                          setLedgerSelectedAccounts([]);
-                          setLedgerScanCount(LEDGER_ACCOUNT_SCAN_BATCH_SIZE);
-                        }}
-                      >
-                        Solana
-                      </Button>
-                      <Button
-                        tone={ledgerChain === 'sui' ? 'primary' : 'secondary'}
-                        onClick={() => {
-                          setLedgerChain('sui');
-                          setLedgerAccounts([]);
-                          setLedgerSelectedAccounts([]);
-                          setLedgerScanCount(LEDGER_ACCOUNT_SCAN_BATCH_SIZE);
-                        }}
-                      >
-                        Sui
-                      </Button>
-                      <Button
-                        tone={ledgerChain === 'monad' ? 'primary' : 'secondary'}
-                        onClick={() => {
-                          setLedgerChain('monad');
-                          setLedgerAccounts([]);
-                          setLedgerSelectedAccounts([]);
-                          setLedgerScanCount(LEDGER_ACCOUNT_SCAN_BATCH_SIZE);
-                        }}
-                      >
-                        Monad
-                      </Button>
-                      <Button
-                        tone={ledgerChain === 'ethereum' ? 'primary' : 'secondary'}
-                        onClick={() => {
-                          setLedgerChain('ethereum');
-                          setLedgerAccounts([]);
-                          setLedgerSelectedAccounts([]);
-                          setLedgerScanCount(LEDGER_ACCOUNT_SCAN_BATCH_SIZE);
-                        }}
-                      >
-                        Ethereum
-                      </Button>
-                    </div>
+                    {renderChainOptionButtons({
+                      value: ledgerChain,
+                      onChange: setLedgerChain,
+                      onBeforeChange: () => {
+                        setLedgerAccounts([]);
+                        setLedgerSelectedAccounts([]);
+                        setLedgerScanCount(LEDGER_ACCOUNT_SCAN_BATCH_SIZE);
+                      }
+                    })}
                   </label>
                   <p className="muted">
                     Connect your Ledger, unlock it, open the {getChainLabel(ledgerChain)} app, then scan derived accounts on{' '}

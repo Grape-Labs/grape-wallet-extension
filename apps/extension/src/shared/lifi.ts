@@ -210,12 +210,18 @@ export async function fetchNativeBridgeQuote(input: {
     { id: 'cheapest', label: 'Cheapest route', order: 'CHEAPEST' },
     { id: 'fastest', label: 'Fastest route', order: 'FASTEST' }
   ] as const;
+  const quoteErrors: Error[] = [];
 
   const quotes = await Promise.all(
     orderVariants.map(async (variant) => {
       const nextParams = new URLSearchParams(params);
       nextParams.set('order', variant.order);
-      const quote = await fetchLifiJson<LifiQuoteResponse>('/quote', nextParams).catch(() => null);
+      const quote = await fetchLifiJson<LifiQuoteResponse>('/quote', nextParams).catch((error) => {
+        if (error instanceof Error) {
+          quoteErrors.push(error);
+        }
+        return null;
+      });
       if (!quote) {
         return null;
       }
@@ -266,7 +272,7 @@ export async function fetchNativeBridgeQuote(input: {
     });
 
   if (routes.length === 0) {
-    throw new Error('Unable to fetch a bridge quote right now.');
+    throw quoteErrors[0] ?? new Error('Unable to fetch a bridge quote right now.');
   }
 
   return {
