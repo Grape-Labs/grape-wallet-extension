@@ -3312,6 +3312,12 @@ body[data-surface='popup'] .asset-panel-card {
   font-size: 0.76rem;
 }
 
+.governance-vote-source-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .governance-vote-actions {
   display: flex;
   flex-wrap: wrap;

@@ -387,6 +387,85 @@ function formatGovernanceVoteSourceLabel(
     : 'your voting power';
 }
 
+type GovernanceVoteSourceSummary = {
+  directAvailable: number;
+  directVoted: number;
+  delegatedAvailable: number;
+  delegatedVoted: number;
+  availableCount: number;
+  votedCount: number;
+};
+
+function summarizeGovernanceVoteSources(
+  voteSources: WalletGovernanceResponse['proposals'][number]['voteSources']
+): GovernanceVoteSourceSummary {
+  return voteSources.reduce<GovernanceVoteSourceSummary>(
+    (summary, source) => {
+      const votedKey = source.isDelegate ? 'delegatedVoted' : 'directVoted';
+      const availableKey = source.isDelegate ? 'delegatedAvailable' : 'directAvailable';
+      if (source.hasVoted) {
+        summary[votedKey] += 1;
+        summary.votedCount += 1;
+      } else {
+        summary[availableKey] += 1;
+        summary.availableCount += 1;
+      }
+      return summary;
+    },
+    {
+      directAvailable: 0,
+      directVoted: 0,
+      delegatedAvailable: 0,
+      delegatedVoted: 0,
+      availableCount: 0,
+      votedCount: 0
+    }
+  );
+}
+
+function formatVoteSourceCount(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? '' : 's'}`;
+}
+
+function getGovernanceVoteSourceStatusPills(summary: GovernanceVoteSourceSummary): Array<{
+  label: string;
+  tone: 'neutral' | 'success';
+}> {
+  const pills: Array<{ label: string; tone: 'neutral' | 'success' }> = [];
+  if (summary.directVoted > 0) {
+    pills.push({ label: 'Wallet voted', tone: 'success' });
+  }
+  if (summary.directAvailable > 0) {
+    pills.push({ label: 'Wallet vote open', tone: 'neutral' });
+  }
+  if (summary.delegatedVoted > 0) {
+    pills.push({
+      label: `${formatVoteSourceCount(summary.delegatedVoted, 'delegated vote')} cast`,
+      tone: 'success'
+    });
+  }
+  if (summary.delegatedAvailable > 0) {
+    pills.push({
+      label: `${formatVoteSourceCount(summary.delegatedAvailable, 'delegated vote')} open`,
+      tone: 'neutral'
+    });
+  }
+  return pills;
+}
+
+function getGovernanceVoteActionNote(summary: GovernanceVoteSourceSummary): string | null {
+  if (summary.votedCount === 0 || summary.availableCount === 0) {
+    return null;
+  }
+  if (summary.directVoted > 0 && summary.delegatedAvailable > 0 && summary.directAvailable === 0) {
+    return `Your wallet already voted. The actions below apply only to the remaining ${formatVoteSourceCount(summary.delegatedAvailable, 'delegated vote')}.`;
+  }
+  if (summary.delegatedVoted > 0 && summary.directAvailable > 0 && summary.delegatedAvailable === 0) {
+    return 'A delegated vote source already voted. The actions below apply only to your wallet vote.';
+  }
+  return `Some vote sources already voted. The actions below apply only to the remaining ${formatVoteSourceCount(summary.availableCount, 'vote source')}.`;
+}
+
 function formatRelativeTimeFromNow(targetUnixSeconds: number, nowUnixSeconds = Math.floor(Date.now() / 1000)): string {
   const deltaSeconds = Math.trunc(targetUnixSeconds - nowUnixSeconds);
   const absSeconds = Math.abs(deltaSeconds);
@@ -417,10 +496,14 @@ function getGovernanceProposalTimeMeta(
   noteText: string | null;
   votingWindowOpen: boolean;
 } {
+  const voteSourceSummary = summarizeGovernanceVoteSources(proposal.voteSources ?? []);
+  const hasRemainingVotes = voteSourceSummary.availableCount > 0;
+  const hasAnyVotes = voteSourceSummary.votedCount > 0;
+
   if (!proposal.votingEndsAt) {
     return {
-      badgeLabel: proposal.canVote ? 'Vote now' : proposal.hasVoted ? 'Voted' : proposal.state,
-      badgeTone: proposal.canVote || proposal.hasVoted ? 'success' : 'neutral',
+      badgeLabel: hasRemainingVotes ? (hasAnyVotes ? 'Partially voted' : 'Vote now') : hasAnyVotes ? 'Voted' : proposal.state,
+      badgeTone: hasRemainingVotes ? (hasAnyVotes ? 'warning' : 'success') : hasAnyVotes ? 'success' : 'neutral',
       metaText: null,
       noteText: null,
       votingWindowOpen: true
@@ -432,8 +515,8 @@ function getGovernanceProposalTimeMeta(
 
   if (votingWindowOpen) {
     return {
-      badgeLabel: proposal.canVote ? 'Vote now' : proposal.hasVoted ? 'Voted' : proposal.state,
-      badgeTone: proposal.canVote || proposal.hasVoted ? 'success' : 'neutral',
+      badgeLabel: hasRemainingVotes ? (hasAnyVotes ? 'Partially voted' : 'Vote now') : hasAnyVotes ? 'Voted' : proposal.state,
+      badgeTone: hasRemainingVotes ? (hasAnyVotes ? 'warning' : 'success') : hasAnyVotes ? 'success' : 'neutral',
       metaText: `Ending ${relativeTime}`,
       noteText: null,
       votingWindowOpen
@@ -3592,13 +3675,16 @@ function PopupPage() {
       : false;
     const hasDaoVotingPower = hasCommunityPower || hasCouncilPower;
     const proposalVoteSources = proposal.voteSources ?? [];
+    const voteSourceSummary = summarizeGovernanceVoteSources(proposalVoteSources);
     const availableVoteSources = proposalVoteSources.filter((source) => !source.hasVoted);
     const hasProposalVoteSources = proposalVoteSources.length > 0;
     const hasDelegatedProposalVoteSource = availableVoteSources.some((source) => source.isDelegate);
+    const voteSourceStatusPills = getGovernanceVoteSourceStatusPills(voteSourceSummary);
     const timeMeta = getGovernanceProposalTimeMeta(proposal, nowUnixSeconds);
     const canVoteNow = proposal.canVote && timeMeta.votingWindowOpen;
     const proposalUrl = buildGovernanceProposalUrl(proposal.daoId, proposal.proposalId);
     const voteDecimals = getGovernanceVoteDecimals(proposal, daoSummary);
+    const voteActionNote = canVoteNow ? getGovernanceVoteActionNote(voteSourceSummary) : null;
     const inactiveVotingPowerMessage =
       !timeMeta.votingWindowOpen && timeMeta.noteText
         ? timeMeta.noteText
@@ -3664,57 +3750,69 @@ function PopupPage() {
           {BigInt(proposal.noVotes) > BigInt(0) ? <span>No {formatVotingPower(BigInt(proposal.noVotes), voteDecimals, true)}</span> : null}
           {BigInt(proposal.denyVotes) > BigInt(0) ? <span>Deny {formatVotingPower(BigInt(proposal.denyVotes), voteDecimals, true)}</span> : null}
         </div>
+        {voteSourceStatusPills.length > 0 ? (
+          <div className="governance-vote-source-pills">
+            {voteSourceStatusPills.map((pill) => (
+              <StatusPill key={`${proposal.proposalId}:${pill.label}`} tone={pill.tone}>
+                {pill.label}
+              </StatusPill>
+            ))}
+          </div>
+        ) : null}
         {canVoteNow ? (
-          <div className="governance-vote-actions">
-            {proposal.choices.map((choice) => (
+          <>
+            {voteActionNote ? <p className="muted governance-proposal-note">{voteActionNote}</p> : null}
+            <div className="governance-vote-actions">
+              {proposal.choices.map((choice) => (
                 <Button
                   key={`${proposal.proposalId}:${choice.rank}`}
                   tone="secondary"
                   disabled={
-                  governanceVotingProposalId === proposal.proposalId || !governanceVotingFallbackReady
+                    governanceVotingProposalId === proposal.proposalId || !governanceVotingFallbackReady
                   }
-                onClick={() =>
-                  void handleGovernanceVote({
-                    daoId: proposal.daoId,
-                    governanceProgramId: proposal.governanceProgramId,
-                    governanceId: proposal.governanceId,
-                    proposalId: proposal.proposalId,
-                    proposalOwnerRecordId: proposal.proposalOwnerRecordId,
-                    tokenOwnerRecordId: proposal.tokenOwnerRecordId,
-                    governingTokenMint: proposal.governingTokenMint,
-                    voteKind: 'approve',
-                    choiceRank: choice.rank,
-                    voteSources: proposal.voteSources
-                  })
-                }
-              >
-                {governanceVotingProposalId === proposal.proposalId ? 'Submitting…' : choice.label}
-              </Button>
-            ))}
-            {proposal.hasDenyOption ? (
-              <Button
-                tone="secondary"
-                disabled={
-                  governanceVotingProposalId === proposal.proposalId || !governanceVotingFallbackReady
-                }
-                onClick={() =>
-                  void handleGovernanceVote({
-                    daoId: proposal.daoId,
-                    governanceProgramId: proposal.governanceProgramId,
-                    governanceId: proposal.governanceId,
-                    proposalId: proposal.proposalId,
-                    proposalOwnerRecordId: proposal.proposalOwnerRecordId,
-                    tokenOwnerRecordId: proposal.tokenOwnerRecordId,
-                    governingTokenMint: proposal.governingTokenMint,
-                    voteKind: 'deny',
-                    voteSources: proposal.voteSources
-                  })
-                }
-              >
-                {governanceVotingProposalId === proposal.proposalId ? 'Submitting…' : 'Deny'}
-              </Button>
-            ) : null}
-          </div>
+                  onClick={() =>
+                    void handleGovernanceVote({
+                      daoId: proposal.daoId,
+                      governanceProgramId: proposal.governanceProgramId,
+                      governanceId: proposal.governanceId,
+                      proposalId: proposal.proposalId,
+                      proposalOwnerRecordId: proposal.proposalOwnerRecordId,
+                      tokenOwnerRecordId: proposal.tokenOwnerRecordId,
+                      governingTokenMint: proposal.governingTokenMint,
+                      voteKind: 'approve',
+                      choiceRank: choice.rank,
+                      voteSources: proposal.voteSources
+                    })
+                  }
+                >
+                  {governanceVotingProposalId === proposal.proposalId ? 'Submitting…' : choice.label}
+                </Button>
+              ))}
+              {proposal.hasDenyOption ? (
+                <Button
+                  tone="secondary"
+                  disabled={
+                    governanceVotingProposalId === proposal.proposalId || !governanceVotingFallbackReady
+                  }
+                  onClick={() =>
+                    void handleGovernanceVote({
+                      daoId: proposal.daoId,
+                      governanceProgramId: proposal.governanceProgramId,
+                      governanceId: proposal.governanceId,
+                      proposalId: proposal.proposalId,
+                      proposalOwnerRecordId: proposal.proposalOwnerRecordId,
+                      tokenOwnerRecordId: proposal.tokenOwnerRecordId,
+                      governingTokenMint: proposal.governingTokenMint,
+                      voteKind: 'deny',
+                      voteSources: proposal.voteSources
+                    })
+                  }
+                >
+                  {governanceVotingProposalId === proposal.proposalId ? 'Submitting…' : 'Deny'}
+                </Button>
+              ) : null}
+            </div>
+          </>
         ) : (
           <p className="muted governance-proposal-note">
             {inactiveVotingPowerMessage}
