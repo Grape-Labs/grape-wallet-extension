@@ -8,6 +8,7 @@ import type {
   ProviderRequest,
   SendAsset,
   SessionState,
+  WalletContact,
   WalletRecipient,
   WalletState
 } from '@grape/core';
@@ -48,6 +49,7 @@ export type WalletStateResponse = {
   };
   activeAccount?: { publicKey: string };
   recentRecipients: WalletRecipient[];
+  contacts: WalletContact[];
   canUseUnlockedSigner: boolean;
   unlockedWalletIds: string[];
 };
@@ -302,9 +304,20 @@ export type TokenDetailsResponse = {
 export type SendTransferResponse = {
   signature: string;
   recipient: string;
+  requestedRecipient: string;
+  recipientKind: 'address' | 'sol-domain' | 'skr-domain';
+  recipientDomain?: string;
   amount: string;
   asset: SendAsset;
   network: WalletState['selectedNetwork'];
+};
+
+export type RecipientResolutionResponse = {
+  recipient: string;
+  requestedRecipient: string;
+  recipientKind: 'address' | 'sol-domain' | 'skr-domain';
+  recipientDomain?: string;
+  chain: WalletState['selectedChain'];
 };
 
 export type TokenActionResponse = {

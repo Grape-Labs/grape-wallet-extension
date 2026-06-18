@@ -25,6 +25,14 @@ Grape Wallet currently includes:
 - Popup, expanded tab view, side panel, onboarding, unlock, approval, send, and settings surfaces
 - Export for software wallets
 
+## Release Notes
+
+Version 0.5.90
+
+- Added support for sending to `.sol` and `.skr` domains
+- Added an address book for saved contacts with labels
+- Added resolved recipient previews before sending
+
 ## Standards And Official References
 
 The implementation was aligned against official sources:

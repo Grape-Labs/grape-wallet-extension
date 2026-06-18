@@ -3,10 +3,17 @@ import { QrCode } from 'lucide-react';
 
 import { Button, Card, Input, KeyValueRow, PageShell, StatusPill } from '@grape/ui';
 
-import type { SendTransferResponse, TokenHolding, WalletAssetsResponse, WalletStateResponse } from '../../shared/models';
+import type {
+  RecipientResolutionResponse,
+  SendTransferResponse,
+  TokenHolding,
+  WalletAssetsResponse,
+  WalletStateResponse
+} from '../../shared/models';
 
 import { sendRuntimeMessage } from '../../shared/chrome';
 import { isBiometricUnlockSupported, resolveBiometricUnlockConfig, unlockWithBiometric } from '../../shared/biometric';
+import { formatSavedRecipient, isSupportedSolanaRecipientDomain, suggestRecipientLabel } from '../../shared/recipient-resolution';
 import { mountPage } from '../lib';
 
 type AssetOption =
@@ -52,6 +59,10 @@ function formatAddress(address: string | undefined): string {
   return `${address.slice(0, 4)}...${address.slice(-4)}`;
 }
 
+function formatRecipientSummary(recipient: string): string {
+  return recipient.includes('.') ? recipient : formatAddress(recipient);
+}
+
 function normalizeScannedRecipientInput(input: string): string {
   const trimmed = input.trim();
   if (!trimmed) {
@@ -85,6 +96,13 @@ function SendPage() {
   });
   const [assetId, setAssetId] = useState('sol');
   const [recipient, setRecipient] = useState('');
+  const [recipientResolution, setRecipientResolution] = useState<RecipientResolutionResponse | null>(null);
+  const [recipientResolutionLoading, setRecipientResolutionLoading] = useState(false);
+  const [recipientResolutionError, setRecipientResolutionError] = useState<string | null>(null);
+  const [contactEditorVisible, setContactEditorVisible] = useState(false);
+  const [contactLabel, setContactLabel] = useState('');
+  const [contactSubmitting, setContactSubmitting] = useState(false);
+  const [contactError, setContactError] = useState<string | null>(null);
   const [amount, setAmount] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -214,6 +232,53 @@ function SendPage() {
     }
   }, [shouldAutoScan]);
 
+  useEffect(() => {
+    const normalizedRecipient = recipient.trim();
+    if (state?.wallet.selectedChain !== 'solana' || !isSupportedSolanaRecipientDomain(normalizedRecipient)) {
+      setRecipientResolution(null);
+      setRecipientResolutionError(null);
+      setRecipientResolutionLoading(false);
+      return;
+    }
+
+    let active = true;
+    const timer = window.setTimeout(() => {
+      setRecipientResolutionLoading(true);
+      setRecipientResolution(null);
+      setRecipientResolutionError(null);
+      void sendRuntimeMessage<RecipientResolutionResponse>({
+        type: 'wallet_resolve_recipient',
+        recipient: normalizedRecipient
+      })
+        .then((nextResolution) => {
+          if (!active) {
+            return;
+          }
+
+          setRecipientResolution(nextResolution);
+          setRecipientResolutionError(null);
+        })
+        .catch((nextError) => {
+          if (!active) {
+            return;
+          }
+
+          setRecipientResolution(null);
+          setRecipientResolutionError(nextError instanceof Error ? nextError.message : 'Unable to resolve recipient.');
+        })
+        .finally(() => {
+          if (active) {
+            setRecipientResolutionLoading(false);
+          }
+        });
+    }, 250);
+
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [recipient, state?.wallet.selectedChain]);
+
   async function handleBiometricUnlockForSigning() {
     if (!state?.wallet.wallets.length) {
       return;
@@ -243,6 +308,43 @@ function SendPage() {
       setError(nextError instanceof Error ? nextError.message : 'Unable to unlock with device.');
     } finally {
       setBiometricUnlocking(false);
+    }
+  }
+
+  async function handleSaveContact() {
+    if (!recipient.trim()) {
+      setContactError('Enter a recipient before saving a contact.');
+      return;
+    }
+
+    try {
+      setContactSubmitting(true);
+      setContactError(null);
+      const nextState = await sendRuntimeMessage<WalletStateResponse>({
+        type: 'wallet_add_contact',
+        label: contactLabel.trim(),
+        recipient
+      });
+      setState(nextState);
+      setContactLabel('');
+      setContactEditorVisible(false);
+    } catch (nextError) {
+      setContactError(nextError instanceof Error ? nextError.message : 'Unable to save contact.');
+    } finally {
+      setContactSubmitting(false);
+    }
+  }
+
+  async function handleRemoveContact(contactId: string) {
+    try {
+      setContactError(null);
+      const nextState = await sendRuntimeMessage<WalletStateResponse>({
+        type: 'wallet_remove_contact',
+        contactId
+      });
+      setState(nextState);
+    } catch (nextError) {
+      setContactError(nextError instanceof Error ? nextError.message : 'Unable to remove contact.');
     }
   }
 
@@ -354,6 +456,9 @@ function SendPage() {
   }
 
   const canUseUnlockedSigner = state.canUseUnlockedSigner;
+  const contacts = state.contacts ?? [];
+  const normalizedRecipient = formatSavedRecipient(recipient);
+  const existingContact = contacts.find((entry) => entry.recipient === normalizedRecipient);
 
   return (
     <PageShell
@@ -380,7 +485,12 @@ function SendPage() {
         <label className="stack">
           <span className="muted">To</span>
           <div className="send-input-shell send-input-shell-action">
-            <Input value={recipient} onChange={(event) => setRecipient(event.target.value)} placeholder="Recipient public key" className="send-recipient-input" />
+            <Input
+              value={recipient}
+              onChange={(event) => setRecipient(event.target.value)}
+              placeholder="Recipient address or .sol/.skr domain"
+              className="send-recipient-input"
+            />
             <button
               type="button"
               className="biometric-inline-button"
@@ -400,7 +510,90 @@ function SendPage() {
               {recipientScannerError ? <p className="danger-box">{recipientScannerError}</p> : null}
             </div>
           ) : null}
+          {recipientResolutionLoading ? <p className="muted">Resolving domain...</p> : null}
+          {recipientResolution && recipientResolution.requestedRecipient !== recipientResolution.recipient ? (
+            <p className="muted">
+              Resolves to <span className="mono">{recipientResolution.recipient}</span>
+            </p>
+          ) : null}
+          {recipientResolutionError ? <p className="danger-box">{recipientResolutionError}</p> : null}
+          {recipient.trim() ? (
+            <div className="send-inline-actions">
+              <Button
+                tone="secondary"
+                onClick={() => {
+                  setContactEditorVisible((current) => !current);
+                  setContactError(null);
+                  if (!contactLabel.trim()) {
+                    setContactLabel(existingContact?.label ?? suggestRecipientLabel(recipient));
+                  }
+                }}
+              >
+                {existingContact ? 'Update contact' : 'Save as contact'}
+              </Button>
+            </div>
+          ) : null}
+          {contactEditorVisible ? (
+            <div className="send-contact-editor">
+              <Input
+                value={contactLabel}
+                onChange={(event) => setContactLabel(event.target.value)}
+                placeholder="Contact label"
+                maxLength={64}
+              />
+              <div className="send-inline-actions">
+                <Button tone="secondary" onClick={() => void handleSaveContact()} disabled={contactSubmitting}>
+                  {contactSubmitting ? 'Saving...' : existingContact ? 'Update' : 'Save'}
+                </Button>
+                <Button
+                  tone="secondary"
+                  onClick={() => {
+                    setContactEditorVisible(false);
+                    setContactLabel('');
+                    setContactError(null);
+                  }}
+                  disabled={contactSubmitting}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : null}
+          {contactError ? <p className="danger-box">{contactError}</p> : null}
         </label>
+        {contacts.length > 0 ? (
+          <div className="stack">
+            <span className="muted">Contacts</span>
+            <div className="recipient-list">
+              {contacts.map((entry) => (
+                <div key={entry.id} className={`recipient-chip-shell ${normalizedRecipient === entry.recipient ? 'active' : ''}`.trim()}>
+                  <button
+                    type="button"
+                    className={`recipient-chip ${normalizedRecipient === entry.recipient ? 'active' : ''}`.trim()}
+                    onClick={() => {
+                      setRecipient(entry.recipient);
+                      setContactEditorVisible(false);
+                      setContactError(null);
+                    }}
+                    title={`${entry.label} · ${entry.recipient}`}
+                  >
+                    <span className="recipient-chip-label">{entry.label}</span>
+                    <span className="recipient-chip-meta mono">{formatRecipientSummary(entry.recipient)}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="recipient-chip-remove"
+                    aria-label={`Remove contact ${entry.label}`}
+                    title="Remove contact"
+                    onClick={() => void handleRemoveContact(entry.id)}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
         <label className="stack">
           <span className="muted">Amount</span>
           <Input value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0.0" inputMode="decimal" />
@@ -438,6 +631,9 @@ function SendPage() {
         <Card title="Sent">
           <KeyValueRow label="Signature" value={<span className="mono transfer-signature">{result.signature}</span>} />
           <KeyValueRow label="Recipient" value={<span className="mono">{formatAddress(result.recipient)}</span>} />
+          {result.requestedRecipient !== result.recipient ? (
+            <KeyValueRow label="Domain" value={<span className="mono">{result.requestedRecipient}</span>} />
+          ) : null}
           <KeyValueRow
             label="Amount"
             value={`${result.amount} ${
@@ -486,6 +682,9 @@ function SendPage() {
               setRecipient('');
               setAmount('');
               setPassword('');
+              setContactEditorVisible(false);
+              setContactLabel('');
+              setContactError(null);
               setRecipientScannerVisible(false);
               setRecipientScannerError(null);
             } catch (nextError) {

@@ -1,7 +1,7 @@
 {
   "name": "grape-wallet-extension",
   "private": true,
-  "version": "0.5.89",
+  "version": "0.5.90",
   "packageManager": "pnpm@10.6.3",
   "scripts": {
     "build": "pnpm --filter @grape/core build && pnpm --filter @grape/solana build && pnpm --filter @grape/sui build && pnpm --filter @grape/monad build && pnpm --filter @grape/ethereum build && pnpm --filter @grape/ui build && pnpm --filter @grape/wallet-adapter build && pnpm --filter @grape/extension build && pnpm --filter @grape/passkey-web build",

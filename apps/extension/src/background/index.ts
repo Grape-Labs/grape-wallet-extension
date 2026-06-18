@@ -21,6 +21,7 @@ import {
   isSessionExpired,
   listPermissions,
   migrateWalletState,
+  removeWalletContact,
   removeWalletProfile,
   removeWalletRecipient,
   rememberWalletRecipient,
@@ -33,7 +34,9 @@ import {
   STORAGE_KEYS,
   type RuntimeMessage,
   type VaultSecret,
+  type WalletState,
   unlockVaultRecord,
+  upsertWalletContact,
   verifyVaultPassword
 } from '@grape/core';
 import {
@@ -76,6 +79,8 @@ import {
   VALIDATOR_INFO_KEY,
   ValidatorInfo
 } from '@solana/web3.js';
+import { resolve as resolveSolanaDomain } from '@bonfida/spl-name-service';
+import { Record as AlternativeDomainRecord, TldParser } from '@onsol/tldparser';
 import {
   getMaxVoterWeightRecordAddress,
   getVoterWeightRecordAddress,
@@ -165,6 +170,7 @@ import type {
 
 import { filterCollectibleTokens, inferCollectibleMints, sortWalletTokens } from '../shared/assets';
 import { ChromeStorageArea, permissionsStorage, sessionStorage, walletStateStorage } from '../shared/chrome';
+import { formatSavedRecipient, parseSupportedSolanaRecipientDomain } from '../shared/recipient-resolution';
 import {
   createJupiterSwapTransaction,
   fetchJupiterPrices,
@@ -264,6 +270,13 @@ function tryParseSolanaPublicKey(value: string): PublicKey | null {
     return null;
   }
 }
+
+type ResolvedRecipient = {
+  recipient: string;
+  requestedRecipient: string;
+  recipientKind: 'address' | 'sol-domain' | 'skr-domain';
+  recipientDomain?: string;
+};
 
 type ParsedWalletTokenAccount = TokenHolding & {
   rawAmount: string;
@@ -572,7 +585,17 @@ class WalletController {
     }
 
     await this.ensureUnlockedSecretsLoaded();
-    return Object.keys(this.unlockedSecrets);
+    const unlockedWalletIds = new Set(Object.keys(this.unlockedSecrets));
+    const unlockedPassword = (await unlockedPasswordSessionStorage.get()).value;
+    if (unlockedPassword) {
+      const walletState = await this.getWalletState();
+      for (const wallet of walletState.wallets) {
+        if (wallet.vault) {
+          unlockedWalletIds.add(wallet.id);
+        }
+      }
+    }
+    return [...unlockedWalletIds];
   }
 
   private getEffectiveIdleTimeoutMs(walletState: Awaited<ReturnType<WalletController['getWalletState']>>) {
@@ -610,6 +633,111 @@ class WalletController {
     walletState: Awaited<ReturnType<WalletController['getWalletState']>>
   ) {
     return new Connection(this.resolveRpcEndpoint(network, walletState), 'confirmed');
+  }
+
+  private ensureResolvedSolanaDomainRecipient(domain: string, publicKey: PublicKey) {
+    if (!PublicKey.isOnCurve(publicKey.toBytes())) {
+      throw new RpcError(
+        'INVALID_RECIPIENT',
+        `${domain} resolves to a program-derived address. Enter a wallet address instead.`
+      );
+    }
+
+    return publicKey.toBase58();
+  }
+
+  private async resolveSolanaRecipient(recipient: string, connection: Connection): Promise<ResolvedRecipient> {
+    const requestedRecipient = recipient.trim();
+    const directRecipient = tryParseSolanaPublicKey(requestedRecipient);
+    if (directRecipient) {
+      return {
+        recipient: directRecipient.toBase58(),
+        requestedRecipient,
+        recipientKind: 'address'
+      };
+    }
+
+    const supportedDomain = parseSupportedSolanaRecipientDomain(requestedRecipient);
+    if (!supportedDomain) {
+      throw new RpcError('INVALID_RECIPIENT', 'Enter a valid Solana wallet address or a supported .sol/.skr domain.');
+    }
+
+    try {
+      if (supportedDomain.suffix === '.sol') {
+        const resolvedRecipient = await resolveSolanaDomain(connection, supportedDomain.domain);
+        return {
+          recipient: this.ensureResolvedSolanaDomainRecipient(supportedDomain.domain, resolvedRecipient),
+          requestedRecipient,
+          recipientKind: 'sol-domain',
+          recipientDomain: supportedDomain.domain
+        };
+      }
+
+      const parser = new TldParser(connection, 'solana');
+      const solRecord = await parser.getRecord(supportedDomain.domain, AlternativeDomainRecord.SOL);
+      const recordRecipient = solRecord ? tryParseSolanaPublicKey(solRecord) : null;
+      const owner = await parser.getOwnerFromDomainTld(supportedDomain.domain);
+      const ownerRecipient = recordRecipient ?? (typeof owner === 'string' ? tryParseSolanaPublicKey(owner) : owner);
+      if (!ownerRecipient) {
+        throw new Error('Domain did not resolve to a wallet address.');
+      }
+
+      return {
+        recipient: this.ensureResolvedSolanaDomainRecipient(supportedDomain.domain, ownerRecipient),
+        requestedRecipient,
+        recipientKind: 'skr-domain',
+        recipientDomain: supportedDomain.domain
+      };
+    } catch (error) {
+      if (error instanceof RpcError) {
+        throw error;
+      }
+
+      throw new RpcError(
+        'INVALID_RECIPIENT',
+        `Unable to resolve ${supportedDomain.domain}. Check the domain and try again.`
+      );
+    }
+  }
+
+  private async resolveRecipientForChain(
+    chain: GrapeChain,
+    recipient: string,
+    walletState: Awaited<ReturnType<WalletController['getWalletState']>>
+  ): Promise<ResolvedRecipient> {
+    const requestedRecipient = recipient.trim();
+    if (!requestedRecipient) {
+      throw new RpcError('INVALID_RECIPIENT', 'Enter a recipient wallet address.');
+    }
+
+    if (chain === 'solana') {
+      const connection = this.createConnection(this.getSelectedNetworkForChain(walletState, chain), walletState);
+      return this.resolveSolanaRecipient(requestedRecipient, connection);
+    }
+
+    if (chain === 'sui') {
+      if (!validateSuiAddress(requestedRecipient)) {
+        throw new RpcError('INVALID_RECIPIENT', 'Enter a valid Sui wallet address.');
+      }
+    } else if (chain === 'monad') {
+      if (!validateMonadAddress(requestedRecipient)) {
+        throw new RpcError('INVALID_RECIPIENT', 'Enter a valid Monad wallet address.');
+      }
+    } else if (!validateEthereumAddress(requestedRecipient)) {
+      throw new RpcError('INVALID_RECIPIENT', 'Enter a valid Ethereum wallet address.');
+    }
+
+    return {
+      recipient: requestedRecipient,
+      requestedRecipient,
+      recipientKind: 'address'
+    };
+  }
+
+  private resolveStoredContactRecipient(resolvedRecipient: ResolvedRecipient): string {
+    return resolvedRecipient.recipientKind === 'address'
+      ? resolvedRecipient.recipient
+      : formatSavedRecipient(resolvedRecipient.recipientDomain ?? resolvedRecipient.requestedRecipient);
   }
 
   private resolveSuiNetwork(network: 'mainnet-beta' | 'devnet'): SuiNetwork {
@@ -921,7 +1049,8 @@ class WalletController {
       source: input.source,
       accounts: [account],
       selectedAccountId: account.id,
-      recentRecipients: []
+      recentRecipients: [],
+      contacts: []
     };
   }
 
@@ -1468,9 +1597,11 @@ class WalletController {
     }
     if (!session.locked) {
       await this.ensureUnlockedSecretsLoaded();
+      const unlockedPassword = (await unlockedPasswordSessionStorage.get()).value;
       if (
         wallet.wallets.some((entry) => entry.signer.kind !== 'watch-only') &&
-        Object.keys(this.unlockedSecrets).length === 0
+        Object.keys(this.unlockedSecrets).length === 0 &&
+        !unlockedPassword
       ) {
         await unlockedPasswordSessionStorage.set({ value: null });
         const locked = {
@@ -1727,89 +1858,43 @@ class WalletController {
       selectedWallet?.vault
         ? [selectedWallet, ...vaultWallets.filter((wallet) => wallet.id !== selectedWallet.id)]
         : vaultWallets;
-    let primaryWallet: (typeof prioritizedWallets)[number] | undefined;
-    let primarySecret: VaultSecret | null = null;
 
     if (prioritizedWallets.length === 0) {
       await this.setSessionState({ locked: false, lastActivityAt: Date.now() });
       return true;
     }
 
+    let unlockedWalletId: string | null = null;
+    let unlockedSecret: VaultSecret | null = null;
+
     for (const wallet of prioritizedWallets) {
       if (!wallet.vault) {
         continue;
       }
 
-      const unlocked = await unlockVaultRecord(wallet.vault, password).catch(() => null);
-      if (!unlocked) {
-        continue;
+      const secret = await unlockVaultRecord(wallet.vault, password).catch(() => null);
+      if (secret) {
+        unlockedWalletId = wallet.id;
+        unlockedSecret = secret;
+        break;
       }
-
-      primaryWallet = wallet;
-      primarySecret = unlocked;
-      break;
     }
 
-    if (!primaryWallet?.vault || !primarySecret) {
+    if (!unlockedWalletId || !unlockedSecret) {
       throw new RpcError('INVALID_PASSWORD', 'Password is incorrect.');
     }
 
-    const remainingWallets = prioritizedWallets.filter((wallet) => wallet.id !== primaryWallet.id);
-    const unlockedAt = Date.now();
-    const nextUnlockedSecrets: UnlockedSecretCache = {
-      [primaryWallet.id]: {
-        secret: primarySecret,
-        unlockedAt
+    this.unlockedSecrets = {
+      [unlockedWalletId]: {
+        secret: unlockedSecret,
+        unlockedAt: Date.now()
       }
     };
-
-    if (primarySecret.kind === 'mnemonic') {
-      for (const wallet of walletState.wallets) {
-        if (
-          !wallet.vault ||
-          nextUnlockedSecrets[wallet.id] ||
-          wallet.id === primaryWallet.id ||
-          wallet.signer.kind !== 'software' ||
-          wallet.source !== primaryWallet.source ||
-          wallet.name !== primaryWallet.name
-        ) {
-          continue;
-        }
-
-        nextUnlockedSecrets[wallet.id] = {
-          secret: primarySecret,
-          unlockedAt
-        };
-      }
-    }
-
-    this.unlockedSecrets = nextUnlockedSecrets;
     await Promise.all([
       this.persistUnlockedSecrets(),
       unlockedPasswordSessionStorage.set({ value: password })
     ]);
     await this.setSessionState({ locked: false, lastActivityAt: Date.now() });
-
-    void (async () => {
-      for (const wallet of remainingWallets) {
-        if (!wallet.vault || this.unlockedSecrets[wallet.id]) {
-          continue;
-        }
-
-        try {
-          const secret = await unlockVaultRecord(wallet.vault, password);
-          this.unlockedSecrets[wallet.id] = {
-            secret,
-            unlockedAt: Date.now()
-          };
-          await this.persistUnlockedSecrets();
-        } catch {
-          // Ignore secondary-wallet failures and keep primary unlock responsive.
-        }
-
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      }
-    })();
 
     return true;
   }
@@ -1892,6 +1977,60 @@ class WalletController {
     return this.getStateResponse();
   }
 
+  async addContact(input: { label: string; recipient: string }) {
+    const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    const normalizedLabel = input.label.trim();
+    if (!normalizedLabel) {
+      throw new RpcError('INVALID_CONTACT_LABEL', 'Enter a contact label.');
+    }
+
+    const resolvedRecipient = await this.resolveRecipientForChain(selectedWallet.chain, input.recipient, walletState);
+    const storedRecipient = this.resolveStoredContactRecipient(resolvedRecipient);
+    const existingContact = selectedWallet.contacts.find((entry) => entry.recipient === storedRecipient);
+    const normalizedLabelKey = normalizedLabel.toLowerCase();
+    const duplicateLabel = selectedWallet.contacts.find(
+      (entry) => entry.id !== existingContact?.id && entry.label.trim().toLowerCase() === normalizedLabelKey
+    );
+    if (duplicateLabel) {
+      throw new RpcError('DUPLICATE_CONTACT_LABEL', 'That contact label is already in use.');
+    }
+
+    const timestamp = Date.now();
+    await walletStateStorage.set({
+      ...walletState,
+      wallets: walletState.wallets.map((wallet) =>
+        wallet.id === selectedWallet.id
+          ? upsertWalletContact(wallet, {
+              id: existingContact?.id ?? crypto.randomUUID(),
+              label: normalizedLabel,
+              recipient: storedRecipient,
+              createdAt: existingContact?.createdAt ?? timestamp,
+              updatedAt: timestamp
+            })
+          : wallet
+      )
+    });
+
+    return this.getStateResponse();
+  }
+
+  async removeContact(contactId: string) {
+    const walletState = await this.getWalletState();
+    const selectedWallet = getSelectedWallet(walletState);
+    if (!selectedWallet) {
+      return this.getStateResponse();
+    }
+
+    await walletStateStorage.set({
+      ...walletState,
+      wallets: walletState.wallets.map((wallet) =>
+        wallet.id === selectedWallet.id ? removeWalletContact(wallet, contactId) : wallet
+      )
+    });
+
+    return this.getStateResponse();
+  }
+
   async getActiveAccount() {
     const wallet = await this.getWalletState();
     const selectedWallet = getSelectedWallet(wallet);
@@ -1947,6 +2086,7 @@ class WalletController {
           : undefined,
       activeAccount: activeAccount ? { publicKey: activeAccount.publicKey } : undefined,
       recentRecipients: activeWallet?.recentRecipients ?? [],
+      contacts: activeWallet?.contacts ?? [],
       canUseUnlockedSigner,
       unlockedWalletIds
     };
@@ -3836,6 +3976,16 @@ class WalletController {
     };
   }
 
+  async resolveRecipient(input: { recipient: string }) {
+    const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    const resolvedRecipient = await this.resolveRecipientForChain(selectedWallet.chain, input.recipient, walletState);
+
+    return {
+      ...resolvedRecipient,
+      chain: selectedWallet.chain
+    };
+  }
+
   async sendTransfer(input: { recipient: string; amount: string; password?: string; asset: SendAsset }) {
     const { walletState, selectedWallet } = await this.ensureReadyWallet();
     this.assertInteractiveWallet(selectedWallet);
@@ -3843,24 +3993,21 @@ class WalletController {
     if (!activeAccount) {
       throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
     }
+    const resolvedRecipient = await this.resolveRecipientForChain(selectedWallet.chain, input.recipient, walletState);
     let signature: string;
 
     if (selectedWallet.chain === 'sui') {
-      if (!validateSuiAddress(input.recipient)) {
-        throw new RpcError('INVALID_RECIPIENT', 'Enter a valid Sui wallet address.');
-      }
-
       try {
         if (selectedWallet.signer.kind === 'ledger') {
           if (input.asset.kind === 'sui') {
             signature = await sendSuiWithLedger(this.resolveSuiNetwork(walletState.selectedNetwork), selectedWallet.signer.derivationPath, {
-              recipient: input.recipient,
+              recipient: resolvedRecipient.recipient,
               amountMist: parseDecimalAmount(input.amount, 9),
               customRpcUrl: walletState.chainState.sui.customRpcUrl
             });
           } else if (input.asset.kind === 'sui-coin') {
             signature = await sendSuiCoinWithLedger(this.resolveSuiNetwork(walletState.selectedNetwork), selectedWallet.signer.derivationPath, {
-              recipient: input.recipient,
+              recipient: resolvedRecipient.recipient,
               amountBaseUnits: parseDecimalAmount(input.amount, input.asset.decimals),
               coinType: input.asset.coinType,
               customRpcUrl: walletState.chainState.sui.customRpcUrl
@@ -3874,12 +4021,12 @@ class WalletController {
           const signer = resolveSuiVaultSecret(secret);
           if (input.asset.kind === 'sui') {
             signature = await sendSui(client, signer, {
-              recipient: input.recipient,
+              recipient: resolvedRecipient.recipient,
               amountMist: parseDecimalAmount(input.amount, 9)
             });
           } else if (input.asset.kind === 'sui-coin') {
             signature = await sendSuiCoin(client, signer, {
-              recipient: input.recipient,
+              recipient: resolvedRecipient.recipient,
               amountBaseUnits: parseDecimalAmount(input.amount, input.asset.decimals),
               coinType: input.asset.coinType
             });
@@ -3891,15 +4038,11 @@ class WalletController {
         throw normalizeSigningError(error);
       }
     } else if (selectedWallet.chain === 'monad') {
-      if (!validateMonadAddress(input.recipient)) {
-        throw new RpcError('INVALID_RECIPIENT', 'Enter a valid Monad wallet address.');
-      }
-
       try {
         if (selectedWallet.signer.kind === 'ledger') {
           if (input.asset.kind === 'mon') {
             signature = await sendMonadWithLedger(this.resolveMonadNetwork(walletState.selectedNetwork), selectedWallet.signer.derivationPath, {
-              recipient: input.recipient,
+              recipient: resolvedRecipient.recipient,
               amountEther: input.amount,
               customRpcUrl: walletState.chainState.monad.customRpcUrl
             });
@@ -3908,7 +4051,7 @@ class WalletController {
               this.resolveMonadNetwork(walletState.selectedNetwork),
               selectedWallet.signer.derivationPath,
               {
-                recipient: input.recipient,
+                recipient: resolvedRecipient.recipient,
                 amount: input.amount,
                 tokenAddress: input.asset.tokenAddress,
                 decimals: input.asset.decimals,
@@ -3921,14 +4064,14 @@ class WalletController {
         } else if (input.asset.kind === 'mon') {
           const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
           signature = await sendMonad(this.resolveMonadNetwork(walletState.selectedNetwork), secret, {
-            recipient: input.recipient,
+            recipient: resolvedRecipient.recipient,
             amountEther: input.amount,
             customRpcUrl: walletState.chainState.monad.customRpcUrl
           });
         } else if (input.asset.kind === 'evm-token') {
           const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
           signature = await sendMonadToken(this.resolveMonadNetwork(walletState.selectedNetwork), secret, {
-            recipient: input.recipient,
+            recipient: resolvedRecipient.recipient,
             amount: input.amount,
             tokenAddress: input.asset.tokenAddress,
             decimals: input.asset.decimals,
@@ -3941,15 +4084,11 @@ class WalletController {
         throw normalizeSigningError(error);
       }
     } else if (selectedWallet.chain === 'ethereum') {
-      if (!validateEthereumAddress(input.recipient)) {
-        throw new RpcError('INVALID_RECIPIENT', 'Enter a valid Ethereum wallet address.');
-      }
-
       try {
         if (selectedWallet.signer.kind === 'ledger') {
           if (input.asset.kind === 'eth') {
             signature = await sendEthereumWithLedger(this.resolveEthereumNetwork(walletState.selectedNetwork), selectedWallet.signer.derivationPath, {
-              recipient: input.recipient,
+              recipient: resolvedRecipient.recipient,
               amountEther: input.amount,
               customRpcUrl: walletState.chainState.ethereum.customRpcUrl
             });
@@ -3958,7 +4097,7 @@ class WalletController {
               this.resolveEthereumNetwork(walletState.selectedNetwork),
               selectedWallet.signer.derivationPath,
               {
-                recipient: input.recipient,
+                recipient: resolvedRecipient.recipient,
                 amount: input.amount,
                 tokenAddress: input.asset.tokenAddress,
                 decimals: input.asset.decimals,
@@ -3971,14 +4110,14 @@ class WalletController {
         } else if (input.asset.kind === 'eth') {
           const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
           signature = await sendEthereum(this.resolveEthereumNetwork(walletState.selectedNetwork), secret, {
-            recipient: input.recipient,
+            recipient: resolvedRecipient.recipient,
             amountEther: input.amount,
             customRpcUrl: walletState.chainState.ethereum.customRpcUrl
           });
         } else if (input.asset.kind === 'evm-token') {
           const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
           signature = await sendEthereumToken(this.resolveEthereumNetwork(walletState.selectedNetwork), secret, {
-            recipient: input.recipient,
+            recipient: resolvedRecipient.recipient,
             amount: input.amount,
             tokenAddress: input.asset.tokenAddress,
             decimals: input.asset.decimals,
@@ -4007,11 +4146,11 @@ class WalletController {
       const transaction =
         input.asset.kind === 'sol'
           ? await buildSolTransferTransaction(connection, owner, {
-              recipient: input.recipient,
+              recipient: resolvedRecipient.recipient,
               amount: input.amount
             })
           : await buildSplTokenTransferTransaction(connection, owner, {
-              recipient: input.recipient,
+              recipient: resolvedRecipient.recipient,
               amount: input.amount,
               mint: input.asset.mint,
               decimals: input.asset.decimals,
@@ -4066,7 +4205,7 @@ class WalletController {
     await walletStateStorage.set({
       ...walletState,
       wallets: walletState.wallets.map((wallet) =>
-        wallet.id === selectedWallet.id ? rememberWalletRecipient(wallet, input.recipient) : wallet
+        wallet.id === selectedWallet.id ? rememberWalletRecipient(wallet, resolvedRecipient.recipient) : wallet
       )
     });
     await this.invalidateAssetCache(this.getAssetCacheKey(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey));
@@ -4075,7 +4214,10 @@ class WalletController {
 
     return {
       signature,
-      recipient: input.recipient,
+      recipient: resolvedRecipient.recipient,
+      requestedRecipient: resolvedRecipient.requestedRecipient,
+      recipientKind: resolvedRecipient.recipientKind,
+      recipientDomain: resolvedRecipient.recipientDomain,
       amount: input.amount,
       asset: input.asset,
       network: walletState.selectedNetwork
@@ -5274,8 +5416,15 @@ class WalletController {
     const session = await this.getSessionState();
     const walletState = await this.getWalletState();
     const unlockedWalletIds = await this.getUnlockedWalletIds(session.locked);
+    const unlockedPassword = session.locked ? null : (await unlockedPasswordSessionStorage.get()).value;
     const kind = toApprovalKind(request);
     const approvalWallet = walletState.wallets.find((wallet) => wallet.id === walletId);
+    const canUseUnlockedSession = !!(
+      approvalWallet?.signer.kind === 'watch-only' ||
+      approvalWallet?.signer.kind === 'ledger' ||
+      unlockedWalletIds.includes(walletId) ||
+      (approvalWallet?.vault && unlockedPassword)
+    );
     const state = createPendingApproval(crypto.randomUUID(), kind);
     const approval: ApprovalRecord = {
       id: state.id,
@@ -5295,9 +5444,7 @@ class WalletController {
           ? false
           : walletState.dappApprovalMode === 'non-strict' && kind !== 'connect'
             ? session.locked
-          : shouldRequireReauthForApproval(kind, walletState.dappApprovalMode)
-            ? true
-            : !unlockedWalletIds.includes(walletId),
+          : !canUseUnlockedSession,
       hostSurfaceId: getPreferredApprovalSurface()?.surfaceId
     };
 
@@ -9335,6 +9482,17 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
         case 'wallet_remove_recent_recipient':
           sendResponse(await controller.removeRecentRecipient(message.address));
           break;
+        case 'wallet_add_contact':
+          sendResponse(
+            await controller.addContact({
+              label: message.label,
+              recipient: message.recipient
+            })
+          );
+          break;
+        case 'wallet_remove_contact':
+          sendResponse(await controller.removeContact(message.contactId));
+          break;
         case 'wallet_set_idle_timeout':
           sendResponse(await controller.setIdleTimeout(message.idleTimeoutMs));
           break;
@@ -9421,6 +9579,13 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
               stakeAccount: message.stakeAccount,
               amount: message.amount,
               password: message.password
+            })
+          );
+          break;
+        case 'wallet_resolve_recipient':
+          sendResponse(
+            await controller.resolveRecipient({
+              recipient: message.recipient
             })
           );
           break;

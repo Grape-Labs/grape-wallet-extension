@@ -141,6 +141,7 @@ type DiscoverApproval = {
 };
 
 const GRAPE_DISCOVER_DEFAULT_URL = 'https://governance.so';
+const OG_REPUTATION_DISCOVERY_URL = 'https://vine.governance.so';
 const SOLANA_SEND_FEE_RESERVE_SOL = 0.00001;
 const SOLANA_TOKEN_SEND_RESERVE_SOL = 0.0021;
 const MOBILE_SWAP_SLIPPAGE_BPS = 50;
@@ -6232,6 +6233,14 @@ export default function App() {
             <Text style={styles.sectionHint}>
               Track Solana OG reputation by adding DAO space ids here. Home will then show the current wallet’s effective and latest-season points per tracked space.
             </Text>
+          <PaperButton
+            mode="outlined"
+            style={styles.paperSecondaryButton}
+            textColor={activeTheme.text}
+            onPress={() => void Linking.openURL(OG_REPUTATION_DISCOVERY_URL)}
+          >
+            Discover communities
+          </PaperButton>
           {reputation.spaces.length > 0 ? (
             <View style={styles.reputationSummaryGrid}>
               <View style={styles.reputationSummaryCard}>

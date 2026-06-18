@@ -516,11 +516,12 @@ function OptionsPage() {
               setState(nextState);
             }}
           >
-            <option value="strict">Strict · Ask for password / biometrics on each dApp transaction</option>
+            <option value="strict">Strict · Review every dApp transaction</option>
             <option value="non-strict">Non-strict · Ask once per unlocked session</option>
           </select>
           <p className="muted">
-            Strict mode re-authenticates each dApp transaction approval. Non-strict mode signs from the unlocked session until the wallet locks again.
+            Strict mode still shows every dApp transaction approval, but uses the unlocked session until the wallet locks or times out.
+            Non-strict mode reduces prompts further during an unlocked session.
           </p>
         </label>
         <div className="stack">

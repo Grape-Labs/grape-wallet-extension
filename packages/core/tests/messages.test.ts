@@ -132,6 +132,50 @@ describe('message routing contracts', () => {
     expect(message.type).toBe('wallet_remove_recent_recipient');
   });
 
+  it('validates runtime messages for adding and removing contacts', () => {
+    const addMessage = runtimeMessageSchema.parse({
+      type: 'wallet_add_contact',
+      label: 'Alice',
+      recipient: 'alice.sol'
+    });
+    const removeMessage = runtimeMessageSchema.parse({
+      type: 'wallet_remove_contact',
+      contactId: 'contact-1'
+    });
+
+    expect(addMessage).toMatchObject({
+      type: 'wallet_add_contact',
+      label: 'Alice',
+      recipient: 'alice.sol'
+    });
+    expect(removeMessage).toMatchObject({
+      type: 'wallet_remove_contact',
+      contactId: 'contact-1'
+    });
+  });
+
+  it('accepts short recipient domains for resolution and send runtime messages', () => {
+    const resolveMessage = runtimeMessageSchema.parse({
+      type: 'wallet_resolve_recipient',
+      recipient: 'a.sol'
+    });
+    const sendMessage = runtimeMessageSchema.parse({
+      type: 'wallet_send_transfer',
+      recipient: 'a.skr',
+      amount: '0.5',
+      asset: { kind: 'sol' }
+    });
+
+    expect(resolveMessage).toMatchObject({
+      type: 'wallet_resolve_recipient',
+      recipient: 'a.sol'
+    });
+    expect(sendMessage).toMatchObject({
+      type: 'wallet_send_transfer',
+      recipient: 'a.skr'
+    });
+  });
+
   it('validates swap runtime messages used by the wallet popup', () => {
     const quoteMessage = runtimeMessageSchema.parse({
       type: 'wallet_get_swap_quote',

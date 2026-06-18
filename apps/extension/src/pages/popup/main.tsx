@@ -47,6 +47,7 @@ import type {
   CollectibleItem,
   CollectionHolding,
   IncidentResponseResponse,
+  RecipientResolutionResponse,
   StakeAccountRow,
   TokenActionResponse,
   TokenDetailsResponse,
@@ -76,12 +77,14 @@ import { createBiometricUnlock, isBiometricUnlockSupported, resolveBiometricUnlo
 import { ChainLogoBadge } from '../../shared/chains';
 import { JUPITER_SOL_MINT } from '../../shared/jupiter';
 import { getSupportedBridgeDestinations, LIFI_NATIVE_SYMBOL } from '../../shared/lifi';
+import { formatSavedRecipient, isSupportedSolanaRecipientDomain, suggestRecipientLabel } from '../../shared/recipient-resolution';
 import { applyDocumentTheme, THEMES } from '../../shared/theme';
 import { openExtensionPage, openExtensionSidePanel } from '../../shared/window';
 import { ApprovalView } from '../approval/ApprovalView';
 import { mountPage } from '../lib';
 
 const APP_VERSION = extensionPackage.version?.trim() || 'unknown';
+const OG_REPUTATION_DISCOVERY_URL = 'https://vine.governance.so';
 import { OnboardingView } from '../onboarding/OnboardingView';
 
 type PopupView = 'home' | 'send' | 'receive' | 'swap' | 'bridge' | 'settings' | 'asset' | 'security' | 'approval';
@@ -262,6 +265,10 @@ function formatAddress(address: string | undefined): string {
     return 'Unknown';
   }
   return `${address.slice(0, 4)}...${address.slice(-4)}`;
+}
+
+function formatRecipientSummary(recipient: string): string {
+  return recipient.includes('.') ? recipient : formatAddress(recipient);
 }
 
 function normalizeScannedRecipientInput(input: string): string {
@@ -1096,6 +1103,13 @@ function PopupPage() {
   const [customEvmTokenLoading, setCustomEvmTokenLoading] = useState(false);
   const [customEvmTokenError, setCustomEvmTokenError] = useState<string | null>(null);
   const [recipient, setRecipient] = useState('');
+  const [recipientResolution, setRecipientResolution] = useState<RecipientResolutionResponse | null>(null);
+  const [recipientResolutionLoading, setRecipientResolutionLoading] = useState(false);
+  const [recipientResolutionError, setRecipientResolutionError] = useState<string | null>(null);
+  const [contactEditorVisible, setContactEditorVisible] = useState(false);
+  const [contactLabel, setContactLabel] = useState('');
+  const [contactSubmitting, setContactSubmitting] = useState(false);
+  const [contactError, setContactError] = useState<string | null>(null);
   const [amount, setAmount] = useState('');
   const [password, setPassword] = useState('');
   const [sendError, setSendError] = useState<string | null>(null);
@@ -2456,6 +2470,54 @@ function PopupPage() {
   }
 
   useEffect(() => {
+    const normalizedRecipient = recipient.trim();
+    const selectedChain = state?.wallet.selectedChain ?? 'solana';
+    if (selectedChain !== 'solana' || !isSupportedSolanaRecipientDomain(normalizedRecipient)) {
+      setRecipientResolution(null);
+      setRecipientResolutionError(null);
+      setRecipientResolutionLoading(false);
+      return;
+    }
+
+    let active = true;
+    const timer = window.setTimeout(() => {
+      setRecipientResolutionLoading(true);
+      setRecipientResolution(null);
+      setRecipientResolutionError(null);
+      void sendRuntimeMessage<RecipientResolutionResponse>({
+        type: 'wallet_resolve_recipient',
+        recipient: normalizedRecipient
+      })
+        .then((nextResolution) => {
+          if (!active) {
+            return;
+          }
+
+          setRecipientResolution(nextResolution);
+          setRecipientResolutionError(null);
+        })
+        .catch((nextError) => {
+          if (!active) {
+            return;
+          }
+
+          setRecipientResolution(null);
+          setRecipientResolutionError(nextError instanceof Error ? nextError.message : 'Unable to resolve recipient.');
+        })
+        .finally(() => {
+          if (active) {
+            setRecipientResolutionLoading(false);
+          }
+        });
+    }, 250);
+
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [recipient, state?.wallet.selectedChain]);
+
+  useEffect(() => {
     if (!recipientScannerVisible) {
       return;
     }
@@ -2818,6 +2880,9 @@ function PopupPage() {
       setRecipient('');
       setAmount('');
       setPassword('');
+      setContactEditorVisible(false);
+      setContactLabel('');
+      setContactError(null);
       setRecipientScannerVisible(false);
       setRecipientScannerError(null);
     } catch (nextError) {
@@ -2875,6 +2940,9 @@ function PopupPage() {
     governanceVoteErrorRequiresFallback
   );
   const recentRecipients = state?.recentRecipients ?? [];
+  const contacts = state?.contacts ?? [];
+  const normalizedRecipient = formatSavedRecipient(recipient);
+  const existingContact = contacts.find((entry) => entry.recipient === normalizedRecipient);
   const privacyMode = wallet.privacyMode;
   const selectedChain = wallet.selectedChain;
   const selectedWalletIdForChain = getSelectedWalletIdForChain(wallet, selectedChain);
@@ -3190,6 +3258,43 @@ function PopupPage() {
     }
 
     setState(nextState);
+  }
+
+  async function handleSaveContact() {
+    if (!recipient.trim()) {
+      setContactError('Enter a recipient before saving a contact.');
+      return;
+    }
+
+    try {
+      setContactSubmitting(true);
+      setContactError(null);
+      const nextState = await sendRuntimeMessage<WalletStateResponse>({
+        type: 'wallet_add_contact',
+        label: contactLabel.trim(),
+        recipient
+      });
+      setState(nextState);
+      setContactLabel('');
+      setContactEditorVisible(false);
+    } catch (nextError) {
+      setContactError(nextError instanceof Error ? nextError.message : 'Unable to save contact.');
+    } finally {
+      setContactSubmitting(false);
+    }
+  }
+
+  async function handleContactRemove(contactId: string) {
+    try {
+      setContactError(null);
+      const nextState = await sendRuntimeMessage<WalletStateResponse>({
+        type: 'wallet_remove_contact',
+        contactId
+      });
+      setState(nextState);
+    } catch (nextError) {
+      setContactError(nextError instanceof Error ? nextError.message : 'Unable to remove contact.');
+    }
   }
 
   async function handleSaveCustomRpc() {
@@ -4120,7 +4225,7 @@ function PopupPage() {
             </Button>
 
             <p className="muted unlock-welcome-helper">
-              Unlock once per session. In non-strict mode, Grape stays unlocked much longer and asks again mainly after you lock it.
+              Unlock once per session. Grape stays unlocked until you lock it or the idle timeout expires.
             </p>
           </form>
         </Card>
@@ -5091,6 +5196,9 @@ function PopupPage() {
                 value={<span className="mono transfer-signature">{sendResult.signature}</span>}
               />
               <KeyValueRow label="Recipient" value={<span className="mono">{formatAddress(sendResult.recipient)}</span>} />
+              {sendResult.requestedRecipient !== sendResult.recipient ? (
+                <KeyValueRow label="Domain" value={<span className="mono">{sendResult.requestedRecipient}</span>} />
+              ) : null}
             </div>
             <div className="inline wrap-actions action-status-actions">
               <Button tone="secondary" onClick={() => setSendResult(null)}>
@@ -5196,7 +5304,7 @@ function PopupPage() {
                 <Input
                   value={recipient}
                   onChange={(event) => setRecipient(event.target.value)}
-                  placeholder="Search or paste"
+                  placeholder="Address or .sol/.skr domain"
                   className="send-recipient-input"
                 />
                 <button
@@ -5218,7 +5326,92 @@ function PopupPage() {
                   {recipientScannerError ? <p className="danger-box">{recipientScannerError}</p> : null}
                 </div>
               ) : null}
+              {recipientResolutionLoading ? <p className="muted">Resolving domain...</p> : null}
+              {recipientResolution && recipientResolution.requestedRecipient !== recipientResolution.recipient ? (
+                <p className="muted">
+                  Resolves to <span className="mono">{recipientResolution.recipient}</span>
+                </p>
+              ) : null}
+              {recipientResolutionError ? <p className="danger-box">{recipientResolutionError}</p> : null}
+              {recipient.trim() ? (
+                <div className="send-inline-actions">
+                  <Button
+                    tone="secondary"
+                    onClick={() => {
+                      setContactEditorVisible((current) => !current);
+                      setContactError(null);
+                      if (!contactLabel.trim()) {
+                        setContactLabel(existingContact?.label ?? suggestRecipientLabel(recipient));
+                      }
+                    }}
+                  >
+                    {existingContact ? 'Update contact' : 'Save as contact'}
+                  </Button>
+                </div>
+              ) : null}
+              {contactEditorVisible ? (
+                <div className="send-contact-editor">
+                  <Input
+                    value={contactLabel}
+                    onChange={(event) => setContactLabel(event.target.value)}
+                    placeholder="Contact label"
+                    maxLength={64}
+                    className="send-recipient-input"
+                  />
+                  <div className="send-inline-actions">
+                    <Button tone="secondary" onClick={() => void handleSaveContact()} disabled={contactSubmitting}>
+                      {contactSubmitting ? 'Saving...' : existingContact ? 'Update' : 'Save'}
+                    </Button>
+                    <Button
+                      tone="secondary"
+                      onClick={() => {
+                        setContactEditorVisible(false);
+                        setContactLabel('');
+                        setContactError(null);
+                      }}
+                      disabled={contactSubmitting}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
+              {contactError ? <p className="danger-box">{contactError}</p> : null}
             </div>
+
+            {contacts.length > 0 ? (
+              <div className="send-field-group">
+                <label className="send-field-label">Contacts</label>
+                <div className="recipient-list">
+                  {contacts.map((entry) => (
+                    <div key={entry.id} className={`recipient-chip-shell ${normalizedRecipient === entry.recipient ? 'active' : ''}`.trim()}>
+                      <button
+                        type="button"
+                        className={`recipient-chip ${normalizedRecipient === entry.recipient ? 'active' : ''}`.trim()}
+                        onClick={() => {
+                          setRecipient(entry.recipient);
+                          setContactEditorVisible(false);
+                          setContactError(null);
+                        }}
+                        title={`${entry.label} · ${entry.recipient}`}
+                      >
+                        <span className="recipient-chip-label">{entry.label}</span>
+                        <span className="recipient-chip-meta mono">{formatRecipientSummary(entry.recipient)}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="recipient-chip-remove"
+                        aria-label={`Remove contact ${entry.label}`}
+                        title="Remove contact"
+                        onClick={() => void handleContactRemove(entry.id)}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
 
             {recentRecipients.length > 0 ? (
               <div className="send-field-group">
@@ -5850,7 +6043,7 @@ function PopupPage() {
                   {
                     id: 'strict' as const,
                     title: 'Strict',
-                    detail: 'Ask for password or biometrics on each dApp transaction.',
+                    detail: 'Review every dApp transaction while reusing the unlocked session.',
                     meta: 'Best for normal use'
                   },
                   {
@@ -5985,6 +6178,11 @@ function PopupPage() {
               Add the reputation spaces this wallet is part of, and Grape will track the wallet&apos;s points in each
               space directly.
             </p>
+            <div className="inline wrap-actions">
+              <Button tone="secondary" onClick={() => openExternal(OG_REPUTATION_DISCOVERY_URL)}>
+                Discover communities
+              </Button>
+            </div>
             {selectedChain !== 'solana' ? (
               <p className="muted">Tracked reputation spaces are currently supported for Solana wallets.</p>
             ) : (

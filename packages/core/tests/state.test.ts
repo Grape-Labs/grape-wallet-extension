@@ -6,8 +6,10 @@ import {
   normalizeDappApprovalMode,
   normalizeTheme,
   rememberWalletRecipient,
+  removeWalletContact,
   removeWalletProfile,
   removeWalletRecipient,
+  upsertWalletContact,
   type WalletProfile
 } from '../src/state';
 
@@ -73,6 +75,7 @@ describe('wallet state', () => {
     });
 
     expect(migrated.wallets[0]?.recentRecipients).toEqual([]);
+    expect(migrated.wallets[0]?.contacts).toEqual([]);
     expect(migrated.selectedTheme).toBe('grape');
     expect(migrated.autoConnectEnabled).toBe(false);
   });
@@ -94,7 +97,8 @@ describe('wallet state', () => {
         }
       ],
       selectedAccountId: 'account-0',
-      recentRecipients: [{ address: 'old-address', lastUsedAt: 1 }]
+      recentRecipients: [{ address: 'old-address', lastUsedAt: 1 }],
+      contacts: []
     };
 
     const remembered = rememberWalletRecipient(wallet, 'new-address', 2);
@@ -124,12 +128,109 @@ describe('wallet state', () => {
       recentRecipients: [
         { address: 'remove-me', lastUsedAt: 3 },
         { address: 'keep-me', lastUsedAt: 2 }
-      ]
+      ],
+      contacts: []
     };
 
     const nextWallet = removeWalletRecipient(wallet, 'remove-me');
 
     expect(nextWallet.recentRecipients).toEqual([{ address: 'keep-me', lastUsedAt: 2 }]);
+  });
+
+  it('stores contacts uniquely by recipient and keeps the latest label', () => {
+    const wallet: WalletProfile = {
+      id: 'wallet-1',
+      name: 'Wallet 1',
+      chain: 'solana',
+      vault: vaultRecord,
+      signer: { kind: 'software' },
+      source: 'created',
+      accounts: [
+        {
+          id: 'account-0',
+          index: 0,
+          publicKey: '11111111111111111111111111111111',
+          derivationPath: `m/44'/501'/0'/0'`
+        }
+      ],
+      selectedAccountId: 'account-0',
+      recentRecipients: [],
+      contacts: []
+    };
+
+    const created = upsertWalletContact(wallet, {
+      id: 'contact-1',
+      label: 'Alice',
+      recipient: 'alice.sol',
+      createdAt: 1,
+      updatedAt: 1
+    });
+    const updated = upsertWalletContact(created, {
+      id: 'contact-2',
+      label: 'Alice Main',
+      recipient: 'alice.sol',
+      createdAt: 2,
+      updatedAt: 2
+    });
+
+    expect(updated.contacts).toEqual([
+      {
+        id: 'contact-1',
+        label: 'Alice Main',
+        recipient: 'alice.sol',
+        createdAt: 1,
+        updatedAt: 2
+      }
+    ]);
+  });
+
+  it('removes a contact without affecting the others', () => {
+    const wallet: WalletProfile = {
+      id: 'wallet-1',
+      name: 'Wallet 1',
+      chain: 'solana',
+      vault: vaultRecord,
+      signer: { kind: 'software' },
+      source: 'created',
+      accounts: [
+        {
+          id: 'account-0',
+          index: 0,
+          publicKey: '11111111111111111111111111111111',
+          derivationPath: `m/44'/501'/0'/0'`
+        }
+      ],
+      selectedAccountId: 'account-0',
+      recentRecipients: [],
+      contacts: [
+        {
+          id: 'contact-1',
+          label: 'Alice',
+          recipient: 'alice.sol',
+          createdAt: 1,
+          updatedAt: 1
+        },
+        {
+          id: 'contact-2',
+          label: 'Bob',
+          recipient: '7tCjotf5gGQ3U7P9C5iUKZx7PFrf7CAnr7Lq5M2vXy4V',
+          createdAt: 2,
+          updatedAt: 2
+        }
+      ]
+    };
+
+    const nextWallet = removeWalletContact(wallet, 'contact-1');
+
+    expect(nextWallet.contacts).toEqual([
+      {
+        id: 'contact-2',
+        label: 'Bob',
+        recipient: '7tCjotf5gGQ3U7P9C5iUKZx7PFrf7CAnr7Lq5M2vXy4V',
+        createdAt: 2,
+        updatedAt: 2
+      }
+    ]);
   });
 
   it('maps removed themes to the closest supported theme', () => {
@@ -160,7 +261,8 @@ describe('wallet state', () => {
               }
             ],
             selectedAccountId: 'account-0',
-            recentRecipients: []
+            recentRecipients: [],
+            contacts: []
           },
           {
             id: 'wallet-2',
@@ -178,7 +280,8 @@ describe('wallet state', () => {
               }
             ],
             selectedAccountId: 'account-0',
-            recentRecipients: []
+            recentRecipients: [],
+            contacts: []
           }
         ],
         selectedChain: 'solana',
@@ -207,7 +310,7 @@ describe('wallet state', () => {
         selectedNetwork: 'devnet',
         selectedTheme: 'aurora',
         autoConnectEnabled: true,
-        dappApprovalMode: 'safe',
+        dappApprovalMode: 'strict',
         privacyMode: false,
         customRpcUrls: {},
         idleTimeoutMs: 1_000
@@ -242,7 +345,8 @@ describe('wallet state', () => {
               }
             ],
             selectedAccountId: 'account-0',
-            recentRecipients: []
+            recentRecipients: [],
+            contacts: []
           }
         ],
         selectedChain: 'solana',
@@ -271,7 +375,7 @@ describe('wallet state', () => {
         selectedNetwork: 'devnet',
         selectedTheme: 'aurora',
         autoConnectEnabled: true,
-        dappApprovalMode: 'safe',
+        dappApprovalMode: 'strict',
         privacyMode: false,
         customRpcUrls: {},
         idleTimeoutMs: 1_000

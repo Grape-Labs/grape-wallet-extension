@@ -59,6 +59,14 @@ export type WalletRecipient = {
   lastUsedAt: number;
 };
 
+export type WalletContact = {
+  id: string;
+  label: string;
+  recipient: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
 export type BiometricUnlockConfig =
   | {
       mode?: 'wrapped-password';
@@ -100,6 +108,7 @@ export type WalletProfile = {
   accounts: WalletAccount[];
   selectedAccountId: string;
   recentRecipients: WalletRecipient[];
+  contacts: WalletContact[];
 };
 
 export type SolanaChainState = {
@@ -170,6 +179,7 @@ export type SessionState = {
 
 export const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 export const MAX_RECENT_RECIPIENTS = 8;
+export const MAX_WALLET_CONTACTS = 64;
 export const DEFAULT_THEME: GrapeTheme = 'grape';
 export const DEFAULT_AUTO_CONNECT_ENABLED = true;
 export const DEFAULT_DAPP_APPROVAL_MODE: DappApprovalMode = 'strict';
@@ -297,6 +307,43 @@ export function removeWalletRecipient(wallet: WalletProfile, address: string): W
   };
 }
 
+export function upsertWalletContact(wallet: WalletProfile, contact: WalletContact): WalletProfile {
+  const normalizedContact: WalletContact = {
+    ...contact,
+    label: contact.label.trim(),
+    recipient: contact.recipient.trim()
+  };
+  const existingContact =
+    wallet.contacts.find((entry) => entry.id === normalizedContact.id) ??
+    wallet.contacts.find((entry) => entry.recipient === normalizedContact.recipient);
+  const nextContact = existingContact
+    ? {
+        ...existingContact,
+        ...normalizedContact,
+        id: existingContact.id,
+        createdAt: existingContact.createdAt
+      }
+    : normalizedContact;
+  const contacts = [
+    nextContact,
+    ...wallet.contacts.filter((entry) => entry.id !== nextContact.id && entry.recipient !== nextContact.recipient)
+  ].slice(0, MAX_WALLET_CONTACTS);
+
+  return {
+    ...wallet,
+    contacts
+  };
+}
+
+export function removeWalletContact(wallet: WalletProfile, contactId: string): WalletProfile {
+  const normalizedContactId = contactId.trim();
+
+  return {
+    ...wallet,
+    contacts: wallet.contacts.filter((entry) => entry.id !== normalizedContactId)
+  };
+}
+
 export function removeWalletProfile(state: WalletState, walletId: string): WalletState {
   const removedWallet = state.wallets.find((wallet) => wallet.id === walletId);
   const nextWallets = state.wallets.filter((wallet) => wallet.id !== walletId);
@@ -395,7 +442,8 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
           source: 'created',
           accounts: input.accounts,
           selectedAccountId: input.selectedAccountId ?? firstAccount.id,
-          recentRecipients: []
+          recentRecipients: [],
+          contacts: []
         }
       ],
       sharedBiometricUnlock: input.sharedBiometricUnlock,
@@ -507,7 +555,31 @@ function normalizeWalletProfile(wallet: WalletProfile): WalletProfile {
     signer: wallet.signer ?? { kind: 'software' },
     source: wallet.source ?? (wallet.signer?.kind === 'ledger' ? 'ledger' : wallet.signer?.kind === 'watch-only' ? 'watch-only' : 'created'),
     biometricUnlock: wallet.biometricUnlock,
-    recentRecipients: Array.isArray(wallet.recentRecipients) ? wallet.recentRecipients : []
+    recentRecipients: Array.isArray(wallet.recentRecipients) ? wallet.recentRecipients : [],
+    contacts: Array.isArray(wallet.contacts)
+      ? wallet.contacts
+          .map((entry) => {
+            if (
+              !entry ||
+              typeof entry.id !== 'string' ||
+              typeof entry.label !== 'string' ||
+              typeof entry.recipient !== 'string' ||
+              typeof entry.createdAt !== 'number' ||
+              typeof entry.updatedAt !== 'number'
+            ) {
+              return null;
+            }
+
+            return {
+              id: entry.id.trim(),
+              label: entry.label.trim(),
+              recipient: entry.recipient.trim(),
+              createdAt: entry.createdAt,
+              updatedAt: entry.updatedAt
+            };
+          })
+          .filter((entry): entry is WalletContact => !!entry && entry.id.length > 0 && entry.label.length > 0 && entry.recipient.length > 0)
+      : []
   };
 }
 

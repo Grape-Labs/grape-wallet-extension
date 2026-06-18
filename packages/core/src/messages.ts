@@ -484,6 +484,15 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     address: z.string().trim().min(1)
   }),
   z.object({
+    type: z.literal('wallet_add_contact'),
+    label: z.string().trim().min(1).max(64),
+    recipient: z.string().trim().min(1)
+  }),
+  z.object({
+    type: z.literal('wallet_remove_contact'),
+    contactId: z.string().trim().min(1)
+  }),
+  z.object({
     type: z.literal('wallet_set_idle_timeout'),
     idleTimeoutMs: z.number().int().positive()
   }),
@@ -604,8 +613,12 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     password: z.string().min(1).optional()
   }),
   z.object({
+    type: z.literal('wallet_resolve_recipient'),
+    recipient: z.string().trim().min(1)
+  }),
+  z.object({
     type: z.literal('wallet_send_transfer'),
-    recipient: z.string().min(32),
+    recipient: z.string().trim().min(1),
     amount: decimalAmountSchema,
     password: z.string().min(1).optional(),
     asset: sendAssetSchema

@@ -4717,11 +4717,24 @@ body[data-surface='popup'] .token-list {
   border-radius: 999px;
   padding: 4px 8px;
   cursor: pointer;
+  display: grid;
+  gap: 2px;
+  text-align: left;
 }
 
 .recipient-chip.active,
 .recipient-chip:hover {
   background: transparent;
+}
+
+.recipient-chip-label {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.recipient-chip-meta {
+  font-size: 0.72rem;
+  color: var(--theme-muted);
 }
 
 .recipient-chip-remove {
@@ -4848,6 +4861,11 @@ body[data-surface='popup'] .token-list {
 .send-inline-actions {
   display: flex;
   justify-content: flex-start;
+  gap: 8px;
+}
+
+.send-contact-editor {
+  display: grid;
   gap: 8px;
 }
 
