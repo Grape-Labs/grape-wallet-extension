@@ -1,12 +1,30 @@
-import { DEFAULT_THEME, type GrapeTheme } from '@grape/core';
+import { DEFAULT_THEME, normalizeCustomTheme, type CustomThemeConfig, type GrapeTheme } from '@grape/core';
 
-export const basePalette = {
+type BasePalette = {
+  bg: string;
+  panel: string;
+  panelBorder: string;
+  softPanel: string;
+  text: string;
+  muted: string;
+  subtle: string;
+  grape: string;
+  pink: string;
+  mint: string;
+  warning: string;
+  danger: string;
+  frost: string;
+  shadow: string;
+};
+
+export const basePalette: BasePalette = {
   bg: '#09040d',
   panel: 'rgba(30, 14, 38, 0.8)',
   panelBorder: 'rgba(255,255,255,0.12)',
   softPanel: 'rgba(255,255,255,0.07)',
   text: '#fbf7ff',
   muted: '#bbaece',
+  subtle: '#d8cae8',
   grape: '#d15fff',
   pink: '#ff7ccc',
   mint: '#8bf7c6',
@@ -14,7 +32,7 @@ export const basePalette = {
   danger: '#ff8ea1',
   frost: 'rgba(255,255,255,0.08)',
   shadow: 'rgba(6, 0, 12, 0.55)'
-} as const;
+};
 
 export const chains = [
   { id: 'solana', label: 'Solana', short: 'SOL', accent: '#8bf7c6' },
@@ -30,13 +48,17 @@ export const mobileThemes: Array<{ id: GrapeTheme; label: string }> = [
   { id: 'matrix', label: 'Matrix' },
   { id: 'tron', label: 'Ares' },
   { id: 'apple', label: 'Apple Glass' },
+  { id: 'mist', label: 'Mist Glass' },
+  { id: 'midnight-glass', label: 'Dark Glass' },
+  { id: 'plastic', label: 'Soft Plastic' },
   { id: 'aurora', label: 'Aurora' },
   { id: 'champagne', label: 'Champagne' },
   { id: 'liquid-chrome', label: 'Liquid Chrome' },
-  { id: 'obsidian', label: 'Obsidian' }
+  { id: 'obsidian', label: 'Obsidian' },
+  { id: 'custom', label: 'Custom' }
 ];
 
-export type MobileThemePalette = typeof basePalette & {
+export type MobileThemePalette = BasePalette & {
   id: GrapeTheme;
   label: string;
   backgroundAssetKey?: 'bg_comic' | 'bg_glass' | 'bg_grape_dark' | 'bg_matrix' | 'bg_tron' | 'bg_chrome';
@@ -51,7 +73,7 @@ export type MobileThemePalette = typeof basePalette & {
   footerBg: string;
 };
 
-const themeMap: Record<GrapeTheme, Omit<MobileThemePalette, keyof typeof basePalette>> = {
+const themeMap: Record<GrapeTheme, Omit<MobileThemePalette, keyof BasePalette>> = {
   grape: {
     id: 'grape',
     label: 'Grape',
@@ -133,6 +155,42 @@ const themeMap: Record<GrapeTheme, Omit<MobileThemePalette, keyof typeof basePal
     primaryButtonText: '#16212f',
     footerBg: 'rgba(21, 26, 34, 0.56)'
   },
+  mist: {
+    id: 'mist',
+    label: 'Mist Glass',
+    backgroundImageOpacity: 0,
+    backgroundImageBlur: 0,
+    bgGlowTop: 'rgba(214, 235, 255, 0.14)',
+    bgGlowBottom: 'rgba(168, 198, 232, 0.1)',
+    brandGradient: ['#f8fbff', '#d7e9ff', '#a8c6e8'],
+    primaryButton: '#d7e9ff',
+    primaryButtonText: '#16202d',
+    footerBg: 'rgba(26, 33, 44, 0.72)'
+  },
+  'midnight-glass': {
+    id: 'midnight-glass',
+    label: 'Dark Glass',
+    backgroundImageOpacity: 0,
+    backgroundImageBlur: 0,
+    bgGlowTop: 'rgba(111, 120, 255, 0.14)',
+    bgGlowBottom: 'rgba(20, 184, 166, 0.1)',
+    brandGradient: ['#e5e7ff', '#8b8dff', '#2dd4bf'],
+    primaryButton: '#8b8dff',
+    primaryButtonText: '#080a18',
+    footerBg: 'rgba(8, 11, 22, 0.9)'
+  },
+  plastic: {
+    id: 'plastic',
+    label: 'Soft Plastic',
+    backgroundImageOpacity: 0,
+    backgroundImageBlur: 0,
+    bgGlowTop: 'rgba(251, 113, 133, 0.16)',
+    bgGlowBottom: 'rgba(96, 165, 250, 0.14)',
+    brandGradient: ['#fbcfe8', '#c4b5fd', '#93c5fd'],
+    primaryButton: '#fbcfe8',
+    primaryButtonText: '#241124',
+    footerBg: 'rgba(28, 18, 35, 0.88)'
+  },
   aurora: {
     id: 'aurora',
     label: 'Aurora',
@@ -182,10 +240,22 @@ const themeMap: Record<GrapeTheme, Omit<MobileThemePalette, keyof typeof basePal
     primaryButton: '#e5e7eb',
     primaryButtonText: '#101214',
     footerBg: 'rgba(9, 11, 15, 0.94)'
+  },
+  custom: {
+    id: 'custom',
+    label: 'Custom',
+    backgroundImageOpacity: 0,
+    backgroundImageBlur: 0,
+    bgGlowTop: 'rgba(255, 115, 233, 0.16)',
+    bgGlowBottom: 'rgba(141, 107, 255, 0.14)',
+    brandGradient: ['#ff73e9', '#8d6bff', '#64d8ff'],
+    primaryButton: '#ff73e9',
+    primaryButtonText: '#190723',
+    footerBg: 'rgba(18, 9, 29, 0.92)'
   }
 };
 
-const paletteOverrides: Partial<Record<GrapeTheme, Partial<typeof basePalette>>> = {
+const paletteOverrides: Partial<Record<GrapeTheme, Partial<BasePalette>>> = {
   comic: {
     bg: '#140a20',
     panel: 'rgba(39, 19, 70, 0.82)',
@@ -246,6 +316,45 @@ const paletteOverrides: Partial<Record<GrapeTheme, Partial<typeof basePalette>>>
     shadow: 'rgba(3, 6, 12, 0.28)',
     frost: 'rgba(255,255,255,0.22)'
   },
+  mist: {
+    bg: '#10151d',
+    panel: 'rgba(35, 45, 58, 0.58)',
+    panelBorder: 'rgba(229, 241, 255, 0.2)',
+    text: '#f5f9ff',
+    muted: 'rgba(229, 241, 255, 0.72)',
+    subtle: 'rgba(229, 241, 255, 0.86)',
+    grape: '#d7e9ff',
+    pink: '#f0d4ff',
+    mint: '#bdebdc',
+    danger: '#ffb6c5',
+    frost: 'rgba(255,255,255,0.18)',
+    shadow: 'rgba(4, 9, 17, 0.34)'
+  },
+  'midnight-glass': {
+    bg: '#070a16',
+    panel: 'rgba(14, 18, 36, 0.72)',
+    panelBorder: 'rgba(139, 141, 255, 0.18)',
+    text: '#f1f4ff',
+    muted: 'rgba(221, 227, 255, 0.7)',
+    subtle: 'rgba(221, 227, 255, 0.84)',
+    grape: '#8b8dff',
+    pink: '#c084fc',
+    mint: '#2dd4bf',
+    shadow: 'rgba(0, 0, 0, 0.5)'
+  },
+  plastic: {
+    bg: '#151020',
+    panel: 'rgba(40, 29, 54, 0.78)',
+    panelBorder: 'rgba(251, 207, 232, 0.16)',
+    text: '#fff7fb',
+    muted: 'rgba(255, 247, 251, 0.72)',
+    subtle: 'rgba(255, 247, 251, 0.86)',
+    grape: '#fbcfe8',
+    pink: '#c4b5fd',
+    mint: '#93c5fd',
+    danger: '#ff9eb3',
+    shadow: 'rgba(8, 5, 16, 0.42)'
+  },
   aurora: {
     bg: '#0d101a',
     panel: 'rgba(19, 23, 40, 0.82)',
@@ -289,11 +398,56 @@ const paletteOverrides: Partial<Record<GrapeTheme, Partial<typeof basePalette>>>
     grape: '#e5e7eb',
     pink: '#a1a1aa',
     mint: '#d4d4d8'
+  },
+  custom: {
+    bg: '#0d0a14',
+    panel: 'rgba(27, 11, 38, 0.84)',
+    panelBorder: 'rgba(255, 115, 233, 0.16)',
+    text: '#fbf5ff',
+    muted: 'rgba(251, 245, 255, 0.72)',
+    subtle: 'rgba(251, 245, 255, 0.86)',
+    grape: '#ff73e9',
+    pink: '#8d6bff',
+    mint: '#64d8ff'
   }
 };
 
-export function getMobileTheme(theme: GrapeTheme | undefined): MobileThemePalette {
+function hexToRgba(hex: string, alpha: number) {
+  const normalized = hex.replace('#', '');
+  const red = Number.parseInt(normalized.slice(0, 2), 16);
+  const green = Number.parseInt(normalized.slice(2, 4), 16);
+  const blue = Number.parseInt(normalized.slice(4, 6), 16);
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+}
+
+export function getMobileTheme(theme: GrapeTheme | undefined, customTheme?: CustomThemeConfig): MobileThemePalette {
   const normalizedTheme = theme && themeMap[theme] ? theme : DEFAULT_THEME;
+  if (normalizedTheme === 'custom') {
+    const normalizedCustomTheme = normalizeCustomTheme(customTheme);
+    return {
+      ...basePalette,
+      ...themeMap.custom,
+      bg: normalizedCustomTheme.background,
+      panel: hexToRgba(normalizedCustomTheme.surface, 0.86),
+      panelBorder: hexToRgba(normalizedCustomTheme.accent, 0.2),
+      softPanel: hexToRgba(normalizedCustomTheme.text, 0.08),
+      text: normalizedCustomTheme.text,
+      muted: hexToRgba(normalizedCustomTheme.text, 0.72),
+      subtle: hexToRgba(normalizedCustomTheme.text, 0.86),
+      grape: normalizedCustomTheme.accent,
+      pink: normalizedCustomTheme.accent2,
+      mint: normalizedCustomTheme.accent2,
+      frost: hexToRgba(normalizedCustomTheme.text, 0.08),
+      shadow: hexToRgba(normalizedCustomTheme.background, 0.54),
+      bgGlowTop: hexToRgba(normalizedCustomTheme.accent, 0.16),
+      bgGlowBottom: hexToRgba(normalizedCustomTheme.accent2, 0.14),
+      brandGradient: [normalizedCustomTheme.accent, normalizedCustomTheme.accent2, normalizedCustomTheme.text],
+      primaryButton: normalizedCustomTheme.accent,
+      primaryButtonText: normalizedCustomTheme.background,
+      footerBg: hexToRgba(normalizedCustomTheme.surface, 0.92)
+    };
+  }
+
   return {
     ...basePalette,
     ...paletteOverrides[normalizedTheme],

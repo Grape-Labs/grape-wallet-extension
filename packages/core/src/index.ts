@@ -1,5 +1,6 @@
 export * from './approval-machine';
 export * from './access';
+export * from './branding';
 export * from './bridge';
 export * from './crypto';
 export * from './device-link';

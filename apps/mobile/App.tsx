@@ -39,7 +39,7 @@ import {
   TextInput as PaperTextInput
 } from 'react-native-paper';
 
-import { DEFAULT_THEME, parseDeviceLinkPayloadText, type GrapeTheme } from '@grape/core';
+import { DEFAULT_CUSTOM_THEME, DEFAULT_THEME, parseDeviceLinkPayloadText, type CustomThemeConfig, type GrapeTheme } from '@grape/core';
 import { chains, getMobileTheme, mobileThemes, type MobileThemePalette } from './src/theme';
 import {
   addWalletSet,
@@ -155,6 +155,14 @@ const GRAPE_DISCOVER_FAVORITES = [
   { label: 'Verification', subtitle: 'Manage verified identities', url: 'https://verification.governance.so' },
   { label: 'Jupiter', subtitle: 'Swap on Solana', url: 'https://jup.ag' }
 ] as const;
+
+const CUSTOM_THEME_FIELDS: Array<{ key: keyof CustomThemeConfig; label: string }> = [
+  { key: 'background', label: 'Background' },
+  { key: 'surface', label: 'Surface' },
+  { key: 'text', label: 'Text' },
+  { key: 'accent', label: 'Accent' },
+  { key: 'accent2', label: 'Accent 2' }
+];
 
 const GRAPE_DISCOVER_INJECTED_JS = `
 (function () {
@@ -1062,6 +1070,10 @@ function parseOriginFromUrl(value: string) {
   }
 }
 
+function isHexColor(value: string) {
+  return /^#[0-9a-fA-F]{6}$/.test(value.trim());
+}
+
 export default function App() {
   const { width } = useWindowDimensions();
   const [screen, setScreen] = useState<Screen>('loading');
@@ -1220,8 +1232,8 @@ export default function App() {
   );
   const selectedChainMeta = chainMeta(walletState.selectedChain);
   const activeTheme = useMemo(
-    () => getMobileTheme(walletState.selectedTheme ?? DEFAULT_THEME),
-    [walletState.selectedTheme]
+    () => getMobileTheme(walletState.selectedTheme ?? DEFAULT_THEME, walletState.customTheme),
+    [walletState.customTheme, walletState.selectedTheme]
   );
   const setupCredentialKind: MobileWalletState['credentialKind'] = 'passcode';
   const setupCredentialLabel = getCredentialLabel(setupCredentialKind);
@@ -1338,7 +1350,7 @@ export default function App() {
     [walletState.trustedDappOrigins]
   );
   const discoverApprovalRequiresReauth =
-    !!discoverApproval && walletState.dappApprovalMode === 'safe' && discoverApproval.request.method !== 'connect';
+    !!discoverApproval && walletState.dappApprovalMode === 'strict' && discoverApproval.request.method !== 'connect';
   const actionableGovernanceProposalCount = useMemo(
     () => governance.proposals.filter((proposal) => proposal.canVote).length,
     [governance.proposals]
@@ -2153,7 +2165,7 @@ export default function App() {
   }
 
   function isDiscoverOriginAuthorized(origin: string) {
-    return trustedDappOrigins.has(origin) || discoverConnectedOrigins.includes(origin);
+    return discoverConnectedOrigins.includes(origin) || (walletState.autoConnectEnabled && trustedDappOrigins.has(origin));
   }
 
   function rejectDiscoverProviderRequest(request: DiscoverProviderRequest, code: string, message: string) {
@@ -2209,12 +2221,19 @@ export default function App() {
 
       if (request.method === 'connect') {
         const silent = Boolean(request.params?.silent);
-        if (silent && !trustedDappOrigins.has(requestOrigin)) {
-          rejectDiscoverProviderRequest(request, 'UNTRUSTED', 'This site is not trusted yet.');
+        const canAutoConnect = walletState.autoConnectEnabled && trustedDappOrigins.has(requestOrigin);
+        if (silent && !canAutoConnect) {
+          rejectDiscoverProviderRequest(
+            request,
+            trustedDappOrigins.has(requestOrigin) ? 'AUTO_CONNECT_DISABLED' : 'UNTRUSTED',
+            trustedDappOrigins.has(requestOrigin)
+              ? 'Auto-connect is disabled for trusted sites.'
+              : 'This site is not trusted yet.'
+          );
           return;
         }
 
-        if (trustedDappOrigins.has(requestOrigin)) {
+        if (canAutoConnect) {
           setDiscoverConnectedOrigins((currentValue) => (currentValue.includes(requestOrigin) ? currentValue : [...currentValue, requestOrigin]));
           sendDiscoverProviderResponse({
             id: request.id,
@@ -2659,11 +2678,9 @@ export default function App() {
     setSubmitLoading(true);
     setSubmitStatus(setupMode === 'create'
       ? 'Creating your wallet…'
-      : setupMode === 'passkey'
-        ? 'Creating your passkey wallet…'
-        : importKind === 'restore'
-          ? 'Decrypting restore payload…'
-          : 'Importing your wallet…');
+      : importKind === 'restore'
+        ? 'Decrypting restore payload…'
+        : 'Importing your wallet…');
     try {
       await waitForNextFrame();
       let nextState: MobileWalletState;
@@ -3145,6 +3162,30 @@ export default function App() {
     await saveState({
       ...walletState,
       selectedTheme: theme
+    });
+  }
+
+  async function handleSetCustomThemeValue(key: keyof CustomThemeConfig, value: string) {
+    await saveState({
+      ...walletState,
+      customTheme: {
+        ...walletState.customTheme,
+        [key]: value.trim()
+      }
+    });
+  }
+
+  async function handleResetCustomTheme() {
+    await saveState({
+      ...walletState,
+      customTheme: DEFAULT_CUSTOM_THEME
+    });
+  }
+
+  async function handleSetAutoConnectEnabled(enabled: boolean) {
+    await saveState({
+      ...walletState,
+      autoConnectEnabled: enabled
     });
   }
 
@@ -5882,6 +5923,34 @@ export default function App() {
                 );
               })}
             </View>
+            {walletState.selectedTheme === 'custom' ? (
+              <View style={styles.customThemeEditor}>
+                {CUSTOM_THEME_FIELDS.map((field) => {
+                  const value = walletState.customTheme[field.key];
+                  return (
+                    <View key={field.key} style={styles.customThemeField}>
+                      <View style={[styles.customThemeSwatch, { backgroundColor: isHexColor(value) ? value : 'transparent' }]} />
+                      <PaperTextInput
+                        value={value}
+                        onChangeText={(nextValue) => void handleSetCustomThemeValue(field.key, nextValue)}
+                        label={field.label}
+                        mode="outlined"
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        maxLength={7}
+                        style={[styles.paperInput, styles.customThemeInput]}
+                        contentStyle={styles.paperInputContent}
+                        outlineStyle={styles.paperOutline}
+                        textColor={activeTheme.text}
+                      />
+                    </View>
+                  );
+                })}
+                <PaperButton mode="outlined" style={styles.paperSecondaryButton} onPress={() => void handleResetCustomTheme()}>
+                  Reset custom theme
+                </PaperButton>
+              </View>
+            ) : null}
           </>
         )}
 
@@ -5894,7 +5963,7 @@ export default function App() {
                 ? 'Biometric on'
                 : 'Biometric off'
               : 'Biometric unavailable'
-          } • ${walletState.dappApprovalMode === 'degen' ? 'Degen mode' : 'Safe mode'}`,
+          } • ${walletState.dappApprovalMode === 'non-strict' ? 'Non-strict mode' : 'Strict mode'}`,
           <>
             <View style={styles.settingsRow}>
               <View style={styles.settingsCopy}>
@@ -5929,19 +5998,19 @@ export default function App() {
               <View style={styles.settingsCopy}>
                 <Text style={styles.settingsTitle}>dApp signing mode</Text>
                 <Text style={styles.sectionHint}>
-                  Safe mode re-verifies each Discover signature or transaction. Degen mode uses the unlocked session until you lock the app again.
+                  Strict mode re-verifies each Discover signature or transaction. Non-strict mode uses the unlocked session until you lock the app again.
                 </Text>
               </View>
               <View style={styles.dappModeGrid}>
                 {[
                   {
-                    id: 'safe' as const,
-                    title: 'Safe',
+                    id: 'strict' as const,
+                    title: 'Strict',
                     detail: 'Verify each dApp signature or transaction.'
                   },
                   {
-                    id: 'degen' as const,
-                    title: 'Degen',
+                    id: 'non-strict' as const,
+                    title: 'Non-strict',
                     detail: 'Keep signing from the unlocked session.'
                   }
                 ].map((mode) => {
@@ -6109,11 +6178,25 @@ export default function App() {
         {renderSettingsSection(
           'trusted-apps',
           'Trusted apps',
-          trustedAppsCount > 0 ? `${trustedAppsCount} trusted` : 'No trusted apps',
+          `${walletState.autoConnectEnabled ? 'Auto-connect on' : 'Auto-connect off'} • ${
+            trustedAppsCount > 0 ? `${trustedAppsCount} trusted` : 'No trusted apps'
+          }`,
           <>
             <Text style={styles.sectionHint}>
               Grape Discover remembers sites you approved for connection. Remove any site to force a new connect prompt.
             </Text>
+          <View style={styles.settingsRow}>
+            <View style={styles.settingsCopy}>
+              <Text style={styles.settingsTitle}>Auto-connect trusted apps</Text>
+              <Text style={styles.sectionHint}>Reconnect approved sites automatically during future Discover sessions.</Text>
+            </View>
+            <Switch
+              value={walletState.autoConnectEnabled}
+              onValueChange={(value) => void handleSetAutoConnectEnabled(value)}
+              trackColor={{ true: activeTheme.primaryButton, false: 'rgba(255,255,255,0.16)' }}
+              thumbColor={walletState.autoConnectEnabled ? '#f7f2ff' : '#d0c0df'}
+            />
+          </View>
           {walletState.trustedDappOrigins.length === 0 ? (
             <Text style={styles.sectionHint}>No trusted apps yet.</Text>
           ) : (
@@ -9244,6 +9327,24 @@ function createStyles(palette: MobileThemePalette) {
   },
   themeChipTextActive: {
     color: palette.text
+  },
+  customThemeEditor: {
+    gap: 12
+  },
+  customThemeField: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10
+  },
+  customThemeSwatch: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 1,
+    borderColor: palette.panelBorder
+  },
+  customThemeInput: {
+    flex: 1
   },
   settingsCopy: {
     flex: 1,

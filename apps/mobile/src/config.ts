@@ -502,9 +502,9 @@ const MOBILE_SUPPORTED_BRIDGE_DESTINATIONS = {
   sui: [] as const
 } as const;
 
-function createMobileLifiHeaders() {
+function createMobileLifiHeaders(): Record<string, string> | undefined {
   const apiKey = getMobileLifiApiKey();
-  return apiKey ? { 'x-lifi-api-key': apiKey } : {};
+  return apiKey ? { 'x-lifi-api-key': apiKey } : undefined;
 }
 
 async function fetchMobileLifiJson<T>(path: string, params?: URLSearchParams): Promise<T> {

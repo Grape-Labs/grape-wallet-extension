@@ -1,9 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  DEFAULT_CUSTOM_THEME,
+  DEFAULT_THEME_BACKGROUND_STYLE,
+  DEFAULT_THEME_MOTION_INTENSITY,
   createEmptyWalletState,
   migrateWalletState,
+  normalizeCustomTheme,
   normalizeDappApprovalMode,
+  normalizeThemeBackgroundStyle,
+  normalizeThemeMotionIntensity,
   normalizeTheme,
   rememberWalletRecipient,
   removeWalletContact,
@@ -36,6 +42,8 @@ describe('wallet state', () => {
     expect(state.chainState.sui.selectedNetwork).toBe('mainnet-beta');
     expect(state.chainState.monad.selectedNetwork).toBe('mainnet-beta');
     expect(state.chainState.ethereum.selectedNetwork).toBe('mainnet-beta');
+    expect(state.themeBackgroundStyle).toBe(DEFAULT_THEME_BACKGROUND_STYLE);
+    expect(state.themeMotionIntensity).toBe(DEFAULT_THEME_MOTION_INTENSITY);
     expect(state.autoConnectEnabled).toBe(true);
     expect(state.dappApprovalMode).toBe('strict');
   });
@@ -77,6 +85,9 @@ describe('wallet state', () => {
     expect(migrated.wallets[0]?.recentRecipients).toEqual([]);
     expect(migrated.wallets[0]?.contacts).toEqual([]);
     expect(migrated.selectedTheme).toBe('grape');
+    expect(migrated.customTheme).toEqual(DEFAULT_CUSTOM_THEME);
+    expect(migrated.themeBackgroundStyle).toBe(DEFAULT_THEME_BACKGROUND_STYLE);
+    expect(migrated.themeMotionIntensity).toBe(DEFAULT_THEME_MOTION_INTENSITY);
     expect(migrated.autoConnectEnabled).toBe(false);
   });
 
@@ -240,6 +251,31 @@ describe('wallet state', () => {
     expect(normalizeTheme('light')).toBe('champagne');
   });
 
+  it('normalizes theme background styles and motion intensity', () => {
+    expect(normalizeThemeBackgroundStyle('glass')).toBe('glass');
+    expect(normalizeThemeBackgroundStyle('bogus')).toBe(DEFAULT_THEME_BACKGROUND_STYLE);
+    expect(normalizeThemeMotionIntensity('subtle')).toBe('subtle');
+    expect(normalizeThemeMotionIntensity('bogus')).toBe(DEFAULT_THEME_MOTION_INTENSITY);
+  });
+
+  it('normalizes custom theme colors and falls back invalid values', () => {
+    expect(
+      normalizeCustomTheme({
+        background: '#ABCDEF',
+        surface: 'invalid',
+        text: '#123456',
+        accent: '#654321',
+        accent2: '#FEDCBA'
+      })
+    ).toEqual({
+      background: '#abcdef',
+      surface: DEFAULT_CUSTOM_THEME.surface,
+      text: '#123456',
+      accent: '#654321',
+      accent2: '#fedcba'
+    });
+  });
+
   it('removes a selected wallet and falls forward to the next wallet', () => {
     const nextState = removeWalletProfile(
       {
@@ -309,6 +345,9 @@ describe('wallet state', () => {
         selectedWalletId: 'wallet-1',
         selectedNetwork: 'devnet',
         selectedTheme: 'aurora',
+        customTheme: DEFAULT_CUSTOM_THEME,
+        themeBackgroundStyle: DEFAULT_THEME_BACKGROUND_STYLE,
+        themeMotionIntensity: DEFAULT_THEME_MOTION_INTENSITY,
         autoConnectEnabled: true,
         dappApprovalMode: 'strict',
         privacyMode: false,
@@ -374,6 +413,9 @@ describe('wallet state', () => {
         selectedWalletId: 'wallet-1',
         selectedNetwork: 'devnet',
         selectedTheme: 'aurora',
+        customTheme: DEFAULT_CUSTOM_THEME,
+        themeBackgroundStyle: DEFAULT_THEME_BACKGROUND_STYLE,
+        themeMotionIntensity: DEFAULT_THEME_MOTION_INTENSITY,
         autoConnectEnabled: true,
         dappApprovalMode: 'strict',
         privacyMode: false,

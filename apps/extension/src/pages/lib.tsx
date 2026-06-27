@@ -4,7 +4,7 @@ import { Component } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import '../shared/style.css';
-import { applyDocumentTheme, loadPersistedTheme } from '../shared/theme';
+import { applyDocumentTheme, loadPersistedThemeSettings } from '../shared/theme';
 
 function resolveSurface() {
   const page = document.body.dataset.page;
@@ -96,8 +96,8 @@ export function mountPage(element: React.ReactNode) {
       surfacePort = null;
     }
   }
-  void loadPersistedTheme().then((theme) => {
-    applyDocumentTheme(theme);
+  void loadPersistedThemeSettings().then(({ theme, customTheme, backgroundStyle, motionIntensity }) => {
+    applyDocumentTheme(theme, customTheme, backgroundStyle, motionIntensity);
   });
   createRoot(container).render(<PageErrorBoundary>{element}</PageErrorBoundary>);
 }

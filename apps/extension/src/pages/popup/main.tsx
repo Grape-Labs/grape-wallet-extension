@@ -37,7 +37,7 @@ import QRCode from 'qrcode';
 import extensionPackage from '../../../package.json';
 
 import { Button, Card, Input, KeyValueRow, PageShell, StatusPill } from '@grape/ui';
-import { hasExecutableBridgeTransaction, STORAGE_KEYS } from '@grape/core';
+import { DEFAULT_CUSTOM_THEME, hasExecutableBridgeTransaction, STORAGE_KEYS } from '@grape/core';
 
 import type {
   ApprovalRecord,
@@ -75,10 +75,11 @@ import type {
 import { sendRuntimeMessage } from '../../shared/chrome';
 import { createBiometricUnlock, isBiometricUnlockSupported, resolveBiometricUnlockConfig, unlockWithBiometric } from '../../shared/biometric';
 import { ChainLogoBadge } from '../../shared/chains';
+import { CustomThemeEditor } from '../../shared/CustomThemeEditor';
 import { JUPITER_SOL_MINT } from '../../shared/jupiter';
 import { getSupportedBridgeDestinations, LIFI_NATIVE_SYMBOL } from '../../shared/lifi';
 import { formatSavedRecipient, isSupportedSolanaRecipientDomain, suggestRecipientLabel } from '../../shared/recipient-resolution';
-import { applyDocumentTheme, THEMES } from '../../shared/theme';
+import { applyDocumentTheme, THEMES, THEME_BACKGROUND_STYLES, THEME_MOTION_INTENSITIES } from '../../shared/theme';
 import { openExtensionPage, openExtensionSidePanel } from '../../shared/window';
 import { ApprovalView } from '../approval/ApprovalView';
 import { mountPage } from '../lib';
@@ -1431,6 +1432,30 @@ function PopupPage() {
     await refresh();
   };
 
+  const applyCustomTheme = async (customTheme: WalletStateResponse['wallet']['customTheme']) => {
+    const nextState = await sendRuntimeMessage<WalletStateResponse>({
+      type: 'wallet_set_custom_theme',
+      customTheme
+    });
+    setState(nextState);
+  };
+
+  const applyThemeBackgroundStyle = async (style: WalletStateResponse['wallet']['themeBackgroundStyle']) => {
+    const nextState = await sendRuntimeMessage<WalletStateResponse>({
+      type: 'wallet_set_theme_background_style',
+      style
+    });
+    setState(nextState);
+  };
+
+  const applyThemeMotionIntensity = async (intensity: WalletStateResponse['wallet']['themeMotionIntensity']) => {
+    const nextState = await sendRuntimeMessage<WalletStateResponse>({
+      type: 'wallet_set_theme_motion_intensity',
+      intensity
+    });
+    setState(nextState);
+  };
+
   const applyUnlockedState = (nextState: WalletStateResponse) => {
     setSurfaceError(null);
     setState(nextState);
@@ -1541,8 +1566,13 @@ function PopupPage() {
   }, []);
 
   useEffect(() => {
-    applyDocumentTheme(state?.wallet.selectedTheme);
-  }, [state?.wallet.selectedTheme]);
+    applyDocumentTheme(
+      state?.wallet.selectedTheme,
+      state?.wallet.customTheme,
+      state?.wallet.themeBackgroundStyle,
+      state?.wallet.themeMotionIntensity
+    );
+  }, [state?.wallet.customTheme, state?.wallet.selectedTheme, state?.wallet.themeBackgroundStyle, state?.wallet.themeMotionIntensity]);
 
   useEffect(() => {
     if (view === 'security' && state?.wallet.setup === 'ready' && !state.session.locked) {
@@ -2985,6 +3015,9 @@ function PopupPage() {
       setup: 'empty',
       wallets: [],
       selectedTheme: 'grape',
+      customTheme: DEFAULT_CUSTOM_THEME,
+      themeBackgroundStyle: 'gradient',
+      themeMotionIntensity: 'expressive',
       autoConnectEnabled: true,
       dappApprovalMode: 'strict',
       privacyMode: false,
@@ -6186,16 +6219,49 @@ function PopupPage() {
               <select
                 value={wallet.selectedTheme}
                 onChange={async (event) => {
-                  await sendRuntimeMessage({
+                  const nextState = await sendRuntimeMessage<WalletStateResponse>({
                     type: 'wallet_set_theme',
                     theme: event.target.value as typeof wallet.selectedTheme
                   });
-                  await refresh();
+                  setState(nextState);
                 }}
               >
                 {THEMES.map((theme) => (
                   <option key={theme.id} value={theme.id}>
                     {theme.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {wallet.selectedTheme === 'custom' ? (
+              <CustomThemeEditor
+                theme={wallet.customTheme}
+                onChange={applyCustomTheme}
+                onReset={() => applyCustomTheme(DEFAULT_CUSTOM_THEME)}
+              />
+            ) : null}
+            <label className="stack">
+              <span className="muted">Background style</span>
+              <select
+                value={wallet.themeBackgroundStyle}
+                onChange={(event) => void applyThemeBackgroundStyle(event.target.value as typeof wallet.themeBackgroundStyle)}
+              >
+                {THEME_BACKGROUND_STYLES.map((style) => (
+                  <option key={style.id} value={style.id}>
+                    {style.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="stack">
+              <span className="muted">Motion intensity</span>
+              <select
+                value={wallet.themeMotionIntensity}
+                onChange={(event) => void applyThemeMotionIntensity(event.target.value as typeof wallet.themeMotionIntensity)}
+              >
+                {THEME_MOTION_INTENSITIES.map((intensity) => (
+                  <option key={intensity.id} value={intensity.id}>
+                    {intensity.label}
                   </option>
                 ))}
               </select>

@@ -19,10 +19,25 @@ export type GrapeTheme =
   | 'matrix'
   | 'tron'
   | 'apple'
+  | 'mist'
+  | 'midnight-glass'
+  | 'plastic'
   | 'aurora'
   | 'champagne'
   | 'liquid-chrome'
-  | 'obsidian';
+  | 'obsidian'
+  | 'custom';
+
+export type CustomThemeConfig = {
+  background: string;
+  surface: string;
+  text: string;
+  accent: string;
+  accent2: string;
+};
+
+export type ThemeBackgroundStyle = 'gradient' | 'glass' | 'noise' | 'orbs';
+export type ThemeMotionIntensity = 'off' | 'subtle' | 'expressive';
 
 export const SUPPORTED_THEMES = [
   'grape',
@@ -31,11 +46,28 @@ export const SUPPORTED_THEMES = [
   'matrix',
   'tron',
   'apple',
+  'mist',
+  'midnight-glass',
+  'plastic',
   'aurora',
   'champagne',
   'liquid-chrome',
-  'obsidian'
+  'obsidian',
+  'custom'
 ] as const satisfies readonly GrapeTheme[];
+
+export const SUPPORTED_THEME_BACKGROUND_STYLES = [
+  'gradient',
+  'glass',
+  'noise',
+  'orbs'
+] as const satisfies readonly ThemeBackgroundStyle[];
+
+export const SUPPORTED_THEME_MOTION_INTENSITIES = [
+  'off',
+  'subtle',
+  'expressive'
+] as const satisfies readonly ThemeMotionIntensity[];
 
 export const SUPPORTED_CHAINS = ['solana', 'sui', 'monad', 'ethereum'] as const satisfies readonly GrapeChain[];
 
@@ -144,6 +176,9 @@ export type WalletState = {
   selectedWalletId?: string;
   selectedNetwork: GrapeNetwork;
   selectedTheme: GrapeTheme;
+  customTheme: CustomThemeConfig;
+  themeBackgroundStyle: ThemeBackgroundStyle;
+  themeMotionIntensity: ThemeMotionIntensity;
   autoConnectEnabled: boolean;
   dappApprovalMode: DappApprovalMode;
   privacyMode: boolean;
@@ -165,6 +200,9 @@ export type LegacyWalletState = {
   chainState?: Partial<WalletState['chainState']>;
   selectedNetwork?: GrapeNetwork;
   selectedTheme?: GrapeTheme;
+  customTheme?: Partial<CustomThemeConfig>;
+  themeBackgroundStyle?: ThemeBackgroundStyle;
+  themeMotionIntensity?: ThemeMotionIntensity;
   autoConnectEnabled?: boolean;
   dappApprovalMode?: DappApprovalMode;
   privacyMode?: boolean;
@@ -181,9 +219,20 @@ export const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 export const MAX_RECENT_RECIPIENTS = 8;
 export const MAX_WALLET_CONTACTS = 64;
 export const DEFAULT_THEME: GrapeTheme = 'grape';
+export const DEFAULT_CUSTOM_THEME: CustomThemeConfig = {
+  background: '#0d0a14',
+  surface: '#1b0b26',
+  text: '#fbf5ff',
+  accent: '#ff73e9',
+  accent2: '#8d6bff'
+};
+export const DEFAULT_THEME_BACKGROUND_STYLE: ThemeBackgroundStyle = 'gradient';
+export const DEFAULT_THEME_MOTION_INTENSITY: ThemeMotionIntensity = 'expressive';
 export const DEFAULT_AUTO_CONNECT_ENABLED = true;
 export const DEFAULT_DAPP_APPROVAL_MODE: DappApprovalMode = 'strict';
 export const DEFAULT_CHAIN: GrapeChain = 'solana';
+
+const CUSTOM_THEME_HEX_PATTERN = /^#[0-9a-fA-F]{6}$/;
 
 export function normalizeTheme(theme: unknown): GrapeTheme {
   switch (theme) {
@@ -193,10 +242,14 @@ export function normalizeTheme(theme: unknown): GrapeTheme {
     case 'matrix':
     case 'tron':
     case 'apple':
+    case 'mist':
+    case 'midnight-glass':
+    case 'plastic':
     case 'aurora':
     case 'champagne':
     case 'liquid-chrome':
     case 'obsidian':
+    case 'custom':
       return theme;
     case 'modern':
       return 'aurora';
@@ -208,6 +261,49 @@ export function normalizeTheme(theme: unknown): GrapeTheme {
       return 'champagne';
     default:
       return DEFAULT_THEME;
+  }
+}
+
+function normalizeHexColor(value: unknown, fallback: string): string {
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return CUSTOM_THEME_HEX_PATTERN.test(normalized) ? normalized : fallback;
+}
+
+export function normalizeCustomTheme(theme: unknown): CustomThemeConfig {
+  const candidate =
+    theme && typeof theme === 'object'
+      ? (theme as Partial<Record<keyof CustomThemeConfig, unknown>>)
+      : {};
+
+  return {
+    background: normalizeHexColor(candidate.background, DEFAULT_CUSTOM_THEME.background),
+    surface: normalizeHexColor(candidate.surface, DEFAULT_CUSTOM_THEME.surface),
+    text: normalizeHexColor(candidate.text, DEFAULT_CUSTOM_THEME.text),
+    accent: normalizeHexColor(candidate.accent, DEFAULT_CUSTOM_THEME.accent),
+    accent2: normalizeHexColor(candidate.accent2, DEFAULT_CUSTOM_THEME.accent2)
+  };
+}
+
+export function normalizeThemeBackgroundStyle(style: unknown): ThemeBackgroundStyle {
+  switch (style) {
+    case 'gradient':
+    case 'glass':
+    case 'noise':
+    case 'orbs':
+      return style;
+    default:
+      return DEFAULT_THEME_BACKGROUND_STYLE;
+  }
+}
+
+export function normalizeThemeMotionIntensity(intensity: unknown): ThemeMotionIntensity {
+  switch (intensity) {
+    case 'off':
+    case 'subtle':
+    case 'expressive':
+      return intensity;
+    default:
+      return DEFAULT_THEME_MOTION_INTENSITY;
   }
 }
 
@@ -238,6 +334,9 @@ export function createEmptyWalletState(): WalletState {
     },
     selectedNetwork: 'mainnet-beta',
     selectedTheme: DEFAULT_THEME,
+    customTheme: DEFAULT_CUSTOM_THEME,
+    themeBackgroundStyle: DEFAULT_THEME_BACKGROUND_STYLE,
+    themeMotionIntensity: DEFAULT_THEME_MOTION_INTENSITY,
     autoConnectEnabled: DEFAULT_AUTO_CONNECT_ENABLED,
     dappApprovalMode: DEFAULT_DAPP_APPROVAL_MODE,
     privacyMode: false,
@@ -420,6 +519,9 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
       selectedWalletId: selectedWalletId ?? selectedWalletIds.solana ?? normalizedWallets.find((wallet) => wallet.chain === 'solana')?.id,
       selectedNetwork: chainState.solana.selectedNetwork,
       selectedTheme: normalizeTheme(input.selectedTheme),
+      customTheme: normalizeCustomTheme(input.customTheme),
+      themeBackgroundStyle: normalizeThemeBackgroundStyle(input.themeBackgroundStyle),
+      themeMotionIntensity: normalizeThemeMotionIntensity(input.themeMotionIntensity),
       autoConnectEnabled: input.autoConnectEnabled ?? DEFAULT_AUTO_CONNECT_ENABLED,
       dappApprovalMode: normalizeDappApprovalMode(input.dappApprovalMode),
       privacyMode: input.privacyMode ?? false,
@@ -472,6 +574,9 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
       selectedWalletId: 'wallet-1',
       selectedNetwork: input.selectedNetwork ?? 'mainnet-beta',
       selectedTheme: normalizeTheme(input.selectedTheme),
+      customTheme: normalizeCustomTheme(input.customTheme),
+      themeBackgroundStyle: normalizeThemeBackgroundStyle(input.themeBackgroundStyle),
+      themeMotionIntensity: normalizeThemeMotionIntensity(input.themeMotionIntensity),
       autoConnectEnabled: input.autoConnectEnabled ?? DEFAULT_AUTO_CONNECT_ENABLED,
       dappApprovalMode: normalizeDappApprovalMode(input.dappApprovalMode),
       privacyMode: input.privacyMode ?? false,
@@ -492,6 +597,9 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
     chainState: normalizeChainState(input.chainState, input.selectedNetwork, input.customRpcUrls),
     selectedNetwork: input.selectedNetwork ?? 'mainnet-beta',
     selectedTheme: normalizeTheme(input.selectedTheme),
+    customTheme: normalizeCustomTheme(input.customTheme),
+    themeBackgroundStyle: normalizeThemeBackgroundStyle(input.themeBackgroundStyle),
+    themeMotionIntensity: normalizeThemeMotionIntensity(input.themeMotionIntensity),
     autoConnectEnabled: input.autoConnectEnabled ?? DEFAULT_AUTO_CONNECT_ENABLED,
     dappApprovalMode: normalizeDappApprovalMode(input.dappApprovalMode),
     privacyMode: input.privacyMode ?? false,

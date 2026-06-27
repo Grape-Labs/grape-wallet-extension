@@ -3,12 +3,14 @@ import { Fingerprint } from 'lucide-react';
 import QRCode from 'qrcode';
 
 import { Button, Card, Input, KeyValueRow, PageShell, StatusPill, TextArea } from '@grape/ui';
+import { DEFAULT_CUSTOM_THEME } from '@grape/core';
 
 import type { WalletDeviceLinkSessionResponse, WalletExportResponse, WalletStateResponse } from '../../shared/models';
 
 import { createBiometricUnlock, isBiometricUnlockSupported, resolveBiometricUnlockConfig, unlockWithBiometric } from '../../shared/biometric';
 import { sendRuntimeMessage } from '../../shared/chrome';
-import { applyDocumentTheme, THEMES } from '../../shared/theme';
+import { CustomThemeEditor } from '../../shared/CustomThemeEditor';
+import { applyDocumentTheme, THEMES, THEME_BACKGROUND_STYLES, THEME_MOTION_INTENSITIES } from '../../shared/theme';
 import { mountPage } from '../lib';
 
 function formatWalletSourceLabel(
@@ -132,8 +134,13 @@ function OptionsPage() {
   }, [deviceLinkSessions]);
 
   useEffect(() => {
-    applyDocumentTheme(state?.wallet.selectedTheme);
-  }, [state?.wallet.selectedTheme]);
+    applyDocumentTheme(
+      state?.wallet.selectedTheme,
+      state?.wallet.customTheme,
+      state?.wallet.themeBackgroundStyle,
+      state?.wallet.themeMotionIntensity
+    );
+  }, [state?.wallet.customTheme, state?.wallet.selectedTheme, state?.wallet.themeBackgroundStyle, state?.wallet.themeMotionIntensity]);
 
   useEffect(() => {
     if (!state) {
@@ -152,6 +159,30 @@ function OptionsPage() {
   function navigateInCurrentTab(path: string) {
     window.location.href = chrome.runtime.getURL(path);
   }
+
+  const applyCustomTheme = async (customTheme: WalletStateResponse['wallet']['customTheme']) => {
+    const nextState = await sendRuntimeMessage<WalletStateResponse>({
+      type: 'wallet_set_custom_theme',
+      customTheme
+    });
+    setState(nextState);
+  };
+
+  const applyThemeBackgroundStyle = async (style: WalletStateResponse['wallet']['themeBackgroundStyle']) => {
+    const nextState = await sendRuntimeMessage<WalletStateResponse>({
+      type: 'wallet_set_theme_background_style',
+      style
+    });
+    setState(nextState);
+  };
+
+  const applyThemeMotionIntensity = async (intensity: WalletStateResponse['wallet']['themeMotionIntensity']) => {
+    const nextState = await sendRuntimeMessage<WalletStateResponse>({
+      type: 'wallet_set_theme_motion_intensity',
+      intensity
+    });
+    setState(nextState);
+  };
 
   const settingsActions = (
     <div className="inline wrap-actions">
@@ -456,16 +487,49 @@ function OptionsPage() {
           <select
             value={state.wallet.selectedTheme}
             onChange={async (event) => {
-              await sendRuntimeMessage({
+              const nextState = await sendRuntimeMessage<WalletStateResponse>({
                 type: 'wallet_set_theme',
                 theme: event.target.value as typeof state.wallet.selectedTheme
               });
-              await refresh();
+              setState(nextState);
             }}
           >
             {THEMES.map((theme) => (
               <option key={theme.id} value={theme.id}>
                 {theme.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {state.wallet.selectedTheme === 'custom' ? (
+          <CustomThemeEditor
+            theme={state.wallet.customTheme}
+            onChange={applyCustomTheme}
+            onReset={() => applyCustomTheme(DEFAULT_CUSTOM_THEME)}
+          />
+        ) : null}
+        <label className="stack">
+          <span className="muted">Background style</span>
+          <select
+            value={state.wallet.themeBackgroundStyle}
+            onChange={(event) => void applyThemeBackgroundStyle(event.target.value as typeof state.wallet.themeBackgroundStyle)}
+          >
+            {THEME_BACKGROUND_STYLES.map((style) => (
+              <option key={style.id} value={style.id}>
+                {style.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="stack">
+          <span className="muted">Motion intensity</span>
+          <select
+            value={state.wallet.themeMotionIntensity}
+            onChange={(event) => void applyThemeMotionIntensity(event.target.value as typeof state.wallet.themeMotionIntensity)}
+          >
+            {THEME_MOTION_INTENSITIES.map((intensity) => (
+              <option key={intensity.id} value={intensity.id}>
+                {intensity.label}
               </option>
             ))}
           </select>

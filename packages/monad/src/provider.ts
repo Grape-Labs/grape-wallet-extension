@@ -1,8 +1,8 @@
 import './ledger-polyfills';
 
-import type { PageOrigin } from '@grape/core';
+import { GRAPE_WALLET_ICON, type PageOrigin } from '@grape/core';
 
-const GRAPE_PROVIDER_ICON = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
+const GRAPE_PROVIDER_ICON = GRAPE_WALLET_ICON;
 const EIP6963_ANNOUNCE_EVENT = 'eip6963:announceProvider';
 const EIP6963_REQUEST_EVENT = 'eip6963:requestProvider';
 

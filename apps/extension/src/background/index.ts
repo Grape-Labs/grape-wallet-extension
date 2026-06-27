@@ -2130,6 +2130,33 @@ class WalletController {
     return this.getStateResponse();
   }
 
+  async setCustomTheme(customTheme: import('@grape/core').CustomThemeConfig) {
+    const walletState = await this.getWalletState();
+    await walletStateStorage.set({
+      ...walletState,
+      customTheme
+    });
+    return this.getStateResponse();
+  }
+
+  async setThemeBackgroundStyle(style: import('@grape/core').ThemeBackgroundStyle) {
+    const walletState = await this.getWalletState();
+    await walletStateStorage.set({
+      ...walletState,
+      themeBackgroundStyle: style
+    });
+    return this.getStateResponse();
+  }
+
+  async setThemeMotionIntensity(intensity: import('@grape/core').ThemeMotionIntensity) {
+    const walletState = await this.getWalletState();
+    await walletStateStorage.set({
+      ...walletState,
+      themeMotionIntensity: intensity
+    });
+    return this.getStateResponse();
+  }
+
   async setPrivacyMode(enabled: boolean) {
     const walletState = await this.getWalletState();
     await walletStateStorage.set({
@@ -3569,6 +3596,9 @@ class WalletController {
       selectedChain: walletState.selectedChain,
       selectedNetwork: walletState.selectedNetwork,
       selectedTheme: walletState.selectedTheme,
+      customTheme: walletState.customTheme,
+      themeBackgroundStyle: walletState.themeBackgroundStyle,
+      themeMotionIntensity: walletState.themeMotionIntensity,
       autoConnectEnabled: walletState.autoConnectEnabled,
       dappApprovalMode: walletState.dappApprovalMode,
       privacyMode: walletState.privacyMode
@@ -3587,6 +3617,9 @@ class WalletController {
       selectedChain: preferences.selectedChain,
       selectedNetwork: preferences.selectedNetwork,
       selectedTheme: preferences.selectedTheme,
+      customTheme: preferences.customTheme,
+      themeBackgroundStyle: preferences.themeBackgroundStyle,
+      themeMotionIntensity: preferences.themeMotionIntensity,
       autoConnectEnabled: preferences.autoConnectEnabled,
       dappApprovalMode: preferences.dappApprovalMode,
       privacyMode: preferences.privacyMode
@@ -9448,6 +9481,15 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
           break;
         case 'wallet_set_theme':
           sendResponse(await controller.setTheme(message.theme));
+          break;
+        case 'wallet_set_custom_theme':
+          sendResponse(await controller.setCustomTheme(message.customTheme));
+          break;
+        case 'wallet_set_theme_background_style':
+          sendResponse(await controller.setThemeBackgroundStyle(message.style));
+          break;
+        case 'wallet_set_theme_motion_intensity':
+          sendResponse(await controller.setThemeMotionIntensity(message.intensity));
           break;
         case 'wallet_set_privacy_mode':
           sendResponse(await controller.setPrivacyMode(message.enabled));

@@ -1320,10 +1320,7 @@ async function fetchGovernanceForDaoViaGraphql(
     ).values()
   );
   const governanceAccounts = normalizeGovernanceAccounts(governanceData, namespace);
-  const effectiveGovernanceAccounts =
-    governanceAccounts.length > 0 || !override
-      ? governanceAccounts
-      : override.governanceIds.map((pubkey) => ({ pubkey, realm: daoId, baseVotingTime: null } satisfies GovernanceProgramAccount));
+  const effectiveGovernanceAccounts = governanceAccounts;
   if (!realm || effectiveGovernanceAccounts.length === 0) {
     return {
       daoId,
@@ -1349,7 +1346,7 @@ async function fetchGovernanceForDaoViaGraphql(
     fetchGovernanceGraphql<Record<string, unknown>>(buildGovernanceVoteRecordsQuery(namespace, voteQueryAddresses))
   ]);
   const proposalRows = normalizeGovernanceProposalRows(proposalData, namespace);
-  const effectiveProposalRows = proposalRows.length > 0 || !override ? proposalRows : override.proposals;
+  const effectiveProposalRows = proposalRows;
   const votedOwnersByProposal = normalizeGovernanceVoteOwnersByProposal(voteData, namespace);
   const { ProposalState } = loadSplGovernanceModule();
   const governanceConfigById = new Map(effectiveGovernanceAccounts.map((entry) => [entry.pubkey, entry] as const));

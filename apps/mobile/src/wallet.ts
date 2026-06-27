@@ -6,19 +6,31 @@ import {
   base64ToBytes,
   bytesToBase64,
   createDeviceLinkPayloadText,
+  DEFAULT_AUTO_CONNECT_ENABLED,
+  DEFAULT_CUSTOM_THEME,
   DEFAULT_DAPP_APPROVAL_MODE,
   decryptText,
   DEFAULT_THEME,
+  DEFAULT_THEME_BACKGROUND_STYLE,
+  DEFAULT_THEME_MOTION_INTENSITY,
   extractExecutableBridgeTransactionRequest,
   GRAPE_VERIFICATION_REQUIRED_DAO_ID,
   encryptText,
+  normalizeCustomTheme,
+  normalizeDappApprovalMode,
+  normalizeTheme,
+  normalizeThemeBackgroundStyle,
+  normalizeThemeMotionIntensity,
   parseDeviceLinkPayloadText,
+  type CustomThemeConfig,
   type DeviceLinkHandoffPayload,
   type DeviceLinkPreferencesSnapshot,
   type DeviceLinkSessionRecord,
   type DappApprovalMode,
   type GrapeChain,
   type GrapeTheme,
+  type ThemeBackgroundStyle,
+  type ThemeMotionIntensity,
   type VaultSecret,
   type WalletSetupState
 } from '@grape/core';
@@ -86,6 +98,10 @@ export type MobileWalletState = {
   setup: WalletSetupState;
   selectedChain: GrapeChain;
   selectedTheme: GrapeTheme;
+  customTheme: CustomThemeConfig;
+  themeBackgroundStyle: ThemeBackgroundStyle;
+  themeMotionIntensity: ThemeMotionIntensity;
+  autoConnectEnabled: boolean;
   dappApprovalMode: DappApprovalMode;
   selectedWalletIds: Partial<Record<GrapeChain, string>>;
   trustedDappOrigins: string[];
@@ -268,6 +284,10 @@ export function createEmptyMobileWalletState(): MobileWalletState {
     setup: 'empty',
     selectedChain: DEFAULT_CHAIN,
     selectedTheme: DEFAULT_THEME,
+    customTheme: DEFAULT_CUSTOM_THEME,
+    themeBackgroundStyle: DEFAULT_THEME_BACKGROUND_STYLE,
+    themeMotionIntensity: DEFAULT_THEME_MOTION_INTENSITY,
+    autoConnectEnabled: DEFAULT_AUTO_CONNECT_ENABLED,
     dappApprovalMode: DEFAULT_DAPP_APPROVAL_MODE,
     selectedWalletIds: {},
     trustedDappOrigins: [],
@@ -353,6 +373,10 @@ export async function createWalletSet(input: {
     setup: 'ready',
     selectedChain: DEFAULT_CHAIN,
     selectedTheme: DEFAULT_THEME,
+    customTheme: DEFAULT_CUSTOM_THEME,
+    themeBackgroundStyle: DEFAULT_THEME_BACKGROUND_STYLE,
+    themeMotionIntensity: DEFAULT_THEME_MOTION_INTENSITY,
+    autoConnectEnabled: DEFAULT_AUTO_CONNECT_ENABLED,
     dappApprovalMode: DEFAULT_DAPP_APPROVAL_MODE,
     selectedWalletIds: Object.fromEntries(wallets.map((wallet) => [wallet.chain, wallet.id])),
     trustedDappOrigins: [],
@@ -433,6 +457,10 @@ export async function createPrivateKeyWallet(input: {
     setup: 'ready',
     selectedChain: input.chain,
     selectedTheme: DEFAULT_THEME,
+    customTheme: DEFAULT_CUSTOM_THEME,
+    themeBackgroundStyle: DEFAULT_THEME_BACKGROUND_STYLE,
+    themeMotionIntensity: DEFAULT_THEME_MOTION_INTENSITY,
+    autoConnectEnabled: DEFAULT_AUTO_CONNECT_ENABLED,
     dappApprovalMode: DEFAULT_DAPP_APPROVAL_MODE,
     selectedWalletIds: {
       [input.chain]: wallet.id
@@ -1389,7 +1417,6 @@ export async function sendWalletAsset(input: {
   switch (input.wallet.chain) {
     case 'solana': {
       const { resolveSolanaVaultSecret } = loadSolanaDeriveModule();
-      const { signAndSendTransaction } = loadSolanaSigningModule();
       const {
         ASSOCIATED_TOKEN_PROGRAM_ID,
         buildSolTransferTransaction,
@@ -1444,7 +1471,8 @@ export async function sendWalletAsset(input: {
           `Not enough SOL. You need ${(Number(requiredLamports) / 1_000_000_000).toFixed(9)} SOL including network fee, but only ${(balanceLamports / 1_000_000_000).toFixed(9)} SOL is available.`
         );
       }
-      return signAndSendTransaction(transaction, keypair, connection);
+      transaction.sign(keypair);
+      return connection.sendRawTransaction(transaction.serialize());
     }
     case 'sui': {
       if (input.asset.tokenType === 'sui-coin') {
@@ -2038,6 +2066,10 @@ function getMobileDeviceLinkPreferencesSnapshot(state: MobileWalletState): Devic
     selectedChain: state.selectedChain,
     selectedNetwork: 'mainnet-beta',
     selectedTheme: state.selectedTheme,
+    customTheme: state.customTheme,
+    themeBackgroundStyle: state.themeBackgroundStyle,
+    themeMotionIntensity: state.themeMotionIntensity,
+    autoConnectEnabled: state.autoConnectEnabled,
     dappApprovalMode: state.dappApprovalMode,
     privacyMode: state.privacyMode
   };
@@ -2051,6 +2083,10 @@ function applyMobileDeviceLinkPreferences(state: MobileWalletState, preferences:
     trackedGovernanceDaoIds: Array.from(new Set([...state.trackedGovernanceDaoIds, ...preferences.trackedGovernanceDaoIds])),
     selectedChain: preferences.selectedChain,
     selectedTheme: preferences.selectedTheme,
+    customTheme: preferences.customTheme,
+    themeBackgroundStyle: preferences.themeBackgroundStyle,
+    themeMotionIntensity: preferences.themeMotionIntensity,
+    autoConnectEnabled: preferences.autoConnectEnabled,
     dappApprovalMode: preferences.dappApprovalMode,
     privacyMode: preferences.privacyMode
   };
@@ -2370,6 +2406,12 @@ function normalizeMobileWalletState(state: MobileWalletState): MobileWalletState
     selectedWalletIds,
     credentialKind: resolveMobileCredentialKind(state.credentialKind, Boolean(state.passwordHash), Boolean(state.passkeyWallet)),
     passkeyWallet: normalizePasskeyWalletConfig(state.passkeyWallet),
+    selectedTheme: normalizeTheme(state.selectedTheme),
+    customTheme: normalizeCustomTheme(state.customTheme),
+    themeBackgroundStyle: normalizeThemeBackgroundStyle(state.themeBackgroundStyle),
+    themeMotionIntensity: normalizeThemeMotionIntensity(state.themeMotionIntensity),
+    autoConnectEnabled: state.autoConnectEnabled ?? DEFAULT_AUTO_CONNECT_ENABLED,
+    dappApprovalMode: normalizeDappApprovalMode(state.dappApprovalMode),
     trustedDappOrigins: normalizeTrustedDappOrigins(state.trustedDappOrigins),
     trackedReputationSpaceIds: normalizeTrackedReputationSpaceIds(state.trackedReputationSpaceIds),
     trackedVerificationSpaceIds: normalizeTrackedVerificationSpaceIds(state.trackedVerificationSpaceIds),

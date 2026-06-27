@@ -27,11 +27,11 @@ export type MobileReputationSpace = {
   points: string;
   latestSeasonPoints: string;
   effectivePoints: string;
-  metadataUri?: string | null;
-  name?: string;
-  symbol?: string;
-  description?: string;
-  imageUri?: string;
+  metadataUri: string | null;
+  name: string | undefined;
+  symbol: string | undefined;
+  description: string | undefined;
+  imageUri: string | undefined;
 };
 
 export type MobileReputationResponse = {

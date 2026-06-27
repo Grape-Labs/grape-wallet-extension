@@ -39,6 +39,7 @@
     "prepublishOnly": "pnpm run build"
   },
   "dependencies": {
+    "@grape/core": "workspace:*",
     "@solana/web3.js": "^1.98.0"
   },
   "peerDependencies": {

@@ -2,6 +2,14 @@ import { z } from 'zod';
 
 const bytesSchema = z.string().min(1);
 const decimalAmountSchema = z.string().trim().regex(/^(?:\d+(?:\.\d+)?|\.\d+)$/, 'Amount must be a positive decimal value.');
+const customThemeHexSchema = z.string().trim().regex(/^#[0-9a-fA-F]{6}$/, 'Expected a 6-digit hex color.');
+const customThemeConfigSchema = z.object({
+  background: customThemeHexSchema,
+  surface: customThemeHexSchema,
+  text: customThemeHexSchema,
+  accent: customThemeHexSchema,
+  accent2: customThemeHexSchema
+});
 
 const sendAssetSchema = z.discriminatedUnion('kind', [
   z.object({
@@ -429,11 +437,27 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
       'matrix',
       'tron',
       'apple',
+      'mist',
+      'midnight-glass',
+      'plastic',
       'aurora',
       'champagne',
       'liquid-chrome',
-      'obsidian'
+      'obsidian',
+      'custom'
     ])
+  }),
+  z.object({
+    type: z.literal('wallet_set_custom_theme'),
+    customTheme: customThemeConfigSchema
+  }),
+  z.object({
+    type: z.literal('wallet_set_theme_background_style'),
+    style: z.enum(['gradient', 'glass', 'noise', 'orbs'])
+  }),
+  z.object({
+    type: z.literal('wallet_set_theme_motion_intensity'),
+    intensity: z.enum(['off', 'subtle', 'expressive'])
   }),
   z.object({
     type: z.literal('wallet_set_privacy_mode'),

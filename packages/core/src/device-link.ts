@@ -1,6 +1,14 @@
 import type { EncryptedPayload } from './crypto';
 import { base64ToBytes, bytesToBase64, bytesToUtf8, utf8ToBytes } from './encoding';
-import type { DappApprovalMode, GrapeChain, GrapeNetwork, GrapeTheme } from './state';
+import type {
+  CustomThemeConfig,
+  DappApprovalMode,
+  GrapeChain,
+  GrapeNetwork,
+  GrapeTheme,
+  ThemeBackgroundStyle,
+  ThemeMotionIntensity
+} from './state';
 import type { VaultSecret } from './vault';
 
 export type DeviceLinkPreferencesSnapshot = {
@@ -10,6 +18,9 @@ export type DeviceLinkPreferencesSnapshot = {
   selectedChain: GrapeChain;
   selectedNetwork: GrapeNetwork;
   selectedTheme: GrapeTheme;
+  customTheme: CustomThemeConfig;
+  themeBackgroundStyle: ThemeBackgroundStyle;
+  themeMotionIntensity: ThemeMotionIntensity;
   autoConnectEnabled: boolean;
   dappApprovalMode: DappApprovalMode;
   privacyMode: boolean;
