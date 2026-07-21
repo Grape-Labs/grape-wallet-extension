@@ -3,6 +3,8 @@ dist
 .turbo
 coverage
 *.tsbuildinfo
+.expo/
+android/
 .env
 .env.local
 .env.*.local

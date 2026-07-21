@@ -66,6 +66,7 @@ export type TokenHolding = {
   priceUsd?: number | null;
   valueUsd?: number | null;
   priceChange24h?: number | null;
+  assetClass?: 'stock' | 'crypto';
   delegate?: string | null;
   delegatedAmount?: string | null;
   closeAuthority?: string | null;

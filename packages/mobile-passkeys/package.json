@@ -10,9 +10,5 @@
     "passkeys",
     "webauthn"
   ],
-  "license": "MIT",
-  "peerDependencies": {
-    "expo": "*",
-    "react-native": "*"
-  }
+  "license": "MIT"
 }

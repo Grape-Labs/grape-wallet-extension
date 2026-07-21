@@ -175,6 +175,7 @@ import {
   createJupiterSwapTransaction,
   fetchJupiterPrices,
   fetchJupiterQuote,
+  fetchJupiterStockMints,
   JUPITER_SOL_MINT,
   type JupiterQuoteResponse
 } from '../shared/jupiter';
@@ -1486,8 +1487,12 @@ class WalletController {
       const fungibleTokens = filterCollectibleTokens(tokens, finalCollections, inferredCollectibleMints);
 
       let pricing: Record<string, { usdPrice: number | null; priceChange24h: number | null }> = {};
+      let stockMints = new Set<string>();
       try {
-        pricing = await fetchJupiterPrices([JUPITER_SOL_MINT, ...fungibleTokens.map((token) => token.mint)]);
+        [pricing, stockMints] = await Promise.all([
+          fetchJupiterPrices([JUPITER_SOL_MINT, ...fungibleTokens.map((token) => token.mint)]),
+          fetchJupiterStockMints().catch(() => new Set<string>())
+        ]);
       } catch {
         pricing = {};
       }
@@ -1499,6 +1504,7 @@ class WalletController {
         const usdPrice = pricing[token.mint]?.usdPrice ?? null;
         return {
           ...token,
+          assetClass: stockMints.has(token.mint) ? 'stock' as const : 'crypto' as const,
           priceUsd: usdPrice,
           valueUsd: usdPrice === null ? null : Number(token.amount) * usdPrice,
           priceChange24h: pricing[token.mint]?.priceChange24h ?? null
@@ -7666,6 +7672,7 @@ function normalizeGovernanceOwnerDaoIds(
 }
 
 async function discoverGovernanceDaoOwnersForWallet(
+  connection: Connection,
   owner: PublicKey
 ): Promise<Map<string, { owner: GovernanceOwner; isDelegate: boolean; isNonMember: boolean }>> {
   const ownerKey = owner.toBase58();
@@ -7681,62 +7688,24 @@ async function discoverGovernanceDaoOwnersForWallet(
       });
 
       try {
-        const loadPagedTokenOwnerRows = async (queryBuilder: (offset: number) => string) => {
-          const mergedV2: Array<Record<string, unknown>> = [];
-          const mergedV1: Array<Record<string, unknown>> = [];
-
-          for (let offset = 0; offset < 10000; offset += 1000) {
-            const page = await fetchGovernanceGraphql<Record<string, unknown>>(queryBuilder(offset));
-            const pageV2 = Array.isArray(page[`${namespace}_TokenOwnerRecordV2`])
-              ? (page[`${namespace}_TokenOwnerRecordV2`] as Array<Record<string, unknown>>)
-              : [];
-            const pageV1 = Array.isArray(page[`${namespace}_TokenOwnerRecordV1`])
-              ? (page[`${namespace}_TokenOwnerRecordV1`] as Array<Record<string, unknown>>)
-              : [];
-
-            mergedV2.push(...pageV2);
-            mergedV1.push(...pageV1);
-
-            if (pageV2.length < 1000 && pageV1.length < 1000) {
-              break;
-            }
-          }
-
-          return {
-            [`${namespace}_TokenOwnerRecordV2`]: mergedV2,
-            [`${namespace}_TokenOwnerRecordV1`]: mergedV1
-          } satisfies Record<string, unknown>;
-        };
-
-        // Direct + delegate are paginated independently so large delegate sets don't crowd out
-        // the wallet's own memberships under the indexer's page caps.
-        const [directData, delegateData, governedData] = await Promise.all([
-          loadPagedTokenOwnerRows((offset) => buildGovernanceDirectMemberQuery(namespace, ownerKey, offset)),
-          loadPagedTokenOwnerRows((offset) => buildGovernanceDelegateQuery(namespace, ownerKey, offset)).catch(() => ({} as Record<string, unknown>)),
-          fetchGovernanceGraphql<Record<string, unknown>>(buildGovernanceGovernedAccountQuery(namespace, ownerKey)).catch(() => ({} as Record<string, unknown>))
+        const programKey = new PublicKey(programId);
+        // Delegate is an Option<Pubkey> at byte 109; the pubkey begins after its tag.
+        const [directRecords, delegateRecords, treasuryDaoIds] = await Promise.all([
+          getTokenOwnerRecordsByOwner(connection, programKey, owner).catch(() => []),
+          getGovernanceAccounts(connection, programKey, TokenOwnerRecord, [
+            new MemcmpFilter(110, owner.toBuffer())
+          ]).catch(() => []),
+          discoverGovernanceTreasuryDaosForNamespace(owner, namespace, programId).catch(() => [])
         ]);
-
-        const directV2 = Array.isArray(directData[`${namespace}_TokenOwnerRecordV2`])
-          ? (directData[`${namespace}_TokenOwnerRecordV2`] as Array<Record<string, unknown>>)
-          : [];
-        const directV1 = Array.isArray(directData[`${namespace}_TokenOwnerRecordV1`])
-          ? (directData[`${namespace}_TokenOwnerRecordV1`] as Array<Record<string, unknown>>)
-          : [];
-        const delegateV2 = Array.isArray(delegateData[`${namespace}_TokenOwnerRecordV2`])
-          ? (delegateData[`${namespace}_TokenOwnerRecordV2`] as Array<Record<string, unknown>>)
-          : [];
-        const delegateV1 = Array.isArray(delegateData[`${namespace}_TokenOwnerRecordV1`])
-          ? (delegateData[`${namespace}_TokenOwnerRecordV1`] as Array<Record<string, unknown>>)
-          : [];
-
-        const mergedData: Record<string, unknown> = {
-          [`${namespace}_TokenOwnerRecordV2`]: [...directV2, ...delegateV2],
-          [`${namespace}_TokenOwnerRecordV1`]: [...directV1, ...delegateV1]
-        };
-
-        const { directDaoIds, delegateDaoIds } = normalizeGovernanceOwnerDaoIds(mergedData, namespace, ownerKey);
-        const governedDaoIds = normalizeGovernanceGovernedDaoIds(governedData, namespace).filter(
-          (id) => !directDaoIds.includes(id) && !delegateDaoIds.includes(id)
+        const directDaoIds = Array.from(new Set(directRecords.map((entry) => entry.account.realm.toBase58())));
+        const directDaoSet = new Set(directDaoIds);
+        const delegateDaoIds = Array.from(new Set(
+          delegateRecords
+            .filter((entry) => entry.account.governingTokenOwner.toBase58() !== ownerKey)
+            .map((entry) => entry.account.realm.toBase58())
+        )).filter((id) => !directDaoSet.has(id));
+        const governedDaoIds = treasuryDaoIds.filter(
+          (id) => !directDaoSet.has(id) && !delegateDaoIds.includes(id)
         );
 
         const entries: Entry[] = [
@@ -7744,16 +7713,6 @@ async function discoverGovernanceDaoOwnersForWallet(
           ...delegateDaoIds.map((id) => makeEntry(id, true, false)),
           ...governedDaoIds.map((id) => makeEntry(id, false, true))
         ];
-
-        // Step 2: If nothing found yet, try native treasury PDA discovery
-        if (entries.length === 0) {
-          try {
-            const treasuryDaoIds = await discoverGovernanceTreasuryDaosForNamespace(owner, namespace, programId);
-            entries.push(...treasuryDaoIds.map((id) => makeEntry(id, false, true)));
-          } catch {
-            // Treasury discovery is best-effort
-          }
-        }
 
         return entries;
       } catch {
@@ -7772,7 +7731,7 @@ async function discoverGovernanceDaoOwnersForWallet(
   return mapping;
 }
 
-async function resolveGovernanceOwnerByRealm(daoId: string): Promise<GovernanceOwner> {
+async function resolveGovernanceOwnerByRealm(connection: Connection, daoId: string): Promise<GovernanceOwner> {
   const mapped = GOVERNANCE_OWNERS.find((entry) => entry.dao === daoId);
   if (mapped) {
     return mapped;
@@ -7780,9 +7739,8 @@ async function resolveGovernanceOwnerByRealm(daoId: string): Promise<GovernanceO
 
   for (const { namespace, programId } of getGovernanceNamespaces()) {
     try {
-      const data = await fetchGovernanceGraphql<Record<string, unknown>>(buildGovernanceRealmQuery(namespace, daoId));
-      const realm = normalizeGovernanceRealmInfo(data, namespace, daoId);
-      if (realm) {
+      const realmAccount = await connection.getAccountInfo(new PublicKey(daoId), 'confirmed');
+      if (realmAccount?.owner.equals(new PublicKey(programId))) {
         return {
           owner: programId,
           name: namespace,
@@ -8516,7 +8474,7 @@ async function fetchGovernanceForWallet(
         .filter((entry) => !!entry)
     )
   );
-  const discoveredDaoOwnerMap = await discoverGovernanceDaoOwnersForWallet(owner);
+  const discoveredDaoOwnerMap = await discoverGovernanceDaoOwnersForWallet(connection, owner);
 
   const discoveredDaoIds = [...discoveredDaoOwnerMap.keys()];
   const delegateDaoIds = discoveredDaoIds.filter((id) => discoveredDaoOwnerMap.get(id)?.isDelegate === true);
@@ -8541,20 +8499,10 @@ async function fetchGovernanceForWallet(
   const results = await Promise.all(
     uniqueDaoIds.map(async (daoId) => {
       const discovered = discoveredDaoOwnerMap.get(daoId);
-        const governanceOwner = discovered?.owner ?? (await resolveGovernanceOwnerByRealm(daoId));
+        const governanceOwner = discovered?.owner ?? (await resolveGovernanceOwnerByRealm(connection, daoId));
         const isDelegateDao = discovered?.isDelegate === true;
         // Non-member: treasury/governed wallet, OR manually tracked but not discovered
         const isNonMemberDao = discovered?.isNonMember === true || (!discovered && uniqueTrackedDaoIds.includes(daoId));
-        try {
-        return await fetchGovernanceForDaoViaGraphql(
-          connection,
-          owner,
-          daoId,
-          governanceOwner,
-          isDelegateDao,
-          isNonMemberDao
-        );
-      } catch {
         try {
           return await fetchGovernanceForDaoViaRpc(
             connection,
@@ -8572,7 +8520,6 @@ async function fetchGovernanceForWallet(
             daoSummary: null
           };
         }
-      }
     })
   );
 
@@ -8609,11 +8556,7 @@ async function fetchGovernanceForWallet(
     }
   }
 
-  const source = results.some((entry) => entry.source === 'shyft')
-    ? 'shyft'
-    : results.some((entry) => entry.source === 'rpc')
-      ? 'rpc'
-      : 'none';
+  const source = results.some((entry) => entry.source === 'rpc') ? 'rpc' : 'none';
 
   return {
     trackedDaos: uniqueTrackedDaoIds,

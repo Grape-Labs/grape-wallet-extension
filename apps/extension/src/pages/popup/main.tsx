@@ -76,7 +76,7 @@ import { sendRuntimeMessage } from '../../shared/chrome';
 import { createBiometricUnlock, isBiometricUnlockSupported, resolveBiometricUnlockConfig, unlockWithBiometric } from '../../shared/biometric';
 import { ChainLogoBadge } from '../../shared/chains';
 import { CustomThemeEditor } from '../../shared/CustomThemeEditor';
-import { JUPITER_SOL_MINT } from '../../shared/jupiter';
+import { fetchJupiterPrices, fetchJupiterStockTokens, JUPITER_SOL_MINT, searchJupiterTokens } from '../../shared/jupiter';
 import { getSupportedBridgeDestinations, LIFI_NATIVE_SYMBOL } from '../../shared/lifi';
 import { formatSavedRecipient, isSupportedSolanaRecipientDomain, suggestRecipientLabel } from '../../shared/recipient-resolution';
 import { applyDocumentTheme, THEMES, THEME_BACKGROUND_STYLES, THEME_MOTION_INTENSITIES } from '../../shared/theme';
@@ -89,7 +89,7 @@ const OG_REPUTATION_DISCOVERY_URL = 'https://vine.governance.so';
 import { OnboardingView } from '../onboarding/OnboardingView';
 
 type PopupView = 'home' | 'send' | 'receive' | 'swap' | 'bridge' | 'settings' | 'asset' | 'security' | 'approval';
-type HomeTab = 'tokens' | 'community' | 'governance' | 'collectibles' | 'activity' | 'staking';
+type HomeTab = 'tokens' | 'rebalance' | 'community' | 'governance' | 'collectibles' | 'activity' | 'staking';
 type AssetOption =
   | {
       id: string;
@@ -132,12 +132,46 @@ const COMMON_SWAP_TOKENS = [
   { mint: 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN', symbol: 'JUP' },
   { mint: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263', symbol: 'BONK' }
 ] as const;
+const REBALANCE_STABLE_MINT = COMMON_SWAP_TOKENS[1].mint;
+const REBALANCE_MIN_TRADE_USD = 1;
+type RebalanceAsset = {
+  mint: string;
+  symbol: string;
+  assetClass: 'stablecoin' | 'stock' | 'crypto';
+  valueUsd: number;
+  priceUsd: number;
+  amountUi: number;
+  asset: AssetOption['asset'];
+};
+const TOKEN_2022_PROGRAM_ID = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
+
+function classifyRebalanceAsset(input: { mint: string; symbol?: string; name?: string; programId?: string; assetClass?: 'stock' | 'crypto' }): RebalanceAsset['assetClass'] {
+  if (input.mint === REBALANCE_STABLE_MINT) return 'stablecoin';
+  if (input.assetClass) return input.assetClass;
+  const symbol = input.symbol?.trim() ?? '';
+  const name = input.name?.trim().toLowerCase() ?? '';
+  const looksLikeXStock = /^[a-z0-9.]{1,10}x$/i.test(symbol) || name.includes('xstock') || name.includes('tokenized stock');
+  return input.programId === TOKEN_2022_PROGRAM_ID && looksLikeXStock ? 'stock' : 'crypto';
+}
+type RebalanceLeg = {
+  id: string;
+  side: 'sell' | 'buy';
+  input: RebalanceAsset;
+  outputMint: string;
+  amountUi: string;
+  valueUsd: number;
+  label: string;
+};
 const SOLANA_SEND_FEE_RESERVE_SOL = 0.00001;
 const SOLANA_TOKEN_SEND_RESERVE_SOL = 0.0021;
 
 type SwapOutputOption = {
   mint: string;
   symbol: string;
+  name?: string;
+  logoUri?: string;
+  assetClass?: 'stock' | 'crypto';
+  priceUsd?: number;
 };
 const SOLANA_LOGO_URL =
   'https://media.solana-cdn.com/image/width=100/https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/solana/info/logo.png';
@@ -1232,8 +1266,27 @@ function PopupPage() {
   const [swapSelectedRouteId, setSwapSelectedRouteId] = useState<string | null>(null);
   const [swapResult, setSwapResult] = useState<WalletSwapExecuteResponse | null>(null);
   const [swapError, setSwapError] = useState<string | null>(null);
+  const [swapStockSearch, setSwapStockSearch] = useState('');
+  const [swapDiscoveryMode, setSwapDiscoveryMode] = useState<'tokens' | 'stocks'>('tokens');
+  const [swapTokenSearchResults, setSwapTokenSearchResults] = useState<RebalanceAsset[]>([]);
+  const [swapDiscoverySearching, setSwapDiscoverySearching] = useState(false);
   const [quotingSwap, setQuotingSwap] = useState(false);
   const [submittingSwap, setSubmittingSwap] = useState(false);
+  const [rebalanceSelectedMints, setRebalanceSelectedMints] = useState<Set<string>>(new Set());
+  const [rebalanceGroupName, setRebalanceGroupName] = useState('My basket');
+  const [rebalanceAddedAssets, setRebalanceAddedAssets] = useState<RebalanceAsset[]>([]);
+  const [rebalanceAssetQuery, setRebalanceAssetQuery] = useState('');
+  const [rebalanceAssetResults, setRebalanceAssetResults] = useState<RebalanceAsset[]>([]);
+  const [rebalanceAssetSearching, setRebalanceAssetSearching] = useState(false);
+  const [rebalanceStockCatalog, setRebalanceStockCatalog] = useState<RebalanceAsset[]>([]);
+  const [rebalanceStockCatalogLoading, setRebalanceStockCatalogLoading] = useState(false);
+  const [rebalancePlan, setRebalancePlan] = useState<RebalanceLeg[]>([]);
+  const [rebalanceSlippageBps, setRebalanceSlippageBps] = useState('50');
+  const [rebalancePassword, setRebalancePassword] = useState('');
+  const [rebalanceExecuting, setRebalanceExecuting] = useState(false);
+  const [rebalanceProgress, setRebalanceProgress] = useState<string | null>(null);
+  const [rebalanceError, setRebalanceError] = useState<string | null>(null);
+  const [rebalanceSignatures, setRebalanceSignatures] = useState<string[]>([]);
   const swapQuoteRequestRef = useRef(0);
   const recipientScannerVideoRef = useRef<HTMLVideoElement | null>(null);
   const [bridgeDestinationChain, setBridgeDestinationChain] = useState<WalletStateResponse['wallet']['selectedChain'] | null>(null);
@@ -2232,6 +2285,159 @@ function PopupPage() {
 
     return [...assetOptions, ...collectibleOptions];
   }, [assetOptions, collectibleItems, selectedChainValue]);
+  const rebalanceAssets = useMemo<RebalanceAsset[]>(() => {
+    if (selectedChainValue !== 'solana') return [];
+    const solAmount = (assets.lamports ?? 0) / 1_000_000_000;
+    const solPrice = assets.nativePriceUsd ?? 0;
+    const result: RebalanceAsset[] = solAmount > 0 && solPrice > 0
+      ? [{
+          mint: JUPITER_SOL_MINT,
+          symbol: 'SOL',
+          assetClass: 'crypto',
+          valueUsd: assets.nativeValueUsd ?? solAmount * solPrice,
+          priceUsd: solPrice,
+          amountUi: solAmount,
+          asset: { kind: 'sol' }
+        }]
+      : [];
+    for (const token of assets.tokens) {
+      const priceUsd = token.priceUsd ?? 0;
+      const valueUsd = token.valueUsd ?? 0;
+      const amountUi = Number(token.amount);
+      if (priceUsd <= 0 || valueUsd <= 0 || !Number.isFinite(amountUi)) continue;
+      result.push({
+        mint: token.mint,
+        symbol: token.symbol ?? formatAddress(token.mint),
+        assetClass: classifyRebalanceAsset(token),
+        valueUsd,
+        priceUsd,
+        amountUi,
+        asset: {
+          kind: 'spl-token',
+          mint: token.mint,
+          decimals: token.decimals,
+          programId: token.programId,
+          accountAddress: token.accountAddress
+        }
+      });
+    }
+    for (const added of rebalanceAddedAssets) {
+      if (!result.some((asset) => asset.mint === added.mint)) result.push(added);
+    }
+    return result.sort((left, right) => right.valueUsd - left.valueUsd);
+  }, [assets, rebalanceAddedAssets, selectedChainValue]);
+  const rebalanceStableAsset = rebalanceAssets.find((asset) => asset.mint === REBALANCE_STABLE_MINT) ?? null;
+  const rebalanceStableValueUsd = rebalanceStableAsset?.valueUsd ?? 0;
+  const rebalanceStockCount = rebalanceAssets.filter((asset) => asset.assetClass === 'stock').length;
+  const selectedRebalanceStockCount = rebalanceAssets.filter(
+    (asset) => asset.assetClass === 'stock' && rebalanceSelectedMints.has(asset.mint)
+  ).length;
+  const rebalanceLinkedValueUsd = rebalanceAssets
+    .filter((asset) => asset.mint === REBALANCE_STABLE_MINT || rebalanceSelectedMints.has(asset.mint))
+    .reduce((sum, asset) => sum + asset.valueUsd, 0);
+  const rebalanceUnlinkedValueUsd = Math.max(0, (assets.totalUsdValue ?? 0) - rebalanceLinkedValueUsd);
+
+  useEffect(() => {
+    if (rebalanceSelectedMints.size > 0 || rebalanceAssets.length === 0) return;
+    const initial = rebalanceAssets
+      .filter((asset) => asset.mint !== REBALANCE_STABLE_MINT)
+      .slice(0, 3)
+      .map((asset) => asset.mint);
+    setRebalanceSelectedMints(new Set(initial));
+  }, [rebalanceAssets, rebalanceSelectedMints.size]);
+
+  useEffect(() => {
+    if (view !== 'swap' || selectedChainValue !== 'solana' || rebalanceStockCatalog.length > 0) return;
+    let cancelled = false;
+    setRebalanceStockCatalogLoading(true);
+    void fetchJupiterStockTokens()
+      .then(async (tokens) => {
+        const prices: Awaited<ReturnType<typeof fetchJupiterPrices>> = await fetchJupiterPrices(
+          tokens.map((token) => token.id)
+        ).catch(() => ({}));
+        if (cancelled) return;
+        setRebalanceStockCatalog(tokens.map((token) => ({
+          mint: token.id,
+          symbol: token.symbol,
+          assetClass: 'stock' as const,
+          valueUsd: 0,
+          priceUsd: prices[token.id]?.usdPrice ?? token.usdPrice ?? 0,
+          amountUi: 0,
+          asset: {
+            kind: 'spl-token' as const,
+            mint: token.id,
+            decimals: token.decimals,
+            programId: token.tokenProgram ?? TOKEN_2022_PROGRAM_ID
+          }
+        })).filter((asset) => asset.priceUsd > 0).sort((left, right) => left.symbol.localeCompare(right.symbol)));
+      })
+      .catch((error) => {
+        if (!cancelled) setRebalanceError(error instanceof Error ? error.message : 'Unable to load tokenized stocks.');
+      })
+      .finally(() => {
+        if (!cancelled) setRebalanceStockCatalogLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [rebalanceStockCatalog.length, selectedChainValue, view]);
+
+  useEffect(() => {
+    const query = swapStockSearch.trim();
+    if (view !== 'swap') return;
+    if (query.length < 2) {
+      setSwapTokenSearchResults([]);
+      setSwapDiscoverySearching(false);
+      return;
+    }
+    let cancelled = false;
+    const timeoutId = window.setTimeout(() => {
+      setSwapDiscoverySearching(true);
+      void searchJupiterTokens(query)
+        .then(async (tokens) => {
+          const eligible = tokens.filter((token) =>
+            token.isVerified === true ||
+            token.tags?.includes('verified') ||
+            token.tags?.includes('moonshot-verified') ||
+            token.tags?.includes('stocks') ||
+            token.tags?.includes('xstocks')
+          );
+          const prices: Awaited<ReturnType<typeof fetchJupiterPrices>> = await fetchJupiterPrices(
+            eligible.map((token) => token.id)
+          ).catch(() => ({}));
+          if (cancelled) return;
+          const discovered = eligible.map((token) => {
+            const isStock = token.tags?.includes('stocks') || token.tags?.includes('xstocks');
+            return ({
+            mint: token.id,
+            symbol: token.symbol,
+            assetClass: isStock ? 'stock' as const : 'crypto' as const,
+            valueUsd: 0,
+            priceUsd: prices[token.id]?.usdPrice ?? token.usdPrice ?? 0,
+            amountUi: 0,
+            asset: {
+              kind: 'spl-token' as const,
+              mint: token.id,
+              decimals: token.decimals,
+              programId: token.tokenProgram ?? (isStock ? TOKEN_2022_PROGRAM_ID : 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA')
+            }
+          } satisfies RebalanceAsset);
+          }).filter((asset) => asset.priceUsd > 0);
+          const stocks = discovered.filter((asset) => asset.assetClass === 'stock');
+          setRebalanceStockCatalog((current) => [
+            ...current,
+            ...stocks.filter((asset) => !current.some((entry) => entry.mint === asset.mint))
+          ]);
+          setSwapTokenSearchResults(discovered.filter((asset) => asset.assetClass === 'crypto'));
+        })
+        .catch(() => setSwapTokenSearchResults([]))
+        .finally(() => {
+          if (!cancelled) setSwapDiscoverySearching(false);
+        });
+    }, 300);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [swapStockSearch, view]);
 
   const selectedAsset = sendAssetOptions.find((option) => option.id === assetId) ?? sendAssetOptions[0];
   const selectedTokenHolding =
@@ -2261,10 +2467,24 @@ function PopupPage() {
       mint: token.mint,
       symbol: token.symbol ?? formatAddress(token.mint)
     }));
-    return [...COMMON_SWAP_TOKENS, ...ownedTokens].filter(
+    const stockTokens: SwapOutputOption[] = rebalanceStockCatalog.map((stock) => ({
+      mint: stock.mint,
+      symbol: stock.symbol,
+      name: `${stock.symbol} tokenized stock`,
+      assetClass: 'stock',
+      priceUsd: stock.priceUsd
+    }));
+    const discoveredTokens: SwapOutputOption[] = swapTokenSearchResults.map((token) => ({
+      mint: token.mint,
+      symbol: token.symbol,
+      name: token.symbol,
+      assetClass: 'crypto',
+      priceUsd: token.priceUsd
+    }));
+    return [...COMMON_SWAP_TOKENS, ...ownedTokens, ...stockTokens, ...discoveredTokens].filter(
       (token, index, allTokens) => allTokens.findIndex((candidate) => candidate.mint === token.mint) === index
     );
-  }, [assets.tokens, selectedChainValue]);
+  }, [assets.tokens, rebalanceStockCatalog, selectedChainValue, swapTokenSearchResults]);
   const effectiveSwapOutputMint = swapUseCustomOutputMint ? swapCustomOutputMint.trim() : swapOutputMint;
   const selectedSwapOutputToken = assets.tokens.find((token) => token.mint === effectiveSwapOutputMint) ?? null;
   const selectedSwapOutputOption = swapOutputOptions.find((option) => option.mint === effectiveSwapOutputMint) ?? null;
@@ -2277,7 +2497,7 @@ function PopupPage() {
           name:
             option.mint === JUPITER_SOL_MINT
               ? 'Solana'
-              : ownedToken?.name ?? option.symbol ?? formatAddress(option.mint),
+              : ownedToken?.name ?? option.name ?? option.symbol ?? formatAddress(option.mint),
           symbol: option.symbol ?? ownedToken?.symbol ?? formatAddress(option.mint),
           balance:
             option.mint === JUPITER_SOL_MINT
@@ -2289,7 +2509,7 @@ function PopupPage() {
                   ? '***'
                   : formatTokenAmount(ownedToken)
                 : 'Not owned yet',
-          logoUri: option.mint === JUPITER_SOL_MINT ? SOLANA_LOGO_URL : ownedToken?.logoUri,
+          logoUri: option.mint === JUPITER_SOL_MINT ? SOLANA_LOGO_URL : ownedToken?.logoUri ?? option.logoUri,
           sol: option.mint === JUPITER_SOL_MINT
         };
       }),
@@ -2372,6 +2592,182 @@ function PopupPage() {
       setSwapError(error instanceof Error ? error.message : 'Unable to execute swap.');
     } finally {
       setSubmittingSwap(false);
+    }
+  }
+
+  async function handleSearchRebalanceAssets() {
+    const query = rebalanceAssetQuery.trim();
+    if (!query) return;
+    try {
+      setRebalanceAssetSearching(true);
+      setRebalanceError(null);
+      const tokens = await searchJupiterTokens(query);
+      const limited = tokens.slice(0, 8);
+      const prices: Awaited<ReturnType<typeof fetchJupiterPrices>> = await fetchJupiterPrices(
+        limited.map((token) => token.id)
+      ).catch(() => ({}));
+      setRebalanceAssetResults(limited.map((token) => ({
+        mint: token.id,
+        symbol: token.symbol,
+        assetClass: token.tags?.includes('stocks') || token.tags?.includes('stock') ? 'stock' : classifyRebalanceAsset({
+          mint: token.id,
+          symbol: token.symbol,
+          name: token.name,
+          programId: token.tokenProgram
+        }),
+        valueUsd: 0,
+        priceUsd: prices[token.id]?.usdPrice ?? token.usdPrice ?? 0,
+        amountUi: 0,
+        asset: {
+          kind: 'spl-token' as const,
+          mint: token.id,
+          decimals: token.decimals,
+          programId: token.tokenProgram ?? 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'
+        }
+      } satisfies RebalanceAsset)).filter((asset) => asset.priceUsd > 0));
+    } catch (error) {
+      setRebalanceAssetResults([]);
+      setRebalanceError(error instanceof Error ? error.message : 'Unable to search Jupiter assets.');
+    } finally {
+      setRebalanceAssetSearching(false);
+    }
+  }
+
+  function addRebalanceAsset(asset: RebalanceAsset) {
+    setRebalanceAddedAssets((current) => current.some((entry) => entry.mint === asset.mint) ? current : [...current, asset]);
+    setRebalanceSelectedMints((current) => new Set([...current, asset.mint]));
+    setRebalanceAssetQuery('');
+    setRebalanceAssetResults([]);
+    setRebalancePlan([]);
+  }
+
+  function buildRebalancePlan() {
+    setRebalanceError(null);
+    setRebalanceSignatures([]);
+    const stableAsset = rebalanceStableAsset ?? {
+      mint: REBALANCE_STABLE_MINT,
+      symbol: 'USDC',
+      assetClass: 'stablecoin',
+      valueUsd: 0,
+      priceUsd: 1,
+      amountUi: 0,
+      asset: {
+        kind: 'spl-token' as const,
+        mint: REBALANCE_STABLE_MINT,
+        decimals: 6,
+        programId: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'
+      }
+    };
+    const selected = [
+      stableAsset,
+      ...rebalanceAssets.filter(
+        (asset) => asset.mint !== REBALANCE_STABLE_MINT && rebalanceSelectedMints.has(asset.mint)
+      )
+    ];
+    if (selected.length < 2 || !selected.some((asset) => asset.mint !== REBALANCE_STABLE_MINT)) {
+      setRebalancePlan([]);
+      setRebalanceError('Select at least one priced asset to rebalance alongside USDC.');
+      return;
+    }
+    const totalValueUsd = selected.reduce((sum, asset) => sum + asset.valueUsd, 0);
+    if (totalValueUsd <= 0) {
+      setRebalancePlan([]);
+      setRebalanceError('No priced portfolio value is available to rebalance.');
+      return;
+    }
+    // USDC is always one equal-weight bucket and the settlement asset for every leg.
+    const targetValueUsd = totalValueUsd / selected.length;
+    const sells: RebalanceLeg[] = [];
+    const buys: RebalanceLeg[] = [];
+    for (const asset of selected) {
+      if (asset.mint === REBALANCE_STABLE_MINT) continue;
+      const deltaUsd = asset.valueUsd - targetValueUsd;
+      if (Math.abs(deltaUsd) < REBALANCE_MIN_TRADE_USD) continue;
+      if (deltaUsd > 0) {
+        const maxSellAmount = asset.mint === JUPITER_SOL_MINT
+          ? Math.max(0, asset.amountUi - 0.01)
+          : asset.amountUi;
+        const amountUi = Math.min(deltaUsd / asset.priceUsd, maxSellAmount);
+        if (amountUi <= 0) continue;
+        sells.push({
+          id: `sell:${asset.mint}`,
+          side: 'sell',
+          input: asset,
+          outputMint: REBALANCE_STABLE_MINT,
+          amountUi: amountUi.toFixed(asset.asset.kind === 'spl-token' ? Math.min(asset.asset.decimals, 9) : 9).replace(/(\.\d*?[1-9])0+$|\.0+$/, '$1'),
+          valueUsd: amountUi * asset.priceUsd,
+          label: `Sell ${asset.symbol} to USDC`
+        });
+      } else {
+        // Leave a small USDC buffer for quote movement, slippage and rounding between sequential legs.
+        const valueUsd = -deltaUsd * 0.99;
+        buys.push({
+          id: `buy:${asset.mint}`,
+          side: 'buy',
+          input: stableAsset,
+          outputMint: asset.mint,
+          amountUi: valueUsd.toFixed(6).replace(/(\.\d*?[1-9])0+$|\.0+$/, '$1'),
+          valueUsd,
+          label: `Buy ${asset.symbol} with USDC`
+        });
+      }
+    }
+    const sellProceeds = sells.reduce((sum, leg) => sum + leg.valueUsd, 0);
+    const buyCost = buys.reduce((sum, leg) => sum + leg.valueUsd, 0);
+    if (buyCost > rebalanceStableValueUsd + sellProceeds + 0.01) {
+      setRebalancePlan([]);
+      setRebalanceError('This plan needs more USDC than the wallet and planned sales can provide. Add USDC or select fewer underweight assets.');
+      return;
+    }
+    if (sells.length === 0 && buys.length === 0) {
+      setRebalancePlan([]);
+      setRebalanceProgress('The selected portfolio is already within the $1 rebalance threshold.');
+      return;
+    }
+    setRebalanceProgress(null);
+    setRebalancePlan([...sells, ...buys]);
+  }
+
+  async function executeRebalancePlan() {
+    if (rebalancePlan.length === 0) return;
+    try {
+      const slippageBps = Number(rebalanceSlippageBps);
+      if (!Number.isInteger(slippageBps) || slippageBps < 1 || slippageBps > 5000) {
+        throw new Error('Slippage must be between 1 and 5000 basis points.');
+      }
+      setRebalanceExecuting(true);
+      setRebalanceError(null);
+      setRebalanceSignatures([]);
+      const signatures: string[] = [];
+      for (let index = 0; index < rebalancePlan.length; index += 1) {
+        const leg = rebalancePlan[index];
+        setRebalanceProgress(`${index + 1} of ${rebalancePlan.length}: quoting ${leg.label}`);
+        const quote = await sendRuntimeMessage<WalletSwapQuoteResponse>({
+          type: 'wallet_get_swap_quote',
+          amount: leg.amountUi,
+          slippageBps,
+          inputAsset: leg.input.asset,
+          outputMint: leg.outputMint
+        });
+        const route = quote.routes[0];
+        if (!route) throw new Error(`No Jupiter route is available for ${leg.label}.`);
+        setRebalanceProgress(`${index + 1} of ${rebalancePlan.length}: confirming ${leg.label}`);
+        const result = await sendRuntimeMessage<WalletSwapExecuteResponse>({
+          type: 'wallet_execute_swap',
+          quoteResponse: route.quoteResponse,
+          password: canUseUnlockedSigner ? undefined : rebalancePassword || undefined
+        });
+        signatures.push(result.signature);
+        setRebalanceSignatures([...signatures]);
+      }
+      setRebalanceProgress(`Rebalance complete — ${signatures.length} swap${signatures.length === 1 ? '' : 's'} confirmed.`);
+      setRebalancePassword('');
+      setRebalancePlan([]);
+      await refresh();
+    } catch (error) {
+      setRebalanceError(error instanceof Error ? error.message : 'Unable to complete the rebalance.');
+    } finally {
+      setRebalanceExecuting(false);
     }
   }
 
@@ -3718,6 +4114,16 @@ function PopupPage() {
     const proposalUrl = buildGovernanceProposalUrl(proposal.daoId, proposal.proposalId);
     const voteDecimals = getGovernanceVoteDecimals(proposal, daoSummary);
     const voteActionNote = canVoteNow ? getGovernanceVoteActionNote(voteSourceSummary) : null;
+    const hasCastVote = voteSourceSummary.votedCount > 0;
+    const participationMessage = canVoteNow
+      ? hasCastVote
+        ? `Vote recorded. ${formatVoteSourceCount(voteSourceSummary.availableCount, 'vote source')} still available.`
+        : 'Your vote is still open. Choose an option below to participate.'
+      : hasCastVote
+        ? voteSourceSummary.availableCount === 0
+          ? 'This wallet has voted on this proposal.'
+          : `This wallet has voted with ${formatVoteSourceCount(voteSourceSummary.votedCount, 'vote source')}.`
+        : null;
     const inactiveVotingPowerMessage =
       !timeMeta.votingWindowOpen && timeMeta.noteText
         ? timeMeta.noteText
@@ -3783,6 +4189,15 @@ function PopupPage() {
           {BigInt(proposal.noVotes) > BigInt(0) ? <span>No {formatVotingPower(BigInt(proposal.noVotes), voteDecimals, true)}</span> : null}
           {BigInt(proposal.denyVotes) > BigInt(0) ? <span>Deny {formatVotingPower(BigInt(proposal.denyVotes), voteDecimals, true)}</span> : null}
         </div>
+        {timeMeta.votingWindowOpen && participationMessage ? (
+          <div
+            className={`governance-participation-status ${canVoteNow ? 'governance-participation-status-action' : 'governance-participation-status-voted'}`}
+            role="status"
+          >
+            <strong>{canVoteNow ? (hasCastVote ? 'More voting power available' : 'Vote on this proposal') : 'Voted'}</strong>
+            <span>{participationMessage}</span>
+          </div>
+        ) : null}
         {voteSourceStatusPills.length > 0 ? (
           <div className="governance-vote-source-pills">
             {voteSourceStatusPills.map((pill) => (
@@ -3799,7 +4214,7 @@ function PopupPage() {
               {proposal.choices.map((choice) => (
                 <Button
                   key={`${proposal.proposalId}:${choice.rank}`}
-                  tone="secondary"
+                  tone="primary"
                   disabled={
                     governanceVotingProposalId === proposal.proposalId || !governanceVotingFallbackReady
                   }
@@ -4369,7 +4784,7 @@ function PopupPage() {
     const nativeAssetSymbol = assets.nativeSymbol ?? (isEthereumChain ? 'ETH' : isSuiChain ? 'SUI' : isMonadChain ? 'MON' : 'SOL');
     const activeHomeTab =
       (isSuiChain || isMonadChain || isEthereumChain) &&
-      (homeTab === 'collectibles' || homeTab === 'staking' || homeTab === 'community' || homeTab === 'governance')
+      (homeTab === 'collectibles' || homeTab === 'staking' || homeTab === 'rebalance' || homeTab === 'community' || homeTab === 'governance')
         ? 'tokens'
         : homeTab;
     const nativeAssetId = isEthereumChain ? 'ethereum' : isMonadChain ? 'monad' : isSuiChain ? 'sui' : 'sol';
@@ -4567,6 +4982,11 @@ function PopupPage() {
               <span className="content-tab-copy">Tokens</span>
             </Tabs.Trigger>
             {isSolanaChain ? (
+              <Tabs.Trigger className="content-tab content-tab-primary" value="rebalance">
+                <span className="content-tab-copy">Rebalance</span>
+              </Tabs.Trigger>
+            ) : null}
+            {isSolanaChain ? (
               <Tabs.Trigger className="content-tab content-tab-primary" value="community">
                 <span className="content-tab-copy">Community</span>
               </Tabs.Trigger>
@@ -4654,6 +5074,220 @@ function PopupPage() {
               )}
             </Card>
           </Tabs.Content>
+
+          {isSolanaChain ? (
+            <Tabs.Content value="rebalance">
+              <Card className="asset-panel-card rebalance-panel">
+                <div className="rebalance-header">
+                  <div className="rebalance-header-copy">
+                    <strong className="governance-panel-title">Portfolio rebalancer</strong>
+                    <p className="muted governance-panel-description">
+                      Equal-weight selected assets through USDC with fresh Jupiter quotes.
+                    </p>
+                  </div>
+                  <div className={`rebalance-stable-badge ${rebalanceStableValueUsd >= 1 ? 'ready' : 'needed'}`}>
+                    <span>USDC</span>
+                    <strong>{formatUsd(rebalanceStableValueUsd) ?? '$0.00'}</strong>
+                    <small>{rebalanceStableValueUsd >= 1 ? 'ready' : 'needed'}</small>
+                  </div>
+                </div>
+
+                <div className="rebalance-inventory-summary">
+                  <div><small>Total inventory</small><strong>{formatUsd(assets.totalUsdValue) ?? '$0.00'}</strong></div>
+                  <div><small>Linked value</small><strong>{formatUsd(rebalanceLinkedValueUsd) ?? '$0.00'}</strong></div>
+                  <div><small>Unlinked</small><strong>{formatUsd(rebalanceUnlinkedValueUsd) ?? '$0.00'}</strong></div>
+                </div>
+
+                <div className="rebalance-group-bar">
+                  <label>
+                    <span className="muted">Active group</span>
+                    <Input
+                      value={rebalanceGroupName}
+                      maxLength={32}
+                      disabled={rebalanceExecuting}
+                      onChange={(event) => setRebalanceGroupName(event.target.value)}
+                      aria-label="Rebalance group name"
+                    />
+                  </label>
+                  <StatusPill tone="success">
+                    {rebalanceSelectedMints.size + 1} asset{rebalanceSelectedMints.size === 0 ? '' : 's'} linked
+                  </StatusPill>
+                </div>
+
+                {rebalanceStableValueUsd < 1 ? (
+                  <div className="rebalance-stable-note warning-box">
+                    <AlertTriangle size={15} />
+                    <span>Add a little USDC for safer routing. Overweight assets will still be harvested into USDC first.</span>
+                  </div>
+                ) : null}
+
+                <div className="rebalance-add-asset">
+                  <div className="rebalance-add-copy">
+                    <strong>Add an asset</strong>
+                    <small className="muted">Search Jupiter by symbol, name, or paste a Solana mint.</small>
+                  </div>
+                  <div className="rebalance-search-row">
+                    <Input
+                      value={rebalanceAssetQuery}
+                      disabled={rebalanceExecuting || rebalanceAssetSearching}
+                      placeholder="NVDAx, JUP, or mint address"
+                      onChange={(event) => {
+                        setRebalanceAssetQuery(event.target.value);
+                        setRebalanceAssetResults([]);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') void handleSearchRebalanceAssets();
+                      }}
+                    />
+                    <Button tone="secondary" disabled={!rebalanceAssetQuery.trim() || rebalanceAssetSearching} onClick={() => void handleSearchRebalanceAssets()}>
+                      {rebalanceAssetSearching ? 'Searching…' : 'Search'}
+                    </Button>
+                  </div>
+                  {rebalanceAssetResults.length > 0 ? (
+                    <div className="rebalance-search-results">
+                      {rebalanceAssetResults.map((asset) => {
+                        const alreadyLinked = rebalanceSelectedMints.has(asset.mint);
+                        return (
+                          <button key={asset.mint} type="button" disabled={alreadyLinked} onClick={() => addRebalanceAsset(asset)}>
+                            <span><strong>{asset.symbol}</strong><small>{asset.assetClass === 'stock' ? 'Tokenized stock' : 'Crypto asset'}</small></span>
+                            <span><strong>{formatUsd(asset.priceUsd) ?? 'Unpriced'}</strong><small>{alreadyLinked ? 'Linked' : 'Add'}</small></span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="rebalance-filter-row" aria-label="Rebalance asset filters">
+                  <span className="muted">Include</span>
+                  <button
+                    type="button"
+                    className="rebalance-filter-chip"
+                    disabled={rebalanceExecuting}
+                    onClick={() => {
+                      setRebalanceSelectedMints(new Set(rebalanceAssets.filter((asset) => asset.assetClass !== 'stablecoin').map((asset) => asset.mint)));
+                      setRebalancePlan([]);
+                    }}
+                  >
+                    All
+                  </button>
+                  <button
+                    type="button"
+                    className="rebalance-filter-chip"
+                    disabled={rebalanceExecuting}
+                    onClick={() => {
+                      setRebalanceSelectedMints(new Set(rebalanceAssets.filter((asset) => asset.assetClass === 'crypto').map((asset) => asset.mint)));
+                      setRebalancePlan([]);
+                    }}
+                  >
+                    Crypto
+                  </button>
+                  <button
+                    type="button"
+                    className="rebalance-filter-chip"
+                    disabled={rebalanceExecuting || rebalanceStockCount === 0}
+                    onClick={() => {
+                      setRebalanceSelectedMints(new Set(rebalanceAssets.filter((asset) => asset.assetClass === 'stock').map((asset) => asset.mint)));
+                      setRebalancePlan([]);
+                    }}
+                  >
+                    Stocks {rebalanceStockCount > 0 ? rebalanceStockCount : ''}
+                  </button>
+                </div>
+
+                <div className="rebalance-assets" role="group" aria-label="Assets to rebalance">
+                  <div className="rebalance-asset-row rebalance-asset-row-fixed">
+                    <span className="rebalance-asset-check"><Check size={14} /></span>
+                    <span><strong>USDC</strong><small>Settlement · always included</small></span>
+                    <strong>{formatUsd(rebalanceStableValueUsd) ?? '$0.00'}</strong>
+                  </div>
+                  {rebalanceAssets.filter((asset) => asset.mint !== REBALANCE_STABLE_MINT).map((asset) => {
+                    const selected = rebalanceSelectedMints.has(asset.mint);
+                    return (
+                      <label key={asset.mint} className={`rebalance-asset-row ${selected ? 'selected' : ''}`}>
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          disabled={rebalanceExecuting}
+                          onChange={() => {
+                            setRebalanceSelectedMints((current) => {
+                              const next = new Set(current);
+                              if (next.has(asset.mint)) next.delete(asset.mint); else next.add(asset.mint);
+                              return next;
+                            });
+                            setRebalancePlan([]);
+                            setRebalanceError(null);
+                          }}
+                        />
+                        <span>
+                          <strong>{asset.symbol}</strong>
+                          <small>
+                            {asset.assetClass === 'stock' ? 'Tokenized stock · ' : 'Crypto · '}
+                            {asset.amountUi.toLocaleString(undefined, { maximumFractionDigits: 6 })}
+                          </small>
+                        </span>
+                        <strong>{formatUsd(asset.valueUsd) ?? '$0.00'}</strong>
+                      </label>
+                    );
+                  })}
+                </div>
+
+                {selectedRebalanceStockCount > 0 ? (
+                  <p className="rebalance-stock-disclosure muted">
+                    Tokenized stocks provide economic exposure, not shareholder or voting rights. Availability and eligibility vary by jurisdiction.
+                  </p>
+                ) : null}
+
+                <div className="rebalance-controls">
+                  <label className="stack-tight">
+                    <span className="muted">Slippage (bps)</span>
+                    <Input
+                      inputMode="numeric"
+                      value={rebalanceSlippageBps}
+                      disabled={rebalanceExecuting}
+                      onChange={(event) => setRebalanceSlippageBps(event.target.value.replace(/\D/g, '').slice(0, 4))}
+                    />
+                  </label>
+                  {!canUseUnlockedSigner ? (
+                    <label className="stack-tight">
+                      <span className="muted">Wallet password</span>
+                      <Input type="password" value={rebalancePassword} disabled={rebalanceExecuting} onChange={(event) => setRebalancePassword(event.target.value)} />
+                    </label>
+                  ) : null}
+                </div>
+
+                {rebalanceError ? <p className="danger-box">{rebalanceError}</p> : null}
+                {rebalanceProgress ? <p className={rebalanceExecuting ? 'warning-box' : 'success-box'}>{rebalanceProgress}</p> : null}
+                {rebalancePlan.length > 0 ? (
+                  <div className="rebalance-plan">
+                    <div className="rebalance-plan-heading">
+                      <strong>Proposed swaps</strong>
+                      <StatusPill tone="neutral">{rebalancePlan.length}</StatusPill>
+                    </div>
+                    {rebalancePlan.map((leg, index) => (
+                      <div key={leg.id} className="rebalance-leg">
+                        <span>{index + 1}</span>
+                        <div><strong>{leg.label}</strong><small>{leg.amountUi} {leg.input.symbol} · about {formatUsd(leg.valueUsd) ?? '$0.00'}</small></div>
+                        <StatusPill tone={leg.side === 'sell' ? 'warning' : 'success'}>{leg.side}</StatusPill>
+                      </div>
+                    ))}
+                    <p className="muted governance-proposal-note">Each leg is a separate on-chain transaction. Execution stops immediately if a quote or signature fails.</p>
+                  </div>
+                ) : null}
+                <div className="governance-vote-actions">
+                  <Button tone="secondary" disabled={rebalanceExecuting || rebalanceAssets.length < 1} onClick={buildRebalancePlan}>
+                    Preview rebalance
+                  </Button>
+                  {rebalancePlan.length > 0 ? (
+                    <Button disabled={rebalanceExecuting || isWatchOnlyWallet || !rebalanceSlippageBps} onClick={() => void executeRebalancePlan()}>
+                      {rebalanceExecuting ? 'Rebalancing…' : `Execute ${rebalancePlan.length} swap${rebalancePlan.length === 1 ? '' : 's'}`}
+                    </Button>
+                  ) : null}
+                </div>
+                {rebalanceSignatures.length > 0 ? <p className="muted">Confirmed transactions: {rebalanceSignatures.length}</p> : null}
+              </Card>
+            </Tabs.Content>
+          ) : null}
 
           {isSolanaChain ? (
             <Tabs.Content value="community">
@@ -4869,14 +5503,28 @@ function PopupPage() {
                 ) : null}
                 {governanceVoteError ? <p className="danger-box">{governanceVoteError}</p> : null}
                 {governanceLoading ? <p className="muted">Loading governance proposals…</p> : null}
-                {!governanceLoading && governanceError ? <p className="danger-box">{governanceError}</p> : null}
+                {governanceError ? <p className="danger-box">{governanceError}</p> : null}
                 {(() => {
-                  if (governanceLoading || governanceError) return null;
                   const nowUnixSeconds = Math.floor(Date.now() / 1000);
                   const activeProposals = visibleGovernanceProposals.filter((proposal) => {
                     const timeMeta = getGovernanceProposalTimeMeta(proposal, nowUnixSeconds);
                     return proposal.stateCode === 2 && timeMeta.votingWindowOpen;
                   });
+                  const activeProposalsNeedingVote = activeProposals.filter(
+                    (proposal) => summarizeGovernanceVoteSources(proposal.voteSources ?? []).availableCount > 0
+                  );
+                  const activeProposalsVoted = activeProposals.filter(
+                    (proposal) => {
+                      const summary = summarizeGovernanceVoteSources(proposal.voteSources ?? []);
+                      return summary.availableCount === 0 && summary.votedCount > 0;
+                    }
+                  );
+                  const activeProposalsUnavailable = activeProposals.filter(
+                    (proposal) => {
+                      const summary = summarizeGovernanceVoteSources(proposal.voteSources ?? []);
+                      return summary.availableCount === 0 && summary.votedCount === 0;
+                    }
+                  );
                   const finalizingProposals = visibleGovernanceProposals.filter((proposal) => {
                     const timeMeta = getGovernanceProposalTimeMeta(proposal, nowUnixSeconds);
                     return proposal.stateCode === 2 && !timeMeta.votingWindowOpen;
@@ -4926,7 +5574,21 @@ function PopupPage() {
                       ) : null}
                       {activeProposals.length > 0 ? (
                         <div className="governance-proposal-list">
-                          {activeProposals.map((proposal) => renderGovernanceProposalCard(proposal, nowUnixSeconds))}
+                          {activeProposalsNeedingVote.length > 0 ? (
+                            <div className="governance-proposal-group-heading">
+                              <strong>Needs your vote</strong>
+                              <StatusPill tone="warning">{activeProposalsNeedingVote.length}</StatusPill>
+                            </div>
+                          ) : null}
+                          {activeProposalsNeedingVote.map((proposal) => renderGovernanceProposalCard(proposal, nowUnixSeconds))}
+                          {activeProposalsVoted.length > 0 ? (
+                            <div className="governance-proposal-group-heading">
+                              <strong>Participation recorded</strong>
+                              <StatusPill tone="success">{activeProposalsVoted.length}</StatusPill>
+                            </div>
+                          ) : null}
+                          {activeProposalsVoted.map((proposal) => renderGovernanceProposalCard(proposal, nowUnixSeconds))}
+                          {activeProposalsUnavailable.map((proposal) => renderGovernanceProposalCard(proposal, nowUnixSeconds))}
                         </div>
                       ) : (
                         <div className="community-empty-state governance-empty-subtle">
@@ -7324,7 +7986,7 @@ function PopupPage() {
                     <AssetPickerOptionRow
                       option={{
                         id: swapUseCustomOutputMint ? `custom:${effectiveSwapOutputMint}` : effectiveSwapOutputMint,
-                        name: swapUseCustomOutputMint ? 'Custom mint' : selectedSwapOutputToken?.name ?? selectedSwapOutputOption?.symbol ?? outputAssetSymbol,
+                        name: swapUseCustomOutputMint ? 'Custom mint' : selectedSwapOutputToken?.name ?? selectedSwapOutputOption?.name ?? selectedSwapOutputOption?.symbol ?? outputAssetSymbol,
                         symbol: outputAssetSymbol,
                         balance: outputAssetBalance,
                         logoUri:
@@ -7400,6 +8062,63 @@ function PopupPage() {
               </div>
             </section>
           </div>
+
+          <section className="swap-stock-discovery">
+            <div className="swap-stock-discovery-header">
+              <div>
+                <strong>Discover assets</strong>
+                <small>Search verified tokens, stocks, and ETFs through Jupiter</small>
+              </div>
+              <div className="swap-discovery-tabs">
+                <button type="button" className={swapDiscoveryMode === 'tokens' ? 'active' : ''} onClick={() => setSwapDiscoveryMode('tokens')}>Tokens</button>
+                <button type="button" className={swapDiscoveryMode === 'stocks' ? 'active' : ''} onClick={() => setSwapDiscoveryMode('stocks')}>Stocks</button>
+              </div>
+            </div>
+            <Input
+              value={swapStockSearch}
+              placeholder={
+                swapDiscoverySearching
+                  ? 'Searching Jupiter…'
+                  : swapDiscoveryMode === 'stocks'
+                    ? 'Search AAPLx, NVDAx, SPYx…'
+                    : 'Search JUP, BONK, USDC, or mint…'
+              }
+              onChange={(event) => setSwapStockSearch(event.target.value)}
+            />
+            <div className="swap-stock-results">
+              {(swapDiscoveryMode === 'stocks'
+                ? rebalanceStockCatalog.filter((asset) => !swapStockSearch.trim() || asset.symbol.toLowerCase().includes(swapStockSearch.trim().toLowerCase()))
+                : swapStockSearch.trim().length >= 2
+                  ? swapTokenSearchResults
+                  : rebalanceAssets.filter((asset) => asset.assetClass === 'crypto'))
+                .slice(0, 10)
+                .map((asset) => (
+                  <button
+                    key={asset.mint}
+                    type="button"
+                    className={effectiveSwapOutputMint === asset.mint && !swapUseCustomOutputMint ? 'active' : ''}
+                    onClick={() => {
+                      setSwapUseCustomOutputMint(false);
+                      setSwapCustomOutputMint('');
+                      setSwapOutputMint(asset.mint);
+                      setSwapQuote(null);
+                      setSwapResult(null);
+                    }}
+                  >
+                    <span className="rebalance-stock-symbol">{asset.symbol.slice(0, 2)}</span>
+                    <span><strong>{asset.symbol}</strong><small>{formatUsd(asset.priceUsd) ?? 'Unpriced'}</small></span>
+                  </button>
+                ))}
+              {!swapDiscoverySearching && swapStockSearch.trim().length >= 2 && (
+                swapDiscoveryMode === 'stocks'
+                  ? !rebalanceStockCatalog.some((stock) => stock.symbol.toLowerCase().includes(swapStockSearch.trim().toLowerCase()))
+                  : swapTokenSearchResults.length === 0
+              ) ? <span className="swap-stock-empty muted">No verified {swapDiscoveryMode === 'stocks' ? 'stock' : 'token'} match yet.</span> : null}
+            </div>
+            {swapDiscoveryMode === 'stocks' ? (
+              <p className="swap-stock-disclosure muted">Tokenized stocks provide economic exposure and do not include shareholder voting rights. Eligibility varies by jurisdiction.</p>
+            ) : null}
+          </section>
 
           <div className="swap-settings-row">
             <label className="swap-slippage-chip">

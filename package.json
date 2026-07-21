@@ -1,7 +1,7 @@
 {
   "name": "grape-wallet-extension",
   "private": true,
-  "version": "0.5.104",
+  "version": "0.5.113",
   "packageManager": "pnpm@10.6.3",
   "scripts": {
     "build": "pnpm --filter @grape/core build && pnpm --filter @grape/solana build && pnpm --filter @grape/sui build && pnpm --filter @grape/monad build && pnpm --filter @grape/ethereum build && pnpm --filter @grape/ui build && pnpm --filter @grape/wallet-adapter build && pnpm --filter @grape/extension build && pnpm --filter @grape/passkey-web build",
@@ -39,5 +39,11 @@
     "typescript": "^5.8.2",
     "vite": "^6.2.1",
     "vitest": "^3.0.8"
+  },
+  "pnpm": {
+    "overrides": {
+      "react": "19.1.0",
+      "react-dom": "19.1.0"
+    }
   }
 }
