@@ -161,6 +161,10 @@ type RebalanceLeg = {
   amountUi: string;
   valueUsd: number;
   label: string;
+  reason: string;
+  currentValueUsd: number;
+  targetValueUsd: number;
+  targetWeightPct: number;
 };
 const SOLANA_SEND_FEE_RESERVE_SOL = 0.00001;
 const SOLANA_TOKEN_SEND_RESERVE_SOL = 0.0021;
@@ -177,6 +181,7 @@ const SOLANA_LOGO_URL =
   'https://media.solana-cdn.com/image/width=100/https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/solana/info/logo.png';
 const GRAPE_LOGO_URL = chrome.runtime.getURL('icons/grape_logo_white.png');
 const ASSET_CACHE_STORAGE_KEY = 'grape:asset-cache';
+const REBALANCE_ADDON_STORAGE_KEY = 'grape:experimental-rebalancer-enabled:v1';
 const CHAIN_OPTIONS = [
   { id: 'solana', label: 'Solana', shortLabel: 'SOL', enabled: true },
   { id: 'sui', label: 'Sui', shortLabel: 'SUI', enabled: true },
@@ -1273,6 +1278,10 @@ function PopupPage() {
   const [quotingSwap, setQuotingSwap] = useState(false);
   const [submittingSwap, setSubmittingSwap] = useState(false);
   const [rebalanceSelectedMints, setRebalanceSelectedMints] = useState<Set<string>>(new Set());
+  const [rebalanceAddonEnabled, setRebalanceAddonEnabled] = useState(false);
+  const [rebalanceAddonLoaded, setRebalanceAddonLoaded] = useState(false);
+  const [rebalanceEnablePrompt, setRebalanceEnablePrompt] = useState(false);
+  const [rebalanceRiskAccepted, setRebalanceRiskAccepted] = useState(false);
   const [rebalanceGroupName, setRebalanceGroupName] = useState('My basket');
   const [rebalanceAddedAssets, setRebalanceAddedAssets] = useState<RebalanceAsset[]>([]);
   const [rebalanceAssetQuery, setRebalanceAssetQuery] = useState('');
@@ -1523,6 +1532,35 @@ function PopupPage() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void chrome.storage.local.get(REBALANCE_ADDON_STORAGE_KEY).then((stored) => {
+      if (cancelled) return;
+      setRebalanceAddonEnabled(stored[REBALANCE_ADDON_STORAGE_KEY] === true);
+      setRebalanceAddonLoaded(true);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (rebalanceAddonLoaded && !rebalanceAddonEnabled && homeTab === 'rebalance') {
+      setHomeTab('tokens');
+    }
+  }, [homeTab, rebalanceAddonEnabled, rebalanceAddonLoaded]);
+
+  async function setRebalanceAddon(enabled: boolean) {
+    await chrome.storage.local.set({ [REBALANCE_ADDON_STORAGE_KEY]: enabled });
+    setRebalanceAddonEnabled(enabled);
+    setRebalanceEnablePrompt(false);
+    setRebalanceRiskAccepted(false);
+    if (!enabled) {
+      setHomeTab('tokens');
+      setRebalancePlan([]);
+      setRebalanceProgress(null);
+      setRebalanceError(null);
+    }
+  }
 
   const refreshStakeAccounts = async () => {
     if (!state || state.wallet.setup !== 'ready') {
@@ -2677,6 +2715,7 @@ function PopupPage() {
     }
     // USDC is always one equal-weight bucket and the settlement asset for every leg.
     const targetValueUsd = totalValueUsd / selected.length;
+    const targetWeightPct = 100 / selected.length;
     const sells: RebalanceLeg[] = [];
     const buys: RebalanceLeg[] = [];
     for (const asset of selected) {
@@ -2696,7 +2735,11 @@ function PopupPage() {
           outputMint: REBALANCE_STABLE_MINT,
           amountUi: amountUi.toFixed(asset.asset.kind === 'spl-token' ? Math.min(asset.asset.decimals, 9) : 9).replace(/(\.\d*?[1-9])0+$|\.0+$/, '$1'),
           valueUsd: amountUi * asset.priceUsd,
-          label: `Sell ${asset.symbol} to USDC`
+          label: `Sell ${asset.symbol} to USDC`,
+          currentValueUsd: asset.valueUsd,
+          targetValueUsd,
+          targetWeightPct,
+          reason: `${asset.symbol} is ${formatUsd(deltaUsd) ?? '$0.00'} above its equal-weight target. Selling the excess moves that value into USDC to fund underweight assets.`
         });
       } else {
         // Leave a small USDC buffer for quote movement, slippage and rounding between sequential legs.
@@ -2708,7 +2751,11 @@ function PopupPage() {
           outputMint: asset.mint,
           amountUi: valueUsd.toFixed(6).replace(/(\.\d*?[1-9])0+$|\.0+$/, '$1'),
           valueUsd,
-          label: `Buy ${asset.symbol} with USDC`
+          label: `Buy ${asset.symbol} with USDC`,
+          currentValueUsd: asset.valueUsd,
+          targetValueUsd,
+          targetWeightPct,
+          reason: `${asset.symbol} is ${formatUsd(-deltaUsd) ?? '$0.00'} below its equal-weight target. USDC closes most of the gap while leaving a small execution buffer.`
         });
       }
     }
@@ -4981,9 +5028,10 @@ function PopupPage() {
             <Tabs.Trigger className="content-tab content-tab-primary" value="tokens">
               <span className="content-tab-copy">Tokens</span>
             </Tabs.Trigger>
-            {isSolanaChain ? (
+            {isSolanaChain && rebalanceAddonEnabled ? (
               <Tabs.Trigger className="content-tab content-tab-primary" value="rebalance">
                 <span className="content-tab-copy">Rebalance</span>
+                <span className="experimental-tab-dot" aria-label="Experimental" />
               </Tabs.Trigger>
             ) : null}
             {isSolanaChain ? (
@@ -5075,12 +5123,15 @@ function PopupPage() {
             </Card>
           </Tabs.Content>
 
-          {isSolanaChain ? (
+          {isSolanaChain && rebalanceAddonEnabled ? (
             <Tabs.Content value="rebalance">
               <Card className="asset-panel-card rebalance-panel">
                 <div className="rebalance-header">
                   <div className="rebalance-header-copy">
-                    <strong className="governance-panel-title">Portfolio rebalancer</strong>
+                    <div className="rebalance-title-row">
+                      <strong className="governance-panel-title">Portfolio rebalancer</strong>
+                      <StatusPill tone="warning">Experimental</StatusPill>
+                    </div>
                     <p className="muted governance-panel-description">
                       Equal-weight selected assets through USDC with fresh Jupiter quotes.
                     </p>
@@ -5264,10 +5315,23 @@ function PopupPage() {
                       <strong>Proposed swaps</strong>
                       <StatusPill tone="neutral">{rebalancePlan.length}</StatusPill>
                     </div>
+                    <div className="rebalance-plan-explanation">
+                      <strong>Why these swaps?</strong>
+                      <span>
+                        This basket targets about {rebalancePlan[0].targetWeightPct.toFixed(1)}% per selected asset, including USDC. Overweight positions are sold to fund underweight positions.
+                      </span>
+                    </div>
                     {rebalancePlan.map((leg, index) => (
                       <div key={leg.id} className="rebalance-leg">
                         <span>{index + 1}</span>
-                        <div><strong>{leg.label}</strong><small>{leg.amountUi} {leg.input.symbol} · about {formatUsd(leg.valueUsd) ?? '$0.00'}</small></div>
+                        <div>
+                          <strong>{leg.label}</strong>
+                          <small>{leg.amountUi} {leg.input.symbol} · about {formatUsd(leg.valueUsd) ?? '$0.00'}</small>
+                          <span className="rebalance-leg-allocation">
+                            {formatUsd(leg.currentValueUsd) ?? '$0.00'} current → {formatUsd(leg.targetValueUsd) ?? '$0.00'} target
+                          </span>
+                          <p className="rebalance-leg-reason">{leg.reason}</p>
+                        </div>
                         <StatusPill tone={leg.side === 'sell' ? 'warning' : 'success'}>{leg.side}</StatusPill>
                       </div>
                     ))}
@@ -6818,6 +6882,64 @@ function PopupPage() {
                 <small className="muted">Hide portfolio values and token balances with ***</small>
               </span>
             </label>
+            {isSolanaChain ? (
+              <div className="stack experimental-addon-setting">
+                <label className="incident-toggle compact-settings-toggle">
+                  <input
+                    type="checkbox"
+                    checked={rebalanceAddonEnabled}
+                    onChange={(event) => {
+                      if (event.target.checked) {
+                        setRebalanceEnablePrompt(true);
+                        setRebalanceRiskAccepted(false);
+                      } else {
+                        void setRebalanceAddon(false);
+                      }
+                    }}
+                  />
+                  <span>
+                    <strong>Experimental rebalancer</strong>
+                    <small className="muted">Opt in to multi-transaction portfolio rebalancing through Jupiter.</small>
+                  </span>
+                </label>
+                {rebalanceEnablePrompt && !rebalanceAddonEnabled ? (
+                  <div className="experimental-addon-warning">
+                    <div className="experimental-addon-warning-title">
+                      <AlertTriangle size={16} />
+                      <strong>Understand the risks before enabling</strong>
+                    </div>
+                    <ul>
+                      <li>A rebalance uses multiple independent on-chain swaps.</li>
+                      <li>If a later swap fails, earlier swaps remain final and the portfolio may be partially rebalanced.</li>
+                      <li>Prices, routes, slippage, network fees, and token liquidity can change during execution.</li>
+                      <li>Tokenized assets may have issuer, custody, transfer, and jurisdiction restrictions.</li>
+                    </ul>
+                    <label className="experimental-risk-check">
+                      <input
+                        type="checkbox"
+                        checked={rebalanceRiskAccepted}
+                        onChange={(event) => setRebalanceRiskAccepted(event.target.checked)}
+                      />
+                      <span>I understand that execution is non-atomic and may stop after partial completion.</span>
+                    </label>
+                    <div className="inline wrap-actions">
+                      <Button disabled={!rebalanceRiskAccepted} onClick={() => void setRebalanceAddon(true)}>
+                        Enable rebalancer
+                      </Button>
+                      <Button
+                        tone="secondary"
+                        onClick={() => {
+                          setRebalanceEnablePrompt(false);
+                          setRebalanceRiskAccepted(false);
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
             <label className="incident-toggle compact-settings-toggle">
               <input
                 type="checkbox"
