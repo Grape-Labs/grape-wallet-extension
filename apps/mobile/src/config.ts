@@ -236,6 +236,44 @@ export async function fetchMobileJupiterPrices(ids: string[]) {
   );
 }
 
+export type MobileJupiterToken = {
+  id: string;
+  name: string;
+  symbol: string;
+  decimals: number;
+  logoURI?: string;
+  tokenProgram?: string;
+  isVerified?: boolean;
+  tags?: string[];
+  usdPrice?: number;
+};
+
+export async function searchMobileJupiterTokens(query: string): Promise<MobileJupiterToken[]> {
+  const normalized = query.trim();
+  if (normalized.length < 2) return [];
+  const apiKey = getMobileJupiterApiKey();
+  const baseUrl = apiKey ? 'https://api.jup.ag' : 'https://lite-api.jup.ag';
+  const version = apiKey ? 'v2' : 'v1';
+  const response = await fetch(
+    `${baseUrl}/tokens/${version}/search?query=${encodeURIComponent(normalized)}`,
+    { headers: apiKey ? { 'x-api-key': apiKey } : undefined }
+  );
+  if (!response.ok) throw new Error(`Jupiter token search failed with ${response.status}.`);
+  const payload = await response.json();
+  if (!Array.isArray(payload)) return [];
+  return payload
+    .map((token: MobileJupiterToken & { address?: string }) => ({
+      ...token,
+      id: token.id?.trim() || token.address?.trim() || ''
+    }))
+    .filter((token: MobileJupiterToken) => token.id && token.symbol && Number.isInteger(token.decimals));
+}
+
+export async function fetchMobileJupiterStocks(): Promise<MobileJupiterToken[]> {
+  const tokens = await searchMobileJupiterTokens('xStock');
+  return tokens.filter((token) => token.tags?.includes('stocks') || token.tags?.includes('xstocks'));
+}
+
 export type MobileJupiterQuoteResponse = {
   inputMint: string;
   inAmount: string;

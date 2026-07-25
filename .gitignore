@@ -4,7 +4,7 @@ dist
 coverage
 *.tsbuildinfo
 .expo/
-android/
+/android/
 .env
 .env.local
 .env.*.local

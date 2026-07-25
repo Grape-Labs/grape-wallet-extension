@@ -27,6 +27,7 @@ import {
   Plus,
   QrCode,
   RefreshCcw,
+  Search,
   SendHorizontal,
   Settings,
   ShieldAlert,
@@ -1271,13 +1272,14 @@ function PopupPage() {
   const [swapSelectedRouteId, setSwapSelectedRouteId] = useState<string | null>(null);
   const [swapResult, setSwapResult] = useState<WalletSwapExecuteResponse | null>(null);
   const [swapError, setSwapError] = useState<string | null>(null);
+  const [swapInputSearch, setSwapInputSearch] = useState('');
   const [swapStockSearch, setSwapStockSearch] = useState('');
-  const [swapDiscoveryMode, setSwapDiscoveryMode] = useState<'tokens' | 'stocks'>('tokens');
   const [swapTokenSearchResults, setSwapTokenSearchResults] = useState<RebalanceAsset[]>([]);
   const [swapDiscoverySearching, setSwapDiscoverySearching] = useState(false);
   const [quotingSwap, setQuotingSwap] = useState(false);
   const [submittingSwap, setSubmittingSwap] = useState(false);
   const [rebalanceSelectedMints, setRebalanceSelectedMints] = useState<Set<string>>(new Set());
+  const [rebalanceTargetWeights, setRebalanceTargetWeights] = useState<Record<string, string>>({});
   const [rebalanceAddonEnabled, setRebalanceAddonEnabled] = useState(false);
   const [rebalanceAddonLoaded, setRebalanceAddonLoaded] = useState(false);
   const [rebalanceEnablePrompt, setRebalanceEnablePrompt] = useState(false);
@@ -2374,6 +2376,25 @@ function PopupPage() {
     .filter((asset) => asset.mint === REBALANCE_STABLE_MINT || rebalanceSelectedMints.has(asset.mint))
     .reduce((sum, asset) => sum + asset.valueUsd, 0);
   const rebalanceUnlinkedValueUsd = Math.max(0, (assets.totalUsdValue ?? 0) - rebalanceLinkedValueUsd);
+  const rebalanceTargetTotal = [REBALANCE_STABLE_MINT, ...rebalanceSelectedMints]
+    .reduce((sum, mint) => sum + (Number(rebalanceTargetWeights[mint]) || 0), 0);
+
+  function equalRebalanceWeights(mints: Iterable<string>) {
+    const keys = [REBALANCE_STABLE_MINT, ...Array.from(mints).filter((mint) => mint !== REBALANCE_STABLE_MINT)];
+    const base = Math.floor((100 / keys.length) * 100) / 100;
+    return Object.fromEntries(keys.map((mint, index) => [
+      mint,
+      (index === keys.length - 1 ? 100 - base * (keys.length - 1) : base).toFixed(2)
+    ]));
+  }
+
+  function applyRebalanceSelection(mints: Iterable<string>) {
+    const next = new Set(Array.from(mints).filter((mint) => mint !== REBALANCE_STABLE_MINT));
+    setRebalanceSelectedMints(next);
+    setRebalanceTargetWeights(equalRebalanceWeights(next));
+    setRebalancePlan([]);
+    setRebalanceError(null);
+  }
 
   useEffect(() => {
     if (rebalanceSelectedMints.size > 0 || rebalanceAssets.length === 0) return;
@@ -2381,7 +2402,7 @@ function PopupPage() {
       .filter((asset) => asset.mint !== REBALANCE_STABLE_MINT)
       .slice(0, 3)
       .map((asset) => asset.mint);
-    setRebalanceSelectedMints(new Set(initial));
+    applyRebalanceSelection(initial);
   }, [rebalanceAssets, rebalanceSelectedMints.size]);
 
   useEffect(() => {
@@ -2431,7 +2452,9 @@ function PopupPage() {
       setSwapDiscoverySearching(true);
       void searchJupiterTokens(query)
         .then(async (tokens) => {
+          const isMintQuery = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(query);
           const eligible = tokens.filter((token) =>
+            isMintQuery ||
             token.isVerified === true ||
             token.tags?.includes('verified') ||
             token.tags?.includes('moonshot-verified') ||
@@ -2458,13 +2481,13 @@ function PopupPage() {
               programId: token.tokenProgram ?? (isStock ? TOKEN_2022_PROGRAM_ID : 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA')
             }
           } satisfies RebalanceAsset);
-          }).filter((asset) => asset.priceUsd > 0);
+          }).filter((asset) => isMintQuery || asset.priceUsd > 0);
           const stocks = discovered.filter((asset) => asset.assetClass === 'stock');
           setRebalanceStockCatalog((current) => [
             ...current,
             ...stocks.filter((asset) => !current.some((entry) => entry.mint === asset.mint))
           ]);
-          setSwapTokenSearchResults(discovered.filter((asset) => asset.assetClass === 'crypto'));
+          setSwapTokenSearchResults(discovered);
         })
         .catch(() => setSwapTokenSearchResults([]))
         .finally(() => {
@@ -2673,7 +2696,7 @@ function PopupPage() {
 
   function addRebalanceAsset(asset: RebalanceAsset) {
     setRebalanceAddedAssets((current) => current.some((entry) => entry.mint === asset.mint) ? current : [...current, asset]);
-    setRebalanceSelectedMints((current) => new Set([...current, asset.mint]));
+    applyRebalanceSelection([...rebalanceSelectedMints, asset.mint]);
     setRebalanceAssetQuery('');
     setRebalanceAssetResults([]);
     setRebalancePlan([]);
@@ -2713,13 +2736,17 @@ function PopupPage() {
       setRebalanceError('No priced portfolio value is available to rebalance.');
       return;
     }
-    // USDC is always one equal-weight bucket and the settlement asset for every leg.
-    const targetValueUsd = totalValueUsd / selected.length;
-    const targetWeightPct = 100 / selected.length;
+    if (Math.abs(rebalanceTargetTotal - 100) > 0.01) {
+      setRebalancePlan([]);
+      setRebalanceError(`Target allocations must total 100%. They currently total ${rebalanceTargetTotal.toFixed(2)}%.`);
+      return;
+    }
     const sells: RebalanceLeg[] = [];
     const buys: RebalanceLeg[] = [];
     for (const asset of selected) {
       if (asset.mint === REBALANCE_STABLE_MINT) continue;
+      const targetWeightPct = Number(rebalanceTargetWeights[asset.mint]) || 0;
+      const targetValueUsd = totalValueUsd * targetWeightPct / 100;
       const deltaUsd = asset.valueUsd - targetValueUsd;
       if (Math.abs(deltaUsd) < REBALANCE_MIN_TRADE_USD) continue;
       if (deltaUsd > 0) {
@@ -2739,7 +2766,7 @@ function PopupPage() {
           currentValueUsd: asset.valueUsd,
           targetValueUsd,
           targetWeightPct,
-          reason: `${asset.symbol} is ${formatUsd(deltaUsd) ?? '$0.00'} above its equal-weight target. Selling the excess moves that value into USDC to fund underweight assets.`
+          reason: `${asset.symbol} is ${formatUsd(deltaUsd) ?? '$0.00'} above its ${targetWeightPct.toFixed(2)}% target. Selling the excess moves that value into USDC to fund underweight assets.`
         });
       } else {
         // Leave a small USDC buffer for quote movement, slippage and rounding between sequential legs.
@@ -2755,7 +2782,7 @@ function PopupPage() {
           currentValueUsd: asset.valueUsd,
           targetValueUsd,
           targetWeightPct,
-          reason: `${asset.symbol} is ${formatUsd(-deltaUsd) ?? '$0.00'} below its equal-weight target. USDC closes most of the gap while leaving a small execution buffer.`
+          reason: `${asset.symbol} is ${formatUsd(-deltaUsd) ?? '$0.00'} below its ${targetWeightPct.toFixed(2)}% target. USDC closes most of the gap while leaving a small execution buffer.`
         });
       }
     }
@@ -5133,7 +5160,7 @@ function PopupPage() {
                       <StatusPill tone="warning">Experimental</StatusPill>
                     </div>
                     <p className="muted governance-panel-description">
-                      Equal-weight selected assets through USDC with fresh Jupiter quotes.
+                      Build a custom allocation and rebalance through USDC with fresh Jupiter quotes.
                     </p>
                   </div>
                   <div className={`rebalance-stable-badge ${rebalanceStableValueUsd >= 1 ? 'ready' : 'needed'}`}>
@@ -5216,8 +5243,7 @@ function PopupPage() {
                     className="rebalance-filter-chip"
                     disabled={rebalanceExecuting}
                     onClick={() => {
-                      setRebalanceSelectedMints(new Set(rebalanceAssets.filter((asset) => asset.assetClass !== 'stablecoin').map((asset) => asset.mint)));
-                      setRebalancePlan([]);
+                      applyRebalanceSelection(rebalanceAssets.filter((asset) => asset.assetClass !== 'stablecoin').map((asset) => asset.mint));
                     }}
                   >
                     All
@@ -5227,8 +5253,7 @@ function PopupPage() {
                     className="rebalance-filter-chip"
                     disabled={rebalanceExecuting}
                     onClick={() => {
-                      setRebalanceSelectedMints(new Set(rebalanceAssets.filter((asset) => asset.assetClass === 'crypto').map((asset) => asset.mint)));
-                      setRebalancePlan([]);
+                      applyRebalanceSelection(rebalanceAssets.filter((asset) => asset.assetClass === 'crypto').map((asset) => asset.mint));
                     }}
                   >
                     Crypto
@@ -5238,47 +5263,80 @@ function PopupPage() {
                     className="rebalance-filter-chip"
                     disabled={rebalanceExecuting || rebalanceStockCount === 0}
                     onClick={() => {
-                      setRebalanceSelectedMints(new Set(rebalanceAssets.filter((asset) => asset.assetClass === 'stock').map((asset) => asset.mint)));
-                      setRebalancePlan([]);
+                      applyRebalanceSelection(rebalanceAssets.filter((asset) => asset.assetClass === 'stock').map((asset) => asset.mint));
                     }}
                   >
                     Stocks {rebalanceStockCount > 0 ? rebalanceStockCount : ''}
                   </button>
                 </div>
 
+                <div className="rebalance-allocation-bar">
+                  <span>
+                    <strong>Target allocation</strong>
+                    <small className={Math.abs(rebalanceTargetTotal - 100) <= 0.01 ? 'success-text' : 'warning-text'}>
+                      {rebalanceTargetTotal.toFixed(2)}% of 100%
+                    </small>
+                  </span>
+                  <Button tone="secondary" disabled={rebalanceExecuting} onClick={() => setRebalanceTargetWeights(equalRebalanceWeights(rebalanceSelectedMints))}>
+                    Equalize
+                  </Button>
+                </div>
+
                 <div className="rebalance-assets" role="group" aria-label="Assets to rebalance">
                   <div className="rebalance-asset-row rebalance-asset-row-fixed">
                     <span className="rebalance-asset-check"><Check size={14} /></span>
-                    <span><strong>USDC</strong><small>Settlement · always included</small></span>
-                    <strong>{formatUsd(rebalanceStableValueUsd) ?? '$0.00'}</strong>
+                    <span><strong>USDC</strong><small>Settlement · {formatUsd(rebalanceStableValueUsd) ?? '$0.00'} current</small></span>
+                    <label className="rebalance-weight-field">
+                      <Input
+                        inputMode="decimal"
+                        value={rebalanceTargetWeights[REBALANCE_STABLE_MINT] ?? ''}
+                        disabled={rebalanceExecuting}
+                        aria-label="USDC target percentage"
+                        onChange={(event) => {
+                          setRebalanceTargetWeights((current) => ({ ...current, [REBALANCE_STABLE_MINT]: event.target.value.replace(/[^\d.]/g, '').slice(0, 6) }));
+                          setRebalancePlan([]);
+                        }}
+                      />
+                      <span>%</span>
+                    </label>
                   </div>
                   {rebalanceAssets.filter((asset) => asset.mint !== REBALANCE_STABLE_MINT).map((asset) => {
                     const selected = rebalanceSelectedMints.has(asset.mint);
                     return (
-                      <label key={asset.mint} className={`rebalance-asset-row ${selected ? 'selected' : ''}`}>
+                      <div key={asset.mint} className={`rebalance-asset-row ${selected ? 'selected' : ''}`}>
                         <input
                           type="checkbox"
                           checked={selected}
                           disabled={rebalanceExecuting}
                           onChange={() => {
-                            setRebalanceSelectedMints((current) => {
-                              const next = new Set(current);
-                              if (next.has(asset.mint)) next.delete(asset.mint); else next.add(asset.mint);
-                              return next;
-                            });
-                            setRebalancePlan([]);
-                            setRebalanceError(null);
+                            const next = new Set(rebalanceSelectedMints);
+                            if (next.has(asset.mint)) next.delete(asset.mint); else next.add(asset.mint);
+                            applyRebalanceSelection(next);
                           }}
                         />
                         <span>
                           <strong>{asset.symbol}</strong>
                           <small>
                             {asset.assetClass === 'stock' ? 'Tokenized stock · ' : 'Crypto · '}
-                            {asset.amountUi.toLocaleString(undefined, { maximumFractionDigits: 6 })}
+                            {formatUsd(asset.valueUsd) ?? '$0.00'} current
                           </small>
                         </span>
-                        <strong>{formatUsd(asset.valueUsd) ?? '$0.00'}</strong>
-                      </label>
+                        {selected ? (
+                          <label className="rebalance-weight-field">
+                            <Input
+                              inputMode="decimal"
+                              value={rebalanceTargetWeights[asset.mint] ?? ''}
+                              disabled={rebalanceExecuting}
+                              aria-label={`${asset.symbol} target percentage`}
+                              onChange={(event) => {
+                                setRebalanceTargetWeights((current) => ({ ...current, [asset.mint]: event.target.value.replace(/[^\d.]/g, '').slice(0, 6) }));
+                                setRebalancePlan([]);
+                              }}
+                            />
+                            <span>%</span>
+                          </label>
+                        ) : <strong>{formatUsd(asset.valueUsd) ?? '$0.00'}</strong>}
+                      </div>
                     );
                   })}
                 </div>
@@ -5318,7 +5376,7 @@ function PopupPage() {
                     <div className="rebalance-plan-explanation">
                       <strong>Why these swaps?</strong>
                       <span>
-                        This basket targets about {rebalancePlan[0].targetWeightPct.toFixed(1)}% per selected asset, including USDC. Overweight positions are sold to fund underweight positions.
+                        This plan moves the basket toward your custom target percentages. Overweight positions are sold through USDC to fund underweight positions.
                       </span>
                     </div>
                     {rebalancePlan.map((leg, index) => (
@@ -5339,7 +5397,7 @@ function PopupPage() {
                   </div>
                 ) : null}
                 <div className="governance-vote-actions">
-                  <Button tone="secondary" disabled={rebalanceExecuting || rebalanceAssets.length < 1} onClick={buildRebalancePlan}>
+                  <Button tone="secondary" disabled={rebalanceExecuting || rebalanceAssets.length < 1 || Math.abs(rebalanceTargetTotal - 100) > 0.01} onClick={buildRebalancePlan}>
                     Preview rebalance
                   </Button>
                   {rebalancePlan.length > 0 ? (
@@ -7923,6 +7981,19 @@ function PopupPage() {
       null;
     const quoteOutputValue = activeSwapRoute ? `${activeSwapRoute.outputAmountUi} ${outputAssetSymbol}` : '0';
     const swapPrecisionHint = `${inputAssetSymbol} supports up to ${selectedSwapInputDecimals} decimal place${selectedSwapInputDecimals === 1 ? '' : 's'}.`;
+    const normalizedInputSearch = swapInputSearch.trim().toLowerCase();
+    const filteredSwapInputOptions = assetOptions.filter((option) => {
+      if (!normalizedInputSearch) return true;
+      const mint = option.asset.kind === 'spl-token' ? option.asset.mint : option.id;
+      return `${option.label} ${mint}`.toLowerCase().includes(normalizedInputSearch);
+    });
+    const normalizedOutputSearch = swapStockSearch.trim().toLowerCase();
+    const filteredSwapOutputOptions = swapOutputPickerOptions.filter((option) =>
+      !normalizedOutputSearch || `${option.name} ${option.symbol} ${option.id}`.toLowerCase().includes(normalizedOutputSearch)
+    );
+    const quickSwapOutputOptions = COMMON_SWAP_TOKENS
+      .map((token) => swapOutputPickerOptions.find((option) => option.id === token.mint))
+      .filter((option): option is AssetPickerDisplayOption => Boolean(option));
 
     if (submittingSwap) {
       return (
@@ -8046,10 +8117,19 @@ function PopupPage() {
                     <ChevronDown className="send-select-chevron" size={18} />
                   </button>
                   {swapInputPickerOpen ? (
-                    <div className="send-asset-menu">
-                      <div className="popup-menu-section">Sell asset</div>
+                    <div className="send-asset-menu swap-asset-menu">
+                      <label className="swap-asset-search">
+                        <Search size={17} />
+                        <input
+                          value={swapInputSearch}
+                          onChange={(event) => setSwapInputSearch(event.target.value)}
+                          placeholder="Search your assets by name or address"
+                          autoFocus
+                        />
+                      </label>
+                      <div className="popup-menu-section">Your assets</div>
                       <div className="send-asset-menu-list">
-                        {assetOptions.map((option) => (
+                        {filteredSwapInputOptions.map((option) => (
                           <AssetPickerOptionRow
                             key={option.id}
                             option={option}
@@ -8059,11 +8139,13 @@ function PopupPage() {
                               setSwapInputAssetId(option.id);
                               setSwapAmount((current) => sanitizeDecimalInput(current, getSwapAssetDecimals(option)));
                               setSwapInputPickerOpen(false);
+                              setSwapInputSearch('');
                               setSwapQuote(null);
                               setSwapResult(null);
                             }}
                           />
                         ))}
+                        {filteredSwapInputOptions.length === 0 ? <p className="swap-asset-empty muted">No owned asset matches that search.</p> : null}
                       </div>
                     </div>
                   ) : null}
@@ -8124,10 +8206,38 @@ function PopupPage() {
                     <ChevronDown className="send-select-chevron" size={18} />
                   </button>
                   {swapOutputPickerOpen ? (
-                    <div className="send-asset-menu">
-                      <div className="popup-menu-section">Buy asset</div>
+                    <div className="send-asset-menu swap-asset-menu">
+                      <label className="swap-asset-search">
+                        <Search size={17} />
+                        <input
+                          value={swapStockSearch}
+                          onChange={(event) => setSwapStockSearch(event.target.value)}
+                          placeholder={swapDiscoverySearching ? 'Searching Jupiter…' : 'Search by name or paste address'}
+                          autoFocus
+                        />
+                      </label>
+                      <div className="swap-asset-quick-pills" aria-label="Quick asset choices">
+                        {quickSwapOutputOptions.map((option) => (
+                          <button
+                            key={option.id}
+                            type="button"
+                            className={option.id === effectiveSwapOutputMint && !swapUseCustomOutputMint ? 'active' : ''}
+                            onClick={() => {
+                              setSwapUseCustomOutputMint(false);
+                              setSwapCustomOutputMint('');
+                              setSwapOutputMint(option.id);
+                              setSwapOutputPickerOpen(false);
+                              setSwapStockSearch('');
+                              setSwapQuote(null);
+                            }}
+                          >
+                            <span>{option.symbol.slice(0, 2)}</span>{option.symbol}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="popup-menu-section">{normalizedOutputSearch ? 'Search results' : 'Popular assets'}</div>
                       <div className="send-asset-menu-list">
-                        {swapOutputPickerOptions.map((option) => (
+                        {filteredSwapOutputOptions.slice(0, normalizedOutputSearch ? 30 : 15).map((option) => (
                           <AssetPickerOptionRow
                             key={option.id}
                             option={option}
@@ -8137,43 +8247,17 @@ function PopupPage() {
                               setSwapUseCustomOutputMint(false);
                               setSwapOutputMint(option.id);
                               setSwapOutputPickerOpen(false);
+                              setSwapStockSearch('');
                               setSwapQuote(null);
                               setSwapResult(null);
                             }}
                           />
                         ))}
-                        <button
-                          type="button"
-                          className={`send-asset-option-button ${swapUseCustomOutputMint ? 'active' : ''}`.trim()}
-                          onClick={() => setSwapUseCustomOutputMint(true)}
-                        >
-                          <div className="token-item send-asset-option-row">
-                            <div className="token-leading">
-                              <div className="token-avatar">+</div>
-                              <div className="token-copy">
-                                <strong className="token-name">Custom mint</strong>
-                                <div className="token-subline">
-                                  <span className="token-subtitle">Paste any SPL mint address</span>
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        </button>
+                        {!swapDiscoverySearching && normalizedOutputSearch.length >= 2 && filteredSwapOutputOptions.length === 0 ? (
+                          <p className="swap-asset-empty muted">No Jupiter asset matches that name or address.</p>
+                        ) : null}
                       </div>
-                      {swapUseCustomOutputMint ? (
-                        <div className="swap-custom-mint-shell">
-                          <Input
-                            value={swapCustomOutputMint}
-                            onChange={(event) => {
-                              setSwapCustomOutputMint(event.target.value);
-                              setSwapQuote(null);
-                              setSwapResult(null);
-                            }}
-                            placeholder="Paste custom mint address"
-                            className="swap-custom-mint-input"
-                          />
-                        </div>
-                      ) : null}
+                      <p className="swap-asset-menu-note muted">Tokenized stocks provide economic exposure without shareholder voting rights. Eligibility varies by jurisdiction.</p>
                     </div>
                   ) : null}
                 </div>
@@ -8184,63 +8268,6 @@ function PopupPage() {
               </div>
             </section>
           </div>
-
-          <section className="swap-stock-discovery">
-            <div className="swap-stock-discovery-header">
-              <div>
-                <strong>Discover assets</strong>
-                <small>Search verified tokens, stocks, and ETFs through Jupiter</small>
-              </div>
-              <div className="swap-discovery-tabs">
-                <button type="button" className={swapDiscoveryMode === 'tokens' ? 'active' : ''} onClick={() => setSwapDiscoveryMode('tokens')}>Tokens</button>
-                <button type="button" className={swapDiscoveryMode === 'stocks' ? 'active' : ''} onClick={() => setSwapDiscoveryMode('stocks')}>Stocks</button>
-              </div>
-            </div>
-            <Input
-              value={swapStockSearch}
-              placeholder={
-                swapDiscoverySearching
-                  ? 'Searching Jupiter…'
-                  : swapDiscoveryMode === 'stocks'
-                    ? 'Search AAPLx, NVDAx, SPYx…'
-                    : 'Search JUP, BONK, USDC, or mint…'
-              }
-              onChange={(event) => setSwapStockSearch(event.target.value)}
-            />
-            <div className="swap-stock-results">
-              {(swapDiscoveryMode === 'stocks'
-                ? rebalanceStockCatalog.filter((asset) => !swapStockSearch.trim() || asset.symbol.toLowerCase().includes(swapStockSearch.trim().toLowerCase()))
-                : swapStockSearch.trim().length >= 2
-                  ? swapTokenSearchResults
-                  : rebalanceAssets.filter((asset) => asset.assetClass === 'crypto'))
-                .slice(0, 10)
-                .map((asset) => (
-                  <button
-                    key={asset.mint}
-                    type="button"
-                    className={effectiveSwapOutputMint === asset.mint && !swapUseCustomOutputMint ? 'active' : ''}
-                    onClick={() => {
-                      setSwapUseCustomOutputMint(false);
-                      setSwapCustomOutputMint('');
-                      setSwapOutputMint(asset.mint);
-                      setSwapQuote(null);
-                      setSwapResult(null);
-                    }}
-                  >
-                    <span className="rebalance-stock-symbol">{asset.symbol.slice(0, 2)}</span>
-                    <span><strong>{asset.symbol}</strong><small>{formatUsd(asset.priceUsd) ?? 'Unpriced'}</small></span>
-                  </button>
-                ))}
-              {!swapDiscoverySearching && swapStockSearch.trim().length >= 2 && (
-                swapDiscoveryMode === 'stocks'
-                  ? !rebalanceStockCatalog.some((stock) => stock.symbol.toLowerCase().includes(swapStockSearch.trim().toLowerCase()))
-                  : swapTokenSearchResults.length === 0
-              ) ? <span className="swap-stock-empty muted">No verified {swapDiscoveryMode === 'stocks' ? 'stock' : 'token'} match yet.</span> : null}
-            </div>
-            {swapDiscoveryMode === 'stocks' ? (
-              <p className="swap-stock-disclosure muted">Tokenized stocks provide economic exposure and do not include shareholder voting rights. Eligibility varies by jurisdiction.</p>
-            ) : null}
-          </section>
 
           <div className="swap-settings-row">
             <label className="swap-slippage-chip">

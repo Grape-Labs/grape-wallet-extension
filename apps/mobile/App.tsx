@@ -88,8 +88,14 @@ import {
   unlockMobileWalletState,
   validateMobileWalletCredential
 } from './src/wallet';
-import type { MobileBridgeQuoteSummary } from './src/config';
-import { getMobileSupportedBridgeDestinations } from './src/config';
+import type { MobileBridgeQuoteSummary, MobileJupiterToken } from './src/config';
+import {
+  fetchMobileJupiterPrices,
+  fetchMobileJupiterStocks,
+  getMobileSupportedBridgeDestinations,
+  MOBILE_JUPITER_SOL_MINT,
+  searchMobileJupiterTokens
+} from './src/config';
 import type {
   MobileGovernanceEligibleDao,
   MobileGovernanceResponse,
@@ -140,12 +146,64 @@ type DiscoverApproval = {
   rememberOrigin: boolean;
 };
 
+type MobileRebalanceLeg = {
+  id: string;
+  side: 'sell' | 'buy';
+  asset: MobileAsset;
+  inputAsset: MobileAsset;
+  outputAsset: MobileAsset;
+  amount: string;
+  valueUsd: number;
+  currentValueUsd: number;
+  targetValueUsd: number;
+  targetWeightPct: number;
+  reason: string;
+};
+
 const GRAPE_DISCOVER_DEFAULT_URL = 'https://governance.so';
 const OG_REPUTATION_DISCOVERY_URL = 'https://vine.governance.so';
 const SOLANA_SEND_FEE_RESERVE_SOL = 0.00001;
 const SOLANA_TOKEN_SEND_RESERVE_SOL = 0.0021;
 const MOBILE_SWAP_SLIPPAGE_BPS = 50;
+const MOBILE_REBALANCE_STABLE_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+const MOBILE_POPULAR_SWAP_SYMBOLS = ['USDC', 'USDT', 'SOL', 'JUP', 'BONK'] as const;
 const PASSKEY_WALLET_CREATION_ENABLED = false;
+
+function mobileJupiterTokenToAsset(
+  token: MobileJupiterToken,
+  priceUsd: number | null = token.usdPrice ?? null
+): MobileAsset {
+  const stock = token.tags?.includes('stocks') || token.tags?.includes('xstocks');
+  const stablecoin = token.id === MOBILE_REBALANCE_STABLE_MINT || ['USDC', 'USDT'].includes(token.symbol.toUpperCase());
+  return {
+    id: `jupiter:${token.id}`,
+    name: token.name || token.symbol,
+    symbol: token.symbol,
+    amountLabel: 'Not owned',
+    amountUi: 0,
+    valueLabel: priceUsd && priceUsd > 0 ? `$${priceUsd.toLocaleString(undefined, { maximumFractionDigits: 4 })} price` : '',
+    logoUri: token.logoURI,
+    chain: 'solana',
+    address: token.id,
+    decimals: token.decimals,
+    description: stock ? 'Tokenized stock · Jupiter' : 'Jupiter token',
+    tokenType: token.id === MOBILE_JUPITER_SOL_MINT ? 'native' : 'spl',
+    programId: token.tokenProgram,
+    assetClass: stock ? 'stock' : stablecoin ? 'stablecoin' : 'crypto'
+  };
+}
+
+function parseMobileUsdLabel(value: string | undefined) {
+  if (!value) return 0;
+  const parsed = Number(value.replace(/[^0-9.-]/g, ''));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function getMobileAssetPriceUsd(asset: MobileAsset) {
+  const labeled = parseMobileUsdLabel(asset.valueLabel);
+  if (asset.valueLabel.includes('price')) return labeled;
+  return asset.amountUi && asset.amountUi > 0 ? labeled / asset.amountUi : 0;
+}
 const GRAPE_DISCOVER_WALLET_ICON =
   "data:image/png;base64,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";
 const GRAPE_DISCOVER_WALLET_ICON_JS = JSON.stringify(GRAPE_DISCOVER_WALLET_ICON);
@@ -1119,12 +1177,23 @@ export default function App() {
   const [swapInputPickerVisible, setSwapInputPickerVisible] = useState(false);
   const [swapOutputPickerVisible, setSwapOutputPickerVisible] = useState(false);
   const [swapAssetSearch, setSwapAssetSearch] = useState('');
+  const [swapDiscoveredAssets, setSwapDiscoveredAssets] = useState<MobileAsset[]>([]);
+  const [swapDiscoveryLoading, setSwapDiscoveryLoading] = useState(false);
   const [swapAmount, setSwapAmount] = useState('');
   const [swapQuote, setSwapQuote] = useState<MobileSwapQuote | null>(null);
   const [swapSelectedRouteId, setSwapSelectedRouteId] = useState<string | null>(null);
   const [swapQuoteLoading, setSwapQuoteLoading] = useState(false);
   const [swapExecuteLoading, setSwapExecuteLoading] = useState(false);
   const [swapError, setSwapError] = useState<string | null>(null);
+  const [rebalanceScreenVisible, setRebalanceScreenVisible] = useState(false);
+  const [rebalanceAssetSearch, setRebalanceAssetSearch] = useState('');
+  const [rebalanceSelectedMints, setRebalanceSelectedMints] = useState<Set<string>>(new Set());
+  const [rebalanceWeights, setRebalanceWeights] = useState<Record<string, string>>({});
+  const [rebalancePlan, setRebalancePlan] = useState<MobileRebalanceLeg[]>([]);
+  const [rebalanceError, setRebalanceError] = useState<string | null>(null);
+  const [rebalanceExecuting, setRebalanceExecuting] = useState(false);
+  const [rebalanceProgress, setRebalanceProgress] = useState<string | null>(null);
+  const [rebalanceRiskAccepted, setRebalanceRiskAccepted] = useState(false);
   const [bridgeScreenVisible, setBridgeScreenVisible] = useState(false);
   const [bridgeAmount, setBridgeAmount] = useState('');
   const [bridgeToChain, setBridgeToChain] = useState<MobileWalletState['selectedChain']>('ethereum');
@@ -1320,7 +1389,29 @@ export default function App() {
     [remoteActivity, selectedWallet, walletState.activities]
   );
   const headlineAsset = assets[0];
-  const holdingsSummary = assets.length === 0 ? '--' : headlineAsset?.amountLabel ?? '--';
+  const pricedPortfolio = useMemo(() => {
+    const pricedAssets = assets.filter((asset) => /^\s*\$/.test(asset.valueLabel));
+    return {
+      count: pricedAssets.length,
+      totalUsd: pricedAssets.reduce((sum, asset) => sum + parseMobileUsdLabel(asset.valueLabel), 0)
+    };
+  }, [assets]);
+  const holdingsSummary = pricedPortfolio.count > 0
+    ? `${pricedPortfolio.totalUsd.toLocaleString(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDC`
+    : assets.length === 0
+      ? '--'
+      : headlineAsset?.amountLabel ?? '--';
+  const visibleSortedAssets = useMemo(() => {
+    return assets
+      .filter((asset) => !walletState.hideZeroBalances || (asset.amountUi ?? 0) > 0)
+      .sort((left, right) => {
+        const valueDifference = parseMobileUsdLabel(right.valueLabel) - parseMobileUsdLabel(left.valueLabel);
+        if (Math.abs(valueDifference) > 0.000001) return valueDifference;
+        const amountDifference = (right.amountUi ?? 0) - (left.amountUi ?? 0);
+        if (Math.abs(amountDifference) > 0.000001) return amountDifference;
+        return left.symbol.localeCompare(right.symbol);
+      });
+  }, [assets, walletState.hideZeroBalances]);
   const selectedAsset = useMemo(
     () => assets.find((asset) => asset.id === selectedAssetId) ?? null,
     [assets, selectedAssetId]
@@ -1391,6 +1482,13 @@ export default function App() {
     () => (selectedWallet?.chain === 'solana' ? assets.filter((asset) => asset.chain === 'solana') : []),
     [assets, selectedWallet?.chain]
   );
+  const swapSelectableAssets = useMemo(() => {
+    const combined = [...swappableAssets, ...swapDiscoveredAssets];
+    return combined.filter((asset, index) => {
+      const key = asset.address ?? asset.id;
+      return combined.findIndex((candidate) => (candidate.address ?? candidate.id) === key) === index;
+    });
+  }, [swapDiscoveredAssets, swappableAssets]);
   const selectedSwapInputAsset = useMemo(() => {
     if (swapInputAssetId) {
       return swappableAssets.find((asset) => asset.id === swapInputAssetId) ?? null;
@@ -1399,8 +1497,8 @@ export default function App() {
     return swappableAssets[0] ?? null;
   }, [swapInputAssetId, swappableAssets]);
   const swapOutputCandidates = useMemo(
-    () => swappableAssets.filter((asset) => asset.id !== selectedSwapInputAsset?.id),
-    [selectedSwapInputAsset?.id, swappableAssets]
+    () => swapSelectableAssets.filter((asset) => (asset.address ?? asset.id) !== (selectedSwapInputAsset?.address ?? selectedSwapInputAsset?.id)),
+    [selectedSwapInputAsset?.address, selectedSwapInputAsset?.id, swapSelectableAssets]
   );
   const selectedSwapOutputAsset = useMemo(() => {
     if (swapOutputAssetId) {
@@ -1419,6 +1517,50 @@ export default function App() {
       [asset.name, asset.symbol, asset.address ?? '', asset.description ?? ''].some((value) => value.toLowerCase().includes(query))
     );
   }, [swapAssetSearch, swappableAssets]);
+  const filteredSwapOutputAssets = useMemo(() => {
+    const query = swapAssetSearch.trim().toLowerCase();
+    return swapOutputCandidates.filter((asset) =>
+      !query || [asset.name, asset.symbol, asset.address ?? '', asset.description ?? ''].some((value) => value.toLowerCase().includes(query))
+    );
+  }, [swapAssetSearch, swapOutputCandidates]);
+  const popularSwapAssets = useMemo(
+    () => MOBILE_POPULAR_SWAP_SYMBOLS
+      .map((symbol) => swapSelectableAssets.find((asset) => asset.symbol.toUpperCase() === symbol))
+      .filter((asset): asset is MobileAsset => Boolean(asset)),
+    [swapSelectableAssets]
+  );
+  const rebalanceAssets = useMemo(
+    () => swapSelectableAssets.filter((asset) =>
+      Boolean(asset.address) &&
+      ((asset.amountUi ?? 0) > 0 ||
+        rebalanceSelectedMints.has(asset.address ?? '') ||
+        (rebalanceAssetSearch.trim().length >= 2 && asset.id.startsWith('jupiter:')))
+    ),
+    [rebalanceAssetSearch, rebalanceSelectedMints, swapSelectableAssets]
+  );
+  const rebalanceStableAsset = useMemo(
+    () => swapSelectableAssets.find((asset) => asset.address === MOBILE_REBALANCE_STABLE_MINT) ??
+      mobileJupiterTokenToAsset({
+        id: MOBILE_REBALANCE_STABLE_MINT,
+        name: 'USD Coin',
+        symbol: 'USDC',
+        decimals: 6,
+        isVerified: true
+      }, 1),
+    [swapSelectableAssets]
+  );
+  const rebalanceWeightTotal = useMemo(
+    () => [MOBILE_REBALANCE_STABLE_MINT, ...rebalanceSelectedMints]
+      .reduce((sum, mint) => sum + (Number(rebalanceWeights[mint]) || 0), 0),
+    [rebalanceSelectedMints, rebalanceWeights]
+  );
+  const filteredRebalanceAssets = useMemo(() => {
+    const query = rebalanceAssetSearch.trim().toLowerCase();
+    return rebalanceAssets.filter((asset) =>
+      asset.address !== MOBILE_REBALANCE_STABLE_MINT &&
+      (!query || [asset.name, asset.symbol, asset.address ?? ''].some((value) => value.toLowerCase().includes(query)))
+    );
+  }, [rebalanceAssetSearch, rebalanceAssets]);
   const bridgeDestinationChains = useMemo(() => {
     if (!selectedWallet || selectedWallet.chain === 'sui') {
       return [] as MobileWalletState['selectedChain'][];
@@ -1477,6 +1619,61 @@ export default function App() {
       setSwapAmount(nextValue);
     }
   }, [selectedSwapInputAsset, swapAmount]);
+
+  useEffect(() => {
+    if ((!swapScreenVisible && !rebalanceScreenVisible) || selectedWallet?.chain !== 'solana' || swapDiscoveredAssets.length > 0) return;
+    let cancelled = false;
+    setSwapDiscoveryLoading(true);
+    void Promise.all([
+      fetchMobileJupiterStocks().catch(() => []),
+      ...MOBILE_POPULAR_SWAP_SYMBOLS.map((symbol) => searchMobileJupiterTokens(symbol).catch(() => []))
+    ])
+      .then(async (groups) => {
+        const tokens = groups.flat().filter((token, index, all) => all.findIndex((candidate) => candidate.id === token.id) === index);
+        const prices: Awaited<ReturnType<typeof fetchMobileJupiterPrices>> =
+          await fetchMobileJupiterPrices(tokens.map((token) => token.id)).catch(() => ({}));
+        if (!cancelled) {
+          setSwapDiscoveredAssets(tokens.map((token) => mobileJupiterTokenToAsset(token, prices[token.id]?.usdPrice ?? null)));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setSwapDiscoveryLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [rebalanceScreenVisible, selectedWallet?.chain, swapDiscoveredAssets.length, swapScreenVisible]);
+
+  useEffect(() => {
+    const query = (swapOutputPickerVisible ? swapAssetSearch : rebalanceAssetSearch).trim();
+    if ((!swapOutputPickerVisible && !rebalanceScreenVisible) || query.length < 2) return;
+    let cancelled = false;
+    const timeout = setTimeout(() => {
+      setSwapDiscoveryLoading(true);
+      void searchMobileJupiterTokens(query)
+        .then(async (tokens) => {
+          const mintQuery = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(query);
+          const eligible = tokens.filter((token) =>
+            mintQuery ||
+            token.isVerified === true ||
+            token.tags?.includes('verified') ||
+            token.tags?.includes('moonshot-verified') ||
+            token.tags?.includes('stocks') ||
+            token.tags?.includes('xstocks')
+          );
+          const prices: Awaited<ReturnType<typeof fetchMobileJupiterPrices>> =
+            await fetchMobileJupiterPrices(eligible.map((token) => token.id)).catch(() => ({}));
+          if (cancelled) return;
+          const next = eligible.map((token) => mobileJupiterTokenToAsset(token, prices[token.id]?.usdPrice ?? null));
+          setSwapDiscoveredAssets((current) => [...current, ...next.filter((asset) => !current.some((entry) => entry.address === asset.address))]);
+        })
+        .finally(() => {
+          if (!cancelled) setSwapDiscoveryLoading(false);
+        });
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(timeout);
+    };
+  }, [rebalanceAssetSearch, rebalanceScreenVisible, swapAssetSearch, swapOutputPickerVisible]);
 
   useEffect(() => {
     let mounted = true;
@@ -3145,6 +3342,13 @@ export default function App() {
     });
   }
 
+  async function handleSetHideZeroBalances(value: boolean) {
+    await saveState({
+      ...walletState,
+      hideZeroBalances: value
+    });
+  }
+
   async function handleSetBiometricEnabled(value: boolean) {
     const nextState: MobileWalletState = {
       ...walletState,
@@ -3948,6 +4152,7 @@ export default function App() {
 
   function openSendScreen(assetId?: string | null) {
     setSwapScreenVisible(false);
+    setRebalanceScreenVisible(false);
     setBridgeScreenVisible(false);
     setSendAssetId(assetId ?? null);
     setSelectedAssetId(null);
@@ -3962,6 +4167,7 @@ export default function App() {
   function openSwapScreen(inputAssetId?: string | null, outputAssetId?: string | null) {
     setSendScreenVisible(false);
     setBridgeScreenVisible(false);
+    setRebalanceScreenVisible(false);
     setSelectedAssetId(null);
     setSwapInputAssetId(inputAssetId ?? null);
     setSwapOutputAssetId(outputAssetId ?? null);
@@ -3975,9 +4181,184 @@ export default function App() {
     setSwapScreenVisible(true);
   }
 
+  function makeEqualRebalanceWeights(mints: Iterable<string>) {
+    const keys = [MOBILE_REBALANCE_STABLE_MINT, ...Array.from(mints).filter((mint) => mint !== MOBILE_REBALANCE_STABLE_MINT)];
+    const base = Math.floor((100 / keys.length) * 100) / 100;
+    return Object.fromEntries(keys.map((mint, index) => [
+      mint,
+      (index === keys.length - 1 ? 100 - base * (keys.length - 1) : base).toFixed(2)
+    ]));
+  }
+
+  function applyMobileRebalanceSelection(mints: Iterable<string>) {
+    const next = new Set(Array.from(mints).filter((mint) => mint !== MOBILE_REBALANCE_STABLE_MINT));
+    setRebalanceSelectedMints(next);
+    setRebalanceWeights(makeEqualRebalanceWeights(next));
+    setRebalancePlan([]);
+    setRebalanceError(null);
+  }
+
+  function openRebalanceScreen() {
+    if (!rebalanceRiskAccepted) {
+      Alert.alert(
+        'Experimental rebalancer',
+        'A rebalance uses multiple independent on-chain swaps. If a later quote or signature fails, earlier swaps remain final and the portfolio may be partially rebalanced.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'I understand',
+            onPress: () => {
+              setRebalanceRiskAccepted(true);
+              enterRebalanceScreen();
+            }
+          }
+        ]
+      );
+      return;
+    }
+    enterRebalanceScreen();
+  }
+
+  function enterRebalanceScreen() {
+    setSendScreenVisible(false);
+    setSwapScreenVisible(false);
+    setBridgeScreenVisible(false);
+    setSelectedAssetId(null);
+    const initial = assets
+      .filter((asset) => asset.chain === 'solana' && asset.address !== MOBILE_REBALANCE_STABLE_MINT && (asset.amountUi ?? 0) > 0)
+      .slice(0, 3)
+      .map((asset) => asset.address!)
+      .filter(Boolean);
+    if (rebalanceSelectedMints.size === 0) applyMobileRebalanceSelection(initial);
+    setRebalanceAssetSearch('');
+    setRebalancePlan([]);
+    setRebalanceError(null);
+    setRebalanceProgress(null);
+    setRebalanceScreenVisible(true);
+  }
+
+  function buildMobileRebalancePlan() {
+    if (Math.abs(rebalanceWeightTotal - 100) > 0.01) {
+      setRebalanceError(`Target allocations must total 100%. They currently total ${rebalanceWeightTotal.toFixed(2)}%.`);
+      return;
+    }
+    const selected = Array.from(rebalanceSelectedMints)
+      .map((mint) => swapSelectableAssets.find((asset) => asset.address === mint))
+      .filter((asset): asset is MobileAsset => Boolean(asset));
+    if (selected.length === 0) {
+      setRebalanceError('Select at least one asset alongside USDC.');
+      return;
+    }
+    const stableValue = (rebalanceStableAsset.amountUi ?? 0) * getMobileAssetPriceUsd(rebalanceStableAsset);
+    const totalValue = stableValue + selected.reduce((sum, asset) => sum + ((asset.amountUi ?? 0) * getMobileAssetPriceUsd(asset)), 0);
+    if (!(totalValue > 0)) {
+      setRebalanceError('No priced portfolio value is available to rebalance.');
+      return;
+    }
+    const sells: MobileRebalanceLeg[] = [];
+    const buys: MobileRebalanceLeg[] = [];
+    for (const asset of selected) {
+      const price = getMobileAssetPriceUsd(asset);
+      if (!(price > 0)) continue;
+      const currentValueUsd = (asset.amountUi ?? 0) * price;
+      const targetWeightPct = Number(rebalanceWeights[asset.address ?? '']) || 0;
+      const targetValueUsd = totalValue * targetWeightPct / 100;
+      const delta = currentValueUsd - targetValueUsd;
+      if (Math.abs(delta) < 1) continue;
+      if (delta > 0) {
+        const maxAmount = asset.tokenType === 'native' ? Math.max(0, (asset.amountUi ?? 0) - 0.01) : asset.amountUi ?? 0;
+        const amount = Math.min(delta / price, maxAmount);
+        if (!(amount > 0)) continue;
+        sells.push({
+          id: `sell:${asset.address}`,
+          side: 'sell',
+          asset,
+          inputAsset: asset,
+          outputAsset: rebalanceStableAsset,
+          amount: formatSwapAmountInput(amount, getMobileAssetAmountDecimals(asset)),
+          valueUsd: amount * price,
+          currentValueUsd,
+          targetValueUsd,
+          targetWeightPct,
+          reason: `${asset.symbol} is $${delta.toFixed(2)} above its ${targetWeightPct.toFixed(2)}% target.`
+        });
+      } else {
+        const valueUsd = -delta * 0.99;
+        buys.push({
+          id: `buy:${asset.address}`,
+          side: 'buy',
+          asset,
+          inputAsset: rebalanceStableAsset,
+          outputAsset: asset,
+          amount: valueUsd.toFixed(6),
+          valueUsd,
+          currentValueUsd,
+          targetValueUsd,
+          targetWeightPct,
+          reason: `${asset.symbol} is $${(-delta).toFixed(2)} below its ${targetWeightPct.toFixed(2)}% target.`
+        });
+      }
+    }
+    const next = [...sells, ...buys];
+    const availableUsdc = stableValue + sells.reduce((sum, leg) => sum + leg.valueUsd, 0);
+    const requiredUsdc = buys.reduce((sum, leg) => sum + leg.valueUsd, 0);
+    if (requiredUsdc > availableUsdc + 0.01) {
+      setRebalancePlan([]);
+      setRebalanceError('This plan needs more USDC than the wallet and planned sales can provide. Add USDC or reduce underweight targets.');
+      return;
+    }
+    setRebalancePlan(next);
+    setRebalanceError(next.length > 0 ? null : 'This basket is already within the $1 rebalance threshold.');
+  }
+
+  async function executeMobileRebalance() {
+    if (!selectedWallet || rebalancePlan.length === 0) return;
+    setRebalanceExecuting(true);
+    setRebalanceError(null);
+    const activities: MobileActivity[] = [];
+    try {
+      for (let index = 0; index < rebalancePlan.length; index += 1) {
+        const leg = rebalancePlan[index];
+        setRebalanceProgress(`Executing swap ${index + 1} of ${rebalancePlan.length}: ${leg.side} ${leg.asset.symbol}`);
+        const quote = await getWalletSwapQuote({
+          wallet: selectedWallet,
+          inputAsset: leg.inputAsset,
+          outputAsset: leg.outputAsset,
+          amount: leg.amount,
+          slippageBps: MOBILE_SWAP_SLIPPAGE_BPS
+        });
+        const route = quote.routes[0];
+        if (!route) throw new Error(`No Jupiter route is available for ${leg.asset.symbol}.`);
+        const result = await executeWalletSwap({ wallet: selectedWallet, quoteResponse: route.quoteResponse });
+        activities.push(createSwapActivity({
+          wallet: selectedWallet,
+          inputAsset: leg.inputAsset,
+          outputAsset: leg.outputAsset,
+          inputAmountLabel: `${result.inputAmountUi} ${leg.inputAsset.symbol}`,
+          outputAmountLabel: `${result.outputAmountUi} ${leg.outputAsset.symbol}`,
+          signature: result.signature
+        }));
+      }
+      await saveState({ ...walletState, activities: [...activities.reverse(), ...walletState.activities].slice(0, 100) });
+      setRebalanceProgress(`Rebalance complete · ${rebalancePlan.length} swaps confirmed`);
+      setRebalancePlan([]);
+      const [nextAssets, nextActivity] = await Promise.all([
+        loadWalletAssets(selectedWallet),
+        loadWalletActivity(selectedWallet).catch(() => [])
+      ]);
+      setAssets(nextAssets);
+      setRemoteActivity(nextActivity);
+    } catch (unknownError) {
+      setRebalanceError(unknownError instanceof Error ? unknownError.message : 'Rebalance execution stopped.');
+    } finally {
+      setRebalanceExecuting(false);
+    }
+  }
+
   function openBridgeScreen() {
     setSendScreenVisible(false);
     setSwapScreenVisible(false);
+    setRebalanceScreenVisible(false);
     setSelectedAssetId(null);
     setBridgeAmount('');
     setBridgeQuote(null);
@@ -4903,7 +5284,7 @@ export default function App() {
 
           <View style={styles.balanceBlock}>
             <View style={styles.balanceHeaderRow}>
-              <Text style={styles.cardLabel}>Holdings</Text>
+              <Text style={styles.cardLabel}>{pricedPortfolio.count > 0 ? 'Portfolio value' : 'Holdings'}</Text>
               <Pressable
                 style={[styles.privacyToggleButton, walletState.privacyMode ? styles.privacyToggleButtonActive : null]}
                 onPress={() => void handleSetPrivacyMode(!walletState.privacyMode)}
@@ -4914,7 +5295,11 @@ export default function App() {
               </Pressable>
             </View>
             <Text style={styles.cardBalance}>{maskValue(holdingsSummary, walletState.privacyMode)}</Text>
-            <Text style={styles.cardSubtle}>{assets.length} asset{assets.length === 1 ? '' : 's'} in this wallet</Text>
+            <Text style={styles.cardSubtle}>
+              {pricedPortfolio.count > 0
+                ? `Estimated USDC value · ${pricedPortfolio.count} priced asset${pricedPortfolio.count === 1 ? '' : 's'}`
+                : `${assets.length} asset${assets.length === 1 ? '' : 's'} in this wallet`}
+            </Text>
           </View>
 
           <View style={styles.quickActionsRow}>
@@ -4945,6 +5330,16 @@ export default function App() {
               <Text style={selectedWallet && bridgeDestinationChains.length > 0 ? styles.quickActionLabel : styles.quickActionLabelMuted}>Bridge</Text>
             </Pressable>
           </View>
+          {selectedWallet?.chain === 'solana' ? (
+            <Pressable style={styles.rebalanceShortcut} onPress={openRebalanceScreen}>
+              <MaterialCommunityIcons name="scale-balance" size={21} color={activeTheme.text} />
+              <View style={styles.rebalanceShortcutCopy}>
+                <Text style={styles.rebalanceShortcutTitle}>Rebalance portfolio</Text>
+                <Text style={styles.rebalanceShortcutHint}>Custom-weight tokens and tokenized stocks through USDC</Text>
+              </View>
+              <Feather name="chevron-right" size={18} color={activeTheme.muted} />
+            </Pressable>
+          ) : null}
         </View>
 
         {renderSolanaCommunityShortcuts()}
@@ -4983,7 +5378,9 @@ export default function App() {
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Assets</Text>
             <Text style={styles.sectionHint}>
-              {assetsLoading ? 'Refreshing' : `${assets.length} asset${assets.length === 1 ? '' : 's'}`}
+              {assetsLoading
+                ? 'Refreshing'
+                : `${visibleSortedAssets.length} asset${visibleSortedAssets.length === 1 ? '' : 's'}${walletState.hideZeroBalances && visibleSortedAssets.length !== assets.length ? ` · ${assets.length - visibleSortedAssets.length} hidden` : ''}`}
             </Text>
           </View>
           <View style={styles.stack}>
@@ -4992,10 +5389,10 @@ export default function App() {
                 <ActivityIndicator color={activeTheme.grape} />
                 <Text style={styles.sectionHint}>Loading holdings...</Text>
               </View>
-            ) : assets.length === 0 ? (
-              <Text style={styles.sectionHint}>No assets found for this wallet.</Text>
+            ) : visibleSortedAssets.length === 0 ? (
+              <Text style={styles.sectionHint}>{walletState.hideZeroBalances && assets.length > 0 ? 'All zero-balance assets are hidden.' : 'No assets found for this wallet.'}</Text>
             ) : (
-              assets.map((asset) => (
+              visibleSortedAssets.map((asset) => (
                 (() => {
                   const assetSubtitle = getAssetSubtitle(asset, selectedChainMeta.label, selectedChainMeta.short);
                   return (
@@ -5688,6 +6085,165 @@ export default function App() {
     );
   }
 
+  function renderRebalanceTab() {
+    const stableCurrentValue = (rebalanceStableAsset.amountUi ?? 0) * getMobileAssetPriceUsd(rebalanceStableAsset);
+    return (
+      <View style={styles.stack}>
+        <View style={styles.sectionCard}>
+          <Pressable style={styles.detailBackRow} onPress={() => setRebalanceScreenVisible(false)}>
+            <Feather name="chevron-left" size={18} color={activeTheme.text} />
+            <Text style={styles.detailBackText}>Back to wallet</Text>
+          </Pressable>
+          <View style={styles.rebalanceMobileTitleRow}>
+            <Text style={styles.sectionTitle}>Portfolio rebalancer</Text>
+            <Text style={styles.rebalanceExperimentalBadge}>EXPERIMENTAL</Text>
+          </View>
+          <Text style={styles.sectionHint}>Set a target percentage for each asset. Overweight positions are sold through USDC before underweight positions are purchased.</Text>
+        </View>
+
+        <View style={[styles.sectionCard, styles.formCard]}>
+          <View style={styles.rebalanceMobileSummary}>
+            <View>
+              <Text style={styles.swapSummaryLabel}>USDC settlement</Text>
+              <Text style={styles.rebalanceMobileValue}>${stableCurrentValue.toFixed(2)}</Text>
+            </View>
+            <View style={styles.rebalanceMobileTotal}>
+              <Text style={styles.swapSummaryLabel}>Target total</Text>
+              <Text style={[styles.rebalanceMobileValue, Math.abs(rebalanceWeightTotal - 100) > 0.01 ? styles.rebalanceMobileWarning : null]}>
+                {rebalanceWeightTotal.toFixed(2)}%
+              </Text>
+            </View>
+          </View>
+          <PaperTextInput
+            value={rebalanceAssetSearch}
+            onChangeText={setRebalanceAssetSearch}
+            placeholder={swapDiscoveryLoading ? 'Searching Jupiter...' : 'Search token, stock, or paste mint'}
+            mode="outlined"
+            style={styles.paperInput}
+            contentStyle={styles.paperInputContent}
+            outlineStyle={styles.paperOutline}
+            textColor={activeTheme.text}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          <View style={styles.rebalanceMobileActions}>
+            <Text style={styles.sectionHint}>{rebalanceSelectedMints.size + 1} assets including USDC</Text>
+            <PaperButton
+              mode="outlined"
+              textColor={activeTheme.text}
+              disabled={rebalanceExecuting}
+              onPress={() => setRebalanceWeights(makeEqualRebalanceWeights(rebalanceSelectedMints))}
+            >
+              Equalize
+            </PaperButton>
+          </View>
+
+          <View style={[styles.rebalanceMobileAssetRow, styles.rebalanceMobileAssetRowActive]}>
+            <Feather name="check" size={18} color={activeTheme.mint} />
+            <View style={styles.rebalanceMobileAssetCopy}>
+              <Text style={styles.assetName}>USDC</Text>
+              <Text style={styles.assetMeta}>Settlement · ${stableCurrentValue.toFixed(2)} current</Text>
+            </View>
+            <View style={styles.rebalanceMobileWeightField}>
+              <TextInput
+                value={rebalanceWeights[MOBILE_REBALANCE_STABLE_MINT] ?? ''}
+                onChangeText={(value) => {
+                  setRebalanceWeights((current) => ({ ...current, [MOBILE_REBALANCE_STABLE_MINT]: value.replace(/[^0-9.]/g, '').slice(0, 6) }));
+                  setRebalancePlan([]);
+                }}
+                keyboardType="decimal-pad"
+                style={styles.rebalanceMobileWeightInput}
+              />
+              <Text style={styles.rebalanceMobilePercent}>%</Text>
+            </View>
+          </View>
+
+          {filteredRebalanceAssets.slice(0, 30).map((asset) => {
+            const mint = asset.address!;
+            const selected = rebalanceSelectedMints.has(mint);
+            const currentValue = (asset.amountUi ?? 0) * getMobileAssetPriceUsd(asset);
+            return (
+              <View key={mint} style={[styles.rebalanceMobileAssetRow, selected ? styles.rebalanceMobileAssetRowActive : null]}>
+                <Pressable
+                  style={[styles.rebalanceMobileCheck, selected ? styles.rebalanceMobileCheckActive : null]}
+                  disabled={rebalanceExecuting}
+                  onPress={() => {
+                    const next = new Set(rebalanceSelectedMints);
+                    if (selected) next.delete(mint); else next.add(mint);
+                    applyMobileRebalanceSelection(next);
+                  }}
+                >
+                  {selected ? <Feather name="check" size={15} color={activeTheme.primaryButtonText} /> : null}
+                </Pressable>
+                <View style={styles.rebalanceMobileAssetCopy}>
+                  <Text style={styles.assetName}>{asset.symbol}</Text>
+                  <Text style={styles.assetMeta}>
+                    {asset.assetClass === 'stock' ? 'Tokenized stock' : 'Crypto'} · ${currentValue.toFixed(2)} current
+                  </Text>
+                </View>
+                {selected ? (
+                  <View style={styles.rebalanceMobileWeightField}>
+                    <TextInput
+                      value={rebalanceWeights[mint] ?? ''}
+                      onChangeText={(value) => {
+                        setRebalanceWeights((current) => ({ ...current, [mint]: value.replace(/[^0-9.]/g, '').slice(0, 6) }));
+                        setRebalancePlan([]);
+                      }}
+                      keyboardType="decimal-pad"
+                      style={styles.rebalanceMobileWeightInput}
+                    />
+                    <Text style={styles.rebalanceMobilePercent}>%</Text>
+                  </View>
+                ) : <Text style={styles.rebalanceMobileAdd}>Add</Text>}
+              </View>
+            );
+          })}
+
+          <Text style={styles.swapStockDisclosure}>Tokenized stocks provide economic exposure without shareholder voting rights. Eligibility varies by jurisdiction.</Text>
+          {rebalanceError ? <View style={styles.inlineErrorCard}><Text style={styles.errorText}>{rebalanceError}</Text></View> : null}
+          {rebalanceProgress ? <Text style={styles.sectionHint}>{rebalanceProgress}</Text> : null}
+          <PaperButton
+            mode="contained"
+            style={styles.paperPrimaryButton}
+            buttonColor={activeTheme.primaryButton}
+            textColor={activeTheme.primaryButtonText}
+            disabled={rebalanceExecuting || Math.abs(rebalanceWeightTotal - 100) > 0.01}
+            onPress={buildMobileRebalancePlan}
+          >
+            Preview rebalance
+          </PaperButton>
+        </View>
+
+        {rebalancePlan.length > 0 ? (
+          <View style={[styles.sectionCard, styles.formCard]}>
+            <Text style={styles.sectionTitle}>Proposed swaps · {rebalancePlan.length}</Text>
+            <Text style={styles.sectionHint}>Each swap is a separate on-chain transaction. Execution stops if a quote or signature fails.</Text>
+            {rebalancePlan.map((leg, index) => (
+              <View key={leg.id} style={styles.rebalanceMobileLeg}>
+                <View style={styles.rebalanceMobileLegIndex}><Text style={styles.rebalanceMobileLegIndexText}>{index + 1}</Text></View>
+                <View style={styles.rebalanceMobileAssetCopy}>
+                  <Text style={styles.assetName}>{leg.side === 'sell' ? 'Sell' : 'Buy'} {leg.asset.symbol}</Text>
+                  <Text style={styles.assetMeta}>{leg.amount} {leg.inputAsset.symbol} · about ${leg.valueUsd.toFixed(2)}</Text>
+                  <Text style={styles.rebalanceMobileReason}>{leg.reason}</Text>
+                </View>
+              </View>
+            ))}
+            <PaperButton
+              mode="contained"
+              style={styles.paperPrimaryButton}
+              buttonColor={activeTheme.primaryButton}
+              textColor={activeTheme.primaryButtonText}
+              disabled={rebalanceExecuting}
+              onPress={() => void executeMobileRebalance()}
+            >
+              {rebalanceExecuting ? 'Rebalancing...' : `Execute ${rebalancePlan.length} swaps`}
+            </PaperButton>
+          </View>
+        ) : null}
+      </View>
+    );
+  }
+
   function renderBridgeTab() {
     const routeOptions = (bridgeQuote?.routes ?? []).map((route) => ({
       id: route.id,
@@ -5975,6 +6531,18 @@ export default function App() {
                 onValueChange={(value) => void handleSetPrivacyMode(value)}
                 trackColor={{ true: activeTheme.primaryButton, false: 'rgba(255,255,255,0.16)' }}
                 thumbColor={walletState.privacyMode ? '#f7f2ff' : '#d0c0df'}
+              />
+            </View>
+            <View style={styles.settingsRow}>
+              <View style={styles.settingsCopy}>
+                <Text style={styles.settingsTitle}>Hide zero balances</Text>
+                <Text style={styles.sectionHint}>Remove empty token accounts from the holdings list.</Text>
+              </View>
+              <Switch
+                value={walletState.hideZeroBalances}
+                onValueChange={(value) => void handleSetHideZeroBalances(value)}
+                trackColor={{ true: activeTheme.primaryButton, false: 'rgba(255,255,255,0.16)' }}
+                thumbColor={walletState.hideZeroBalances ? '#f7f2ff' : '#d0c0df'}
               />
             </View>
             <View style={styles.settingsRow}>
@@ -6822,7 +7390,7 @@ export default function App() {
             styles.mainContent,
             {
               paddingHorizontal: mainTab === 'discover' ? 0 : screenPadding,
-              paddingBottom: mainTab === 'discover' ? 0 : sendScreenVisible || swapScreenVisible || bridgeScreenVisible ? 220 : 140,
+              paddingBottom: mainTab === 'discover' ? 0 : sendScreenVisible || swapScreenVisible || rebalanceScreenVisible || bridgeScreenVisible ? 220 : 140,
               flexGrow: mainTab === 'discover' ? 1 : undefined
             }
           ]}
@@ -6860,6 +7428,8 @@ export default function App() {
               ? renderSendTab()
               : swapScreenVisible
                 ? renderSwapTab()
+                : rebalanceScreenVisible
+                  ? renderRebalanceTab()
                 : bridgeScreenVisible
                   ? renderBridgeTab()
                   : mainTab === 'home'
@@ -6877,7 +7447,7 @@ export default function App() {
         </ScrollView>
         </KeyboardAvoidingView>
 
-        {sendScreenVisible || swapScreenVisible || bridgeScreenVisible ? null : (
+        {sendScreenVisible || swapScreenVisible || rebalanceScreenVisible || bridgeScreenVisible ? null : (
         <View style={[styles.footerShell, { left: footerInset, right: footerInset, bottom: footerInset - 2 }]}>
           <Pressable
             style={[styles.footerButton, mainTab === 'home' ? styles.footerButtonActive : null]}
@@ -7264,12 +7834,12 @@ export default function App() {
           >
             <View style={styles.sendAssetPickerHeader}>
               <Text style={styles.sectionTitle}>Swap to</Text>
-              <Text style={styles.sectionHint}>{swapOutputCandidates.length} available in this wallet</Text>
+              <Text style={styles.sectionHint}>Search Jupiter tokens, stocks, ETFs, or paste a mint</Text>
             </View>
             <PaperTextInput
               value={swapAssetSearch}
               onChangeText={setSwapAssetSearch}
-              placeholder="Search by name, symbol, or address"
+              placeholder={swapDiscoveryLoading ? 'Searching Jupiter...' : 'Search by name or paste address'}
               mode="outlined"
               style={styles.paperInput}
               contentStyle={styles.paperInputContent}
@@ -7278,13 +7848,32 @@ export default function App() {
               autoCapitalize="none"
               autoCorrect={false}
             />
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.swapPopularPills}>
+              {popularSwapAssets.map((asset) => (
+                <Pressable
+                  key={asset.address ?? asset.id}
+                  style={[styles.swapPopularPill, selectedSwapOutputAsset?.address === asset.address ? styles.swapPopularPillActive : null]}
+                  onPress={() => {
+                    setSwapOutputAssetId(asset.id);
+                    setSwapQuote(null);
+                    setSwapSelectedRouteId(null);
+                    setSwapOutputPickerVisible(false);
+                    setSwapAssetSearch('');
+                  }}
+                >
+                  {asset.logoUri ? <Image source={{ uri: asset.logoUri }} style={styles.swapPopularPillImage} /> : null}
+                  <Text style={styles.swapPopularPillText}>{asset.symbol}</Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+            <Text style={styles.swapPickerSectionLabel}>{swapAssetSearch.trim() ? 'SEARCH RESULTS' : 'POPULAR ASSETS'}</Text>
             <ScrollView style={styles.sendAssetPickerList} keyboardShouldPersistTaps="handled">
               <View style={styles.stack}>
-                {filteredSwapAssets.filter((asset) => asset.id !== selectedSwapInputAsset?.id).length === 0 ? (
-                  <Text style={styles.sectionHint}>No output assets match your search.</Text>
+                {filteredSwapOutputAssets.length === 0 ? (
+                  <Text style={styles.sectionHint}>{swapDiscoveryLoading ? 'Searching Jupiter...' : 'No output assets match your search.'}</Text>
                 ) : (
-                  filteredSwapAssets
-                    .filter((asset) => asset.id !== selectedSwapInputAsset?.id)
+                  filteredSwapOutputAssets
+                    .slice(0, 30)
                     .map((asset) => {
                       const active = asset.id === selectedSwapOutputAsset?.id;
                       const assetSubtitle = getAssetSubtitle(asset, selectedChainMeta.label, selectedChainMeta.short);
@@ -7316,6 +7905,7 @@ export default function App() {
                       );
                     })
                 )}
+                <Text style={styles.swapStockDisclosure}>Tokenized stocks provide economic exposure without shareholder voting rights. Availability and eligibility vary by jurisdiction.</Text>
               </View>
             </ScrollView>
           </PaperModal>
@@ -8102,6 +8692,32 @@ function createStyles(palette: MobileThemePalette) {
     fontSize: 13,
     fontWeight: '700'
   },
+  rebalanceShortcut: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginTop: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: palette.panelBorder,
+    backgroundColor: 'rgba(255,255,255,0.06)'
+  },
+  rebalanceShortcutCopy: {
+    flex: 1,
+    gap: 2
+  },
+  rebalanceShortcutTitle: {
+    color: palette.text,
+    fontSize: 14,
+    fontWeight: '800'
+  },
+  rebalanceShortcutHint: {
+    color: palette.muted,
+    fontSize: 11,
+    lineHeight: 15
+  },
   discoverScreen: {
     flex: 1,
     gap: 12,
@@ -8641,6 +9257,50 @@ function createStyles(palette: MobileThemePalette) {
   sendAssetPickerList: {
     marginTop: 14
   },
+  swapPopularPills: {
+    gap: 8,
+    paddingTop: 12,
+    paddingRight: 8
+  },
+  swapPopularPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    minHeight: 36,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: palette.panelBorder,
+    backgroundColor: 'rgba(255,255,255,0.06)'
+  },
+  swapPopularPillActive: {
+    borderColor: palette.grape,
+    backgroundColor: 'rgba(132, 83, 255, 0.16)'
+  },
+  swapPopularPillImage: {
+    width: 20,
+    height: 20,
+    borderRadius: 10
+  },
+  swapPopularPillText: {
+    color: palette.text,
+    fontSize: 13,
+    fontWeight: '800'
+  },
+  swapPickerSectionLabel: {
+    marginTop: 16,
+    color: palette.muted,
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 1.2
+  },
+  swapStockDisclosure: {
+    color: palette.muted,
+    fontSize: 11,
+    lineHeight: 16,
+    paddingHorizontal: 4,
+    paddingBottom: 4
+  },
   pickerAssetRow: {
     backgroundColor: pickerRowBackground
   },
@@ -8692,6 +9352,128 @@ function createStyles(palette: MobileThemePalette) {
   swapFlowCard: {
     gap: 16,
     padding: 18
+  },
+  rebalanceMobileTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap'
+  },
+  rebalanceExperimentalBadge: {
+    color: palette.warning,
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255, 184, 77, 0.12)'
+  },
+  rebalanceMobileSummary: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12
+  },
+  rebalanceMobileTotal: {
+    alignItems: 'flex-end'
+  },
+  rebalanceMobileValue: {
+    color: palette.text,
+    fontSize: 20,
+    fontWeight: '900'
+  },
+  rebalanceMobileWarning: {
+    color: palette.warning
+  },
+  rebalanceMobileActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10
+  },
+  rebalanceMobileAssetRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 12,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: palette.panelBorder,
+    backgroundColor: 'rgba(255,255,255,0.035)'
+  },
+  rebalanceMobileAssetRowActive: {
+    borderColor: `${palette.mint}66`,
+    backgroundColor: `${palette.mint}12`
+  },
+  rebalanceMobileCheck: {
+    width: 24,
+    height: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 7,
+    borderWidth: 1,
+    borderColor: palette.panelBorder
+  },
+  rebalanceMobileCheckActive: {
+    borderColor: palette.mint,
+    backgroundColor: palette.mint
+  },
+  rebalanceMobileAssetCopy: {
+    flex: 1,
+    gap: 2
+  },
+  rebalanceMobileWeightField: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4
+  },
+  rebalanceMobileWeightInput: {
+    width: 68,
+    minHeight: 40,
+    paddingHorizontal: 8,
+    borderRadius: 11,
+    borderWidth: 1,
+    borderColor: palette.panelBorder,
+    backgroundColor: 'rgba(255,255,255,0.07)',
+    color: palette.text,
+    fontSize: 15,
+    fontWeight: '800',
+    textAlign: 'right'
+  },
+  rebalanceMobilePercent: {
+    color: palette.text,
+    fontSize: 13,
+    fontWeight: '800'
+  },
+  rebalanceMobileAdd: {
+    color: palette.grape,
+    fontSize: 13,
+    fontWeight: '800'
+  },
+  rebalanceMobileLeg: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    paddingVertical: 8
+  },
+  rebalanceMobileLegIndex: {
+    width: 26,
+    height: 26,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 13,
+    backgroundColor: 'rgba(255,255,255,0.08)'
+  },
+  rebalanceMobileLegIndexText: {
+    color: palette.muted,
+    fontSize: 12,
+    fontWeight: '800'
+  },
+  rebalanceMobileReason: {
+    color: palette.muted,
+    fontSize: 11,
+    lineHeight: 16,
+    marginTop: 3
   },
   swapFlowShell: {
     gap: 12

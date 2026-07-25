@@ -114,6 +114,7 @@ export type MobileWalletState = {
   passwordHash: string;
   passkeyWallet?: MobilePasskeyWalletConfig;
   privacyMode: boolean;
+  hideZeroBalances: boolean;
   biometricEnabled: boolean;
   activities: MobileActivity[];
 };
@@ -136,6 +137,7 @@ export type MobileAsset = {
   tokenType?: 'native' | 'spl' | 'erc20' | 'sui-coin';
   accountAddress?: string;
   programId?: string;
+  assetClass?: 'crypto' | 'stablecoin' | 'stock';
 };
 
 export type MobileWalletExport = {
@@ -300,6 +302,7 @@ export function createEmptyMobileWalletState(): MobileWalletState {
     passwordHash: '',
     passkeyWallet: undefined,
     privacyMode: false,
+    hideZeroBalances: true,
     biometricEnabled: false,
     activities: []
   };
@@ -389,6 +392,7 @@ export async function createWalletSet(input: {
     passwordHash,
     passkeyWallet: input.passkeyWallet,
     privacyMode: false,
+    hideZeroBalances: true,
     biometricEnabled: false,
     activities: []
   };
@@ -475,6 +479,7 @@ export async function createPrivateKeyWallet(input: {
     passwordHash,
     passkeyWallet: undefined,
     privacyMode: false,
+    hideZeroBalances: true,
     biometricEnabled: false,
     activities: []
   };
