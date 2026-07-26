@@ -27,7 +27,7 @@ import {
 } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
-import Svg, { Defs, LinearGradient as SvgLinearGradient, Stop, SvgUri, Text as SvgText } from 'react-native-svg';
+import Svg, { Defs, LinearGradient as SvgLinearGradient, Polygon, Polyline, Stop, SvgUri, Text as SvgText } from 'react-native-svg';
 import {
   Button as PaperButton,
   Checkbox,
@@ -91,11 +91,13 @@ import {
 import type { MobileBridgeQuoteSummary, MobileJupiterToken } from './src/config';
 import {
   fetchMobileJupiterPrices,
+  fetchMobileSolanaTokenPriceHistory,
   fetchMobileJupiterStocks,
   getMobileSupportedBridgeDestinations,
   MOBILE_JUPITER_SOL_MINT,
   searchMobileJupiterTokens
 } from './src/config';
+import type { MobileTokenPriceHistoryPoint } from './src/config';
 import type {
   MobileGovernanceEligibleDao,
   MobileGovernanceResponse,
@@ -1157,6 +1159,9 @@ export default function App() {
   const [assets, setAssets] = useState<MobileAsset[]>([]);
   const [remoteActivity, setRemoteActivity] = useState<MobileActivity[]>([]);
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
+  const [assetPriceHistory, setAssetPriceHistory] = useState<MobileTokenPriceHistoryPoint[]>([]);
+  const [assetPriceHistoryLoading, setAssetPriceHistoryLoading] = useState(false);
+  const [assetPriceRange, setAssetPriceRange] = useState<7 | 30 | 90>(30);
   const [assetsLoading, setAssetsLoading] = useState(false);
   const [activityLoading, setActivityLoading] = useState(false);
   const [submitLoading, setSubmitLoading] = useState(false);
@@ -1416,6 +1421,33 @@ export default function App() {
     () => assets.find((asset) => asset.id === selectedAssetId) ?? null,
     [assets, selectedAssetId]
   );
+  useEffect(() => {
+    let active = true;
+    setAssetPriceHistory([]);
+    setAssetPriceRange(30);
+    if (!selectedAsset || selectedAsset.chain !== 'solana' || !selectedAsset.address) {
+      setAssetPriceHistoryLoading(false);
+      return () => {
+        active = false;
+      };
+    }
+
+    setAssetPriceHistoryLoading(true);
+    void fetchMobileSolanaTokenPriceHistory(selectedAsset.address)
+      .then((history) => {
+        if (active) setAssetPriceHistory(history);
+      })
+      .catch(() => {
+        if (active) setAssetPriceHistory([]);
+      })
+      .finally(() => {
+        if (active) setAssetPriceHistoryLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [selectedAsset?.address, selectedAsset?.chain]);
   const totalEffectiveReputationPoints = useMemo(
     () => formatWholeNumberString(reputation.totalEffectivePoints),
     [reputation.totalEffectivePoints]
@@ -5134,6 +5166,42 @@ export default function App() {
     if (selectedAsset) {
       const selectedAssetAddress = selectedAsset.address ?? '--';
       const canSwapSelectedAsset = swappableAssets.some((asset) => asset.id === selectedAsset.id);
+      const visiblePriceHistory = assetPriceHistory.slice(-assetPriceRange);
+      const chartWidth = Math.max(260, Math.min(width - 64, 520));
+      const chartHeight = 140;
+      const chartPadding = 6;
+      const chartPrices = visiblePriceHistory.map((point) => point.priceUsd);
+      const chartMinimum = chartPrices.length > 0 ? Math.min(...chartPrices) : 0;
+      const chartMaximum = chartPrices.length > 0 ? Math.max(...chartPrices) : 0;
+      const chartSpread = chartMaximum - chartMinimum || Math.max(chartMaximum * 0.02, 0.000001);
+      const chartPoints = visiblePriceHistory
+        .map((point, index) => {
+          const x =
+            chartPadding +
+            (index / Math.max(visiblePriceHistory.length - 1, 1)) * (chartWidth - chartPadding * 2);
+          const y =
+            chartPadding +
+            ((chartMaximum - point.priceUsd) / chartSpread) * (chartHeight - chartPadding * 2);
+          return `${x.toFixed(2)},${y.toFixed(2)}`;
+        })
+        .join(' ');
+      const firstChartPrice = visiblePriceHistory[0]?.priceUsd ?? null;
+      const lastChartPrice = visiblePriceHistory[visiblePriceHistory.length - 1]?.priceUsd ?? null;
+      const chartChange =
+        firstChartPrice && lastChartPrice !== null
+          ? ((lastChartPrice - firstChartPrice) / firstChartPrice) * 100
+          : null;
+      const chartPositive = chartChange === null || chartChange >= 0;
+      const liveAssetPrice = getMobileAssetPriceUsd(selectedAsset) || lastChartPrice;
+      const formattedAssetPrice =
+        liveAssetPrice && Number.isFinite(liveAssetPrice)
+          ? liveAssetPrice.toLocaleString(undefined, {
+              style: 'currency',
+              currency: 'USD',
+              minimumFractionDigits: liveAssetPrice >= 1 ? 2 : 0,
+              maximumFractionDigits: liveAssetPrice >= 1 ? 2 : liveAssetPrice >= 0.01 ? 4 : 6
+            })
+          : 'Unavailable';
       const metadataSourceLabel =
         selectedAsset.metadataSource === 'shyft'
           ? 'Shyft'
@@ -5192,6 +5260,89 @@ export default function App() {
               </Pressable>
             </View>
           </View>
+
+          {selectedAsset.chain === 'solana' ? (
+            <View style={[styles.sectionCard, styles.assetPriceCard]}>
+              <View style={styles.assetPriceHeader}>
+                <View style={styles.assetPriceSummary}>
+                  <Text style={styles.assetDetailLabel}>Price activity</Text>
+                  <Text style={styles.assetPriceValue}>{formattedAssetPrice}</Text>
+                  {chartChange !== null ? (
+                    <Text style={chartPositive ? styles.assetPriceChangePositive : styles.assetPriceChangeNegative}>
+                      {chartChange >= 0 ? '+' : ''}
+                      {chartChange.toFixed(2)}% · {assetPriceRange}D
+                    </Text>
+                  ) : null}
+                </View>
+                <View style={styles.assetPriceRanges}>
+                  {([7, 30, 90] as const).map((range) => (
+                    <Pressable
+                      key={range}
+                      style={assetPriceRange === range ? styles.assetPriceRangeActive : styles.assetPriceRange}
+                      onPress={() => setAssetPriceRange(range)}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: assetPriceRange === range }}
+                    >
+                      <Text style={assetPriceRange === range ? styles.assetPriceRangeTextActive : styles.assetPriceRangeText}>
+                        {range}D
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </View>
+
+              {assetPriceHistoryLoading ? (
+                <View style={styles.assetPriceEmpty}>
+                  <ActivityIndicator color={activeTheme.mint} />
+                  <Text style={styles.assetPriceEmptyText}>Loading price history…</Text>
+                </View>
+              ) : visiblePriceHistory.length >= 2 ? (
+                <>
+                  <Svg
+                    width="100%"
+                    height={chartHeight}
+                    viewBox={`0 0 ${chartWidth} ${chartHeight}`}
+                    accessibilityLabel={`${selectedAsset.symbol} price over the last ${assetPriceRange} days`}
+                  >
+                    <Defs>
+                      <SvgLinearGradient id="mobileTokenPriceFill" x1="0" y1="0" x2="0" y2="1">
+                        <Stop offset="0" stopColor={chartPositive ? activeTheme.mint : '#ff9c9c'} stopOpacity="0.3" />
+                        <Stop offset="1" stopColor={chartPositive ? activeTheme.mint : '#ff9c9c'} stopOpacity="0" />
+                      </SvgLinearGradient>
+                    </Defs>
+                    <Polygon
+                      points={`${chartPadding},${chartHeight} ${chartPoints} ${chartWidth - chartPadding},${chartHeight}`}
+                      fill="url(#mobileTokenPriceFill)"
+                    />
+                    <Polyline
+                      points={chartPoints}
+                      fill="none"
+                      stroke={chartPositive ? activeTheme.mint : '#ff9c9c'}
+                      strokeWidth={2.5}
+                    />
+                  </Svg>
+                  <View style={styles.assetPriceDates}>
+                    <Text style={styles.assetPriceDate}>
+                      {new Date(visiblePriceHistory[0].timestamp * 1000).toLocaleDateString(undefined, {
+                        month: 'short',
+                        day: 'numeric'
+                      })}
+                    </Text>
+                    <Text style={styles.assetPriceDate}>
+                      {new Date(visiblePriceHistory[visiblePriceHistory.length - 1].timestamp * 1000).toLocaleDateString(
+                        undefined,
+                        { month: 'short', day: 'numeric' }
+                      )}
+                    </Text>
+                  </View>
+                </>
+              ) : (
+                <View style={styles.assetPriceEmpty}>
+                  <Text style={styles.assetPriceEmptyText}>Historical pricing isn’t available for this token yet.</Text>
+                </View>
+              )}
+            </View>
+          ) : null}
 
           <View style={styles.sectionCard}>
             <View style={styles.assetDetailSectionHeader}>
@@ -10002,6 +10153,84 @@ function createStyles(palette: MobileThemePalette) {
     color: palette.muted,
     fontSize: 14,
     fontWeight: '700'
+  },
+  assetPriceCard: {
+    gap: 14,
+    overflow: 'hidden'
+  },
+  assetPriceHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12
+  },
+  assetPriceSummary: {
+    gap: 4
+  },
+  assetPriceValue: {
+    color: palette.text,
+    fontSize: 24,
+    fontWeight: '900'
+  },
+  assetPriceChangePositive: {
+    color: palette.mint,
+    fontSize: 13,
+    fontWeight: '800'
+  },
+  assetPriceChangeNegative: {
+    color: '#ff9c9c',
+    fontSize: 13,
+    fontWeight: '800'
+  },
+  assetPriceRanges: {
+    flexDirection: 'row',
+    gap: 2,
+    padding: 3,
+    borderRadius: 13,
+    backgroundColor: 'rgba(255,255,255,0.06)'
+  },
+  assetPriceRange: {
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+    borderRadius: 10
+  },
+  assetPriceRangeActive: {
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.12)'
+  },
+  assetPriceRangeText: {
+    color: palette.muted,
+    fontSize: 11,
+    fontWeight: '800'
+  },
+  assetPriceRangeTextActive: {
+    color: palette.text,
+    fontSize: 11,
+    fontWeight: '800'
+  },
+  assetPriceDates: {
+    flexDirection: 'row',
+    justifyContent: 'space-between'
+  },
+  assetPriceDate: {
+    color: palette.muted,
+    fontSize: 11,
+    fontWeight: '600'
+  },
+  assetPriceEmpty: {
+    minHeight: 140,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingHorizontal: 18
+  },
+  assetPriceEmptyText: {
+    color: palette.muted,
+    fontSize: 13,
+    lineHeight: 19,
+    textAlign: 'center'
   },
   assetDetailStat: {
     gap: 4

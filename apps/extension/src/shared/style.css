@@ -7668,6 +7668,82 @@ body[data-surface='panel'] .bottom-nav {
   border-radius: 10px;
 }
 
+.price-chart-card {
+  color: var(--theme-success);
+}
+
+.price-chart-card.negative {
+  color: var(--theme-error);
+}
+
+.price-chart-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.price-chart-eyebrow {
+  margin-bottom: 4px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.price-chart-value {
+  color: var(--theme-text);
+  font-size: 1.55rem;
+  font-weight: 800;
+}
+
+.price-chart-ranges {
+  display: flex;
+  padding: 3px;
+  gap: 2px;
+  border-radius: 12px;
+  background: var(--theme-surface-soft);
+}
+
+.price-chart-ranges button {
+  border: 0;
+  padding: 6px 8px;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--theme-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.price-chart-ranges button.active {
+  background: var(--theme-button-secondary-bg);
+  color: var(--theme-text);
+}
+
+.price-chart {
+  display: block;
+  width: 100%;
+  height: 132px;
+  margin-top: 12px;
+  overflow: visible;
+}
+
+.price-chart-dates {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.7rem;
+}
+
+.price-chart-empty {
+  display: grid;
+  min-height: 96px;
+  place-items: center;
+  padding: 16px;
+  text-align: center;
+}
+
 .security-actions {
   justify-content: flex-end;
 }

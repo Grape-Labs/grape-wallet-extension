@@ -52,6 +52,7 @@ import type {
   StakeAccountRow,
   TokenActionResponse,
   TokenDetailsResponse,
+  TokenPriceHistoryPoint,
   SendTransferResponse,
   TokenHolding,
   WalletSecurityReportResponse,
@@ -929,6 +930,92 @@ function TokenAvatar(props: { token: Pick<TokenHolding, 'symbol' | 'logoUri'>; f
   }
 
   return <div className="token-avatar">{props.fallbackLabel ?? props.token.symbol?.slice(0, 1) ?? 'T'}</div>;
+}
+
+function TokenPriceChart(props: {
+  history: TokenPriceHistoryPoint[];
+  symbol?: string;
+  currentPrice?: number | null;
+}) {
+  const [range, setRange] = useState<7 | 30 | 90>(30);
+  const points = props.history.slice(-range);
+
+  if (points.length < 2) {
+    return (
+      <Card title="Price activity">
+        <div className="price-chart-empty">
+          <span className="muted">Historical pricing isn’t available for this token yet.</span>
+        </div>
+      </Card>
+    );
+  }
+
+  const width = 320;
+  const height = 132;
+  const padding = 6;
+  const prices = points.map((point) => point.priceUsd);
+  const minimum = Math.min(...prices);
+  const maximum = Math.max(...prices);
+  const spread = maximum - minimum || Math.max(maximum * 0.02, 0.000001);
+  const chartPoints = points
+    .map((point, index) => {
+      const x = padding + (index / (points.length - 1)) * (width - padding * 2);
+      const y = padding + ((maximum - point.priceUsd) / spread) * (height - padding * 2);
+      return `${x.toFixed(2)},${y.toFixed(2)}`;
+    })
+    .join(' ');
+  const firstPrice = points[0].priceUsd;
+  const lastPrice = points[points.length - 1].priceUsd;
+  const change = firstPrice > 0 ? ((lastPrice - firstPrice) / firstPrice) * 100 : null;
+  const positive = change === null || change >= 0;
+  const currentPrice = props.currentPrice ?? lastPrice;
+
+  return (
+    <Card className={`price-chart-card ${positive ? 'positive' : 'negative'}`.trim()}>
+      <div className="price-chart-header">
+        <div>
+          <div className="muted price-chart-eyebrow">Price activity</div>
+          <div className="price-chart-value">{formatUnitPrice(currentPrice) ?? 'Unavailable'}</div>
+          <div className={`token-change ${positive ? 'positive' : 'negative'}`}>
+            {change === null ? '—' : `${change >= 0 ? '+' : ''}${change.toFixed(2)}%`} · {range}D
+          </div>
+        </div>
+        <div className="price-chart-ranges" aria-label="Price chart range">
+          {([7, 30, 90] as const).map((option) => (
+            <button
+              type="button"
+              key={option}
+              className={range === option ? 'active' : ''}
+              onClick={() => setRange(option)}
+              aria-pressed={range === option}
+            >
+              {option}D
+            </button>
+          ))}
+        </div>
+      </div>
+      <svg
+        className="price-chart"
+        viewBox={`0 0 ${width} ${height}`}
+        role="img"
+        aria-label={`${props.symbol ?? 'Token'} price over the last ${range} days`}
+        preserveAspectRatio="none"
+      >
+        <defs>
+          <linearGradient id="token-price-fill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="currentColor" stopOpacity="0.3" />
+            <stop offset="100%" stopColor="currentColor" stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        <polygon points={`${padding},${height} ${chartPoints} ${width - padding},${height}`} fill="url(#token-price-fill)" />
+        <polyline points={chartPoints} fill="none" stroke="currentColor" strokeWidth="2.5" vectorEffect="non-scaling-stroke" />
+      </svg>
+      <div className="price-chart-dates muted">
+        <span>{new Date(points[0].timestamp * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>
+        <span>{new Date(points[points.length - 1].timestamp * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>
+      </div>
+    </Card>
+  );
 }
 
 function TokenRow(props: { token: TokenHolding; onSelect?: () => void; privacyMode?: boolean }) {
@@ -6541,6 +6628,14 @@ function PopupPage() {
             </div>
           )}
         </Card>
+
+        {!isCollectibleView ? (
+          <TokenPriceChart
+            history={assetDetails.priceHistory ?? []}
+            symbol={assetDetails.symbol}
+            currentPrice={selectedTokenHolding?.priceUsd}
+          />
+        ) : null}
 
         <Card title={isCollectibleView ? 'NFT Details' : 'Token details'}>
           <div className="stack asset-detail-info">

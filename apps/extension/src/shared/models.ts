@@ -300,6 +300,12 @@ export type TokenDetailsResponse = {
   metadataUri: string | null;
   sellerFeeBasisPoints: number | null;
   updateAuthority: string | null;
+  priceHistory: TokenPriceHistoryPoint[];
+};
+
+export type TokenPriceHistoryPoint = {
+  timestamp: number;
+  priceUsd: number;
 };
 
 export type SendTransferResponse = {

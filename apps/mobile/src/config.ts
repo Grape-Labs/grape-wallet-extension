@@ -236,6 +236,52 @@ export async function fetchMobileJupiterPrices(ids: string[]) {
   );
 }
 
+export type MobileTokenPriceHistoryPoint = {
+  timestamp: number;
+  priceUsd: number;
+};
+
+export async function fetchMobileSolanaTokenPriceHistory(mint: string): Promise<MobileTokenPriceHistoryPoint[]> {
+  const baseUrl = 'https://api.geckoterminal.com/api/v2';
+  const poolsResponse = await fetch(
+    `${baseUrl}/networks/solana/tokens/${encodeURIComponent(mint)}/pools?page=1`
+  );
+  if (!poolsResponse.ok) {
+    throw new Error(`Token pool lookup failed with ${poolsResponse.status}.`);
+  }
+  const poolsPayload = (await poolsResponse.json()) as {
+    data?: Array<{
+      id?: string;
+      relationships?: { base_token?: { data?: { id?: string } } };
+    }>;
+  };
+  const pool = poolsPayload.data?.[0];
+  const poolAddress = pool?.id?.replace(/^solana_/, '');
+  if (!poolAddress) return [];
+
+  const baseTokenId = pool?.relationships?.base_token?.data?.id?.replace(/^solana_/, '');
+  const historyUrl = new URL(
+    `${baseUrl}/networks/solana/pools/${encodeURIComponent(poolAddress)}/ohlcv/day`
+  );
+  historyUrl.searchParams.set('aggregate', '1');
+  historyUrl.searchParams.set('limit', '90');
+  historyUrl.searchParams.set('currency', 'usd');
+  historyUrl.searchParams.set('token', baseTokenId === mint ? 'base' : 'quote');
+
+  const historyResponse = await fetch(historyUrl.toString());
+  if (!historyResponse.ok) {
+    throw new Error(`Token price history request failed with ${historyResponse.status}.`);
+  }
+  const historyPayload = (await historyResponse.json()) as {
+    data?: { attributes?: { ohlcv_list?: unknown[][] } };
+  };
+
+  return (historyPayload.data?.attributes?.ohlcv_list ?? [])
+    .map((row) => ({ timestamp: Number(row[0]), priceUsd: Number(row[4]) }))
+    .filter((point) => Number.isFinite(point.timestamp) && Number.isFinite(point.priceUsd) && point.priceUsd >= 0)
+    .sort((left, right) => left.timestamp - right.timestamp);
+}
+
 export type MobileJupiterToken = {
   id: string;
   name: string;

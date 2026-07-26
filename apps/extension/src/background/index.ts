@@ -3506,12 +3506,15 @@ class WalletController {
     if (!accountAddress || !mintAddress) {
       throw new RpcError('TOKEN_NOT_FOUND', 'Token details could not be loaded for an invalid Solana address.');
     }
-    const [shyftMetadataResult, tokenAccountInfo, mintAccountInfo] = await Promise.all([
+    const [shyftMetadataResult, tokenAccountInfo, mintAccountInfo, priceHistory] = await Promise.all([
       hasShyftApiKey()
         ? fetchShyftWalletTokens(walletState.selectedNetwork, activeAccount.publicKey).catch(() => ({}))
         : Promise.resolve({}),
       connection.getParsedAccountInfo(accountAddress, 'confirmed'),
-      connection.getParsedAccountInfo(mintAddress, 'confirmed')
+      connection.getParsedAccountInfo(mintAddress, 'confirmed'),
+      walletState.selectedNetwork === 'mainnet-beta'
+        ? fetchSolanaTokenPriceHistory(input.mint).catch(() => [])
+        : Promise.resolve([])
     ]);
 
     const shyftMetadata = shyftMetadataResult as Record<string, { name?: string; symbol?: string; logoUri?: string }>;
@@ -3584,7 +3587,8 @@ class WalletController {
       metadataSymbol: parsedMetadata?.symbol ?? null,
       metadataUri: parsedMetadata?.uri ?? null,
       sellerFeeBasisPoints: parsedMetadata?.sellerFeeBasisPoints ?? null,
-      updateAuthority: parsedMetadata?.updateAuthority ?? null
+      updateAuthority: parsedMetadata?.updateAuthority ?? null,
+      priceHistory
     };
   }
 
@@ -9132,6 +9136,57 @@ async function fetchSuiTokenPrices(
       )
     )
   );
+}
+
+async function fetchSolanaTokenPriceHistory(mint: string): Promise<Array<{ timestamp: number; priceUsd: number }>> {
+  const poolsResponse = await fetch(
+    `${GECKOTERMINAL_BASE_URL}/networks/solana/tokens/${encodeURIComponent(mint)}/pools?page=1`
+  );
+  if (!poolsResponse.ok) {
+    throw new Error(`Token pool lookup failed with ${poolsResponse.status}.`);
+  }
+
+  const poolsPayload = (await poolsResponse.json()) as {
+    data?: Array<{
+      id?: string;
+      relationships?: {
+        base_token?: { data?: { id?: string } };
+        quote_token?: { data?: { id?: string } };
+      };
+    }>;
+  };
+  const pool = poolsPayload.data?.[0];
+  const poolAddress = pool?.id?.replace(/^solana_/, '');
+  if (!poolAddress) {
+    return [];
+  }
+
+  const baseTokenId = pool?.relationships?.base_token?.data?.id?.replace(/^solana_/, '');
+  const tokenSide = baseTokenId === mint ? 'base' : 'quote';
+  const historyUrl = new URL(
+    `${GECKOTERMINAL_BASE_URL}/networks/solana/pools/${encodeURIComponent(poolAddress)}/ohlcv/day`
+  );
+  historyUrl.searchParams.set('aggregate', '1');
+  historyUrl.searchParams.set('limit', '90');
+  historyUrl.searchParams.set('currency', 'usd');
+  historyUrl.searchParams.set('token', tokenSide);
+
+  const historyResponse = await fetch(historyUrl);
+  if (!historyResponse.ok) {
+    throw new Error(`Token price history request failed with ${historyResponse.status}.`);
+  }
+  const historyPayload = (await historyResponse.json()) as {
+    data?: { attributes?: { ohlcv_list?: unknown[][] } };
+  };
+
+  return (historyPayload.data?.attributes?.ohlcv_list ?? [])
+    .map((row) => {
+      const timestamp = Number(row[0]);
+      const priceUsd = Number(row[4]);
+      return { timestamp, priceUsd };
+    })
+    .filter((point) => Number.isFinite(point.timestamp) && Number.isFinite(point.priceUsd) && point.priceUsd >= 0)
+    .sort((left, right) => left.timestamp - right.timestamp);
 }
 
 function getEthereumBlockscoutBaseUrl(network: 'mainnet-beta' | 'devnet'): string {
