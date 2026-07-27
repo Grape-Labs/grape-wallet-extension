@@ -301,6 +301,11 @@ export type TokenDetailsResponse = {
   sellerFeeBasisPoints: number | null;
   updateAuthority: string | null;
   priceHistory: TokenPriceHistoryPoint[];
+  marketData: {
+    marketCapUsd: number | null;
+    volume24hUsd: number | null;
+    liquidityUsd: number | null;
+  } | null;
 };
 
 export type TokenPriceHistoryPoint = {

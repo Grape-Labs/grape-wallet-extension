@@ -63,6 +63,7 @@ import {
   signMobileSolanaProviderTransactions,
   type MobileActivity,
   type MobileAsset,
+  type MobileDerivedAccountCandidate,
   type MobileDeviceLinkSession,
   type MobileSwapQuote,
   type MobileWallet,
@@ -77,6 +78,8 @@ import {
   loadWalletGovernance,
   removeMobileWallet,
   loadWalletActivity,
+  loadMobileTokenActivity,
+  scanMobileMnemonicAccounts,
   loadWalletAssets,
   loadWalletAssetsFast,
   MOBILE_WALLET_PASSCODE_LENGTH,
@@ -91,13 +94,13 @@ import {
 import type { MobileBridgeQuoteSummary, MobileJupiterToken } from './src/config';
 import {
   fetchMobileJupiterPrices,
-  fetchMobileSolanaTokenPriceHistory,
+  fetchMobileSolanaTokenMarket,
   fetchMobileJupiterStocks,
   getMobileSupportedBridgeDestinations,
   MOBILE_JUPITER_SOL_MINT,
   searchMobileJupiterTokens
 } from './src/config';
-import type { MobileTokenPriceHistoryPoint } from './src/config';
+import type { MobileTokenMarketData, MobileTokenPriceHistoryPoint } from './src/config';
 import type {
   MobileGovernanceEligibleDao,
   MobileGovernanceResponse,
@@ -205,6 +208,21 @@ function getMobileAssetPriceUsd(asset: MobileAsset) {
   const labeled = parseMobileUsdLabel(asset.valueLabel);
   if (asset.valueLabel.includes('price')) return labeled;
   return asset.amountUi && asset.amountUi > 0 ? labeled / asset.amountUi : 0;
+}
+
+function formatMobileCompactUsd(value: number | null | undefined) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '--';
+  const absoluteValue = Math.abs(value);
+  const units = [
+    { threshold: 1_000_000_000_000, suffix: 'T' },
+    { threshold: 1_000_000_000, suffix: 'B' },
+    { threshold: 1_000_000, suffix: 'M' },
+    { threshold: 1_000, suffix: 'K' }
+  ];
+  const unit = units.find((candidate) => absoluteValue >= candidate.threshold);
+  if (!unit) return `$${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+  const compactValue = value / unit.threshold;
+  return `$${compactValue.toFixed(1).replace(/\.0$/, '')}${unit.suffix}`;
 }
 const GRAPE_DISCOVER_WALLET_ICON =
   "data:image/png;base64,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";
@@ -1147,6 +1165,9 @@ export default function App() {
   const [importKind, setImportKind] = useState<ImportKind>('mnemonic');
   const [passkeyRecoveryMode, setPasskeyRecoveryMode] = useState<PasskeyRecoveryMode>('passkey-only');
   const [importMnemonic, setImportMnemonic] = useState('');
+  const [mnemonicAccountCandidates, setMnemonicAccountCandidates] = useState<MobileDerivedAccountCandidate[]>([]);
+  const [selectedMnemonicAccountPaths, setSelectedMnemonicAccountPaths] = useState<string[]>([]);
+  const [mnemonicAccountScanLoading, setMnemonicAccountScanLoading] = useState(false);
   const [importPrivateKey, setImportPrivateKey] = useState('');
   const [importPrivateKeyChain, setImportPrivateKeyChain] = useState<MobileWalletState['selectedChain']>('solana');
   const [restorePayload, setRestorePayload] = useState('');
@@ -1160,8 +1181,13 @@ export default function App() {
   const [remoteActivity, setRemoteActivity] = useState<MobileActivity[]>([]);
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const [assetPriceHistory, setAssetPriceHistory] = useState<MobileTokenPriceHistoryPoint[]>([]);
+  const [assetMarketData, setAssetMarketData] = useState<MobileTokenMarketData | null>(null);
   const [assetPriceHistoryLoading, setAssetPriceHistoryLoading] = useState(false);
   const [assetPriceRange, setAssetPriceRange] = useState<7 | 30 | 90>(30);
+  const [assetDetailsExpanded, setAssetDetailsExpanded] = useState(false);
+  const [selectedAssetActivity, setSelectedAssetActivity] = useState<MobileActivity | null>(null);
+  const [assetTokenActivity, setAssetTokenActivity] = useState<MobileActivity[]>([]);
+  const [assetTokenActivityLoading, setAssetTokenActivityLoading] = useState(false);
   const [assetsLoading, setAssetsLoading] = useState(false);
   const [activityLoading, setActivityLoading] = useState(false);
   const [submitLoading, setSubmitLoading] = useState(false);
@@ -1424,7 +1450,11 @@ export default function App() {
   useEffect(() => {
     let active = true;
     setAssetPriceHistory([]);
+    setAssetMarketData(null);
     setAssetPriceRange(30);
+    setAssetDetailsExpanded(false);
+    setSelectedAssetActivity(null);
+    setAssetTokenActivity([]);
     if (!selectedAsset || selectedAsset.chain !== 'solana' || !selectedAsset.address) {
       setAssetPriceHistoryLoading(false);
       return () => {
@@ -1433,9 +1463,12 @@ export default function App() {
     }
 
     setAssetPriceHistoryLoading(true);
-    void fetchMobileSolanaTokenPriceHistory(selectedAsset.address)
-      .then((history) => {
-        if (active) setAssetPriceHistory(history);
+    void fetchMobileSolanaTokenMarket(selectedAsset.address)
+      .then((market) => {
+        if (active) {
+          setAssetPriceHistory(market.history);
+          setAssetMarketData(market.marketData);
+        }
       })
       .catch(() => {
         if (active) setAssetPriceHistory([]);
@@ -1448,6 +1481,33 @@ export default function App() {
       active = false;
     };
   }, [selectedAsset?.address, selectedAsset?.chain]);
+  useEffect(() => {
+    let active = true;
+    if (!selectedAsset || selectedAsset.chain !== 'solana' || !selectedWallet) {
+      setAssetTokenActivity([]);
+      setAssetTokenActivityLoading(false);
+      return () => {
+        active = false;
+      };
+    }
+
+    setAssetTokenActivityLoading(true);
+    const activityAddress = selectedAsset.accountAddress ?? selectedWallet.address;
+    void loadMobileTokenActivity(selectedWallet, activityAddress)
+      .then((items) => {
+        if (active) setAssetTokenActivity(items);
+      })
+      .catch(() => {
+        if (active) setAssetTokenActivity([]);
+      })
+      .finally(() => {
+        if (active) setAssetTokenActivityLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [selectedAsset?.accountAddress, selectedAsset?.chain, selectedAsset?.id, selectedWallet]);
   const totalEffectiveReputationPoints = useMemo(
     () => formatWholeNumberString(reputation.totalEffectivePoints),
     [reputation.totalEffectivePoints]
@@ -2792,6 +2852,77 @@ export default function App() {
     }
   }
 
+  async function handleMnemonicAccountScan() {
+    if (!isValidMnemonic(importMnemonic)) {
+      setError('Enter a valid recovery phrase before scanning accounts.');
+      return;
+    }
+    setMnemonicAccountScanLoading(true);
+    setError(null);
+    try {
+      const accounts = await scanMobileMnemonicAccounts(importMnemonic.trim(), 10);
+      setMnemonicAccountCandidates(accounts);
+      setSelectedMnemonicAccountPaths(
+        accounts.filter((account) => account.index === 0 || account.lamports > 0).map((account) => account.derivationPath)
+      );
+    } catch (scanError) {
+      setError(scanError instanceof Error ? scanError.message : 'Unable to scan derived accounts.');
+    } finally {
+      setMnemonicAccountScanLoading(false);
+    }
+  }
+
+  function handleImportMnemonicChange(value: string) {
+    setImportMnemonic(value);
+    setMnemonicAccountCandidates([]);
+    setSelectedMnemonicAccountPaths([]);
+  }
+
+  function renderMnemonicAccountDiscovery() {
+    if (!isValidMnemonic(importMnemonic)) return null;
+    return (
+      <View style={styles.mnemonicDiscovery}>
+        <PaperButton
+          mode="outlined"
+          onPress={() => void handleMnemonicAccountScan()}
+          loading={mnemonicAccountScanLoading}
+          disabled={mnemonicAccountScanLoading}
+          textColor={activeTheme.text}
+        >
+          Find derived accounts
+        </PaperButton>
+        {mnemonicAccountCandidates.length > 0 ? (
+          <View style={styles.mnemonicAccountList}>
+            <Text style={styles.sectionHint}>Choose the Solana accounts to import</Text>
+            {mnemonicAccountCandidates.map((account) => {
+              const selected = selectedMnemonicAccountPaths.includes(account.derivationPath);
+              return (
+                <Pressable
+                  key={account.derivationPath}
+                  style={selected ? styles.mnemonicAccountCardSelected : styles.mnemonicAccountCard}
+                  onPress={() =>
+                    setSelectedMnemonicAccountPaths((current) =>
+                      selected
+                        ? current.filter((path) => path !== account.derivationPath)
+                        : [...current, account.derivationPath]
+                    )
+                  }
+                >
+                  <Checkbox status={selected ? 'checked' : 'unchecked'} color={activeTheme.mint} />
+                  <View style={styles.mnemonicAccountCopy}>
+                    <Text style={styles.mnemonicAccountTitle}>Account {account.index + 1} · {account.balanceLabel}</Text>
+                    <Text style={styles.mnemonicAccountAddress}>{shortenAddress(account.address)}</Text>
+                    <Text style={styles.mnemonicAccountPath}>{account.derivationPath}</Text>
+                  </View>
+                </Pressable>
+              );
+            })}
+          </View>
+        ) : null}
+      </View>
+    );
+  }
+
   async function handleImportWallet() {
     if (importKind === 'restore' && !restorePayload.trim()) {
       setError('Restore payload is required.');
@@ -2832,7 +2963,10 @@ export default function App() {
               mnemonic: importMnemonic.trim(),
               password: setupPassword,
               credentialKind: setupCredentialKind,
-              source: 'imported-mnemonic'
+              source: 'imported-mnemonic',
+              solanaAccounts: mnemonicAccountCandidates.filter((account) =>
+                selectedMnemonicAccountPaths.includes(account.derivationPath)
+              )
             })
           : await createPrivateKeyWallet({
               chain: importPrivateKeyChain,
@@ -2929,7 +3063,10 @@ export default function App() {
         nextState = await addWalletSet({
           state: walletState,
           mnemonic: importMnemonic.trim(),
-          source: 'imported-mnemonic'
+          source: 'imported-mnemonic',
+          solanaAccounts: mnemonicAccountCandidates.filter((account) =>
+            selectedMnemonicAccountPaths.includes(account.derivationPath)
+          )
         });
       } else {
         nextState = await addPrivateKeyWallet({
@@ -4745,9 +4882,10 @@ export default function App() {
                     />
                   </View>
                   {importKind === 'mnemonic' ? (
+                    <>
                     <PaperTextInput
                       value={importMnemonic}
-                      onChangeText={setImportMnemonic}
+                      onChangeText={handleImportMnemonicChange}
                       placeholder="Enter your 12-word or 24-word recovery phrase"
                       mode="outlined"
                       multiline
@@ -4756,6 +4894,8 @@ export default function App() {
                       outlineStyle={styles.paperOutline}
                       textColor={activeTheme.text}
                     />
+                    {renderMnemonicAccountDiscovery()}
+                    </>
                   ) : importKind === 'private-key' ? (
                     <>
                       <SegmentedButtons
@@ -5208,6 +5348,68 @@ export default function App() {
           : selectedAsset.metadataSource === 'rpc'
             ? 'RPC'
             : 'Native';
+      const tokenActivity = assetTokenActivity;
+
+      if (selectedAssetActivity) {
+        const activityDirection = selectedAssetActivity.type.toLowerCase().includes('receive')
+          ? 'Received'
+          : selectedAssetActivity.type.toLowerCase().includes('send') ||
+              selectedAssetActivity.type.toLowerCase().includes('transfer')
+            ? 'Sent'
+            : selectedAssetActivity.title;
+        return (
+          <View style={styles.stack}>
+            <View style={[styles.sectionCard, styles.assetActivityDetailCard]}>
+              <Pressable style={styles.detailBackRow} onPress={() => setSelectedAssetActivity(null)}>
+                <Feather name="chevron-left" size={18} color={activeTheme.text} />
+                <Text style={styles.detailBackText}>Back to {selectedAsset.symbol}</Text>
+              </Pressable>
+              <Text style={styles.assetActivityDetailTitle}>{activityDirection}</Text>
+              <View style={styles.assetActivityDetailSection}>
+                <Text style={styles.assetDetailLabel}>Date</Text>
+                <Text style={styles.assetActivityDetailValue}>
+                  {new Date(selectedAssetActivity.timestamp).toLocaleString()}
+                </Text>
+              </View>
+              <View style={styles.assetActivityDetailSection}>
+                <Text style={styles.assetDetailLabel}>Transaction result</Text>
+                <Text style={styles.assetActivityAmount}>{selectedAssetActivity.amountLabel}</Text>
+                <Text style={styles.assetDetailSectionHint}>{selectedAssetActivity.subtitle}</Text>
+              </View>
+              {selectedAssetActivity.fromAddress || selectedAssetActivity.toAddress ? (
+                <View style={styles.assetActivityDetailSection}>
+                  <Text style={styles.assetDetailLabel}>Details</Text>
+                  {selectedAssetActivity.fromAddress ? (
+                    <Text style={styles.assetDetailMetaMono}>From {selectedAssetActivity.fromAddress}</Text>
+                  ) : null}
+                  {selectedAssetActivity.toAddress ? (
+                    <Text style={styles.assetDetailMetaMono}>To {selectedAssetActivity.toAddress}</Text>
+                  ) : null}
+                </View>
+              ) : null}
+              <View style={styles.assetActivityDetailSection}>
+                <Text style={styles.assetDetailLabel}>Network fee</Text>
+                <Text style={styles.assetActivityDetailValue}>{selectedAssetActivity.feeLabel ?? 'Unavailable'}</Text>
+              </View>
+              <View style={styles.assetActivityDetailSection}>
+                <Text style={styles.assetDetailLabel}>Transaction ID</Text>
+                <Text style={styles.assetDetailMetaMono}>{selectedAssetActivity.signature}</Text>
+              </View>
+              <Pressable
+                style={styles.assetActivityExplorerButton}
+                onPress={() =>
+                  void Linking.openURL(
+                    `https://explorer.solana.com/tx/${encodeURIComponent(selectedAssetActivity.signature)}`
+                  )
+                }
+              >
+                <Feather name="external-link" size={17} color={activeTheme.text} />
+                <Text style={styles.assetDetailActionLabel}>View on Explorer</Text>
+              </Pressable>
+            </View>
+          </View>
+        );
+      }
 
       return (
         <View style={styles.stack}>
@@ -5227,13 +5429,8 @@ export default function App() {
               </View>
             </View>
 
-            <View style={styles.assetDetailAddressCard}>
-              <Text style={styles.assetDetailLabel}>Token address</Text>
-              <Text style={styles.assetDetailAddressValue}>{selectedAssetAddress}</Text>
-            </View>
-
             <View style={styles.assetDetailBalanceBlock}>
-              <Text style={styles.assetDetailLabel}>Token amount in wallet</Text>
+              <Text style={styles.assetDetailLabel}>Your balance</Text>
               <Text style={styles.assetDetailBalance}>{maskValue(selectedAsset.amountLabel, walletState.privacyMode)}</Text>
               {selectedAsset.valueLabel ? (
                 <Text style={styles.assetDetailBalanceMeta}>
@@ -5341,16 +5538,44 @@ export default function App() {
                   <Text style={styles.assetPriceEmptyText}>Historical pricing isn’t available for this token yet.</Text>
                 </View>
               )}
+              {assetMarketData ? (
+                <View style={styles.assetMarketGrid}>
+                  <View style={styles.assetMarketItem}>
+                    <Text style={styles.assetMarketLabel}>Market cap</Text>
+                    <Text style={styles.assetMarketValue}>{formatMobileCompactUsd(assetMarketData.marketCapUsd)}</Text>
+                  </View>
+                  <View style={styles.assetMarketItem}>
+                    <Text style={styles.assetMarketLabel}>24h volume</Text>
+                    <Text style={styles.assetMarketValue}>{formatMobileCompactUsd(assetMarketData.volume24hUsd)}</Text>
+                  </View>
+                  <View style={styles.assetMarketItem}>
+                    <Text style={styles.assetMarketLabel}>Liquidity</Text>
+                    <Text style={styles.assetMarketValue}>{formatMobileCompactUsd(assetMarketData.liquidityUsd)}</Text>
+                  </View>
+                </View>
+              ) : null}
             </View>
           ) : null}
 
           <View style={styles.sectionCard}>
-            <View style={styles.assetDetailSectionHeader}>
-              <Text style={styles.sectionTitle}>Token metadata</Text>
-              <Text style={styles.assetDetailSectionHint}>Chain, wallet, and token details</Text>
-            </View>
+            <Pressable
+              style={styles.assetDetailDisclosure}
+              onPress={() => setAssetDetailsExpanded((expanded) => !expanded)}
+              accessibilityRole="button"
+              accessibilityState={{ expanded: assetDetailsExpanded }}
+            >
+              <View style={styles.assetDetailSectionHeader}>
+                <Text style={styles.assetDetailDisclosureTitle}>Advanced token details</Text>
+                <Text style={styles.assetDetailSectionHint}>Addresses, chain, and metadata</Text>
+              </View>
+              <Feather name={assetDetailsExpanded ? 'chevron-up' : 'chevron-down'} size={20} color={activeTheme.muted} />
+            </Pressable>
 
-            <View style={styles.assetDetailStats}>
+            {assetDetailsExpanded ? <View style={styles.assetDetailStats}>
+              <View style={styles.assetDetailStat}>
+                <Text style={styles.assetDetailLabel}>Token address</Text>
+                <Text style={styles.assetDetailMetaMono}>{selectedAssetAddress}</Text>
+              </View>
               <View style={styles.assetDetailMetaRow}>
                 <Text style={styles.assetDetailLabel}>Chain</Text>
                 <Text style={styles.assetDetailMeta}>{selectedChainMeta.label}</Text>
@@ -5397,8 +5622,25 @@ export default function App() {
                   <Text style={styles.assetDetailMeta}>{selectedAsset.description}</Text>
                 </View>
               ) : null}
-            </View>
+            </View> : null}
           </View>
+
+          {assetTokenActivityLoading || tokenActivity.length > 0 ? (
+          <View style={[styles.sectionCard, styles.assetActivityCard]}>
+            <View style={styles.assetActivityHeader}>
+              <Text style={styles.sectionTitle}>Activity</Text>
+              <Text style={styles.assetDetailSectionHint}>For this token and wallet</Text>
+            </View>
+            {assetTokenActivityLoading ? <ActivityIndicator color={activeTheme.mint} /> : null}
+            {!assetTokenActivityLoading
+              ? tokenActivity.slice(0, 5).map((item) => (
+                  <Pressable key={item.id} onPress={() => setSelectedAssetActivity(item)}>
+                    {renderActivityRow(item)}
+                  </Pressable>
+                ))
+              : null}
+          </View>
+          ) : null}
         </View>
       );
     }
@@ -7326,9 +7568,10 @@ export default function App() {
                     />
                   </View>
                   {importKind === 'mnemonic' ? (
+                    <>
                     <PaperTextInput
                       value={importMnemonic}
-                      onChangeText={setImportMnemonic}
+                      onChangeText={handleImportMnemonicChange}
                       placeholder="Paste 12 or 24-word recovery phrase"
                       mode="outlined"
                       multiline
@@ -7337,6 +7580,8 @@ export default function App() {
                       outlineStyle={styles.paperOutline}
                       textColor={activeTheme.text}
                     />
+                    {renderMnemonicAccountDiscovery()}
+                    </>
                   ) : importKind === 'private-key' ? (
                     <>
                       <SegmentedButtons
@@ -10015,7 +10260,7 @@ function createStyles(palette: MobileThemePalette) {
     fontWeight: '700'
   },
   assetDetailHeroCard: {
-    gap: 18
+    gap: 20
   },
   assetDetailSectionHeader: {
     gap: 2,
@@ -10032,6 +10277,17 @@ function createStyles(palette: MobileThemePalette) {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 14
+  },
+  assetDetailDisclosure: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 16
+  },
+  assetDetailDisclosureTitle: {
+    color: palette.text,
+    fontSize: 17,
+    fontWeight: '800'
   },
   assetDetailGlyph: {
     width: 72,
@@ -10214,6 +10470,30 @@ function createStyles(palette: MobileThemePalette) {
     flexDirection: 'row',
     justifyContent: 'space-between'
   },
+  assetMarketGrid: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 2
+  },
+  assetMarketItem: {
+    flex: 1,
+    minWidth: 0,
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 12,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.055)'
+  },
+  assetMarketLabel: {
+    color: palette.muted,
+    fontSize: 10,
+    fontWeight: '700'
+  },
+  assetMarketValue: {
+    color: palette.text,
+    fontSize: 13,
+    fontWeight: '800'
+  },
   assetPriceDate: {
     color: palette.muted,
     fontSize: 11,
@@ -10231,6 +10511,88 @@ function createStyles(palette: MobileThemePalette) {
     fontSize: 13,
     lineHeight: 19,
     textAlign: 'center'
+  },
+  assetActivityCard: {
+    gap: 12
+  },
+  assetActivityHeader: {
+    gap: 3
+  },
+  assetActivityDetailCard: {
+    gap: 24
+  },
+  assetActivityDetailTitle: {
+    color: palette.text,
+    fontSize: 28,
+    fontWeight: '900'
+  },
+  assetActivityDetailSection: {
+    gap: 8
+  },
+  assetActivityDetailValue: {
+    color: palette.text,
+    fontSize: 18,
+    lineHeight: 26,
+    fontWeight: '700'
+  },
+  assetActivityAmount: {
+    color: palette.mint,
+    fontSize: 22,
+    fontWeight: '900'
+  },
+  assetActivityExplorerButton: {
+    minHeight: 52,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 9,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.08)'
+  },
+  mnemonicDiscovery: {
+    gap: 12
+  },
+  mnemonicAccountList: {
+    gap: 8
+  },
+  mnemonicAccountCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: palette.panelBorder,
+    backgroundColor: 'rgba(255,255,255,0.035)'
+  },
+  mnemonicAccountCardSelected: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: palette.mint,
+    backgroundColor: 'rgba(139,247,198,0.08)'
+  },
+  mnemonicAccountCopy: {
+    flex: 1,
+    gap: 3
+  },
+  mnemonicAccountTitle: {
+    color: palette.text,
+    fontSize: 14,
+    fontWeight: '800'
+  },
+  mnemonicAccountAddress: {
+    color: palette.text,
+    fontSize: 13,
+    fontFamily: 'Courier'
+  },
+  mnemonicAccountPath: {
+    color: palette.muted,
+    fontSize: 11,
+    fontFamily: 'Courier'
   },
   assetDetailStat: {
     gap: 4

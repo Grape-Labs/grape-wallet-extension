@@ -345,6 +345,17 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     mnemonic: z.string(),
     password: z.string(),
     publicKey: z.string(),
+    solanaAccounts: z
+      .array(
+        z.object({
+          publicKey: z.string().min(32),
+          derivationPath: z.string().min(1),
+          index: z.number().int().nonnegative()
+        })
+      )
+      .min(1)
+      .max(20)
+      .optional(),
     biometricUnlockConfig: z
       .union([
         z.object({
@@ -371,6 +382,11 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
         })
       ])
       .optional()
+  }),
+  z.object({
+    type: z.literal('wallet_scan_mnemonic_accounts'),
+    mnemonic: z.string(),
+    count: z.number().int().min(1).max(20).optional()
   }),
   z.object({
     type: z.literal('wallet_import_private_key'),
@@ -618,6 +634,11 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     mint: z.string().min(32),
     accountAddress: z.string().min(32),
     programId: z.string().min(32)
+  }),
+  z.object({
+    type: z.literal('wallet_get_token_activity'),
+    accountAddress: z.string().min(32),
+    limit: z.number().int().min(1).max(50).optional()
   }),
   z.object({
     type: z.literal('wallet_stake_create'),

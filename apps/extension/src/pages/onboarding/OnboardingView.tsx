@@ -197,6 +197,9 @@ export function OnboardingView(props: OnboardingViewProps) {
   const [network, setNetwork] = useState<'mainnet-beta' | 'devnet'>('mainnet-beta');
   const [scanningLedger, setScanningLedger] = useState(false);
   const [ledgerPermissionPrimed, setLedgerPermissionPrimed] = useState(false);
+  const [mnemonicAccounts, setMnemonicAccounts] = useState<LedgerCandidate[]>([]);
+  const [selectedMnemonicAccounts, setSelectedMnemonicAccounts] = useState<LedgerCandidate[]>([]);
+  const [scanningMnemonicAccounts, setScanningMnemonicAccounts] = useState(false);
   const [importMethod, setImportMethod] = useState<ImportMethod>('mnemonic');
   const [ledgerChain, setLedgerChain] = useState<LedgerImportChain>('solana');
   const [privateKeyChain, setPrivateKeyChain] = useState<ImportChain>('solana');
@@ -216,6 +219,28 @@ export function OnboardingView(props: OnboardingViewProps) {
   const [easyRecoveryMode, setEasyRecoveryMode] = useState<EasyRecoveryMode>('passkey-only');
   const [confirmPasskeyOnlyAccess, setConfirmPasskeyOnlyAccess] = useState(false);
   const restoreScannerVideoRef = useRef<HTMLVideoElement | null>(null);
+
+  async function scanMnemonicAccounts() {
+    if (!validateWalletMnemonic(mnemonic)) {
+      setError('Enter a valid recovery phrase before scanning accounts.');
+      return;
+    }
+    setScanningMnemonicAccounts(true);
+    setError(null);
+    try {
+      const accounts = await sendRuntimeMessage<LedgerCandidate[]>({
+        type: 'wallet_scan_mnemonic_accounts',
+        mnemonic,
+        count: 10
+      });
+      setMnemonicAccounts(accounts);
+      setSelectedMnemonicAccounts(accounts.filter((account) => account.index === 0 || account.balanceLabel !== '0 SOL'));
+    } catch (scanError) {
+      setError(scanError instanceof Error ? scanError.message : 'Unable to scan derived accounts.');
+    } finally {
+      setScanningMnemonicAccounts(false);
+    }
+  }
 
   useEffect(() => {
     setGeneratedMnemonic(generateWalletMnemonic(mnemonicLength));
@@ -598,6 +623,10 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
           mnemonic: walletMnemonic,
           password: walletPassword,
           publicKey: account.publicKey,
+          solanaAccounts:
+            selectedMnemonicAccounts.length > 0
+              ? selectedMnemonicAccounts.map(({ publicKey, derivationPath, index }) => ({ publicKey, derivationPath, index }))
+              : undefined,
           biometricUnlockConfig: pendingPasskeySetup?.config
         });
       } else {
@@ -951,7 +980,11 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
                   <TextArea
                     placeholder="Enter your 12-word or 24-word recovery phrase"
                     value={importMnemonic}
-                    onChange={(event) => setImportMnemonic(event.target.value)}
+                    onChange={(event) => {
+                      setImportMnemonic(event.target.value);
+                      setMnemonicAccounts([]);
+                      setSelectedMnemonicAccounts([]);
+                    }}
                   />
                   {importMnemonicStatus ? (
                     importMnemonicStatus.tone === 'success' ? (
@@ -965,6 +998,45 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
                     )
                   ) : null}
                   <MnemonicGrid words={mnemonicWords} totalWords={importMnemonicPreviewCount} emptyLabel="Empty" />
+                  {validateWalletMnemonic(mnemonic) ? (
+                    <Button
+                      tone="secondary"
+                      type="button"
+                      onClick={() => void scanMnemonicAccounts()}
+                      disabled={scanningMnemonicAccounts}
+                    >
+                      {scanningMnemonicAccounts ? 'Checking balances...' : 'Find derived accounts'}
+                    </Button>
+                  ) : null}
+                  {mnemonicAccounts.length > 0 ? (
+                    <div className="stack">
+                      <span className="muted">Choose the Solana accounts to import</span>
+                      <div className="ledger-account-list">
+                        {mnemonicAccounts.map((account) => {
+                          const selected = selectedMnemonicAccounts.some(
+                            (candidate) => candidate.derivationPath === account.derivationPath
+                          );
+                          return (
+                            <button
+                              type="button"
+                              key={account.derivationPath}
+                              className={`ledger-account-card ${selected ? 'active' : ''}`.trim()}
+                              onClick={() =>
+                                setSelectedMnemonicAccounts((current) =>
+                                  selected
+                                    ? current.filter((candidate) => candidate.derivationPath !== account.derivationPath)
+                                    : [...current, account].sort((left, right) => left.index - right.index)
+                                )
+                              }
+                            >
+                              <span><strong>Account {account.index + 1}</strong> · {account.balanceLabel}</span>
+                              <span className="muted mono">{formatAddress(account.publicKey)} · {account.derivationPath}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
                 </label>
               ) : importMethod === 'private-key' ? (
                 <div className="stack">

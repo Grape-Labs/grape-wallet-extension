@@ -52,6 +52,7 @@ import {
   estimateLegacyTransactionFee,
   exportSolanaSoftwareWalletSecret,
   getAssociatedTokenAddress,
+  deriveSolanaAccount,
   deriveSolanaAccount0,
   importSolanaPrivateKey,
   resolveSolanaVaultSecret,
@@ -1742,7 +1743,8 @@ class WalletController {
     mnemonic: string,
     password: string,
     source: 'created' | 'imported-mnemonic',
-    biometricUnlock?: import('@grape/core').BiometricUnlockConfig
+    biometricUnlock?: import('@grape/core').BiometricUnlockConfig,
+    selectedSolanaAccounts?: Array<{ publicKey: string; derivationPath: string; index: number }>
   ) {
     const current = await this.getWalletState();
     const nextWalletNumber = this.getNextWalletNumber(current);
@@ -1809,6 +1811,15 @@ class WalletController {
         biometricUnlock
       })
     ]);
+    if (selectedSolanaAccounts?.length) {
+      solanaProfile.accounts = selectedSolanaAccounts.map((account) => ({
+        id: `account-${account.index}`,
+        index: account.index,
+        publicKey: account.publicKey,
+        derivationPath: account.derivationPath
+      }));
+      solanaProfile.selectedAccountId = solanaProfile.accounts[0].id;
+    }
 
     const nextState = {
       ...current,
@@ -1849,6 +1860,25 @@ class WalletController {
     ]);
     await this.setSessionState({ locked: false, lastActivityAt: Date.now() });
     return nextState;
+  }
+
+  async scanMnemonicAccounts(mnemonic: string, count = 10) {
+    const walletState = await this.getWalletState();
+    const connection = this.createConnection(walletState.selectedNetwork, walletState);
+    const accounts = Array.from({ length: count }, (_value, index) => {
+      const derivationPath = `m/44'/501'/${index}'/0'`;
+      const derived = deriveSolanaAccount(mnemonic, derivationPath);
+      return { index, publicKey: derived.publicKey, derivationPath };
+    });
+    const balances = await connection.getMultipleAccountsInfo(accounts.map((account) => new PublicKey(account.publicKey)));
+    return accounts.map((account, index) => {
+      const lamports = balances[index]?.lamports ?? 0;
+      return {
+        ...account,
+        lamports,
+        balanceLabel: `${(lamports / LAMPORTS_PER_SOL).toLocaleString(undefined, { maximumFractionDigits: 6 })} SOL`
+      };
+    });
   }
 
   async unlockWallet(password: string) {
@@ -3490,6 +3520,26 @@ class WalletController {
     };
   }
 
+  async getTokenActivity(accountAddress: string, limit = 20): Promise<WalletActivityResponse> {
+    const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    if (selectedWallet.chain !== 'solana' || !hasShyftApiKey()) {
+      return {
+        items: [],
+        source: 'none',
+        network: walletState.selectedNetwork,
+        refreshedAt: Date.now()
+      };
+    }
+
+    const items = await fetchShyftTransactionHistory(walletState.selectedNetwork, accountAddress, limit);
+    return {
+      items,
+      source: 'shyft',
+      network: walletState.selectedNetwork,
+      refreshedAt: Date.now()
+    };
+  }
+
   async getTokenDetails(input: { mint: string; accountAddress: string; programId: string }) {
     const { walletState, selectedWallet } = await this.ensureReadyWallet();
     const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
@@ -3506,15 +3556,15 @@ class WalletController {
     if (!accountAddress || !mintAddress) {
       throw new RpcError('TOKEN_NOT_FOUND', 'Token details could not be loaded for an invalid Solana address.');
     }
-    const [shyftMetadataResult, tokenAccountInfo, mintAccountInfo, priceHistory] = await Promise.all([
+    const [shyftMetadataResult, tokenAccountInfo, mintAccountInfo, tokenMarket] = await Promise.all([
       hasShyftApiKey()
         ? fetchShyftWalletTokens(walletState.selectedNetwork, activeAccount.publicKey).catch(() => ({}))
         : Promise.resolve({}),
       connection.getParsedAccountInfo(accountAddress, 'confirmed'),
       connection.getParsedAccountInfo(mintAddress, 'confirmed'),
       walletState.selectedNetwork === 'mainnet-beta'
-        ? fetchSolanaTokenPriceHistory(input.mint).catch(() => [])
-        : Promise.resolve([])
+        ? fetchSolanaTokenMarket(input.mint).catch(() => null)
+        : Promise.resolve(null)
     ]);
 
     const shyftMetadata = shyftMetadataResult as Record<string, { name?: string; symbol?: string; logoUri?: string }>;
@@ -3588,7 +3638,8 @@ class WalletController {
       metadataUri: parsedMetadata?.uri ?? null,
       sellerFeeBasisPoints: parsedMetadata?.sellerFeeBasisPoints ?? null,
       updateAuthority: parsedMetadata?.updateAuthority ?? null,
-      priceHistory
+      priceHistory: tokenMarket?.history ?? [],
+      marketData: tokenMarket?.marketData ?? null
     };
   }
 
@@ -9138,7 +9189,10 @@ async function fetchSuiTokenPrices(
   );
 }
 
-async function fetchSolanaTokenPriceHistory(mint: string): Promise<Array<{ timestamp: number; priceUsd: number }>> {
+async function fetchSolanaTokenMarket(mint: string): Promise<{
+  history: Array<{ timestamp: number; priceUsd: number }>;
+  marketData: { marketCapUsd: number | null; volume24hUsd: number | null; liquidityUsd: number | null };
+}> {
   const poolsResponse = await fetch(
     `${GECKOTERMINAL_BASE_URL}/networks/solana/tokens/${encodeURIComponent(mint)}/pools?page=1`
   );
@@ -9149,6 +9203,12 @@ async function fetchSolanaTokenPriceHistory(mint: string): Promise<Array<{ times
   const poolsPayload = (await poolsResponse.json()) as {
     data?: Array<{
       id?: string;
+      attributes?: {
+        market_cap_usd?: string | null;
+        fdv_usd?: string | null;
+        reserve_in_usd?: string | null;
+        volume_usd?: { h24?: string | null };
+      };
       relationships?: {
         base_token?: { data?: { id?: string } };
         quote_token?: { data?: { id?: string } };
@@ -9158,7 +9218,10 @@ async function fetchSolanaTokenPriceHistory(mint: string): Promise<Array<{ times
   const pool = poolsPayload.data?.[0];
   const poolAddress = pool?.id?.replace(/^solana_/, '');
   if (!poolAddress) {
-    return [];
+    return {
+      history: [],
+      marketData: { marketCapUsd: null, volume24hUsd: null, liquidityUsd: null }
+    };
   }
 
   const baseTokenId = pool?.relationships?.base_token?.data?.id?.replace(/^solana_/, '');
@@ -9179,7 +9242,7 @@ async function fetchSolanaTokenPriceHistory(mint: string): Promise<Array<{ times
     data?: { attributes?: { ohlcv_list?: unknown[][] } };
   };
 
-  return (historyPayload.data?.attributes?.ohlcv_list ?? [])
+  const history = (historyPayload.data?.attributes?.ohlcv_list ?? [])
     .map((row) => {
       const timestamp = Number(row[0]);
       const priceUsd = Number(row[4]);
@@ -9187,6 +9250,19 @@ async function fetchSolanaTokenPriceHistory(mint: string): Promise<Array<{ times
     })
     .filter((point) => Number.isFinite(point.timestamp) && Number.isFinite(point.priceUsd) && point.priceUsd >= 0)
     .sort((left, right) => left.timestamp - right.timestamp);
+  const numberOrNull = (value: string | null | undefined) => {
+    const parsed = value == null ? Number.NaN : Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+
+  return {
+    history,
+    marketData: {
+      marketCapUsd: numberOrNull(pool?.attributes?.market_cap_usd ?? pool?.attributes?.fdv_usd),
+      volume24hUsd: numberOrNull(pool?.attributes?.volume_usd?.h24),
+      liquidityUsd: numberOrNull(pool?.attributes?.reserve_in_usd)
+    }
+  };
 }
 
 function getEthereumBlockscoutBaseUrl(network: 'mainnet-beta' | 'devnet'): string {
@@ -9399,8 +9475,17 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
           sendResponse(await controller.getStateResponse());
           break;
         case 'wallet_import':
-          await controller.createMnemonicWalletSet(message.mnemonic, message.password, 'imported-mnemonic', message.biometricUnlockConfig);
+          await controller.createMnemonicWalletSet(
+            message.mnemonic,
+            message.password,
+            'imported-mnemonic',
+            message.biometricUnlockConfig,
+            message.solanaAccounts
+          );
           sendResponse(await controller.getStateResponse());
+          break;
+        case 'wallet_scan_mnemonic_accounts':
+          sendResponse(await controller.scanMnemonicAccounts(message.mnemonic, message.count));
           break;
         case 'wallet_import_private_key':
           await controller.createWallet(
@@ -9595,6 +9680,9 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
               programId: message.programId
             })
           );
+          break;
+        case 'wallet_get_token_activity':
+          sendResponse(await controller.getTokenActivity(message.accountAddress, message.limit));
           break;
         case 'wallet_stake_create':
           sendResponse(

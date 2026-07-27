@@ -36,6 +36,10 @@ export type MobileShyftActivity = {
   signature: string;
   status: 'success' | 'failed' | 'unknown';
   source: 'shyft';
+  assetIds?: string[];
+  feeLabel?: string;
+  fromAddress?: string;
+  toAddress?: string;
 };
 
 function normalizeRemoteImageUri(uri?: string) {
@@ -241,7 +245,16 @@ export type MobileTokenPriceHistoryPoint = {
   priceUsd: number;
 };
 
-export async function fetchMobileSolanaTokenPriceHistory(mint: string): Promise<MobileTokenPriceHistoryPoint[]> {
+export type MobileTokenMarketData = {
+  marketCapUsd: number | null;
+  volume24hUsd: number | null;
+  liquidityUsd: number | null;
+};
+
+export async function fetchMobileSolanaTokenMarket(mint: string): Promise<{
+  history: MobileTokenPriceHistoryPoint[];
+  marketData: MobileTokenMarketData;
+}> {
   const baseUrl = 'https://api.geckoterminal.com/api/v2';
   const poolsResponse = await fetch(
     `${baseUrl}/networks/solana/tokens/${encodeURIComponent(mint)}/pools?page=1`
@@ -252,12 +265,20 @@ export async function fetchMobileSolanaTokenPriceHistory(mint: string): Promise<
   const poolsPayload = (await poolsResponse.json()) as {
     data?: Array<{
       id?: string;
+      attributes?: {
+        market_cap_usd?: string | null;
+        fdv_usd?: string | null;
+        reserve_in_usd?: string | null;
+        volume_usd?: { h24?: string | null };
+      };
       relationships?: { base_token?: { data?: { id?: string } } };
     }>;
   };
   const pool = poolsPayload.data?.[0];
   const poolAddress = pool?.id?.replace(/^solana_/, '');
-  if (!poolAddress) return [];
+  if (!poolAddress) {
+    return { history: [], marketData: { marketCapUsd: null, volume24hUsd: null, liquidityUsd: null } };
+  }
 
   const baseTokenId = pool?.relationships?.base_token?.data?.id?.replace(/^solana_/, '');
   const historyUrl = new URL(
@@ -276,10 +297,23 @@ export async function fetchMobileSolanaTokenPriceHistory(mint: string): Promise<
     data?: { attributes?: { ohlcv_list?: unknown[][] } };
   };
 
-  return (historyPayload.data?.attributes?.ohlcv_list ?? [])
+  const history = (historyPayload.data?.attributes?.ohlcv_list ?? [])
     .map((row) => ({ timestamp: Number(row[0]), priceUsd: Number(row[4]) }))
     .filter((point) => Number.isFinite(point.timestamp) && Number.isFinite(point.priceUsd) && point.priceUsd >= 0)
     .sort((left, right) => left.timestamp - right.timestamp);
+  const numberOrNull = (value: string | null | undefined) => {
+    const parsed = value == null ? Number.NaN : Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+
+  return {
+    history,
+    marketData: {
+      marketCapUsd: numberOrNull(pool?.attributes?.market_cap_usd ?? pool?.attributes?.fdv_usd),
+      volume24hUsd: numberOrNull(pool?.attributes?.volume_usd?.h24),
+      liquidityUsd: numberOrNull(pool?.attributes?.reserve_in_usd)
+    }
+  };
 }
 
 export type MobileJupiterToken = {
@@ -986,6 +1020,26 @@ function normalizeMobileShyftActivity(entry: Record<string, unknown>): MobileShy
       'tokenAddress'
     ]) ??
     formatTypeLabel(type);
+  const actionInfo = actions
+    .map((action) => (typeof action.info === 'object' && action.info ? (action.info as Record<string, unknown>) : null))
+    .filter((info): info is Record<string, unknown> => !!info);
+  const assetIds = Array.from(
+    new Set(
+      actionInfo.flatMap((info) =>
+        [
+          extractActionAsset(info),
+          extractStringFromRecord(info, ['mint', 'token_address', 'tokenAddress', 'asset_address', 'assetAddress'])
+        ].filter((value): value is string => !!value)
+      )
+    )
+  );
+  const fromAddress =
+    actionInfo.map((info) => extractStringFromRecord(info, ['sender', 'source', 'from', 'from_address', 'fromAddress'])).find(Boolean) ??
+    undefined;
+  const toAddress =
+    actionInfo.map((info) => extractStringFromRecord(info, ['receiver', 'recipient', 'destination', 'to', 'to_address', 'toAddress'])).find(Boolean) ??
+    undefined;
+  const fee = extractAmountFromRecord(entry, ['fee', 'transaction_fee', 'transactionFee']);
 
   return {
     id: signature,
@@ -996,7 +1050,11 @@ function normalizeMobileShyftActivity(entry: Record<string, unknown>): MobileShy
     timestamp: parseTimestampMs(entry.timestamp),
     signature,
     status: normalizeStatus(entry.status),
-    source: 'shyft'
+    source: 'shyft',
+    assetIds,
+    feeLabel: fee ? `${fee} SOL` : undefined,
+    fromAddress,
+    toAddress
   };
 }
 

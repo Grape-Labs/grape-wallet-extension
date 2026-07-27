@@ -302,6 +302,23 @@ function formatUnitPrice(value: number | null | undefined): string | null {
   }).format(value);
 }
 
+function formatCompactUsd(value: number | null | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 'Unavailable';
+  const absoluteValue = Math.abs(value);
+  const units = [
+    { threshold: 1_000_000_000_000, suffix: 'T' },
+    { threshold: 1_000_000_000, suffix: 'B' },
+    { threshold: 1_000_000, suffix: 'M' },
+    { threshold: 1_000, suffix: 'K' }
+  ];
+  const unit = units.find((candidate) => absoluteValue >= candidate.threshold);
+  if (!unit) {
+    return `$${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+  }
+  const compactValue = value / unit.threshold;
+  return `$${compactValue.toFixed(1).replace(/\.0$/, '')}${unit.suffix}`;
+}
+
 function formatAddress(address: string | undefined): string {
   if (!address) {
     return 'Unknown';
@@ -936,6 +953,7 @@ function TokenPriceChart(props: {
   history: TokenPriceHistoryPoint[];
   symbol?: string;
   currentPrice?: number | null;
+  marketData?: TokenDetailsResponse['marketData'];
 }) {
   const [range, setRange] = useState<7 | 30 | 90>(30);
   const points = props.history.slice(-range);
@@ -1014,6 +1032,13 @@ function TokenPriceChart(props: {
         <span>{new Date(points[0].timestamp * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>
         <span>{new Date(points[points.length - 1].timestamp * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>
       </div>
+      {props.marketData ? (
+        <div className="asset-market-data">
+          <div><span>Market cap</span><strong>{formatCompactUsd(props.marketData.marketCapUsd)}</strong></div>
+          <div><span>24h volume</span><strong>{formatCompactUsd(props.marketData.volume24hUsd)}</strong></div>
+          <div><span>Liquidity</span><strong>{formatCompactUsd(props.marketData.liquidityUsd)}</strong></div>
+        </div>
+      ) : null}
     </Card>
   );
 }
@@ -1458,6 +1483,9 @@ function PopupPage() {
   const [activityLoading, setActivityLoading] = useState(false);
   const [activityError, setActivityError] = useState<string | null>(null);
   const [expandedActivitySignature, setExpandedActivitySignature] = useState<string | null>(null);
+  const [tokenActivity, setTokenActivity] = useState<WalletActivityItem[]>([]);
+  const [tokenActivityLoading, setTokenActivityLoading] = useState(false);
+  const [tokenActivityError, setTokenActivityError] = useState<string | null>(null);
   const [stakeAccounts, setStakeAccounts] = useState<StakeAccountRow[]>([]);
   const [stakeValidators, setStakeValidators] = useState<StakeValidatorRow[]>([]);
   const [stakeSource, setStakeSource] = useState<'shyft' | 'rpc' | 'none'>('none');
@@ -1895,7 +1923,7 @@ function PopupPage() {
   }, [homeTab, view, state?.wallet.setup, state?.session.locked, state?.activeWallet?.signerKind, state?.wallet.selectedWalletId, state?.wallet.selectedNetwork]);
 
   useEffect(() => {
-    if (homeTab !== 'activity' || state?.wallet.setup !== 'ready' || view !== 'home') {
+    if (homeTab !== 'activity' || view !== 'home' || state?.wallet.setup !== 'ready') {
       return;
     }
 
@@ -3305,11 +3333,31 @@ function PopupPage() {
     }
   }
 
+  async function refreshTokenActivity(accountAddress: string) {
+    setTokenActivityLoading(true);
+    setTokenActivityError(null);
+    try {
+      const response = await sendRuntimeMessage<WalletActivityResponse>({
+        type: 'wallet_get_token_activity',
+        accountAddress,
+        limit: 20
+      });
+      setTokenActivity(response.items);
+    } catch (error) {
+      setTokenActivity([]);
+      setTokenActivityError(error instanceof Error ? error.message : 'Unable to load token activity.');
+    } finally {
+      setTokenActivityLoading(false);
+    }
+  }
+
   function openAssetDetails(nextToken: TokenHolding) {
     setAssetId(`${nextToken.mint}:${nextToken.programId}`);
     setSelectedCollectible(null);
     setAssetDetails(null);
     setAssetDetailsError(null);
+    setTokenActivity([]);
+    setTokenActivityError(null);
     setAssetJsonMetadata(null);
     setAssetActionMode(null);
     setTokenActionError(null);
@@ -3318,6 +3366,7 @@ function PopupPage() {
     setBurnPassword('');
     setView('asset');
     void refreshAssetDetails(nextToken);
+    void refreshTokenActivity(nextToken.accountAddress);
   }
 
   function openCollectibleDetails(item: CollectibleItem) {
@@ -6561,19 +6610,23 @@ function PopupPage() {
     return (
       <>
         <Card className="asset-detail-card">
-          <div className="send-flow-header">
+          <div className="send-flow-header asset-detail-topbar">
             <button type="button" className="send-back-button" onClick={() => setView('home')} aria-label="Back to wallet">
               <ArrowLeft size={20} />
             </button>
-            <h2>{isCollectibleView ? 'NFT Details' : assetDetails.name ?? assetDetails.symbol ?? 'Token'}</h2>
-          </div>
-
-          <div className="asset-detail-hero">
             <TokenAvatar
               token={{ symbol: assetDetails.symbol, logoUri: tokenImage }}
               fallbackLabel={assetDetails.symbol?.slice(0, 1) ?? 'T'}
             />
+            <div className="asset-detail-title">
+              <h2>{isCollectibleView ? assetDetails.name ?? 'NFT' : assetDetails.name ?? assetDetails.symbol ?? 'Token'}</h2>
+              <span>{assetDetails.symbol ?? formatAddress(assetDetails.mint)}</span>
+            </div>
+          </div>
+
+          <div className="asset-detail-hero">
             <div className="asset-detail-copy">
+              <span className="asset-detail-kicker">{isCollectibleView ? 'Collectible' : 'Your balance'}</span>
               <div className="hero-balance asset-detail-balance">
                 {isCollectibleView
                   ? assetDetails.name ?? selectedCollectible?.name ?? 'NFT'
@@ -6591,9 +6644,11 @@ function PopupPage() {
             <div className="quick-actions compact asset-detail-actions">
               <button type="button" className="quick-action-card" onClick={() => openSend(assetId)} aria-label="Send token" title="Send" disabled={isWatchOnlyWallet}>
                 <span className="quick-action-icon"><SendHorizontal size={18} /></span>
+                <span>Send</span>
               </button>
               <button type="button" className="quick-action-card" onClick={() => openSwapForAsset(assetId)} aria-label="Swap token" title="Swap" disabled={isWatchOnlyWallet}>
                 <span className="quick-action-icon"><ArrowLeftRight size={18} /></span>
+                <span>Swap</span>
               </button>
               <button
                 type="button"
@@ -6611,6 +6666,7 @@ function PopupPage() {
                 disabled={isWatchOnlyWallet || (canBurn ? !canBurn : !canCloseAccount)}
               >
                 <span className="quick-action-icon">{detailActionIcon}</span>
+                <span>Manage</span>
               </button>
             </div>
           ) : (
@@ -6624,6 +6680,7 @@ function PopupPage() {
                 disabled={isWatchOnlyWallet || !selectedCollectible?.accountAddress || !selectedCollectible?.programId}
               >
                 <span className="quick-action-icon"><SendHorizontal size={18} /></span>
+                <span>Send</span>
               </button>
             </div>
           )}
@@ -6634,9 +6691,15 @@ function PopupPage() {
             history={assetDetails.priceHistory ?? []}
             symbol={assetDetails.symbol}
             currentPrice={selectedTokenHolding?.priceUsd}
+            marketData={assetDetails.marketData}
           />
         ) : null}
 
+        <details className="asset-advanced-details" open={isCollectibleView}>
+          <summary>
+            <span>{isCollectibleView ? 'NFT details' : 'Advanced token details'}</span>
+            <span className="muted">{isCollectibleView ? 'Collection and metadata' : 'Addresses, authorities, and metadata'}</span>
+          </summary>
         <Card title={isCollectibleView ? 'NFT Details' : 'Token details'}>
           <div className="stack asset-detail-info">
             {isCollectibleView && selectedCollectible?.collectionId ? (
@@ -6727,6 +6790,40 @@ function PopupPage() {
               </Card>
             ) : null}
           </>
+        ) : null}
+        </details>
+
+        {!isCollectibleView && (tokenActivityLoading || tokenActivity.length > 0) ? (
+          <Card title="Activity" className="asset-activity-card">
+            {tokenActivityLoading ? <p className="muted">Loading token activity...</p> : null}
+            {!tokenActivityLoading && tokenActivity.length > 0 ? (
+              <div className="activity-list">
+                {tokenActivity.slice(0, 5).map((item) => (
+                  <ActivityRow
+                    key={item.signature}
+                    item={item}
+                    expanded={expandedActivitySignature === item.signature}
+                    network={wallet.selectedNetwork}
+                    onToggle={() =>
+                      setExpandedActivitySignature((current) => (current === item.signature ? null : item.signature))
+                    }
+                  />
+                ))}
+              </div>
+            ) : null}
+            {tokenActivity.length > 5 ? (
+              <Button
+                tone="secondary"
+                className="button-block"
+                onClick={() => {
+                  setHomeTab('activity');
+                  setView('home');
+                }}
+              >
+                View all wallet activity
+              </Button>
+            ) : null}
+          </Card>
         ) : null}
 
         {!isCollectibleView && assetActionMode === 'burn' ? (
@@ -8852,7 +8949,7 @@ function PopupPage() {
 
   return (
     <PageShell
-      eyebrow={view === 'home' ? null : undefined}
+      eyebrow={view === 'home' || view === 'asset' ? null : undefined}
       title={
         view === 'home'
           ? ''
@@ -8865,7 +8962,7 @@ function PopupPage() {
                 : view === 'bridge'
                   ? 'Bridge'
                 : view === 'asset'
-                  ? 'Token'
+                  ? ''
                   : view === 'approval'
                     ? 'Review request'
                   : view === 'security'
@@ -8884,7 +8981,7 @@ function PopupPage() {
                 : view === 'bridge'
                   ? 'Bridge native assets across the wallets you already manage in Grape.'
                 : view === 'asset'
-                  ? 'Burn or close token accounts safely.'
+                  ? undefined
                   : view === 'approval'
                     ? 'Approve or reject this request from the currently open wallet surface.'
                   : view === 'security'

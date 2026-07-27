@@ -92,6 +92,10 @@ export type MobileActivity = {
   signature: string;
   status: 'success' | 'failed' | 'unknown';
   source?: 'local' | 'shyft' | 'rpc';
+  assetIds?: string[];
+  feeLabel?: string;
+  fromAddress?: string;
+  toAddress?: string;
 };
 
 export type MobileWalletState = {
@@ -144,6 +148,14 @@ export type MobileWalletExport = {
   chain: GrapeChain;
   privateKey: string;
   sourceKind: 'mnemonic' | 'private-key';
+};
+
+export type MobileDerivedAccountCandidate = {
+  index: number;
+  address: string;
+  derivationPath: string;
+  lamports: number;
+  balanceLabel: string;
 };
 
 export type MobileDeviceLinkSession = DeviceLinkSessionRecord;
@@ -349,6 +361,7 @@ export async function createWalletSet(input: {
   source: MobileWalletSource;
   credentialKind?: MobileCredentialKind;
   passkeyWallet?: MobilePasskeyWalletConfig;
+  solanaAccounts?: MobileDerivedAccountCandidate[];
 }): Promise<MobileWalletState> {
   const mnemonic = input.mnemonic.trim();
   if (!validateWalletMnemonic(mnemonic)) {
@@ -370,7 +383,7 @@ export async function createWalletSet(input: {
   const passwordSalt = createSecretRef();
   const passwordHash = await createPasswordHash(input.password, passwordSalt);
   const walletLabel = getNextWalletLabel([]);
-  const wallets = await createDerivedWallets(secretRef, mnemonic, input.source, walletLabel);
+  const wallets = await createDerivedWallets(secretRef, mnemonic, input.source, walletLabel, input.solanaAccounts);
 
   const state: MobileWalletState = {
     setup: 'ready',
@@ -381,7 +394,10 @@ export async function createWalletSet(input: {
     themeMotionIntensity: DEFAULT_THEME_MOTION_INTENSITY,
     autoConnectEnabled: DEFAULT_AUTO_CONNECT_ENABLED,
     dappApprovalMode: DEFAULT_DAPP_APPROVAL_MODE,
-    selectedWalletIds: Object.fromEntries(wallets.map((wallet) => [wallet.chain, wallet.id])),
+    selectedWalletIds: wallets.reduce<Partial<Record<GrapeChain, string>>>((selected, wallet) => {
+      if (!selected[wallet.chain]) selected[wallet.chain] = wallet.id;
+      return selected;
+    }, {}),
     trustedDappOrigins: [],
     trackedReputationSpaceIds: [],
     trackedVerificationSpaceIds: [GRAPE_VERIFICATION_REQUIRED_DAO_ID],
@@ -406,6 +422,7 @@ export async function addWalletSet(input: {
   state: MobileWalletState;
   mnemonic: string;
   source: MobileWalletSource;
+  solanaAccounts?: MobileDerivedAccountCandidate[];
 }): Promise<MobileWalletState> {
   const mnemonic = input.mnemonic.trim();
   if (!validateWalletMnemonic(mnemonic)) {
@@ -414,7 +431,7 @@ export async function addWalletSet(input: {
 
   const walletLabel = getNextWalletLabel(input.state.wallets);
   const secretRef = createSecretRef();
-  const addedWallets = await createDerivedWallets(secretRef, mnemonic, input.source, walletLabel);
+  const addedWallets = await createDerivedWallets(secretRef, mnemonic, input.source, walletLabel, input.solanaAccounts);
   const duplicateWallet = addedWallets.find((wallet) => findExistingWalletByAddress(input.state.wallets, wallet.chain, wallet.address));
   if (duplicateWallet) {
     throw new Error(`This ${duplicateWallet.chain} wallet already exists in Grape.`);
@@ -428,7 +445,10 @@ export async function addWalletSet(input: {
     wallets: [...input.state.wallets, ...addedWallets],
     selectedWalletIds: {
       ...input.state.selectedWalletIds,
-      ...Object.fromEntries(addedWallets.map((wallet) => [wallet.chain, wallet.id]))
+      ...addedWallets.reduce<Partial<Record<GrapeChain, string>>>((selected, wallet) => {
+        if (!selected[wallet.chain]) selected[wallet.chain] = wallet.id;
+        return selected;
+      }, {})
     }
   };
 
@@ -622,6 +642,16 @@ export async function loadWalletActivity(wallet: MobileWallet): Promise<MobileAc
     default:
       return [];
   }
+}
+
+export async function loadMobileTokenActivity(wallet: MobileWallet, accountAddress: string): Promise<MobileActivity[]> {
+  if (wallet.chain !== 'solana') return [];
+  const history = await fetchMobileShyftTransactionHistory(accountAddress, DEFAULT_SOLANA_NETWORK, 20).catch(() => []);
+  return history.map((entry) => ({
+    ...entry,
+    chain: 'solana' as const,
+    walletId: wallet.id
+  }));
 }
 
 function formatMobileActivityType(type: string): string {
@@ -1898,12 +1928,19 @@ async function createDerivedWallets(
   secretRef: string,
   mnemonic: string,
   source: MobileWalletSource,
-  walletLabel: string
+  walletLabel: string,
+  selectedSolanaAccounts?: MobileDerivedAccountCandidate[]
 ): Promise<MobileWallet[]> {
   const wallets: MobileWallet[] = [];
   const { deriveSolanaAccount0 } = loadSolanaDeriveModule();
   const solana = deriveSolanaAccount0(mnemonic);
-  wallets.push(createWallet(walletLabel, 'solana', solana.publicKey, solana.derivationPath, source, secretRef));
+  const solanaAccounts = selectedSolanaAccounts?.length
+    ? selectedSolanaAccounts
+    : [{ index: 0, address: solana.publicKey, derivationPath: solana.derivationPath, lamports: 0, balanceLabel: '0 SOL' }];
+  solanaAccounts.forEach((account, accountOffset) => {
+    const name = solanaAccounts.length > 1 ? `${walletLabel} · Solana ${accountOffset + 1}` : walletLabel;
+    wallets.push(createWallet(name, 'solana', account.address, account.derivationPath, source, secretRef));
+  });
 
   await tryAddDerivedWallet(wallets, async () => {
     const sui = deriveMobileSuiAccount0(mnemonic);
@@ -1923,6 +1960,27 @@ async function createDerivedWallets(
   }, 'monad');
 
   return wallets;
+}
+
+export async function scanMobileMnemonicAccounts(mnemonic: string, count = 10): Promise<MobileDerivedAccountCandidate[]> {
+  if (!validateWalletMnemonic(mnemonic.trim())) throw new Error('Recovery phrase is invalid.');
+  const { deriveSolanaAccount } = loadSolanaDeriveModule();
+  const { Connection, PublicKey } = loadSolanaWeb3Module();
+  const connection = new Connection(getMobileSolanaRpcUrl(DEFAULT_SOLANA_NETWORK), 'confirmed');
+  const accounts = Array.from({ length: count }, (_value, index) => {
+    const derivationPath = `m/44'/501'/${index}'/0'`;
+    const derived = deriveSolanaAccount(mnemonic, derivationPath);
+    return { index, address: derived.publicKey, derivationPath };
+  });
+  const accountInfos = await connection.getMultipleAccountsInfo(accounts.map((account) => new PublicKey(account.address)));
+  return accounts.map((account, index) => {
+    const lamports = accountInfos[index]?.lamports ?? 0;
+    return {
+      ...account,
+      lamports,
+      balanceLabel: `${(lamports / 1_000_000_000).toLocaleString(undefined, { maximumFractionDigits: 6 })} SOL`
+    };
+  });
 }
 
 function createWallet(
