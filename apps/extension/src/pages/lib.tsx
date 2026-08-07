@@ -12,20 +12,7 @@ function resolveSurface() {
     return 'panel';
   }
 
-  if (page === 'wallet') {
-    return 'page';
-  }
-
-  if (page !== 'popup') {
-    return 'page';
-  }
-
-  try {
-    const views = chrome.extension.getViews({ type: 'popup' });
-    return views.includes(window) ? 'popup' : 'page';
-  } catch {
-    return 'page';
-  }
+  return page === 'popup' ? 'popup' : 'page';
 }
 
 let surfacePort: chrome.runtime.Port | null = null;

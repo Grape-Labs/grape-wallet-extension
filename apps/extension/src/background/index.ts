@@ -1545,6 +1545,30 @@ class WalletController {
     return refreshPromise;
   }
 
+  async refreshAssetValues(chain?: GrapeChain) {
+    const walletState = await this.getWalletState();
+    const cache = await assetCacheStorage.get();
+    const targets = walletState.wallets
+      .filter((wallet) => !chain || wallet.chain === chain)
+      .flatMap((wallet) => {
+        const account = wallet.accounts.find((candidate) => candidate.id === wallet.selectedAccountId) ?? wallet.accounts[0];
+        if (!account) return [];
+        const network = walletState.chainState[wallet.chain].selectedNetwork;
+        const cached = cache[this.getAssetCacheKey(wallet.id, network, account.publicKey)];
+        if (cached && Date.now() - cached.cachedAt < ASSET_CACHE_TTL_MS) return [];
+        return [{ walletId: wallet.id, network, publicKey: account.publicKey }];
+      });
+
+    for (let index = 0; index < targets.length; index += 3) {
+      await Promise.allSettled(
+        targets.slice(index, index + 3).map((target) =>
+          this.refreshAssetsCache(target.walletId, target.network, target.publicKey)
+        )
+      );
+    }
+    return { refreshed: targets.length };
+  }
+
   async previewChainToken(tokenAddress: string): Promise<ChainTokenPreviewResponse> {
     const { walletState, selectedWallet } = await this.ensureReadyWallet();
     const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
@@ -3646,6 +3670,11 @@ class WalletController {
   async revokePermission(origin: string) {
     const permissions = await permissionsStorage.get();
     await permissionsStorage.set(revokeOriginPermissions(permissions, origin));
+    return this.getStateResponse();
+  }
+
+  async revokeAllPermissions() {
+    await permissionsStorage.set([]);
     return this.getStateResponse();
   }
 
@@ -9639,6 +9668,9 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
         case 'wallet_get_assets':
           sendResponse(await controller.getAssets({ staleWhileRevalidate: message.staleWhileRevalidate }));
           break;
+        case 'wallet_refresh_asset_values':
+          sendResponse(await controller.refreshAssetValues(message.chain));
+          break;
         case 'wallet_get_reputation':
           sendResponse(await controller.getReputation());
           break;
@@ -9829,6 +9861,9 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
           break;
         case 'wallet_revoke_permission':
           sendResponse(await controller.revokePermission(message.origin));
+          break;
+        case 'wallet_revoke_all_permissions':
+          sendResponse(await controller.revokeAllPermissions());
           break;
         case 'approval_get':
           sendResponse(await controller.getApproval(message.approvalId));

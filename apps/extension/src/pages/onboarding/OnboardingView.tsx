@@ -1021,6 +1021,7 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
                               type="button"
                               key={account.derivationPath}
                               className={`ledger-account-card ${selected ? 'active' : ''}`.trim()}
+                              aria-pressed={selected}
                               onClick={() =>
                                 setSelectedMnemonicAccounts((current) =>
                                   selected
@@ -1029,8 +1030,17 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
                                 )
                               }
                             >
-                              <span><strong>Account {account.index + 1}</strong> · {account.balanceLabel}</span>
-                              <span className="muted mono">{formatAddress(account.publicKey)} · {account.derivationPath}</span>
+                              <span className="ledger-account-card-copy">
+                                <span className="ledger-account-card-heading">
+                                  <strong>Account {account.index + 1}</strong>
+                                  <span className="ledger-account-balance">{account.balanceLabel}</span>
+                                </span>
+                                <span className="ledger-account-address mono">{formatAddress(account.publicKey)}</span>
+                                <span className="ledger-account-path mono">{account.derivationPath}</span>
+                              </span>
+                              <span className="ledger-account-selection" aria-hidden="true">
+                                {selected ? '✓' : ''}
+                              </span>
                             </button>
                           );
                         })}

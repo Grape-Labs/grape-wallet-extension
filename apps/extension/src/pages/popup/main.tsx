@@ -183,6 +183,7 @@ const SOLANA_LOGO_URL =
   'https://media.solana-cdn.com/image/width=100/https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/solana/info/logo.png';
 const GRAPE_LOGO_URL = chrome.runtime.getURL('icons/grape_logo_white.png');
 const ASSET_CACHE_STORAGE_KEY = 'grape:asset-cache';
+type AssetValueCache = Record<string, { cachedAt: number; data: WalletAssetsResponse }>;
 const REBALANCE_ADDON_STORAGE_KEY = 'grape:experimental-rebalancer-enabled:v1';
 const CHAIN_OPTIONS = [
   { id: 'solana', label: 'Solana', shortLabel: 'SOL', enabled: true },
@@ -254,7 +255,7 @@ function buildAssetCacheKey(state: WalletStateResponse | null): string | null {
     return null;
   }
 
-  return `${state.wallet.selectedChain}:${state.activeWallet.id}:${state.wallet.selectedNetwork}:${state.activeAccount.publicKey}`;
+  return `${state.activeWallet.id}:${state.wallet.selectedNetwork}:${state.activeAccount.publicKey}`;
 }
 
 function formatLamports(lamports: number | null): string {
@@ -1528,6 +1529,7 @@ function PopupPage() {
   const [incidentError, setIncidentError] = useState<string | null>(null);
   const [unlockWelcomeMenuOpen, setUnlockWelcomeMenuOpen] = useState(false);
   const [walletSwitcherOpen, setWalletSwitcherOpen] = useState(false);
+  const [walletAssetValueCache, setWalletAssetValueCache] = useState<AssetValueCache>({});
   const [walletSwitcherChain, setWalletSwitcherChain] = useState<WalletStateResponse['wallet']['selectedChain']>('solana');
   const [walletMenuOpen, setWalletMenuOpen] = useState(false);
   const [copiedWalletId, setCopiedWalletId] = useState<string | null>(null);
@@ -1950,7 +1952,8 @@ function PopupPage() {
         return;
       }
 
-      const nextCache = assetCacheChange.newValue as Record<string, { data?: WalletAssetsResponse }>;
+      const nextCache = assetCacheChange.newValue as AssetValueCache;
+      setWalletAssetValueCache(nextCache);
       const nextEntry = nextCache[cacheKey];
       if (!nextEntry?.data) {
         return;
@@ -1963,6 +1966,15 @@ function PopupPage() {
     chrome.storage.onChanged.addListener(handleStorageChange);
     return () => chrome.storage.onChanged.removeListener(handleStorageChange);
   }, [state]);
+
+  useEffect(() => {
+    if (!walletSwitcherOpen) return;
+    void chrome.storage.session.get(ASSET_CACHE_STORAGE_KEY).then((stored) => {
+      const cache = stored[ASSET_CACHE_STORAGE_KEY];
+      if (cache && typeof cache === 'object') setWalletAssetValueCache(cache as AssetValueCache);
+    });
+    void sendRuntimeMessage({ type: 'wallet_refresh_asset_values' }).catch(() => undefined);
+  }, [walletSwitcherOpen]);
 
   useEffect(() => {
     if (view === 'asset') {
@@ -4786,6 +4798,18 @@ function PopupPage() {
       ])
     );
     const selectedWalletIdForVisibleChain = visibleChain ? getSelectedWalletIdForChain(wallet, visibleChain.id) : undefined;
+    const getWalletCachedValue = (walletEntry: WalletStateResponse['wallet']['wallets'][number]) => {
+      const account =
+        walletEntry.accounts.find((candidate) => candidate.id === walletEntry.selectedAccountId) ??
+        walletEntry.accounts[0];
+      if (!account) return null;
+      const network = wallet.chainState[walletEntry.chain].selectedNetwork;
+      return walletAssetValueCache[`${walletEntry.id}:${network}:${account.publicKey}`] ?? null;
+    };
+    const cachedWalletValues = wallet.wallets
+      .map((walletEntry) => getWalletCachedValue(walletEntry)?.data.totalUsdValue)
+      .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+    const allWalletsTotal = cachedWalletValues.reduce((sum, value) => sum + value, 0);
     const groupedWallets = [
       { key: 'hardware', label: 'Hardware Wallets' },
       { key: 'imported', label: 'Imported Wallets' },
@@ -4816,6 +4840,11 @@ function PopupPage() {
         <DropdownMenu.Portal>
           <DropdownMenu.Content sideOffset={8} align="end" className="popup-menu-content wallet-switcher-menu">
             <div className="popup-menu-section">Wallets</div>
+            <div className="wallet-switcher-total">
+              <span>Total cached value</span>
+              <strong>{maskSensitiveValue(formatUsd(allWalletsTotal) ?? '$0.00', privacyMode)}</strong>
+              <small>{cachedWalletValues.length} of {wallet.wallets.length} wallets valued</small>
+            </div>
             {availableChains.length > 1 ? (
               <div className="wallet-switcher-chain-tabs" role="tablist" aria-label="Wallet chains">
                 {availableChains.map((chain) => {
@@ -4854,6 +4883,8 @@ function PopupPage() {
                       walletEntry.accounts[0]?.publicKey;
                     const isActiveWallet = selectedWalletIdForVisibleChain === walletEntry.id;
                     const sourceBadge = getWalletSourceBadge(walletEntry.source, walletEntry.signer.kind);
+                    const cachedValue = getWalletCachedValue(walletEntry);
+                    const cachedValueLabel = formatUsd(cachedValue?.data.totalUsdValue);
 
                     return (
                       <div key={walletEntry.id} className="wallet-menu-row">
@@ -4915,7 +4946,10 @@ function PopupPage() {
                             </div>
                             <div className="muted mono">{formatAddress(walletPublicKey)}</div>
                           </div>
-                          {isActiveWallet ? <StatusPill tone="success">Active</StatusPill> : null}
+                          <div className="wallet-menu-value">
+                            <strong>{maskSensitiveValue(cachedValueLabel ?? '—', privacyMode)}</strong>
+                            {isActiveWallet ? <StatusPill tone="success">Active</StatusPill> : null}
+                          </div>
                         </DropdownMenu.Item>
                       </div>
                     );
@@ -5071,6 +5105,7 @@ function PopupPage() {
           <div className="quick-actions compact home-quick-actions">
             <button type="button" className="quick-action-card" onClick={() => openSend(nativeAssetId)} aria-label="Send" title="Send" disabled={isWatchOnlyWallet}>
               <span className="quick-action-icon"><SendHorizontal size={18} /></span>
+              <span>Send</span>
             </button>
             <button
               type="button"
@@ -5089,6 +5124,7 @@ function PopupPage() {
               disabled={isWatchOnlyWallet || !isSolanaChain}
             >
               <span className="quick-action-icon"><ArrowLeftRight size={18} /></span>
+              <span>Swap</span>
             </button>
             <button
               type="button"
@@ -5104,9 +5140,11 @@ function PopupPage() {
               disabled={isWatchOnlyWallet || isSuiChain}
             >
               <span className="quick-action-icon"><ArrowUpRight size={18} /></span>
+              <span>Bridge</span>
             </button>
             <button type="button" className="quick-action-card" onClick={() => setView('receive')} aria-label="Receive" title="Receive">
               <span className="quick-action-icon"><QrCode size={18} /></span>
+              <span>Receive</span>
             </button>
           </div>
 
@@ -5189,7 +5227,7 @@ function PopupPage() {
         <Tabs.Root value={activeHomeTab} onValueChange={(value) => setHomeTab(value as HomeTab)}>
           <Tabs.List className="content-tabs wallet-home-tabs" aria-label="Wallet content">
             <Tabs.Trigger className="content-tab content-tab-primary" value="tokens">
-              <span className="content-tab-copy">Tokens</span>
+              <span className="content-tab-copy">Assets</span>
             </Tabs.Trigger>
             {isSolanaChain && rebalanceAddonEnabled ? (
               <Tabs.Trigger className="content-tab content-tab-primary" value="rebalance">
@@ -5213,7 +5251,7 @@ function PopupPage() {
             {isSolanaChain ? (
               <>
                 <Tabs.Trigger className="content-tab content-tab-secondary" value="collectibles">
-                  <span className="content-tab-copy">Collectibles</span>
+                  <span className="content-tab-copy">NFTs</span>
                 </Tabs.Trigger>
                 <Tabs.Trigger className="content-tab content-tab-secondary" value="staking">
                   <span className="content-tab-copy">Staking</span>

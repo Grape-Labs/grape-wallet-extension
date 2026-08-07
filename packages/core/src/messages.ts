@@ -585,6 +585,10 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     staleWhileRevalidate: z.boolean().optional()
   }),
   z.object({
+    type: z.literal('wallet_refresh_asset_values'),
+    chain: z.enum(['solana', 'sui', 'monad', 'ethereum']).optional()
+  }),
+  z.object({
     type: z.literal('wallet_get_reputation')
   }),
   z.object({
@@ -750,6 +754,9 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('wallet_revoke_permission'),
     origin: z.string().url()
+  }),
+  z.object({
+    type: z.literal('wallet_revoke_all_permissions')
   }),
   z.object({
     type: z.literal('approval_get'),

@@ -26,6 +26,7 @@ import {
   View
 } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Polygon, Polyline, Stop, SvgUri, Text as SvgText } from 'react-native-svg';
 import {
@@ -173,6 +174,8 @@ const MOBILE_SWAP_SLIPPAGE_BPS = 50;
 const MOBILE_REBALANCE_STABLE_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const MOBILE_POPULAR_SWAP_SYMBOLS = ['USDC', 'USDT', 'SOL', 'JUP', 'BONK'] as const;
 const PASSKEY_WALLET_CREATION_ENABLED = false;
+const MOBILE_WALLET_VALUE_CACHE_KEY = 'grape:wallet-value-cache:v1';
+const MOBILE_WALLET_VALUE_CACHE_TTL_MS = 5 * 60 * 1000;
 
 function mobileJupiterTokenToAsset(
   token: MobileJupiterToken,
@@ -1178,6 +1181,7 @@ export default function App() {
   const [confirmPasskeyOnlyAccess, setConfirmPasskeyOnlyAccess] = useState(false);
   const [unlockPassword, setUnlockPassword] = useState('');
   const [assets, setAssets] = useState<MobileAsset[]>([]);
+  const [walletValueCache, setWalletValueCache] = useState<Record<string, { valueUsd: number; cachedAt: number }>>({});
   const [remoteActivity, setRemoteActivity] = useState<MobileActivity[]>([]);
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const [assetPriceHistory, setAssetPriceHistory] = useState<MobileTokenPriceHistoryPoint[]>([]);
@@ -1447,6 +1451,54 @@ export default function App() {
     () => assets.find((asset) => asset.id === selectedAssetId) ?? null,
     [assets, selectedAssetId]
   );
+  useEffect(() => {
+    void AsyncStorage.getItem(MOBILE_WALLET_VALUE_CACHE_KEY).then((raw) => {
+      if (!raw) return;
+      try {
+        setWalletValueCache(JSON.parse(raw) as Record<string, { valueUsd: number; cachedAt: number }>);
+      } catch {
+        // Ignore corrupt display-only cache entries.
+      }
+    });
+  }, []);
+  useEffect(() => {
+    if (!selectedWallet || assetsLoading) return;
+    const valueUsd = assets.reduce((sum, asset) => sum + parseMobileUsdLabel(asset.valueLabel), 0);
+    if (!Number.isFinite(valueUsd)) return;
+    setWalletValueCache((current) => {
+      const next = { ...current, [selectedWallet.id]: { valueUsd, cachedAt: Date.now() } };
+      void AsyncStorage.setItem(MOBILE_WALLET_VALUE_CACHE_KEY, JSON.stringify(next));
+      return next;
+    });
+  }, [assets, assetsLoading, selectedWallet]);
+  useEffect(() => {
+    if (!walletListExpanded) return;
+    let active = true;
+    const staleWallets = walletState.wallets.filter((candidate) => {
+      const cached = walletValueCache[candidate.id];
+      return !cached || Date.now() - cached.cachedAt >= MOBILE_WALLET_VALUE_CACHE_TTL_MS;
+    });
+    void (async () => {
+      for (let index = 0; index < staleWallets.length; index += 3) {
+        const batch = staleWallets.slice(index, index + 3);
+        const results = await Promise.allSettled(batch.map((candidate) => loadWalletAssetsFast(candidate)));
+        if (!active) return;
+        setWalletValueCache((current) => {
+          const next = { ...current };
+          results.forEach((result, resultIndex) => {
+            if (result.status !== 'fulfilled') return;
+            const valueUsd = result.value.reduce((sum, asset) => sum + parseMobileUsdLabel(asset.valueLabel), 0);
+            next[batch[resultIndex].id] = { valueUsd, cachedAt: Date.now() };
+          });
+          void AsyncStorage.setItem(MOBILE_WALLET_VALUE_CACHE_KEY, JSON.stringify(next));
+          return next;
+        });
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [walletListExpanded, walletState.wallets]);
   useEffect(() => {
     let active = true;
     setAssetPriceHistory([]);
@@ -2395,6 +2447,27 @@ export default function App() {
       ...walletState,
       trustedDappOrigins: walletState.trustedDappOrigins.filter((entry) => entry !== normalizedOrigin)
     });
+  }
+
+  function forgetAllTrustedDappOrigins() {
+    Alert.alert(
+      'Revoke all trusted apps?',
+      'Every trusted app will need your approval before connecting again.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Revoke all',
+          style: 'destructive',
+          onPress: () => {
+            setDiscoverConnectedOrigins([]);
+            void saveState({
+              ...walletState,
+              trustedDappOrigins: []
+            });
+          }
+        }
+      ]
+    );
   }
 
   async function handleSetDappApprovalMode(mode: MobileWalletState['dappApprovalMode']) {
@@ -5156,7 +5229,7 @@ export default function App() {
 
   function renderDiscoverTab() {
     return (
-      <View style={[styles.discoverScreen, { paddingBottom: footerInset + 92 }]}>
+      <View style={[styles.discoverScreen, { paddingBottom: footerInset }]}>
         <View style={styles.discoverBrowserBar}>
           <View style={styles.discoverBrowserBarPrimary}>
             <View style={styles.discoverHeaderCopy}>
@@ -5647,7 +5720,7 @@ export default function App() {
 
     return (
       <>
-        <View style={styles.heroCard}>
+        <View style={[styles.heroCard, styles.homeHeroCard]}>
           <View style={styles.cardTopRow}>
             <View style={styles.walletIdentity}>
               <Pressable
@@ -5661,7 +5734,9 @@ export default function App() {
               </Pressable>
               <View style={styles.walletIdentityCopy}>
                 <Text style={styles.cardName}>{selectedWallet?.name ?? '--'}</Text>
-                <Text style={styles.walletIdentityMeta}>{selectedChainMeta.label}</Text>
+                <Text style={styles.walletIdentityMeta}>
+                  {selectedChainMeta.label}{selectedWallet ? ` · ${shortenAddress(selectedWallet.address)}` : ''}
+                </Text>
               </View>
             </View>
             <Pressable style={styles.refreshChip} onPress={() => void handleRefreshAssets()}>
@@ -5669,10 +5744,6 @@ export default function App() {
                 <MaterialCommunityIcons name="refresh" size={22} color={activeTheme.text} />
               </Animated.View>
             </Pressable>
-          </View>
-
-          <View style={styles.addressRow}>
-            <Text style={styles.cardAddress}>{selectedWallet ? shortenAddress(selectedWallet.address) : '--'}</Text>
           </View>
 
           <View style={styles.balanceBlock}>
@@ -5697,48 +5768,44 @@ export default function App() {
 
           <View style={styles.quickActionsRow}>
             <Pressable style={styles.quickActionButton} onPress={() => openSendScreen()}>
-              <MaterialCommunityIcons name="send-outline" size={24} color={activeTheme.text} />
+              <View style={styles.quickActionIcon}>
+                <MaterialCommunityIcons name="send-outline" size={21} color={activeTheme.text} />
+              </View>
               <Text style={styles.quickActionLabel}>Send</Text>
-            </Pressable>
-            <Pressable style={styles.quickActionButton} onPress={() => setMainTab('receive')}>
-              <MaterialCommunityIcons name="qrcode" size={24} color={activeTheme.text} />
-              <Text style={styles.quickActionLabel}>Receive</Text>
             </Pressable>
             <Pressable
               style={selectedWallet?.chain === 'solana' ? styles.quickActionButton : styles.quickActionButtonDisabled}
               onPress={selectedWallet?.chain === 'solana' ? () => openSwapScreen() : undefined}
             >
-              <MaterialCommunityIcons name="swap-horizontal" size={24} color={selectedWallet?.chain === 'solana' ? activeTheme.text : activeTheme.muted} />
+              <View style={styles.quickActionIcon}>
+                <MaterialCommunityIcons name="swap-horizontal" size={21} color={selectedWallet?.chain === 'solana' ? activeTheme.text : activeTheme.muted} />
+              </View>
               <Text style={selectedWallet?.chain === 'solana' ? styles.quickActionLabel : styles.quickActionLabelMuted}>Swap</Text>
             </Pressable>
             <Pressable
               style={selectedWallet && bridgeDestinationChains.length > 0 ? styles.quickActionButton : styles.quickActionButtonDisabled}
               onPress={selectedWallet && bridgeDestinationChains.length > 0 ? () => openBridgeScreen() : undefined}
             >
-              <MaterialCommunityIcons
-                name="transit-connection-variant"
-                size={24}
-                color={selectedWallet && bridgeDestinationChains.length > 0 ? activeTheme.text : activeTheme.muted}
-              />
+              <View style={styles.quickActionIcon}>
+                <MaterialCommunityIcons
+                  name="transit-connection-variant"
+                  size={21}
+                  color={selectedWallet && bridgeDestinationChains.length > 0 ? activeTheme.text : activeTheme.muted}
+                />
+              </View>
               <Text style={selectedWallet && bridgeDestinationChains.length > 0 ? styles.quickActionLabel : styles.quickActionLabelMuted}>Bridge</Text>
             </Pressable>
-          </View>
-          {selectedWallet?.chain === 'solana' ? (
-            <Pressable style={styles.rebalanceShortcut} onPress={openRebalanceScreen}>
-              <MaterialCommunityIcons name="scale-balance" size={21} color={activeTheme.text} />
-              <View style={styles.rebalanceShortcutCopy}>
-                <Text style={styles.rebalanceShortcutTitle}>Rebalance portfolio</Text>
-                <Text style={styles.rebalanceShortcutHint}>Custom-weight tokens and tokenized stocks through USDC</Text>
+            <Pressable style={styles.quickActionButton} onPress={() => setMainTab('receive')}>
+              <View style={styles.quickActionIcon}>
+                <MaterialCommunityIcons name="qrcode" size={21} color={activeTheme.text} />
               </View>
-              <Feather name="chevron-right" size={18} color={activeTheme.muted} />
+              <Text style={styles.quickActionLabel}>Receive</Text>
             </Pressable>
-          ) : null}
+          </View>
         </View>
 
-        {renderSolanaCommunityShortcuts()}
-
         {chainWallets.length > 1 ? (
-          <View style={styles.section}>
+          <View style={[styles.section, styles.homeSection]}>
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>Wallets</Text>
               <Text style={styles.sectionHint}>{chainWallets.length} on {selectedChainMeta.label}</Text>
@@ -5767,7 +5834,7 @@ export default function App() {
           </View>
         ) : null}
 
-        <View style={styles.section}>
+        <View style={[styles.section, styles.homeSection]}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Assets</Text>
             <Text style={styles.sectionHint}>
@@ -5776,7 +5843,7 @@ export default function App() {
                 : `${visibleSortedAssets.length} asset${visibleSortedAssets.length === 1 ? '' : 's'}${walletState.hideZeroBalances && visibleSortedAssets.length !== assets.length ? ` · ${assets.length - visibleSortedAssets.length} hidden` : ''}`}
             </Text>
           </View>
-          <View style={styles.stack}>
+          <View style={styles.homeAssetList}>
             {assetsLoading ? (
               <View style={styles.loadingRow}>
                 <ActivityIndicator color={activeTheme.grape} />
@@ -5789,21 +5856,20 @@ export default function App() {
                 (() => {
                   const assetSubtitle = getAssetSubtitle(asset, selectedChainMeta.label, selectedChainMeta.short);
                   return (
-                    <Pressable key={asset.id} style={styles.assetRow} onPress={() => setSelectedAssetId(asset.id)}>
+                    <Pressable key={asset.id} style={[styles.assetRow, styles.homeAssetRow]} onPress={() => setSelectedAssetId(asset.id)}>
                       <View style={styles.assetGlyph}>
-                        {renderAssetGlyph(asset, 52, styles.assetGlyphText, styles.assetGlyphImage)}
+                        {renderAssetGlyph(asset, 42, styles.assetGlyphText, styles.assetGlyphImage)}
                       </View>
                       <View style={styles.assetCopy}>
                         <Text style={styles.assetName}>{asset.name}</Text>
                         {assetSubtitle ? <Text style={styles.assetMeta}>{assetSubtitle}</Text> : null}
                       </View>
                       <View style={styles.assetValueStack}>
-                        <Text style={styles.assetValue}>{maskValue(asset.amountLabel, walletState.privacyMode)}</Text>
                         {asset.valueLabel ? (
-                          <Text style={styles.assetValueMeta}>{maskValue(asset.valueLabel, walletState.privacyMode)}</Text>
+                          <Text style={styles.assetValue}>{maskValue(asset.valueLabel, walletState.privacyMode)}</Text>
                         ) : null}
+                        <Text style={styles.assetValueMeta}>{maskValue(asset.amountLabel, walletState.privacyMode)}</Text>
                       </View>
-                      <Feather name="chevron-right" size={20} color={activeTheme.muted} style={styles.rowChevronIcon} />
                     </Pressable>
                   );
                 })()
@@ -6810,6 +6876,17 @@ export default function App() {
       ...governance.daos.map((dao) => dao.daoId),
       ...walletState.trackedGovernanceDaoIds
     ]).size;
+    const cachedWalletValues = walletState.wallets
+      .map((wallet) => walletValueCache[wallet.id]?.valueUsd)
+      .filter((value): value is number => Number.isFinite(value));
+    const cachedWalletTotal = cachedWalletValues.reduce((sum, value) => sum + value, 0);
+    const formatCachedWalletValue = (value: number) =>
+      value.toLocaleString(undefined, {
+        style: 'currency',
+        currency: 'USD',
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      });
 
     const toggleSettingsSection = (section: string) => {
       setExpandedSettingsSections((previous) => {
@@ -7162,6 +7239,14 @@ export default function App() {
             <Text style={styles.sectionHint}>No trusted apps yet.</Text>
           ) : (
             <View style={styles.stack}>
+              <PaperButton
+                mode="outlined"
+                textColor={activeTheme.danger}
+                style={styles.paperDangerButton}
+                onPress={forgetAllTrustedDappOrigins}
+              >
+                Revoke all trusted apps
+              </PaperButton>
               {walletState.trustedDappOrigins.map((origin) => (
                 <View key={origin} style={styles.discoverTrustedOriginRow}>
                   <Text style={styles.discoverTrustedOriginText}>{origin}</Text>
@@ -7708,6 +7793,20 @@ export default function App() {
 
           {walletListExpanded ? (
             <View style={styles.stack}>
+              <View style={styles.walletValueSummary}>
+                <View>
+                  <Text style={styles.walletValueSummaryLabel}>Total cached value</Text>
+                  <Text style={styles.walletValueSummaryMeta}>
+                    {cachedWalletValues.length} of {walletState.wallets.length} wallets valued
+                  </Text>
+                </View>
+                <Text style={styles.walletValueSummaryAmount}>
+                  {maskValue(
+                    cachedWalletValues.length > 0 ? formatCachedWalletValue(cachedWalletTotal) : 'Loading…',
+                    walletState.privacyMode
+                  )}
+                </Text>
+              </View>
               {walletsByChain.map(({ chain, wallets }) => {
                 const meta = chainMeta(chain.id);
                 return (
@@ -7731,6 +7830,14 @@ export default function App() {
                               <Text style={styles.walletMeta}>{shortenAddress(wallet.address)}</Text>
                             </View>
                             <View style={styles.walletRowActions}>
+                              <Text style={styles.walletCachedValue}>
+                                {maskValue(
+                                  walletValueCache[wallet.id]
+                                    ? formatCachedWalletValue(walletValueCache[wallet.id].valueUsd)
+                                    : 'Loading…',
+                                  walletState.privacyMode
+                                )}
+                              </Text>
                               {active ? (
                                 <View style={styles.activePill}>
                                   <Text style={styles.activePillText}>Active</Text>
@@ -7786,6 +7893,7 @@ export default function App() {
             styles.mainContent,
             {
               paddingHorizontal: mainTab === 'discover' ? 0 : screenPadding,
+              paddingTop: mainTab === 'home' ? 8 : 18,
               paddingBottom: mainTab === 'discover' ? 0 : sendScreenVisible || swapScreenVisible || rebalanceScreenVisible || bridgeScreenVisible ? 220 : 140,
               flexGrow: mainTab === 'discover' ? 1 : undefined
             }
@@ -7806,7 +7914,7 @@ export default function App() {
                 }
               ]}
             >
-              {mainTab === 'discover' ? null : (
+              {mainTab === 'discover' || mainTab === 'home' ? null : (
                 <View style={styles.mobileAppBar}>
                   <View style={styles.mobileAppBarCopy}>
                     {renderBrandWordmark()}
@@ -8596,6 +8704,9 @@ function createStyles(palette: MobileThemePalette) {
   section: {
     gap: 12
   },
+  homeSection: {
+    gap: 8
+  },
   sectionCard: {
     backgroundColor: palette.panel,
     borderColor: palette.panelBorder,
@@ -8881,25 +8992,36 @@ function createStyles(palette: MobileThemePalette) {
     backgroundColor: palette.panel,
     borderColor: palette.panelBorder,
     borderWidth: 1,
-    borderRadius: 32,
+    borderRadius: 24,
     padding: 20,
-    gap: 14,
+    gap: 20,
     shadowColor: '#000',
-    shadowOpacity: palette.id === 'apple' || palette.id === 'champagne' ? 0 : 0.26,
-    shadowRadius: palette.id === 'apple' || palette.id === 'champagne' ? 0 : 28,
-    shadowOffset: { width: 0, height: 18 },
-    elevation: palette.id === 'apple' || palette.id === 'champagne' ? 0 : 12
+    shadowOpacity: 0,
+    shadowRadius: 0,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 0
+  },
+  homeHeroCard: {
+    paddingHorizontal: 2,
+    paddingTop: 8,
+    paddingBottom: 16,
+    gap: 14,
+    borderWidth: 0,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: palette.panelBorder,
+    borderRadius: 0,
+    backgroundColor: 'transparent'
   },
   walletIdentity: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: 10,
     flex: 1
   },
   walletAvatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1
@@ -8969,13 +9091,14 @@ function createStyles(palette: MobileThemePalette) {
   },
   cardLabel: {
     color: palette.muted,
-    fontSize: 13,
-    letterSpacing: 2,
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 1.4,
     textTransform: 'uppercase'
   },
   cardName: {
     color: palette.text,
-    fontSize: 20,
+    fontSize: 17,
     fontWeight: '800'
   },
   addressRow: {
@@ -8991,7 +9114,8 @@ function createStyles(palette: MobileThemePalette) {
     flex: 1
   },
   balanceBlock: {
-    gap: 4
+    gap: 4,
+    paddingVertical: 4
   },
   balanceHeaderRow: {
     flexDirection: 'row',
@@ -9001,18 +9125,19 @@ function createStyles(palette: MobileThemePalette) {
   },
   cardBalance: {
     color: palette.text,
-    fontSize: 30,
-    fontWeight: '800'
+    fontSize: 38,
+    fontWeight: '900',
+    letterSpacing: -1
   },
   cardSubtle: {
     color: palette.muted,
-    fontSize: 13,
+    fontSize: 12,
     flexShrink: 1
   },
   privacyToggleButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
@@ -9035,7 +9160,7 @@ function createStyles(palette: MobileThemePalette) {
   },
   quickActionsRow: {
     flexDirection: 'row',
-    gap: 8,
+    gap: 6,
     flexWrap: 'nowrap'
   },
   quickActionButton: {
@@ -9043,35 +9168,34 @@ function createStyles(palette: MobileThemePalette) {
     alignItems: 'center',
     justifyContent: 'center',
     gap: 5,
-    borderRadius: 18,
-    paddingVertical: 12,
-    backgroundColor:
-      palette.id === 'apple'
-        ? 'rgba(255,255,255,0.09)'
-        : palette.id === 'champagne'
-          ? 'rgba(255,255,255,0.68)'
-          : 'rgba(255,255,255,0.08)',
-    borderWidth: 1,
-    borderColor:
-      palette.id === 'apple'
-        ? 'rgba(255,255,255,0.14)'
-        : palette.id === 'champagne'
-          ? 'rgba(128,93,36,0.08)'
-          : 'rgba(255,255,255,0.06)'
+    minHeight: 58,
+    borderRadius: 14,
+    paddingVertical: 5,
+    backgroundColor: 'transparent'
   },
   quickActionButtonDisabled: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 5,
+    minHeight: 58,
+    borderRadius: 14,
+    paddingVertical: 5,
+    backgroundColor: 'transparent',
+    opacity: 0.5
+  },
+  quickActionIcon: {
+    width: 36,
+    height: 36,
     borderRadius: 18,
-    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor:
-      palette.id === 'apple'
-        ? 'rgba(255,255,255,0.06)'
-        : palette.id === 'champagne'
-          ? 'rgba(255,255,255,0.52)'
-          : 'rgba(255,255,255,0.03)'
+      palette.id === 'champagne'
+        ? 'rgba(128,93,36,0.10)'
+        : 'rgba(255,255,255,0.08)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: palette.panelBorder
   },
   quickActionGlyph: {
     color: palette.text,
@@ -9080,12 +9204,12 @@ function createStyles(palette: MobileThemePalette) {
   },
   quickActionLabel: {
     color: palette.text,
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '700'
   },
   quickActionLabelMuted: {
     color: palette.muted,
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '700'
   },
   rebalanceShortcut: {
@@ -9434,6 +9558,38 @@ function createStyles(palette: MobileThemePalette) {
     alignItems: 'flex-end',
     gap: 8
   },
+  walletValueSummary: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 16,
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.06)'
+  },
+  walletValueSummaryLabel: {
+    color: palette.muted,
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase'
+  },
+  walletValueSummaryMeta: {
+    color: palette.muted,
+    fontSize: 12,
+    marginTop: 4
+  },
+  walletValueSummaryAmount: {
+    color: palette.text,
+    fontSize: 22,
+    fontWeight: '900'
+  },
+  walletCachedValue: {
+    color: palette.text,
+    fontSize: 15,
+    fontWeight: '800'
+  },
   walletName: {
     color: palette.text,
     fontSize: 17,
@@ -9470,16 +9626,22 @@ function createStyles(palette: MobileThemePalette) {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 14,
-    padding: 15,
-    borderRadius: 22,
-    borderWidth: 1,
-    borderColor: palette.panelBorder,
-    backgroundColor:
-      palette.id === 'apple'
-        ? 'rgba(255,255,255,0.09)'
-        : palette.id === 'champagne'
-          ? 'rgba(255,255,255,0.72)'
-          : 'rgba(255,255,255,0.05)'
+    paddingHorizontal: 4,
+    paddingVertical: 14,
+    borderRadius: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: palette.panelBorder,
+    backgroundColor: 'transparent'
+  },
+  homeAssetList: {
+    gap: 0
+  },
+  homeAssetRow: {
+    minHeight: 64,
+    gap: 11,
+    paddingHorizontal: 2,
+    paddingVertical: 9,
+    borderRadius: 0
   },
   assetRowActive: {
     backgroundColor:
@@ -9516,7 +9678,7 @@ function createStyles(palette: MobileThemePalette) {
   },
   assetName: {
     color: palette.text,
-    fontSize: 17,
+    fontSize: 16,
     fontWeight: '800'
   },
   assetMeta: {
@@ -9530,7 +9692,7 @@ function createStyles(palette: MobileThemePalette) {
   },
   assetValue: {
     color: palette.text,
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: '800'
   },
   assetValueMeta: {
@@ -10878,6 +11040,11 @@ function createStyles(palette: MobileThemePalette) {
   paperSecondaryButton: {
     borderRadius: 18,
     backgroundColor: palette.id === 'apple' ? 'rgba(255,255,255,0.11)' : 'transparent'
+  },
+  paperDangerButton: {
+    borderRadius: 18,
+    borderColor: `${palette.danger}66`,
+    backgroundColor: `${palette.danger}0f`
   },
   inlineActionText: {
     color: palette.grape,

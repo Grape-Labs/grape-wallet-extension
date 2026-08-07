@@ -5,8 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/png" href="/icons/grape_logo_white-32.png" />
     <title>Grape Wallet</title>
+    <style>
+      html,
+      body,
+      #root {
+        width: 344px;
+        max-width: 344px;
+      }
+    </style>
   </head>
-  <body data-page="popup">
+  <body data-page="popup" data-surface="popup">
     <div id="root"></div>
     <script type="module" src="/src/pages/popup/main.tsx"></script>
   </body>

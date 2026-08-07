@@ -979,32 +979,54 @@ function OptionsPage() {
         {state.permissions.length === 0 ? (
           <p className="muted">No sites have been approved yet.</p>
         ) : (
-          state.permissions.map((permission) => (
-            <div key={permission.origin} className="card">
-              <div className="origin-box">
-                {permission.faviconUrl ? <img src={permission.faviconUrl} alt="" /> : null}
-                <div>
-                  <strong>{permission.title ?? permission.origin}</strong>
-                  <div className="muted mono">{permission.origin}</div>
+          <>
+            <div className="space-between connected-sites-heading">
+              <span className="muted">
+                {state.permissions.length} trusted {state.permissions.length === 1 ? 'site' : 'sites'}
+              </span>
+              <Button
+                tone="danger"
+                className="mini-button"
+                onClick={async () => {
+                  if (!window.confirm('Revoke access for every trusted dApp? Each site will need approval before connecting again.')) {
+                    return;
+                  }
+                  const nextState = await sendRuntimeMessage<WalletStateResponse>({
+                    type: 'wallet_revoke_all_permissions'
+                  });
+                  setState(nextState);
+                }}
+              >
+                Revoke all
+              </Button>
+            </div>
+            {state.permissions.map((permission) => (
+              <div key={permission.origin} className="card">
+                <div className="origin-box">
+                  {permission.faviconUrl ? <img src={permission.faviconUrl} alt="" /> : null}
+                  <div>
+                    <strong>{permission.title ?? permission.origin}</strong>
+                    <div className="muted mono">{permission.origin}</div>
+                  </div>
+                </div>
+                <div className="stack">
+                  <KeyValueRow label="Permissions" value={permission.permissions.join(', ')} />
+                  <Button
+                    tone="danger"
+                    onClick={async () => {
+                      await sendRuntimeMessage({
+                        type: 'wallet_revoke_permission',
+                        origin: permission.origin
+                      });
+                      await refresh();
+                    }}
+                  >
+                    Revoke
+                  </Button>
                 </div>
               </div>
-              <div className="stack">
-                <KeyValueRow label="Permissions" value={permission.permissions.join(', ')} />
-                <Button
-                  tone="danger"
-                  onClick={async () => {
-                    await sendRuntimeMessage({
-                      type: 'wallet_revoke_permission',
-                      origin: permission.origin
-                    });
-                    await refresh();
-                  }}
-                >
-                  Revoke
-                </Button>
-              </div>
-            </div>
-          ))
+            ))}
+          </>
         )}
       </Card>
       {deviceLinkQrExpanded && deviceLinkQr ? (
