@@ -15,7 +15,6 @@ import {
   Linking,
   Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
   Share,
   StyleSheet,
@@ -25,6 +24,7 @@ import {
   useWindowDimensions,
   View
 } from 'react-native';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import QRCode from 'react-native-qrcode-svg';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -1155,7 +1155,7 @@ function isHexColor(value: string) {
   return /^#[0-9a-fA-F]{6}$/.test(value.trim());
 }
 
-export default function App() {
+function GrapeApp() {
   const { width } = useWindowDimensions();
   const [screen, setScreen] = useState<Screen>('loading');
   const [launchStatus, setLaunchStatus] = useState('Loading your wallet state');
@@ -1353,6 +1353,7 @@ export default function App() {
   const contentMaxWidth = isWide ? 680 : 560;
   const screenPadding = isCompact ? 10 : 12;
   const footerInset = isCompact ? 16 : 20;
+  const footerClearance = footerInset + 80;
   const deviceLinkQrSize = Math.max(240, Math.min(width - 120, 320));
   const paperTheme = useMemo(
     () => ({
@@ -5229,7 +5230,7 @@ export default function App() {
 
   function renderDiscoverTab() {
     return (
-      <View style={[styles.discoverScreen, { paddingBottom: footerInset }]}>
+      <View style={[styles.discoverScreen, { paddingBottom: footerClearance }]}>
         <View style={styles.discoverBrowserBar}>
           <View style={styles.discoverBrowserBarPrimary}>
             <View style={styles.discoverHeaderCopy}>
@@ -7893,7 +7894,7 @@ export default function App() {
             styles.mainContent,
             {
               paddingHorizontal: mainTab === 'discover' ? 0 : screenPadding,
-              paddingTop: mainTab === 'home' ? 8 : 18,
+              paddingTop: mainTab === 'home' ? (Platform.OS === 'android' ? 20 : 12) : 18,
               paddingBottom: mainTab === 'discover' ? 0 : sendScreenVisible || swapScreenVisible || rebalanceScreenVisible || bridgeScreenVisible ? 220 : 140,
               flexGrow: mainTab === 'discover' ? 1 : undefined
             }
@@ -8420,7 +8421,7 @@ export default function App() {
 
   return (
     <PaperProvider theme={paperTheme}>
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={styles.safe} edges={['top', 'right', 'bottom', 'left']}>
       <StatusBar style={activeTheme.id === 'champagne' ? 'dark' : 'light'} />
       {backgroundAsset ? (
         <Image
@@ -8470,6 +8471,14 @@ export default function App() {
       {screen === 'ready' ? renderReadyScreen() : null}
     </SafeAreaView>
     </PaperProvider>
+  );
+}
+
+export default function App() {
+  return (
+    <SafeAreaProvider>
+      <GrapeApp />
+    </SafeAreaProvider>
   );
 }
 
@@ -9003,7 +9012,7 @@ function createStyles(palette: MobileThemePalette) {
   },
   homeHeroCard: {
     paddingHorizontal: 2,
-    paddingTop: 8,
+    paddingTop: Platform.OS === 'android' ? 16 : 8,
     paddingBottom: 16,
     gap: 14,
     borderWidth: 0,
