@@ -7,6 +7,7 @@ import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { Transaction } from '@mysten/sui/transactions';
 import { isValidSuiAddress, MIST_PER_SUI, normalizeSuiAddress, SUI_TYPE_ARG } from '@mysten/sui/utils';
 import { AggregatorClient, type RouterDataV3 } from '@cetusprotocol/aggregator-sdk';
+import type { SuiClientTypes } from '@mysten/sui/client';
 
 export const SUI_DERIVATION_PATH = `m/44'/784'/0'/0'/0'`;
 export const DEFAULT_SUI_NETWORK = 'mainnet';
@@ -36,6 +37,54 @@ export type SuiCoinHolding = {
   rawAmount: string;
   logoUri?: string;
 };
+
+export type SuiCollectible = {
+  objectId: string;
+  objectType: string;
+  name: string;
+  description?: string;
+  imageUrl?: string;
+  collectionName?: string;
+};
+
+export async function getSuiCollectibles(client: SuiGrpcClient, owner: string): Promise<SuiCollectible[]> {
+  const collectibles: SuiCollectible[] = [];
+  let cursor: string | null = null;
+  do {
+    const page: SuiClientTypes.ListOwnedObjectsResponse<{ display: true; json: true }> = await client.listOwnedObjects({
+      owner: normalizeSuiAddress(owner), cursor, limit: 100,
+      include: { display: true, json: true }
+    });
+    for (const object of page.objects) {
+      if (object.type.startsWith('0x2::coin::Coin<')) continue;
+      const display = object.display?.output ?? {};
+      const json = object.json ?? {};
+      const name = stringField(display.name) ?? stringField(json.name) ?? object.type.split('::').at(-1) ?? 'Sui object';
+      const imageUrl = normalizeAssetUrl(stringField(display.image_url) ?? stringField(display.image) ?? stringField(json.image_url) ?? stringField(json.url));
+      // Only show objects that opt into wallet display or expose recognizable NFT metadata.
+      if (!object.display && !imageUrl && !stringField(json.name)) continue;
+      collectibles.push({
+        objectId: object.objectId, objectType: object.type, name,
+        description: stringField(display.description) ?? stringField(json.description) ?? undefined,
+        imageUrl,
+        collectionName: stringField(display.collection_name) ?? object.type.split('::').slice(-2, -1)[0]
+      });
+    }
+    cursor = page.cursor ?? null;
+  } while (cursor && collectibles.length < 500);
+  return collectibles;
+}
+
+function stringField(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function normalizeAssetUrl(value: string | null): string | undefined {
+  if (!value) return undefined;
+  if (value.startsWith('ipfs://')) return `https://ipfs.io/ipfs/${value.slice(7)}`;
+  if (value.startsWith('ar://')) return `https://arweave.net/${value.slice(5)}`;
+  return value;
+}
 
 export type SuiSwapQuote = {
   fromCoinType: string;

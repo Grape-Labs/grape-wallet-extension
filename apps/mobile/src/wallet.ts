@@ -54,7 +54,7 @@ import {
   type MobileBridgeQuoteSummary,
   type MobileJupiterQuoteResponse
 } from './config';
-import { createSuiClient, executeSuiSwap, getSuiSwapQuote, resolveSuiVaultSecret } from '@grape/sui';
+import { createSuiClient, executeSuiSwap, getSuiCollectibles, getSuiSwapQuote, resolveSuiVaultSecret } from '@grape/sui';
 import {
   deriveMobileSuiAccount0,
   exportMobileSuiWalletSecret,
@@ -144,7 +144,7 @@ export type MobileAsset = {
   metadataSource?: 'native' | 'shyft' | 'rpc';
   decimals?: number;
   description?: string;
-  tokenType?: 'native' | 'spl' | 'erc20' | 'sui-coin';
+  tokenType?: 'native' | 'spl' | 'erc20' | 'sui-coin' | 'nft';
   accountAddress?: string;
   programId?: string;
   assetClass?: 'crypto' | 'stablecoin' | 'stock';
@@ -2680,6 +2680,8 @@ function isValidSolanaPublicKey(value: string) {
 
 async function loadSuiAssets(address: string): Promise<MobileAsset[]> {
   const holdings = await getMobileSuiHoldings(address, DEFAULT_SUI_NETWORK);
+  const client = createSuiClient(DEFAULT_SUI_NETWORK, getMobileSuiRpcUrl(DEFAULT_SUI_NETWORK));
+  const collectibles = await getSuiCollectibles(client, address).catch(() => []);
   return [
     {
       id: 'sui',
@@ -2704,6 +2706,11 @@ async function loadSuiAssets(address: string): Promise<MobileAsset[]> {
       metadataSource: 'rpc' as const,
       decimals: coin.decimals,
       tokenType: coin.coinType === '0x2::sui::SUI' ? 'native' as const : 'sui-coin' as const
+    })),
+    ...collectibles.map((item) => ({
+      id: `sui-nft:${item.objectId}`, name: item.name, symbol: 'NFT', amountLabel: '1 NFT', valueLabel: '',
+      chain: 'sui' as const, address: item.objectId, accountAddress: item.objectId, programId: item.objectType,
+      logoUri: item.imageUrl, description: item.description, metadataSource: 'rpc' as const, tokenType: 'nft' as const
     }))
   ];
 }
@@ -2712,6 +2719,7 @@ async function loadEthereumAssets(address: string): Promise<MobileAsset[]> {
   const { createEthereumPublicClient, getEthereumHoldings } = loadEthereumModule();
   const client = createEthereumPublicClient(DEFAULT_EVM_NETWORK, getMobileEthereumRpcUrl(DEFAULT_EVM_NETWORK));
   const holdings = await getEthereumHoldings(client, address);
+  const nfts = await loadMobileEvmNfts('https://eth.blockscout.com/api/v2', 'ethereum', address).catch(() => []);
   return [
     {
       id: 'eth',
@@ -2724,7 +2732,8 @@ async function loadEthereumAssets(address: string): Promise<MobileAsset[]> {
       metadataSource: 'native',
       decimals: 18,
       tokenType: 'native'
-    }
+    },
+    ...nfts
   ];
 }
 
@@ -2734,6 +2743,7 @@ async function loadMonadAssets(address: string): Promise<MobileAsset[]> {
   const holdings = await getMonadHoldings(client, address);
   const monPriceUsd = await fetchMobileLifiTokenPrice('monad', MOBILE_LIFI_NATIVE_TOKEN_ADDRESS.monad).catch(() => null);
   const monValueUsd = monPriceUsd === null ? null : Number(holdings.formatted) * monPriceUsd;
+  const nfts = await loadMobileEvmNfts('https://monadscan.com/api/v2', 'monad', address).catch(() => []);
   return [
     {
       id: 'mon',
@@ -2746,8 +2756,27 @@ async function loadMonadAssets(address: string): Promise<MobileAsset[]> {
       metadataSource: 'native',
       decimals: 18,
       tokenType: 'native'
-    }
+    },
+    ...nfts
   ];
+}
+
+async function loadMobileEvmNfts(baseUrl: string, chain: 'ethereum' | 'monad', owner: string): Promise<MobileAsset[]> {
+  const response = await fetch(`${baseUrl}/addresses/${encodeURIComponent(owner)}/nft?type=ERC-721,ERC-1155`, { headers: { accept: 'application/json' } });
+  if (!response.ok) throw new Error(`NFT lookup failed with ${response.status}.`);
+  const payload = await response.json() as { items?: Array<Record<string, unknown>> };
+  return (payload.items ?? []).flatMap((entry) => {
+    const token = (entry.token && typeof entry.token === 'object' ? entry.token : {}) as Record<string, unknown>;
+    const metadata = (entry.metadata && typeof entry.metadata === 'object' ? entry.metadata : {}) as Record<string, unknown>;
+    const contract = String(token.address_hash ?? token.address ?? entry.token_contract_address_hash ?? '');
+    const tokenId = String(entry.id ?? entry.token_id ?? '');
+    if (!contract || !tokenId) return [];
+    const rawImage = metadata.image_url ?? metadata.image ?? entry.image_url;
+    const image = typeof rawImage === 'string' ? (rawImage.startsWith('ipfs://') ? `https://ipfs.io/ipfs/${rawImage.slice(7)}` : rawImage) : undefined;
+    const collection = typeof token.name === 'string' ? token.name : 'NFT';
+    const symbol = typeof token.symbol === 'string' ? token.symbol : 'NFT';
+    return [{ id: `${chain}-nft:${contract}:${tokenId}`, chain, name: typeof metadata.name === 'string' ? metadata.name : `${collection} #${tokenId}`, symbol, amountLabel: '1 NFT', valueLabel: '', address: contract, accountAddress: tokenId, programId: contract, logoUri: image, description: collection, metadataSource: 'rpc' as const, tokenType: 'nft' as const }];
+  });
 }
 
 export async function loadMobileMonadTokenAsset(owner: string, tokenAddress: string): Promise<MobileAsset> {

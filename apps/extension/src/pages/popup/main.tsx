@@ -1835,7 +1835,7 @@ function PopupPage() {
   }, [state?.wallet.chainState.ethereum.customRpcUrl, state?.wallet.chainState.monad.customRpcUrl, state?.wallet.chainState.sui.customRpcUrl, state?.wallet.customRpcUrls, state?.wallet.selectedChain, state?.wallet.selectedNetwork]);
 
   useEffect(() => {
-    if ((selectedChainValue === 'sui' || selectedChainValue === 'monad' || selectedChainValue === 'ethereum') && (homeTab === 'collectibles' || homeTab === 'staking')) {
+    if ((selectedChainValue === 'sui' || selectedChainValue === 'monad' || selectedChainValue === 'ethereum') && homeTab === 'staking') {
       setHomeTab('tokens');
     }
   }, [homeTab, selectedChainValue]);
@@ -3409,6 +3409,7 @@ function PopupPage() {
     setBurnAmount('');
     setBurnPassword('');
     setView('asset');
+
     void refreshAssetDetails(nextToken);
     void refreshTokenActivity(nextToken.accountAddress);
   }
@@ -3422,6 +3423,13 @@ function PopupPage() {
     setBurnAmount('');
     setBurnPassword('');
     setView('asset');
+
+    if (!isSolanaChain) {
+      setAssetId(`${item.mint}:${item.programId ?? ''}`);
+      setAssetDetails(null);
+      setAssetDetailsError(null);
+      return;
+    }
 
     if (!item.accountAddress || !item.programId) {
       setAssetDetails(null);
@@ -3959,7 +3967,9 @@ function PopupPage() {
                   <ChainLogoBadge chain={chain.id} />
                   <span>{chain.label}</span>
                 </span>
-                {selectedChain === chain.id ? <Check size={14} /> : null}
+                <span className="chain-selector-check" aria-hidden="true">
+                  {selectedChain === chain.id ? <Check size={16} /> : null}
+                </span>
               </DropdownMenu.Item>
             ))}
           </DropdownMenu.Content>
@@ -5280,11 +5290,11 @@ function PopupPage() {
             <Tabs.Trigger className="content-tab content-tab-primary" value="activity">
               <span className="content-tab-copy">Activity</span>
             </Tabs.Trigger>
+            <Tabs.Trigger className="content-tab content-tab-secondary" value="collectibles">
+              <span className="content-tab-copy">NFTs</span>
+            </Tabs.Trigger>
             {isSolanaChain ? (
               <>
-                <Tabs.Trigger className="content-tab content-tab-secondary" value="collectibles">
-                  <span className="content-tab-copy">NFTs</span>
-                </Tabs.Trigger>
                 <Tabs.Trigger className="content-tab content-tab-secondary" value="staking">
                   <span className="content-tab-copy">Staking</span>
                 </Tabs.Trigger>
@@ -5958,8 +5968,7 @@ function PopupPage() {
             </Tabs.Content>
           ) : null}
 
-          {isSolanaChain ? (
-            <Tabs.Content value="collectibles">
+          <Tabs.Content value="collectibles">
               <Card className="asset-panel-card">
               {collectibleItems.length > 0 ? (
                 <div className="collectible-grid">
@@ -5976,7 +5985,6 @@ function PopupPage() {
               )}
             </Card>
           </Tabs.Content>
-          ) : null}
 
           <Tabs.Content value="activity">
             <Card className="asset-panel-card activity-panel-card">
@@ -6641,6 +6649,25 @@ function PopupPage() {
   function renderAsset() {
     const isCollectibleView = !!selectedCollectible;
     const showMetadataCards = isCollectibleView || !assetActionMode;
+
+    if (isCollectibleView && !isSolanaChain) {
+      const item = selectedCollectible;
+      return (
+        <Card className="asset-detail-card">
+          <div className="send-flow-header asset-detail-topbar">
+            <button type="button" className="send-back-button" onClick={() => setView('home')} aria-label="Back to wallet"><ArrowLeft size={20} /></button>
+            <h2>NFT Details</h2>
+          </div>
+          {item.imageUri ? <img className="collectible-cover-image" src={item.imageUri} alt={item.name ?? 'NFT'} referrerPolicy="no-referrer" /> : null}
+          <div className="stack">
+            <KeyValueRow label="Name" value={item.name ?? 'NFT'} />
+            <KeyValueRow label="Collection" value={item.collectionName ?? item.collectionSymbol ?? 'Unverified collection'} />
+            <KeyValueRow label={isSuiChain ? 'Object ID' : 'Token ID'} value={<span className="mono">{formatAddress(item.mint)}</span>} />
+            {item.programId ? <KeyValueRow label={isSuiChain ? 'Object type' : 'Contract'} value={<span className="mono">{formatAddress(item.programId)}</span>} /> : null}
+          </div>
+        </Card>
+      );
+    }
 
     if (assetDetailsLoading) {
       return (

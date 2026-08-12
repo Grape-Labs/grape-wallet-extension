@@ -115,6 +115,7 @@ import {
   createSuiClient,
   deriveSuiAccount0,
   getSuiHoldings,
+  getSuiCollectibles,
   getSuiSwapQuote,
   executeSuiSwap,
   importSuiPrivateKey,
@@ -255,6 +256,8 @@ const GECKOTERMINAL_BASE_URL = 'https://api.geckoterminal.com/api/v2';
 const GECKOTERMINAL_TOKEN_BATCH_SIZE = 50;
 const ETHEREUM_BLOCKSCOUT_BASE_URL = 'https://eth.blockscout.com/api/v2';
 const ETHEREUM_SEPOLIA_BLOCKSCOUT_BASE_URL = 'https://eth-sepolia.blockscout.com/api/v2';
+const MONAD_BLOCKSCOUT_BASE_URL = 'https://monadscan.com/api/v2';
+const MONAD_TESTNET_BLOCKSCOUT_BASE_URL = 'https://testnet.monadscan.com/api/v2';
 const KNOWN_TOKEN_SYMBOLS: Record<string, string> = {
   [JUPITER_SOL_MINT]: 'SOL',
   EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v: 'USDC'
@@ -1066,6 +1069,7 @@ class WalletController {
   ): Promise<WalletAssetsResponse> {
     const client = await this.createSuiClient(network, walletState);
     const holdings = await getSuiHoldings(client, publicKey);
+    const suiCollectibles = await getSuiCollectibles(client, publicKey).catch(() => []);
     const totalMist = BigInt(holdings.totalMist);
     const safeLamports = totalMist > BigInt(Number.MAX_SAFE_INTEGER) ? null : Number(totalMist);
     let nativePricing: NativeUsdPriceQuote = {
@@ -1120,7 +1124,11 @@ class WalletController {
     const result: WalletAssetsResponse = {
       lamports: safeLamports,
       tokens: sortWalletTokens(pricedTokens),
-      collections: [],
+      collections: groupCollectibles(suiCollectibles.map((item) => ({
+        mint: item.objectId, accountAddress: item.objectId, programId: item.objectType,
+        name: item.name, imageUri: item.imageUrl, collectionName: item.collectionName,
+        collectionId: item.objectType
+      }))),
       nativeName: 'Sui',
       nativeSymbol: 'SUI',
       nativeDecimals: 9,
@@ -1148,6 +1156,7 @@ class WalletController {
   ): Promise<WalletAssetsResponse> {
     const client = await this.createMonadClient(network, walletState);
     const holdings = await getMonadHoldings(client, publicKey);
+    const collections = await fetchEvmNftCollections(network === 'mainnet-beta' ? MONAD_BLOCKSCOUT_BASE_URL : MONAD_TESTNET_BLOCKSCOUT_BASE_URL, publicKey).catch(() => []);
     const safeBaseUnits = holdings.totalWei > BigInt(Number.MAX_SAFE_INTEGER) ? null : Number(holdings.totalWei);
     const monadNativeToken = network === 'mainnet-beta'
       ? (await fetchLifiTokenCatalog('monad').catch(() => [])).find((token) =>
@@ -1159,7 +1168,7 @@ class WalletController {
     const result: WalletAssetsResponse = {
       lamports: safeBaseUnits,
       tokens: [],
-      collections: [],
+      collections,
       nativeName: 'Monad',
       nativeSymbol: 'MON',
       nativeDecimals: 18,
@@ -1207,6 +1216,7 @@ class WalletController {
     } catch {
       tokenHoldings = [];
     }
+    const collections = await fetchEvmNftCollections(getEthereumBlockscoutBaseUrl(network), publicKey).catch(() => []);
 
     const nativeUsdPrice = nativePricing.usdPrice;
     const nativeValueUsd =
@@ -1217,7 +1227,7 @@ class WalletController {
     const result: WalletAssetsResponse = {
       lamports: safeBaseUnits,
       tokens: sortWalletTokens(tokenHoldings),
-      collections: [],
+      collections,
       nativeName: 'Ethereum',
       nativeSymbol: 'ETH',
       nativeDecimals: 18,
@@ -9334,6 +9344,51 @@ async function fetchSolanaTokenMarket(mint: string): Promise<{
 
 function getEthereumBlockscoutBaseUrl(network: 'mainnet-beta' | 'devnet'): string {
   return network === 'devnet' ? ETHEREUM_SEPOLIA_BLOCKSCOUT_BASE_URL : ETHEREUM_BLOCKSCOUT_BASE_URL;
+}
+
+function normalizeNftImageUrl(value: unknown): string | undefined {
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  const url = value.trim();
+  if (url.startsWith('ipfs://')) return `https://ipfs.io/ipfs/${url.slice(7)}`;
+  if (url.startsWith('ar://')) return `https://arweave.net/${url.slice(5)}`;
+  return url;
+}
+
+function groupCollectibles(items: CollectibleItem[]): CollectionHolding[] {
+  const groups = new Map<string, CollectionHolding>();
+  for (const item of items) {
+    const id = item.collectionId ?? item.programId ?? 'uncollected';
+    const current = groups.get(id);
+    if (current) {
+      current.items.push(item);
+      current.itemCount = current.items.length;
+    } else {
+      groups.set(id, { id, name: item.collectionName ?? item.symbol ?? 'Collectibles', symbol: item.collectionSymbol ?? item.symbol, imageUri: item.imageUri, itemCount: 1, items: [item] });
+    }
+  }
+  return [...groups.values()];
+}
+
+async function fetchEvmNftCollections(baseUrl: string, owner: string): Promise<CollectionHolding[]> {
+  const response = await fetch(`${baseUrl}/addresses/${encodeURIComponent(owner)}/nft?type=ERC-721,ERC-1155`, { headers: { accept: 'application/json' } });
+  if (!response.ok) throw new Error(`NFT lookup failed with ${response.status}.`);
+  const payload = await response.json() as { items?: Array<Record<string, unknown>> };
+  const items = (payload.items ?? []).map((entry): CollectibleItem | null => {
+    const token = (entry.token && typeof entry.token === 'object' ? entry.token : {}) as Record<string, unknown>;
+    const metadata = (entry.metadata && typeof entry.metadata === 'object' ? entry.metadata : {}) as Record<string, unknown>;
+    const contract = String(token.address_hash ?? token.address ?? entry.token_contract_address_hash ?? '');
+    const tokenId = String(entry.id ?? entry.token_id ?? '');
+    if (!contract || !tokenId) return null;
+    const collectionName = typeof token.name === 'string' ? token.name : undefined;
+    const symbol = typeof token.symbol === 'string' ? token.symbol : undefined;
+    return {
+      mint: tokenId, accountAddress: `${contract}:${tokenId}`, programId: contract,
+      name: typeof metadata.name === 'string' ? metadata.name : collectionName ? `${collectionName} #${tokenId}` : `NFT #${tokenId}`,
+      symbol, imageUri: normalizeNftImageUrl(metadata.image_url ?? metadata.image ?? entry.image_url),
+      collectionId: contract, collectionName, collectionSymbol: symbol
+    };
+  }).filter((item): item is CollectibleItem => item !== null);
+  return groupCollectibles(items);
 }
 
 function normalizeNumber(value: unknown): number | null {

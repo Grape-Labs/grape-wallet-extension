@@ -140,6 +140,8 @@ function createManifestPlugin(mainnetRpcUrl: string, extensionKey?: string): Plu
           'https://eth-sepolia.blockscout.com/*',
           'https://rpc.monad.xyz/*',
           'https://testnet-rpc.monad.xyz/*',
+          'https://monadscan.com/*',
+          'https://testnet.monadscan.com/*',
           'https://li.quest/*',
           'https://api-sui.cetus.zone/*',
           'https://hermes.pyth.network/*',

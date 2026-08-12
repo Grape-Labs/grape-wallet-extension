@@ -1452,9 +1452,9 @@ function GrapeApp() {
       : headlineAsset?.amountLabel ?? '--';
   const visibleSortedAssets = useMemo(() => {
     return assets
-      .filter((asset) => !walletState.hideZeroBalances || (asset.amountUi ?? 0) > 0)
+      .filter((asset) => asset.tokenType === 'nft' || !walletState.hideZeroBalances || (asset.amountUi ?? 0) > 0)
       .filter((asset) => {
-        if (!walletState.hideLowValueTokens || asset.tokenType === 'native') return true;
+        if (!walletState.hideLowValueTokens || asset.tokenType === 'native' || asset.tokenType === 'nft') return true;
         if (!/^\s*\$/.test(asset.valueLabel)) return false;
         const labeledValue = parseMobileUsdLabel(asset.valueLabel);
         const holdingValue = asset.valueLabel.includes('price')
@@ -1622,7 +1622,10 @@ function GrapeApp() {
     [governance.daos, governance.discoveredDaos, walletState.trackedGovernanceDaoIds]
   );
   const sendAssets = useMemo(
-    () => monadTokenAsset && !assets.some((asset) => asset.id === monadTokenAsset.id) ? [...assets, monadTokenAsset] : assets,
+    () => {
+      const transferable = assets.filter((asset) => asset.tokenType !== 'nft');
+      return monadTokenAsset && !transferable.some((asset) => asset.id === monadTokenAsset.id) ? [...transferable, monadTokenAsset] : transferable;
+    },
     [assets, monadTokenAsset]
   );
   const selectedSendAsset = useMemo(() => {
@@ -1687,7 +1690,7 @@ function GrapeApp() {
     });
   }, [sendAssetSearch, sendAssets]);
   const swappableAssets = useMemo(
-    () => selectedWallet ? assets.filter((asset) => asset.chain === selectedWallet.chain) : [],
+    () => selectedWallet ? assets.filter((asset) => asset.chain === selectedWallet.chain && asset.tokenType !== 'nft') : [],
     [assets, selectedWallet?.chain]
   );
   const swapSelectableAssets = useMemo(() => {
