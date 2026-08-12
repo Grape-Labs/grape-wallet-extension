@@ -115,6 +115,8 @@ import {
   createSuiClient,
   deriveSuiAccount0,
   getSuiHoldings,
+  getSuiSwapQuote,
+  executeSuiSwap,
   importSuiPrivateKey,
   resolveSuiTransactionBytes,
   resolveSuiVaultSecret,
@@ -180,7 +182,7 @@ import {
   JUPITER_SOL_MINT,
   type JupiterQuoteResponse
 } from '../shared/jupiter';
-import { fetchNativeBridgeQuote, getSupportedBridgeDestinations, isBridgeRouteSupported, LIFI_NATIVE_DECIMALS, LIFI_NATIVE_SYMBOL } from '../shared/lifi';
+import { fetchLifiSwapQuote, fetchLifiTokenCatalog, fetchNativeBridgeQuote, getSupportedBridgeDestinations, isBridgeRouteSupported, LIFI_NATIVE_DECIMALS, LIFI_NATIVE_SYMBOL, LIFI_NATIVE_TOKEN_ADDRESS } from '../shared/lifi';
 import { getRpcEndpoint } from '../shared/rpc';
 import {
   fetchShyftCollections,
@@ -1147,6 +1149,13 @@ class WalletController {
     const client = await this.createMonadClient(network, walletState);
     const holdings = await getMonadHoldings(client, publicKey);
     const safeBaseUnits = holdings.totalWei > BigInt(Number.MAX_SAFE_INTEGER) ? null : Number(holdings.totalWei);
+    const monadNativeToken = network === 'mainnet-beta'
+      ? (await fetchLifiTokenCatalog('monad').catch(() => [])).find((token) =>
+          token.address.toLowerCase() === LIFI_NATIVE_TOKEN_ADDRESS.monad || token.symbol.toUpperCase() === 'MON'
+        )
+      : undefined;
+    const nativePriceUsd = normalizeNumber(monadNativeToken?.priceUSD);
+    const nativeValueUsd = nativePriceUsd === null ? null : Number(holdings.formatted) * nativePriceUsd;
     const result: WalletAssetsResponse = {
       lamports: safeBaseUnits,
       tokens: [],
@@ -1154,9 +1163,9 @@ class WalletController {
       nativeName: 'Monad',
       nativeSymbol: 'MON',
       nativeDecimals: 18,
-      totalUsdValue: null,
-      nativePriceUsd: null,
-      nativeValueUsd: null,
+      totalUsdValue: nativeValueUsd,
+      nativePriceUsd: nativePriceUsd,
+      nativeValueUsd,
       nativePriceChange24h: null
     };
 
@@ -2226,6 +2235,15 @@ class WalletController {
     return this.getStateResponse();
   }
 
+  async setHideLowValueTokens(enabled: boolean) {
+    const walletState = await this.getWalletState();
+    await walletStateStorage.set({
+      ...walletState,
+      hideLowValueTokens: enabled
+    });
+    return this.getStateResponse();
+  }
+
   async setAutoConnect(enabled: boolean) {
     const walletState = await this.getWalletState();
     await walletStateStorage.set({
@@ -2461,7 +2479,7 @@ class WalletController {
     if (selectedWallet.chain === 'sui') {
       const client = await this.createSuiClient(walletState.selectedNetwork, walletState);
       const balance = await client.getBalance({ owner: activeAccount.publicKey, coinType: '0x2::sui::SUI' });
-      const total = BigInt(balance.totalBalance);
+      const total = BigInt(balance.balance.balance);
       return total > BigInt(Number.MAX_SAFE_INTEGER) ? null : Number(total);
     }
     if (selectedWallet.chain === 'monad') {
@@ -4732,11 +4750,28 @@ class WalletController {
 
   async getSwapQuote(input: { amount: string; slippageBps: number; inputAsset: SendAsset; outputMint: string }) {
     const { walletState, selectedWallet } = await this.ensureReadyWallet();
-    if (selectedWallet.chain !== 'solana') {
-      throw new RpcError('UNSUPPORTED_CHAIN', 'Swaps are currently available for Solana only.');
-    }
     if (walletState.selectedNetwork !== 'mainnet-beta') {
       throw new RpcError('SWAP_UNAVAILABLE', 'Native swaps are currently available only on mainnet-beta.');
+    }
+
+    const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
+    if (!activeAccount) throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
+    if (selectedWallet.chain === 'ethereum' || selectedWallet.chain === 'monad') {
+      const fromToken = input.inputAsset.kind === 'evm-token' ? input.inputAsset.tokenAddress : LIFI_NATIVE_TOKEN_ADDRESS[selectedWallet.chain];
+      const decimals = input.inputAsset.kind === 'evm-token' ? input.inputAsset.decimals : 18;
+      const amountRaw = parseDecimalAmount(input.amount, decimals).toString();
+      const quote = await fetchLifiSwapQuote({ chain: selectedWallet.chain, fromToken, toToken: input.outputMint, amountRaw, walletAddress: activeAccount.publicKey, slippageBps: input.slippageBps });
+      const estimate = quote.estimate as { toAmount?: string; fromToken?: { symbol?: string }; toToken?: { symbol?: string; decimals?: number }; tool?: string } | undefined;
+      const outputDecimals = estimate?.toToken?.decimals ?? 18;
+      return { inputMint: fromToken, outputMint: input.outputMint, inputAmountUi: input.amount, slippageBps: input.slippageBps, selectedRouteId: 'best', routes: [{ id: 'best', label: 'Best route', quoteResponse: { ...quote, _grapeSwapChain: selectedWallet.chain }, outputAmountUi: formatUiAmount(estimate?.toAmount ?? '0', outputDecimals), priceImpactPct: null, routeLabels: [String((quote.toolDetails as { name?: string } | undefined)?.name ?? 'LI.FI')] }] };
+    }
+    if (selectedWallet.chain === 'sui') {
+      const fromCoinType = input.inputAsset.kind === 'sui-coin' ? input.inputAsset.coinType : '0x2::sui::SUI';
+      const decimals = input.inputAsset.kind === 'sui-coin' ? input.inputAsset.decimals : 9;
+      const client = createSuiClient(this.resolveSuiNetwork(walletState.selectedNetwork), walletState.chainState.sui.customRpcUrl);
+      const quote = await getSuiSwapQuote(client, { fromCoinType, toCoinType: input.outputMint, amountIn: parseDecimalAmount(input.amount, decimals) });
+      const metadata = await client.getCoinMetadata({ coinType: input.outputMint }).catch(() => null);
+      return { inputMint: fromCoinType, outputMint: input.outputMint, inputAmountUi: input.amount, slippageBps: input.slippageBps, selectedRouteId: 'best', routes: [{ id: 'best', label: 'Best route', quoteResponse: { _grapeSwapChain: 'sui', fromCoinType, toCoinType: input.outputMint, amountIn: quote.amountIn, slippageBps: input.slippageBps }, outputAmountUi: formatUiAmount(quote.amountOut, metadata?.coinMetadata?.decimals ?? 0), priceImpactPct: null, routeLabels: quote.providers }] };
     }
 
     const connection = this.createConnection(walletState.selectedNetwork, walletState);
@@ -4800,12 +4835,9 @@ class WalletController {
     };
   }
 
-  async executeSwap(input: { quoteResponse: JupiterQuoteResponse; password?: string }) {
+  async executeSwap(input: { quoteResponse: JupiterQuoteResponse | Record<string, unknown>; password?: string }) {
     const { walletState, selectedWallet } = await this.ensureReadyWallet();
     this.assertInteractiveWallet(selectedWallet);
-    if (selectedWallet.chain !== 'solana') {
-      throw new RpcError('UNSUPPORTED_CHAIN', 'Swaps are currently available for Solana only.');
-    }
     if (walletState.selectedNetwork !== 'mainnet-beta') {
       throw new RpcError('SWAP_UNAVAILABLE', 'Native swaps are currently available only on mainnet-beta.');
     }
@@ -4816,9 +4848,27 @@ class WalletController {
     }
 
     const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
+    const genericQuote = input.quoteResponse as Record<string, unknown>;
+    if (selectedWallet.chain === 'ethereum' || selectedWallet.chain === 'monad') {
+      const transactionRequest = extractExecutableBridgeTransactionRequest(genericQuote, selectedWallet.chain);
+      if (!transactionRequest?.to) throw new RpcError('SWAP_UNSUPPORTED', 'This route did not include an executable transaction.');
+      const signature = selectedWallet.chain === 'ethereum'
+        ? await sendEthereumTransactionRequest(this.resolveEthereumNetwork(walletState.selectedNetwork), secret, { to: transactionRequest.to, data: transactionRequest.data, value: transactionRequest.value, customRpcUrl: walletState.chainState.ethereum.customRpcUrl })
+        : await sendMonadTransactionRequest(this.resolveMonadNetwork(walletState.selectedNetwork), secret, { to: transactionRequest.to, data: transactionRequest.data, value: transactionRequest.value, customRpcUrl: walletState.chainState.monad.customRpcUrl });
+      const estimate = genericQuote.estimate as { fromAmount?: string; toAmount?: string; fromToken?: { address?: string; decimals?: number }; toToken?: { address?: string; decimals?: number } } | undefined;
+      return { signature, inputMint: estimate?.fromToken?.address ?? '', outputMint: estimate?.toToken?.address ?? '', inputAmountUi: formatUiAmount(estimate?.fromAmount ?? '0', estimate?.fromToken?.decimals ?? 18), outputAmountUi: formatUiAmount(estimate?.toAmount ?? '0', estimate?.toToken?.decimals ?? 18) };
+    }
+    if (selectedWallet.chain === 'sui') {
+      const client = createSuiClient(this.resolveSuiNetwork(walletState.selectedNetwork), walletState.chainState.sui.customRpcUrl);
+      const freshQuote = await getSuiSwapQuote(client, { fromCoinType: String(genericQuote.fromCoinType), toCoinType: String(genericQuote.toCoinType), amountIn: BigInt(String(genericQuote.amountIn)) });
+      const signature = await executeSuiSwap(client, resolveSuiVaultSecret(secret), { quote: freshQuote, slippageBps: Number(genericQuote.slippageBps ?? 50) });
+      const outputMetadata = await client.getCoinMetadata({ coinType: freshQuote.toCoinType }).catch(() => null);
+      const inputMetadata = await client.getCoinMetadata({ coinType: freshQuote.fromCoinType }).catch(() => null);
+      return { signature, inputMint: freshQuote.fromCoinType, outputMint: freshQuote.toCoinType, inputAmountUi: formatUiAmount(freshQuote.amountIn, inputMetadata?.coinMetadata?.decimals ?? 0), outputAmountUi: formatUiAmount(freshQuote.amountOut, outputMetadata?.coinMetadata?.decimals ?? 0) };
+    }
     const connection = this.createConnection(walletState.selectedNetwork, walletState);
     const swap = await createJupiterSwapTransaction({
-      quoteResponse: input.quoteResponse,
+      quoteResponse: input.quoteResponse as JupiterQuoteResponse,
       userPublicKey: activeAccount.publicKey
     });
 
@@ -4841,10 +4891,10 @@ class WalletController {
 
     return {
       signature,
-      inputMint: input.quoteResponse.inputMint,
-      outputMint: input.quoteResponse.outputMint,
-      inputAmountUi: formatUiAmount(input.quoteResponse.inAmount, await getMintDecimals(connection, input.quoteResponse.inputMint)),
-      outputAmountUi: formatUiAmount(input.quoteResponse.outAmount, await getMintDecimals(connection, input.quoteResponse.outputMint))
+      inputMint: (input.quoteResponse as JupiterQuoteResponse).inputMint,
+      outputMint: (input.quoteResponse as JupiterQuoteResponse).outputMint,
+      inputAmountUi: formatUiAmount((input.quoteResponse as JupiterQuoteResponse).inAmount, await getMintDecimals(connection, (input.quoteResponse as JupiterQuoteResponse).inputMint)),
+      outputAmountUi: formatUiAmount((input.quoteResponse as JupiterQuoteResponse).outAmount, await getMintDecimals(connection, (input.quoteResponse as JupiterQuoteResponse).outputMint))
     };
   }
 
@@ -5402,7 +5452,7 @@ class WalletController {
             ? await signSuiTransactionBytesWithLedger(approvalWallet.signer.derivationPath, transactionBytes)
             : await resolveSuiVaultSecret(secret).signTransaction(transactionBytes);
         return {
-          address: approvalWallet.signer.kind === 'ledger' ? signed.address : sender,
+          address: sender,
           bytes: signed.bytes,
           signature: signed.signature
         };
@@ -5451,39 +5501,27 @@ class WalletController {
           approvalWallet.signer.kind === 'ledger'
             ? await signSuiTransactionBytesWithLedger(approvalWallet.signer.derivationPath, transactionBytes)
             : await resolveSuiVaultSecret(secret).signTransaction(transactionBytes);
-        const requestedOptions = approval.request.params.options ?? {};
-        const executionOptions = {
-          ...requestedOptions,
-          showRawEffects: true
-        };
-        let result = await client.executeTransactionBlock({
-          transactionBlock: signed.bytes,
-          signature: signed.signature,
-          options: executionOptions
+        const result = await client.executeTransaction({
+          transaction: transactionBytes,
+          signatures: [signed.signature],
+          include: {
+            balanceChanges: true,
+            effects: true,
+            events: true,
+            transaction: true
+          }
         });
-        if (!result.rawEffects?.length) {
-          result = await client.getTransactionBlock({
-            digest: result.digest,
-            options: executionOptions
-          });
-        }
+        const executed = result.Transaction ?? result.FailedTransaction;
 
         return {
-          address: approvalWallet.signer.kind === 'ledger' ? signed.address : sender,
-          balanceChanges: result.balanceChanges ?? null,
+          address: sender,
+          balanceChanges: executed.balanceChanges ?? null,
           bytes: signed.bytes,
-          checkpoint: result.checkpoint ?? null,
-          confirmedLocalExecution: result.confirmedLocalExecution ?? null,
           signature: signed.signature,
-          digest: result.digest,
-          effects: result.rawEffects?.length ? arrayBufferToBase64(new Uint8Array(result.rawEffects)) : undefined,
-          errors: result.errors,
-          events: result.events ?? null,
-          objectChanges: result.objectChanges ?? null,
-          rawEffects: result.rawEffects,
-          rawTransaction: result.rawTransaction,
-          timestampMs: result.timestampMs ?? null,
-          transaction: result.transaction ?? null
+          digest: executed.digest,
+          errors: result.$kind === 'FailedTransaction' ? [executed.status.error?.message ?? 'Sui transaction failed.'] : undefined,
+          events: executed.events ?? null,
+          transaction: executed.transaction ?? null
         };
       }
       case 'monad_sendTransaction': {
@@ -9605,6 +9643,9 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
           break;
         case 'wallet_set_privacy_mode':
           sendResponse(await controller.setPrivacyMode(message.enabled));
+          break;
+        case 'wallet_set_hide_low_value_tokens':
+          sendResponse(await controller.setHideLowValueTokens(message.enabled));
           break;
         case 'wallet_set_auto_connect':
           sendResponse(await controller.setAutoConnect(message.enabled));

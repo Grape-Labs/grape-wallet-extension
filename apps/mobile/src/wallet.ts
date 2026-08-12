@@ -38,6 +38,8 @@ import { generateWalletMnemonic, type WalletMnemonicLength, validateWalletMnemon
 import {
   createMobileJupiterSwapTransaction,
   fetchMobileJupiterQuote,
+  fetchMobileLifiSwapQuote,
+  fetchMobileLifiTokenPrice,
   fetchMobileJupiterPrices,
   fetchMobileNativeBridgeQuote,
   fetchMobileShyftTransactionHistory,
@@ -46,10 +48,13 @@ import {
   getMobileEthereumRpcUrl,
   getMobileSupportedBridgeDestinations,
   getMobileMonadRpcUrl,
+  getMobileSuiRpcUrl,
   getMobileSolanaRpcUrl,
+  MOBILE_LIFI_NATIVE_TOKEN_ADDRESS,
   type MobileBridgeQuoteSummary,
   type MobileJupiterQuoteResponse
 } from './config';
+import { createSuiClient, executeSuiSwap, getSuiSwapQuote, resolveSuiVaultSecret } from '@grape/sui';
 import {
   deriveMobileSuiAccount0,
   exportMobileSuiWalletSecret,
@@ -119,6 +124,7 @@ export type MobileWalletState = {
   passkeyWallet?: MobilePasskeyWalletConfig;
   privacyMode: boolean;
   hideZeroBalances: boolean;
+  hideLowValueTokens: boolean;
   biometricEnabled: boolean;
   activities: MobileActivity[];
 };
@@ -169,7 +175,7 @@ export type MobileSwapQuote = {
   routes: Array<{
     id: string;
     label: string;
-    quoteResponse: MobileJupiterQuoteResponse;
+    quoteResponse: MobileJupiterQuoteResponse | Record<string, unknown>;
     outputAmountUi: string;
     priceImpactPct: string | null;
     routeLabels: string[];
@@ -315,6 +321,7 @@ export function createEmptyMobileWalletState(): MobileWalletState {
     passkeyWallet: undefined,
     privacyMode: false,
     hideZeroBalances: true,
+    hideLowValueTokens: false,
     biometricEnabled: false,
     activities: []
   };
@@ -409,6 +416,7 @@ export async function createWalletSet(input: {
     passkeyWallet: input.passkeyWallet,
     privacyMode: false,
     hideZeroBalances: true,
+    hideLowValueTokens: false,
     biometricEnabled: false,
     activities: []
   };
@@ -500,6 +508,7 @@ export async function createPrivateKeyWallet(input: {
     passkeyWallet: undefined,
     privacyMode: false,
     hideZeroBalances: true,
+    hideLowValueTokens: false,
     biometricEnabled: false,
     activities: []
   };
@@ -898,8 +907,21 @@ export async function getWalletSwapQuote(input: {
   amount: string;
   slippageBps: number;
 }): Promise<MobileSwapQuote> {
-  if (input.wallet.chain !== 'solana') {
-    throw new Error('Swaps are currently available for Solana only.');
+  if (input.wallet.chain === 'ethereum' || input.wallet.chain === 'monad') {
+    const fromToken = input.inputAsset.tokenType === 'erc20' ? input.inputAsset.address ?? '' : MOBILE_LIFI_NATIVE_TOKEN_ADDRESS[input.wallet.chain];
+    const toToken = input.outputAsset.tokenType === 'erc20' ? input.outputAsset.address ?? '' : MOBILE_LIFI_NATIVE_TOKEN_ADDRESS[input.wallet.chain];
+    if (!fromToken || !toToken || fromToken === toToken) throw new Error('Choose two different valid assets.');
+    const amountRaw = parseDecimalAmount(input.amount, input.inputAsset.decimals ?? 18).toString();
+    const quote = await fetchMobileLifiSwapQuote({ chain: input.wallet.chain, fromToken, toToken, amountRaw, walletAddress: input.wallet.address, slippageBps: input.slippageBps });
+    const estimate = quote.estimate as { toAmount?: string; toToken?: { decimals?: number }; fromAmount?: string } | undefined;
+    return { inputMint: fromToken, outputMint: toToken, inputAmountUi: input.amount, slippageBps: input.slippageBps, selectedRouteId: 'best', routes: [{ id: 'best', label: 'Best route', quoteResponse: { ...quote, _grapeSwapChain: input.wallet.chain }, outputAmountUi: formatUiAmount(estimate?.toAmount ?? '0', estimate?.toToken?.decimals ?? 18), priceImpactPct: null, routeLabels: [String(quote.toolDetails?.name ?? 'LI.FI')] }] };
+  }
+  if (input.wallet.chain === 'sui') {
+    const client = createSuiClient(DEFAULT_SUI_NETWORK, getMobileSuiRpcUrl(DEFAULT_SUI_NETWORK));
+    const fromCoinType = input.inputAsset.tokenType === 'sui-coin' ? input.inputAsset.address ?? '' : '0x2::sui::SUI';
+    const toCoinType = input.outputAsset.tokenType === 'sui-coin' ? input.outputAsset.address ?? '' : '0x2::sui::SUI';
+    const quote = await getSuiSwapQuote(client, { fromCoinType, toCoinType, amountIn: parseDecimalAmount(input.amount, input.inputAsset.decimals ?? 9) });
+    return { inputMint: fromCoinType, outputMint: toCoinType, inputAmountUi: input.amount, slippageBps: input.slippageBps, selectedRouteId: 'best', routes: [{ id: 'best', label: 'Best route', quoteResponse: { _grapeSwapChain: 'sui', fromCoinType, toCoinType, amountIn: quote.amountIn, slippageBps: input.slippageBps }, outputAmountUi: formatUiAmount(quote.amountOut, input.outputAsset.decimals ?? 0), priceImpactPct: null, routeLabels: quote.providers }] };
   }
 
   const inputMint = input.inputAsset.tokenType === 'spl' ? input.inputAsset.address ?? '' : JUPITER_SOL_MINT;
@@ -975,13 +997,26 @@ export async function getWalletSwapQuote(input: {
 
 export async function executeWalletSwap(input: {
   wallet: MobileWallet;
-  quoteResponse: MobileJupiterQuoteResponse;
+  quoteResponse: MobileJupiterQuoteResponse | Record<string, unknown>;
 }): Promise<MobileSwapExecuteResponse> {
-  if (input.wallet.chain !== 'solana') {
-    throw new Error('Swaps are currently available for Solana only.');
-  }
-
   const secret = await loadWalletSecret(input.wallet.secretRef);
+  const genericQuote = input.quoteResponse as Record<string, unknown>;
+  if (input.wallet.chain === 'ethereum' || input.wallet.chain === 'monad') {
+    const transactionRequest = extractExecutableBridgeTransactionRequest(genericQuote, input.wallet.chain);
+    if (!transactionRequest?.to) throw new Error('This route is not executable.');
+    const signature = input.wallet.chain === 'ethereum'
+      ? await loadEthereumModule().sendEthereumTransactionRequest(DEFAULT_EVM_NETWORK, secret as VaultSecret, { to: transactionRequest.to, data: transactionRequest.data, value: transactionRequest.value, customRpcUrl: getMobileEthereumRpcUrl(DEFAULT_EVM_NETWORK) })
+      : await loadMonadModule().sendMonadTransactionRequest(DEFAULT_EVM_NETWORK, secret as VaultSecret, { to: transactionRequest.to, data: transactionRequest.data, value: transactionRequest.value, customRpcUrl: getMobileMonadRpcUrl(DEFAULT_EVM_NETWORK) });
+    const estimate = genericQuote.estimate as { fromAmount?: string; toAmount?: string; fromToken?: { address?: string; decimals?: number }; toToken?: { address?: string; decimals?: number } } | undefined;
+    return { signature, inputMint: estimate?.fromToken?.address ?? '', outputMint: estimate?.toToken?.address ?? '', inputAmountUi: formatUiAmount(estimate?.fromAmount ?? '0', estimate?.fromToken?.decimals ?? 18), outputAmountUi: formatUiAmount(estimate?.toAmount ?? '0', estimate?.toToken?.decimals ?? 18) };
+  }
+  if (input.wallet.chain === 'sui') {
+    const client = createSuiClient(DEFAULT_SUI_NETWORK, getMobileSuiRpcUrl(DEFAULT_SUI_NETWORK));
+    const quote = await getSuiSwapQuote(client, { fromCoinType: String(genericQuote.fromCoinType), toCoinType: String(genericQuote.toCoinType), amountIn: BigInt(String(genericQuote.amountIn)) });
+    const signature = await executeSuiSwap(client, resolveSuiVaultSecret(secret as VaultSecret), { quote, slippageBps: Number(genericQuote.slippageBps ?? 50) });
+    return { signature, inputMint: quote.fromCoinType, outputMint: quote.toCoinType, inputAmountUi: quote.amountIn, outputAmountUi: quote.amountOut };
+  }
+  const solanaQuote = input.quoteResponse as MobileJupiterQuoteResponse;
   const { resolveSolanaVaultSecret } = loadSolanaDeriveModule();
   const { signAndSendSerializedTransaction } = loadSolanaSigningModule();
   const keypair =
@@ -989,7 +1024,7 @@ export async function executeWalletSwap(input: {
       ? resolveSolanaVaultSecret({ kind: 'mnemonic', mnemonic: secret.mnemonic })
       : resolveSolanaVaultSecret({ kind: 'private-key', secretKey: secret.secretKey });
   const swap = await createMobileJupiterSwapTransaction({
-    quoteResponse: input.quoteResponse,
+    quoteResponse: solanaQuote,
     userPublicKey: input.wallet.address
   });
   const signature = await signAndSendSerializedTransaction(
@@ -999,16 +1034,16 @@ export async function executeWalletSwap(input: {
   );
 
   const [inputDecimals, outputDecimals] = await Promise.all([
-    getSolanaMintDecimals(input.quoteResponse.inputMint),
-    getSolanaMintDecimals(input.quoteResponse.outputMint)
+    getSolanaMintDecimals(solanaQuote.inputMint),
+    getSolanaMintDecimals(solanaQuote.outputMint)
   ]);
 
   return {
     signature,
-    inputMint: input.quoteResponse.inputMint,
-    outputMint: input.quoteResponse.outputMint,
-    inputAmountUi: formatUiAmount(input.quoteResponse.inAmount, inputDecimals),
-    outputAmountUi: formatUiAmount(input.quoteResponse.outAmount, outputDecimals)
+    inputMint: solanaQuote.inputMint,
+    outputMint: solanaQuote.outputMint,
+    inputAmountUi: formatUiAmount(solanaQuote.inAmount, inputDecimals),
+    outputAmountUi: formatUiAmount(solanaQuote.outAmount, outputDecimals)
   };
 }
 
@@ -1449,6 +1484,10 @@ export async function sendWalletAsset(input: {
 }): Promise<string> {
   const secret = await loadWalletSecret(input.wallet.secretRef);
 
+  if (input.wallet.chain !== 'solana' && /\.(?:sol|skr)$/i.test(input.recipient.trim())) {
+    throw new Error(`${input.wallet.chain === 'sui' ? 'Sui' : input.wallet.chain === 'monad' ? 'Monad' : 'Ethereum'} sends require a wallet address. .sol and .skr domains are only supported on Solana.`);
+  }
+
   switch (input.wallet.chain) {
     case 'solana': {
       const { resolveSolanaVaultSecret } = loadSolanaDeriveModule();
@@ -1793,6 +1832,7 @@ export async function importMobileDeviceLink(input: {
   payload: string;
   pairingCode: string;
   password?: string;
+  credentialKind?: MobileCredentialKind;
 }): Promise<MobileWalletState> {
   const envelope = parseDeviceLinkPayloadText(input.payload);
   if (envelope.expiresAt <= Date.now()) {
@@ -1816,8 +1856,9 @@ export async function importMobileDeviceLink(input: {
   }
 
   const hasExistingWallets = input.state.setup === 'ready' && input.state.wallets.length > 0;
-  if (!hasExistingWallets && !validateMobileWalletCredential(input.password ?? '', DEFAULT_MOBILE_CREDENTIAL_KIND)) {
-    throw new Error(getInvalidMobileCredentialMessage(DEFAULT_MOBILE_CREDENTIAL_KIND));
+  const credentialKind = resolveMobileCredentialKind(input.credentialKind, false, false);
+  if (!hasExistingWallets && !validateMobileWalletCredential(input.password ?? '', credentialKind)) {
+    throw new Error(getInvalidMobileCredentialMessage(credentialKind));
   }
   let nextState: MobileWalletState;
 
@@ -1831,7 +1872,7 @@ export async function importMobileDeviceLink(input: {
       : await createWalletSet({
           mnemonic: payload.wallet.secret.mnemonic,
           password: input.password ?? '',
-          credentialKind: DEFAULT_MOBILE_CREDENTIAL_KIND,
+          credentialKind,
           source: payload.wallet.source === 'created' ? 'created' : 'imported-mnemonic'
         });
   } else {
@@ -1845,7 +1886,7 @@ export async function importMobileDeviceLink(input: {
           chain: payload.wallet.chain,
           privateKey: payload.wallet.secret.secretKey,
           password: input.password ?? '',
-          credentialKind: DEFAULT_MOBILE_CREDENTIAL_KIND
+          credentialKind
         });
   }
 
@@ -2691,13 +2732,15 @@ async function loadMonadAssets(address: string): Promise<MobileAsset[]> {
   const { createMonadPublicClient, getMonadHoldings } = loadMonadModule();
   const client = createMonadPublicClient(DEFAULT_EVM_NETWORK, getMobileMonadRpcUrl(DEFAULT_EVM_NETWORK));
   const holdings = await getMonadHoldings(client, address);
+  const monPriceUsd = await fetchMobileLifiTokenPrice('monad', MOBILE_LIFI_NATIVE_TOKEN_ADDRESS.monad).catch(() => null);
+  const monValueUsd = monPriceUsd === null ? null : Number(holdings.formatted) * monPriceUsd;
   return [
     {
       id: 'mon',
       name: 'Monad',
       symbol: 'MON',
       amountLabel: `${holdings.formatted} MON`,
-      valueLabel: '',
+      valueLabel: formatUsdValue(monValueUsd),
       chain: 'monad',
       address,
       metadataSource: 'native',
@@ -2705,6 +2748,27 @@ async function loadMonadAssets(address: string): Promise<MobileAsset[]> {
       tokenType: 'native'
     }
   ];
+}
+
+export async function loadMobileMonadTokenAsset(owner: string, tokenAddress: string): Promise<MobileAsset> {
+  const { createMonadPublicClient, getMonadTokenPreview } = loadMonadModule();
+  const client = createMonadPublicClient(DEFAULT_EVM_NETWORK, getMobileMonadRpcUrl(DEFAULT_EVM_NETWORK));
+  const token = await getMonadTokenPreview(client, owner, tokenAddress);
+  const tokenPriceUsd = await fetchMobileLifiTokenPrice('monad', token.tokenAddress).catch(() => null);
+  const tokenValueUsd = tokenPriceUsd === null ? null : Number(token.amount) * tokenPriceUsd;
+  return {
+    id: `monad-token:${token.tokenAddress.toLowerCase()}`,
+    name: token.name,
+    symbol: token.symbol,
+    amountLabel: `${token.amount} ${token.symbol}`,
+    amountUi: Number(token.amount),
+    valueLabel: formatUsdValue(tokenValueUsd),
+    chain: 'monad',
+    address: token.tokenAddress,
+    decimals: token.decimals,
+    metadataSource: 'rpc',
+    tokenType: 'erc20'
+  };
 }
 
 function createSecretRef() {

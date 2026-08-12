@@ -554,6 +554,23 @@ function OptionsPage() {
         <label className="inline checkbox-row">
           <input
             type="checkbox"
+            checked={Boolean(state.wallet.hideLowValueTokens)}
+            onChange={async (event) => {
+              const nextState = await sendRuntimeMessage<WalletStateResponse>({
+                type: 'wallet_set_hide_low_value_tokens',
+                enabled: event.target.checked
+              });
+              setState(nextState);
+            }}
+          />
+          <span>
+            <strong>Hide low-value tokens</strong>
+            <small className="muted">Hide tokens worth less than 0.10 USDC, including tokens without reliable pricing.</small>
+          </span>
+        </label>
+        <label className="inline checkbox-row">
+          <input
+            type="checkbox"
             checked={state.wallet.autoConnectEnabled}
             onChange={async (event) => {
               const nextState = await sendRuntimeMessage<WalletStateResponse>({

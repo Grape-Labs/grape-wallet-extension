@@ -1,12 +1,12 @@
 import { base64ToBytes, type VaultSecret } from '@grape/core';
 import {
-  SuiJsonRpcClient,
-  type SuiJsonRpcClientOptions,
-  type CoinBalance
-} from '@mysten/sui/jsonRpc';
+  SuiGrpcClient,
+  type SuiGrpcClientOptions
+} from '@mysten/sui/grpc';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { Transaction } from '@mysten/sui/transactions';
 import { isValidSuiAddress, MIST_PER_SUI, normalizeSuiAddress, SUI_TYPE_ARG } from '@mysten/sui/utils';
+import { AggregatorClient, type RouterDataV3 } from '@cetusprotocol/aggregator-sdk';
 
 export const SUI_DERIVATION_PATH = `m/44'/784'/0'/0'/0'`;
 export const DEFAULT_SUI_NETWORK = 'mainnet';
@@ -36,6 +36,58 @@ export type SuiCoinHolding = {
   rawAmount: string;
   logoUri?: string;
 };
+
+export type SuiSwapQuote = {
+  fromCoinType: string;
+  toCoinType: string;
+  amountIn: string;
+  amountOut: string;
+  providers: string[];
+  router: RouterDataV3;
+};
+
+export async function getSuiSwapQuote(
+  client: SuiGrpcClient,
+  input: { fromCoinType: string; toCoinType: string; amountIn: bigint }
+): Promise<SuiSwapQuote> {
+  if (input.fromCoinType.trim() === input.toCoinType.trim()) throw new Error('Choose a different output token.');
+  if (input.amountIn <= 0n) throw new Error('Enter an amount greater than zero.');
+  const aggregator = new AggregatorClient({ client });
+  const router = await aggregator.findRouters({
+    from: input.fromCoinType.trim(),
+    target: input.toCoinType.trim(),
+    amount: input.amountIn,
+    byAmountIn: true
+  });
+  if (!router || router.insufficientLiquidity || router.error) throw new Error('No Sui swap route is available for this amount.');
+  return {
+    fromCoinType: input.fromCoinType.trim(),
+    toCoinType: input.toCoinType.trim(),
+    amountIn: String(router.amountIn),
+    amountOut: String(router.amountOut),
+    providers: Array.from(new Set(router.paths.map((path) => path.provider))),
+    router
+  };
+}
+
+export async function executeSuiSwap(
+  client: SuiGrpcClient,
+  keypair: Ed25519Keypair,
+  input: { quote: SuiSwapQuote; slippageBps: number }
+): Promise<string> {
+  const aggregator = new AggregatorClient({ client, signer: keypair.toSuiAddress() });
+  const transaction = new Transaction();
+  transaction.setSender(keypair.toSuiAddress());
+  await aggregator.fastRouterSwap({
+    router: input.quote.router,
+    txb: transaction,
+    slippage: Math.max(0, input.slippageBps) / 10_000
+  });
+  const response = await client.signAndExecuteTransaction({ transaction, signer: keypair, include: { effects: true } });
+  const digest = response.Transaction?.digest ?? response.FailedTransaction?.digest;
+  if (!digest) throw new Error('Sui swap did not return a transaction digest.');
+  return digest;
+}
 
 export function deriveSuiAccount0(mnemonic: string): DerivedSuiAccount {
   const keypair = Ed25519Keypair.deriveKeypair(mnemonic, SUI_DERIVATION_PATH);
@@ -91,13 +143,13 @@ export function getSuiRpcUrl(network: SuiNetwork, customRpcUrl?: string | null):
   return network === 'devnet' ? 'https://fullnode.devnet.sui.io:443' : 'https://fullnode.mainnet.sui.io:443';
 }
 
-export function createSuiClient(network: SuiNetwork, customRpcUrl?: string | null): SuiJsonRpcClient {
-  const options: SuiJsonRpcClientOptions = {
+export function createSuiClient(network: SuiNetwork, customRpcUrl?: string | null): SuiGrpcClient {
+  const options: SuiGrpcClientOptions = {
     network,
-    url: getSuiRpcUrl(network, customRpcUrl)
+    baseUrl: getSuiRpcUrl(network, customRpcUrl)
   };
 
-  return new SuiJsonRpcClient(options);
+  return new SuiGrpcClient(options);
 }
 
 export function validateSuiAddress(address: string): boolean {
@@ -109,22 +161,29 @@ export function validateSuiAddress(address: string): boolean {
 }
 
 export async function getSuiHoldings(
-  client: SuiJsonRpcClient,
+  client: SuiGrpcClient,
   owner: string
 ): Promise<{
   totalMist: string;
   coins: SuiCoinHolding[];
 }> {
-  const balances = await client.getAllBalances({ owner: normalizeSuiAddress(owner) });
+  const normalizedOwner = normalizeSuiAddress(owner);
+  const balances: Awaited<ReturnType<SuiGrpcClient['listBalances']>>['balances'] = [];
+  let cursor: string | null = null;
+  do {
+    const page = await client.listBalances({ owner: normalizedOwner, cursor, limit: 1000 });
+    balances.push(...page.balances);
+    cursor = page.hasNextPage ? page.cursor : null;
+  } while (cursor);
   const coinResults: Array<SuiCoinHolding | null> = await Promise.all(
-    balances.map(async (balance: CoinBalance) => {
+    balances.map(async (balance) => {
       if (isNativeSuiCoinType(balance.coinType)) {
         return null;
       }
 
-      const metadata = await client.getCoinMetadata({ coinType: balance.coinType }).catch(() => null);
+      const metadata = (await client.getCoinMetadata({ coinType: balance.coinType }).catch(() => null))?.coinMetadata;
       const decimals = metadata?.decimals ?? 0;
-      const rawAmount = balance.totalBalance;
+      const rawAmount = balance.balance;
       const amount = formatSuiAmount(rawAmount, decimals);
 
       return {
@@ -139,16 +198,16 @@ export async function getSuiHoldings(
     })
   );
 
-  const suiBalance = balances.find((balance: CoinBalance) => isNativeSuiCoinType(balance.coinType));
+  const suiBalance = balances.find((balance) => isNativeSuiCoinType(balance.coinType));
 
   return {
-    totalMist: suiBalance?.totalBalance ?? '0',
+    totalMist: suiBalance?.balance ?? '0',
     coins: coinResults.filter((coin): coin is SuiCoinHolding => coin !== null)
   };
 }
 
 export async function sendSui(
-  client: SuiJsonRpcClient,
+  client: SuiGrpcClient,
   keypair: Ed25519Keypair,
   input: { recipient: string; amountMist: bigint }
 ): Promise<string> {
@@ -160,47 +219,46 @@ export async function sendSui(
   const response = await client.signAndExecuteTransaction({
     transaction,
     signer: keypair,
-    options: {
-      showEffects: true
-    }
+    include: { effects: true }
   });
 
-  if (!response.digest) {
+  const digest = response.Transaction?.digest ?? response.FailedTransaction?.digest;
+  if (!digest) {
     throw new Error('Sui transaction did not return a digest.');
   }
 
-  return response.digest;
+  return digest;
 }
 
 export async function sendSuiCoin(
-  client: SuiJsonRpcClient,
+  client: SuiGrpcClient,
   keypair: Ed25519Keypair,
   input: { recipient: string; amountBaseUnits: bigint; coinType: string }
 ): Promise<string> {
   const owner = keypair.toSuiAddress();
   const coinType = input.coinType.trim();
   const normalizedRecipient = normalizeSuiAddress(input.recipient);
-  const coins = await client.getCoins({
+  const coins = await client.listCoins({
     owner: normalizeSuiAddress(owner),
     coinType
   });
 
-  if (!coins.data.length) {
+  if (!coins.objects.length) {
     throw new Error('No coin objects were found for the selected token.');
   }
 
-  const totalBalance = coins.data.reduce((sum, coin) => sum + BigInt(coin.balance), 0n);
+  const totalBalance = coins.objects.reduce((sum, coin) => sum + BigInt(coin.balance), 0n);
   if (totalBalance < input.amountBaseUnits) {
     throw new Error('Insufficient token balance.');
   }
 
   const transaction = new Transaction();
   transaction.setSender(owner);
-  const primaryCoin = transaction.object(coins.data[0].coinObjectId);
-  if (coins.data.length > 1) {
+  const primaryCoin = transaction.object(coins.objects[0].objectId);
+  if (coins.objects.length > 1) {
     transaction.mergeCoins(
       primaryCoin,
-      coins.data.slice(1).map((coin) => transaction.object(coin.coinObjectId))
+      coins.objects.slice(1).map((coin) => transaction.object(coin.objectId))
     );
   }
   const [coin] = transaction.splitCoins(primaryCoin, [transaction.pure.u64(input.amountBaseUnits.toString())]);
@@ -209,21 +267,20 @@ export async function sendSuiCoin(
   const response = await client.signAndExecuteTransaction({
     transaction,
     signer: keypair,
-    options: {
-      showEffects: true
-    }
+    include: { effects: true }
   });
 
-  if (!response.digest) {
+  const digest = response.Transaction?.digest ?? response.FailedTransaction?.digest;
+  if (!digest) {
     throw new Error('Sui token transaction did not return a digest.');
   }
 
-  return response.digest;
+  return digest;
 }
 
 export async function resolveSuiTransactionBytes(
   transaction: string,
-  client: SuiJsonRpcClient,
+  client: SuiGrpcClient,
   sender: string
 ): Promise<Uint8Array> {
   const trimmed = transaction.trim();

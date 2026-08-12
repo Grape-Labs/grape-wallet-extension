@@ -16,6 +16,7 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@cetusprotocol/aggregator-sdk": "^1.6.9",
     "@grape/core": "workspace:*",
     "@ledgerhq/hw-transport-webhid": "^6.31.0",
     "@mysten/ledgerjs-hw-app-sui": "^0.7.1",

@@ -480,6 +480,10 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     enabled: z.boolean()
   }),
   z.object({
+    type: z.literal('wallet_set_hide_low_value_tokens'),
+    enabled: z.boolean()
+  }),
+  z.object({
     type: z.literal('wallet_set_auto_connect'),
     enabled: z.boolean()
   }),
@@ -697,7 +701,7 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('wallet_execute_swap'),
-    quoteResponse: jupiterQuoteResponseSchema,
+    quoteResponse: z.union([jupiterQuoteResponseSchema, z.record(z.string(), z.unknown())]),
     password: z.string().min(1).optional()
   }),
   z.object({

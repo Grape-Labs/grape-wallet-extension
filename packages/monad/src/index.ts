@@ -2,6 +2,7 @@ import type { VaultSecret } from '@grape/core';
 import {
   createPublicClient,
   createWalletClient,
+  encodeFunctionData,
   formatEther,
   formatUnits,
   http,
@@ -68,6 +69,21 @@ export type MonadTokenPreview = {
   decimals: number;
   amount: string;
   rawAmount: string;
+};
+
+export type MonadTransactionEstimate = {
+  gas: bigint;
+  gasPrice: bigint;
+  feeWei: bigint;
+  balanceWei: bigint;
+};
+
+export type MonadTransactionStatus = {
+  hash: Hex;
+  status: 'pending' | 'success' | 'reverted';
+  blockNumber?: bigint;
+  gasUsed?: bigint;
+  effectiveGasPrice?: bigint;
 };
 
 const ERC20_ABI = parseAbi([
@@ -225,6 +241,17 @@ export async function sendMonad(
   input: { recipient: string; amountEther: string; customRpcUrl?: string | null }
 ): Promise<Hex> {
   const account = resolveMonadVaultSecret(secret);
+  const value = parseEther(input.amountEther);
+  const estimate = await estimateMonadTransaction(network, account.address, {
+    to: input.recipient,
+    value,
+    customRpcUrl: input.customRpcUrl
+  });
+  if (estimate.balanceWei < value + estimate.feeWei) {
+    throw new Error(
+      `Insufficient MON for amount and network fee. Required ${formatEther(value + estimate.feeWei)} MON; available ${formatEther(estimate.balanceWei)} MON.`
+    );
+  }
   const walletClient = createWalletClient({
     account,
     chain: network === 'testnet' ? MONAD_TESTNET_CHAIN : MONAD_MAINNET_CHAIN,
@@ -235,7 +262,7 @@ export async function sendMonad(
     account,
     chain: network === 'testnet' ? MONAD_TESTNET_CHAIN : MONAD_MAINNET_CHAIN,
     to: input.recipient as Address,
-    value: parseEther(input.amountEther)
+    value
   });
 }
 
@@ -252,6 +279,22 @@ export async function sendMonadToken(
 ): Promise<Hex> {
   const account = resolveMonadVaultSecret(secret);
   const chain = network === 'testnet' ? MONAD_TESTNET_CHAIN : MONAD_MAINNET_CHAIN;
+  const tokenAmount = parseUnits(input.amount, input.decimals);
+  const data = encodeFunctionData({
+    abi: ERC20_ABI,
+    functionName: 'transfer',
+    args: [input.recipient as Address, tokenAmount]
+  });
+  const estimate = await estimateMonadTransaction(network, account.address, {
+    to: input.tokenAddress,
+    data,
+    customRpcUrl: input.customRpcUrl
+  });
+  if (estimate.balanceWei < estimate.feeWei) {
+    throw new Error(
+      `Insufficient MON for the token transfer network fee. Required about ${formatEther(estimate.feeWei)} MON; available ${formatEther(estimate.balanceWei)} MON.`
+    );
+  }
   const walletClient = createWalletClient({
     account,
     chain,
@@ -264,8 +307,52 @@ export async function sendMonadToken(
     address: input.tokenAddress as Address,
     abi: ERC20_ABI,
     functionName: 'transfer',
-    args: [input.recipient as Address, parseUnits(input.amount, input.decimals)]
+    args: [input.recipient as Address, tokenAmount]
   });
+}
+
+export async function estimateMonadTransaction(
+  network: MonadNetwork,
+  sender: string,
+  input: { to: string; value?: bigint; data?: Hex; customRpcUrl?: string | null }
+): Promise<MonadTransactionEstimate> {
+  if (!isAddress(sender.trim()) || !isAddress(input.to.trim())) {
+    throw new Error('Monad transaction contains an invalid address.');
+  }
+  const client = createMonadPublicClient(network, input.customRpcUrl);
+  const [balanceWei, gasPrice, gas] = await Promise.all([
+    client.getBalance({ address: sender.trim() as Address }),
+    client.getGasPrice(),
+    client.estimateGas({
+      account: sender.trim() as Address,
+      to: input.to.trim() as Address,
+      value: input.value,
+      data: input.data
+    })
+  ]);
+  return { gas, gasPrice, feeWei: gas * gasPrice, balanceWei };
+}
+
+export async function getMonadTransactionStatus(
+  network: MonadNetwork,
+  hash: Hex,
+  customRpcUrl?: string | null
+): Promise<MonadTransactionStatus> {
+  const client = createMonadPublicClient(network, customRpcUrl);
+  const receipt = await client.getTransactionReceipt({ hash }).catch(() => null);
+  if (!receipt) return { hash, status: 'pending' };
+  return {
+    hash,
+    status: receipt.status === 'success' ? 'success' : 'reverted',
+    blockNumber: receipt.blockNumber,
+    gasUsed: receipt.gasUsed,
+    effectiveGasPrice: receipt.effectiveGasPrice
+  };
+}
+
+export function getMonadExplorerTransactionUrl(network: MonadNetwork, hash: string) {
+  const baseUrl = network === 'testnet' ? MONAD_TESTNET_CHAIN.blockExplorers.default.url : MONAD_MAINNET_CHAIN.blockExplorers.default.url;
+  return `${baseUrl}/tx/${encodeURIComponent(hash)}`;
 }
 
 export async function sendMonadTransactionRequest(
@@ -289,6 +376,22 @@ export async function sendMonadTransactionRequest(
 
   const account = resolveMonadVaultSecret(secret);
   const chain = network === 'testnet' ? MONAD_TESTNET_CHAIN : MONAD_MAINNET_CHAIN;
+  const value = normalizeBigIntValue(input.value);
+  const data = input.data?.trim() ? (input.data.trim() as Hex) : undefined;
+  const estimate = await estimateMonadTransaction(network, account.address, {
+    to: input.to,
+    value,
+    data,
+    customRpcUrl: input.customRpcUrl
+  });
+  const requestedGas = normalizeBigIntValue(input.gas);
+  const requestedGasPrice = normalizeBigIntValue(input.gasPrice) ?? normalizeBigIntValue(input.maxFeePerGas);
+  const maximumFee = (requestedGas ?? estimate.gas) * (requestedGasPrice ?? estimate.gasPrice);
+  if (estimate.balanceWei < (value ?? 0n) + maximumFee) {
+    throw new Error(
+      `Insufficient MON for transaction value and network fee. Required up to ${formatEther((value ?? 0n) + maximumFee)} MON; available ${formatEther(estimate.balanceWei)} MON.`
+    );
+  }
   const walletClient = createWalletClient({
     account,
     chain,
@@ -299,9 +402,9 @@ export async function sendMonadTransactionRequest(
     account,
     chain,
     to: input.to.trim() as Address,
-    data: input.data?.trim() ? (input.data.trim() as Hex) : undefined,
-    value: normalizeBigIntValue(input.value),
-    gas: normalizeBigIntValue(input.gas),
+    data,
+    value,
+    gas: requestedGas,
     nonce: normalizeNumberValue(input.nonce)
   } as {
     account: typeof account;

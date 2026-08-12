@@ -114,6 +114,53 @@ type LifiQuoteResponse = {
   [key: string]: unknown;
 };
 
+export type LifiToken = {
+  address: string;
+  chainId: number;
+  symbol: string;
+  name: string;
+  decimals: number;
+  logoURI?: string;
+  priceUSD?: string;
+};
+
+let tokenCatalogCache = new Map<GrapeChain, Promise<LifiToken[]>>();
+
+export async function fetchLifiTokenCatalog(chain: 'ethereum' | 'monad'): Promise<LifiToken[]> {
+  const cached = tokenCatalogCache.get(chain);
+  if (cached) return cached;
+  const request = resolveLifiChainId(chain).then(async (chainId) => {
+    const response = await fetchLifiJson<{ tokens?: Record<string, LifiToken[]> }>('/tokens', new URLSearchParams({ chains: chainId }));
+    return (response.tokens?.[chainId] ?? []).filter((token) => token.address && token.symbol && Number.isFinite(token.decimals));
+  }).catch((error) => {
+    tokenCatalogCache.delete(chain);
+    throw error;
+  });
+  tokenCatalogCache.set(chain, request);
+  return request;
+}
+
+export async function searchLifiTokens(chain: 'ethereum' | 'monad', query: string): Promise<LifiToken[]> {
+  const normalized = query.trim().toLowerCase();
+  const tokens = await fetchLifiTokenCatalog(chain);
+  const matches = normalized
+    ? tokens.filter((token) => `${token.name} ${token.symbol} ${token.address}`.toLowerCase().includes(normalized))
+    : tokens;
+  return matches.sort((a, b) => Number(b.priceUSD ?? 0) - Number(a.priceUSD ?? 0)).slice(0, 50);
+}
+
+export async function fetchLifiSwapQuote(input: {
+  chain: 'ethereum' | 'monad'; fromToken: string; toToken: string; amountRaw: string; walletAddress: string; slippageBps: number;
+}) {
+  const chainId = await resolveLifiChainId(input.chain);
+  const quote = await fetchLifiJson<LifiQuoteResponse>('/quote', new URLSearchParams({
+    fromChain: chainId, toChain: chainId, fromToken: input.fromToken, toToken: input.toToken,
+    fromAmount: input.amountRaw, fromAddress: input.walletAddress, toAddress: input.walletAddress,
+    slippage: String(Math.max(0, input.slippageBps) / 10_000), integrator: 'grape'
+  }));
+  return quote;
+}
+
 export type BridgeQuoteSummary = {
   fromChain: GrapeChain;
   toChain: GrapeChain;

@@ -601,6 +601,45 @@ const MOBILE_LIFI_NATIVE_TOKEN_ADDRESS = {
   monad: '0x0000000000000000000000000000000000000000',
   ethereum: '0x0000000000000000000000000000000000000000'
 } as const;
+export { MOBILE_LIFI_NATIVE_TOKEN_ADDRESS };
+
+export type MobileLifiToken = { address: string; chainId: number; symbol: string; name: string; decimals: number; logoURI?: string; priceUSD?: string };
+const mobileTokenCatalogCache = new Map<'ethereum' | 'monad', Promise<MobileLifiToken[]>>();
+
+export async function fetchMobileLifiTokenCatalog(chain: 'ethereum' | 'monad') {
+  const cached = mobileTokenCatalogCache.get(chain);
+  if (cached) return cached;
+  const request = resolveMobileLifiChainId(chain).then(async (chainId) => {
+    const response = await fetchMobileLifiJson<{ tokens?: Record<string, MobileLifiToken[]> }>('/tokens', new URLSearchParams({ chains: chainId }));
+    return response.tokens?.[chainId] ?? [];
+  }).catch((error) => { mobileTokenCatalogCache.delete(chain); throw error; });
+  mobileTokenCatalogCache.set(chain, request);
+  return request;
+}
+
+export async function searchMobileLifiTokens(chain: 'ethereum' | 'monad', query: string) {
+  const normalized = query.trim().toLowerCase();
+  const tokens = await fetchMobileLifiTokenCatalog(chain);
+  return tokens.filter((token) => !normalized || `${token.name} ${token.symbol} ${token.address}`.toLowerCase().includes(normalized)).slice(0, 50);
+}
+
+export async function fetchMobileLifiTokenPrice(chain: 'ethereum' | 'monad', addressOrSymbol: string): Promise<number | null> {
+  const normalized = addressOrSymbol.trim().toLowerCase();
+  const token = (await fetchMobileLifiTokenCatalog(chain)).find((candidate) =>
+    candidate.address.toLowerCase() === normalized || candidate.symbol.toLowerCase() === normalized
+  );
+  const price = Number(token?.priceUSD);
+  return Number.isFinite(price) && price > 0 ? price : null;
+}
+
+export async function fetchMobileLifiSwapQuote(input: { chain: 'ethereum' | 'monad'; fromToken: string; toToken: string; amountRaw: string; walletAddress: string; slippageBps: number }) {
+  const chainId = await resolveMobileLifiChainId(input.chain);
+  return fetchMobileLifiJson<MobileLifiQuoteResponse>('/quote', new URLSearchParams({
+    fromChain: chainId, toChain: chainId, fromToken: input.fromToken, toToken: input.toToken,
+    fromAmount: input.amountRaw, fromAddress: input.walletAddress, toAddress: input.walletAddress,
+    slippage: String(input.slippageBps / 10_000), integrator: 'grape'
+  }));
+}
 const MOBILE_LIFI_NATIVE_SYMBOL = {
   solana: 'SOL',
   sui: 'SUI',

@@ -364,7 +364,7 @@ export type WalletSwapQuoteResponse = {
   routes: Array<{
     id: string;
     label: string;
-    quoteResponse: JupiterQuoteResponse;
+    quoteResponse: JupiterQuoteResponse | Record<string, unknown>;
     outputAmountUi: string;
     priceImpactPct: string | null;
     routeLabels: string[];

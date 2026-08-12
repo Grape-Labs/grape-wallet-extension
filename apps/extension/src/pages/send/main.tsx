@@ -26,6 +26,18 @@ type AssetOption =
       label: string;
       balance: string;
       asset: { kind: 'spl-token'; mint: string; decimals: number; programId: string };
+    }
+  | {
+      id: string;
+      label: string;
+      balance: string;
+      asset: { kind: 'evm-token'; tokenAddress: string; decimals: number; symbol?: string };
+    }
+  | {
+      id: string;
+      label: string;
+      balance: string;
+      asset: { kind: 'sui-coin'; coinType: string; decimals: number };
     };
 
 const SOLANA_SEND_FEE_RESERVE_SOL = 0.00001;
@@ -164,17 +176,23 @@ function SendPage() {
               balance: formatNativeBalance(assets.lamports, nativeDecimals, nativeSymbol),
               asset: { kind: 'sol' }
             };
-    const tokenOptions = assets.tokens.map((token) => ({
-      id: `${token.mint}:${token.programId}`,
-      label: token.symbol ? `${token.symbol} token` : `${formatAddress(token.mint)} token`,
-      balance: formatTokenAmount(token),
-      asset: {
-        kind: 'spl-token' as const,
-        mint: token.mint,
-        decimals: token.decimals,
-        programId: token.programId
+    const tokenOptions: AssetOption[] = assets.tokens.map((token): AssetOption => {
+      const common = {
+        id: `${token.mint}:${token.programId}`,
+        label: token.symbol ? `${token.symbol} token` : `${formatAddress(token.mint)} token`,
+        balance: formatTokenAmount(token)
+      };
+      if (selectedChain === 'monad' || selectedChain === 'ethereum') {
+        return {
+          ...common,
+          asset: { kind: 'evm-token', tokenAddress: token.mint, decimals: token.decimals, ...(token.symbol ? { symbol: token.symbol } : {}) }
+        };
       }
-    }));
+      if (selectedChain === 'sui') {
+        return { ...common, asset: { kind: 'sui-coin', coinType: token.mint, decimals: token.decimals } };
+      }
+      return { ...common, asset: { kind: 'spl-token', mint: token.mint, decimals: token.decimals, programId: token.programId } };
+    });
 
     return [
       nativeOption,
@@ -214,9 +232,9 @@ function SendPage() {
 
     const matched = assetOptions.find((option) => {
       return (
-        option.asset.kind === 'spl-token' &&
-        option.asset.mint === requestedMint &&
-        option.asset.programId === requestedProgramId
+        ((option.asset.kind === 'spl-token' && option.asset.mint === requestedMint && option.asset.programId === requestedProgramId) ||
+          (option.asset.kind === 'evm-token' && option.asset.tokenAddress === requestedMint) ||
+          (option.asset.kind === 'sui-coin' && option.asset.coinType === requestedMint))
       );
     });
 
@@ -285,7 +303,7 @@ function SendPage() {
     }
 
     const selectedWallet =
-      state.wallet.wallets.find((entry) => entry.id === state.wallet.selectedWalletIdByChain?.[state.wallet.selectedChain]) ??
+      state.wallet.wallets.find((entry) => entry.id === state.wallet.selectedWalletIds?.[state.wallet.selectedChain]) ??
       state.wallet.wallets.find((entry) => entry.chain === state.wallet.selectedChain) ??
       state.wallet.wallets[0];
     const biometricUnlockConfig = resolveBiometricUnlockConfig(state.wallet, selectedWallet);
@@ -488,7 +506,7 @@ function SendPage() {
             <Input
               value={recipient}
               onChange={(event) => setRecipient(event.target.value)}
-              placeholder="Recipient address or .sol/.skr domain"
+              placeholder={state?.wallet.selectedChain === 'solana' ? 'Recipient address or .sol/.skr domain' : 'Recipient wallet address'}
               className="send-recipient-input"
             />
             <button

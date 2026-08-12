@@ -178,8 +178,8 @@ export async function requestSuiLedgerAccounts(input: {
           index,
           publicKey: address,
           derivationPath,
-          balanceMist: balance.totalBalance,
-          balanceLabel: `${formatSuiAmount(balance.totalBalance, 9)} SUI`,
+          balanceMist: balance.balance.balance,
+          balanceLabel: `${formatSuiAmount(balance.balance.balance, 9)} SUI`,
           label: `Ledger account ${index + 1}`
         } satisfies SuiLedgerDiscoveredAccount;
       })
@@ -252,25 +252,25 @@ export async function sendSuiCoinWithLedger(
 ): Promise<string> {
   return executeSuiLedgerTransaction(network, derivationPath, input.customRpcUrl, async (transaction, sender, client) => {
     transaction.setSender(sender);
-    const coins = await client.getCoins({
+    const coins = await client.listCoins({
       owner: normalizeSuiAddress(sender),
       coinType: input.coinType.trim()
     });
 
-    if (!coins.data.length) {
+    if (!coins.objects.length) {
       throw new Error('No coin objects were found for the selected token.');
     }
 
-    const totalBalance = coins.data.reduce((sum, coin) => sum + BigInt(coin.balance), 0n);
+    const totalBalance = coins.objects.reduce((sum, coin) => sum + BigInt(coin.balance), 0n);
     if (totalBalance < input.amountBaseUnits) {
       throw new Error('Insufficient token balance.');
     }
 
-    const primaryCoin = transaction.object(coins.data[0].coinObjectId);
-    if (coins.data.length > 1) {
+    const primaryCoin = transaction.object(coins.objects[0].objectId);
+    if (coins.objects.length > 1) {
       transaction.mergeCoins(
         primaryCoin,
-        coins.data.slice(1).map((coin) => transaction.object(coin.coinObjectId))
+        coins.objects.slice(1).map((coin) => transaction.object(coin.objectId))
       );
     }
     const [coin] = transaction.splitCoins(primaryCoin, [transaction.pure.u64(input.amountBaseUnits.toString())]);
@@ -311,16 +311,17 @@ async function executeSuiLedgerTransaction(
       signature: signature.signature,
       publicKey
     });
-    const response = await client.executeTransactionBlock({
-      transactionBlock: transactionBytes,
-      signature: serializedSignature
+    const response = await client.executeTransaction({
+      transaction: transactionBytes,
+      signatures: [serializedSignature]
     });
 
-    if (!response.digest) {
+    const digest = response.Transaction?.digest ?? response.FailedTransaction?.digest;
+    if (!digest) {
       throw new Error('Sui transaction did not return a digest.');
     }
 
-    return response.digest;
+    return digest;
   } finally {
     await transport.close().catch(() => undefined);
   }

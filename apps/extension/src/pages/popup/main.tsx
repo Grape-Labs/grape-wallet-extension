@@ -79,6 +79,7 @@ import { createBiometricUnlock, isBiometricUnlockSupported, resolveBiometricUnlo
 import { ChainLogoBadge } from '../../shared/chains';
 import { CustomThemeEditor } from '../../shared/CustomThemeEditor';
 import { fetchJupiterPrices, fetchJupiterStockTokens, JUPITER_SOL_MINT, searchJupiterTokens } from '../../shared/jupiter';
+import { LIFI_NATIVE_TOKEN_ADDRESS, searchLifiTokens } from '../../shared/lifi';
 import { getSupportedBridgeDestinations, LIFI_NATIVE_SYMBOL } from '../../shared/lifi';
 import { formatSavedRecipient, isSupportedSolanaRecipientDomain, suggestRecipientLabel } from '../../shared/recipient-resolution';
 import { applyDocumentTheme, THEMES, THEME_BACKGROUND_STYLES, THEME_MOTION_INTENSITIES } from '../../shared/theme';
@@ -1605,6 +1606,14 @@ function PopupPage() {
     await refresh();
   };
 
+  const setHideLowValueTokens = async (enabled: boolean) => {
+    const nextState = await sendRuntimeMessage<WalletStateResponse>({
+      type: 'wallet_set_hide_low_value_tokens',
+      enabled
+    });
+    setState(nextState);
+  };
+
   const setAutoConnect = async (enabled: boolean) => {
     await sendRuntimeMessage({
       type: 'wallet_set_auto_connect',
@@ -1838,7 +1847,7 @@ function PopupPage() {
   }, [homeTab, selectedChainValue]);
 
   useEffect(() => {
-    if ((selectedChainValue === 'sui' || selectedChainValue === 'monad' || selectedChainValue === 'ethereum') && (view === 'swap' || view === 'security' || view === 'asset')) {
+    if ((selectedChainValue === 'sui' || selectedChainValue === 'monad' || selectedChainValue === 'ethereum') && (view === 'security' || view === 'asset')) {
       setView('home');
     }
   }, [selectedChainValue, view]);
@@ -2089,6 +2098,16 @@ function PopupPage() {
 
   const activePublicKey = state?.activeAccount?.publicKey;
   const privacyModeEnabled = state?.wallet.privacyMode ?? false;
+  const hideLowValueTokensEnabled = state?.wallet.hideLowValueTokens ?? false;
+  const visibleHomeTokens = useMemo(
+    () =>
+      assets.tokens.filter(
+        (token) =>
+          !hideLowValueTokensEnabled ||
+          (typeof token.valueUsd === 'number' && Number.isFinite(token.valueUsd) && token.valueUsd >= 0.1)
+      ),
+    [assets.tokens, hideLowValueTokensEnabled]
+  );
 
   useEffect(() => {
     if (!activePublicKey) {
@@ -2577,7 +2596,11 @@ function PopupPage() {
     let cancelled = false;
     const timeoutId = window.setTimeout(() => {
       setSwapDiscoverySearching(true);
-      void searchJupiterTokens(query)
+      void (selectedChainValue === 'ethereum' || selectedChainValue === 'monad'
+        ? searchLifiTokens(selectedChainValue, query).then((tokens) => tokens.map((token) => ({ id: token.address, symbol: token.symbol, decimals: token.decimals, usdPrice: Number(token.priceUSD ?? 0), isVerified: true, tags: ['verified'], tokenProgram: 'erc20' })))
+        : selectedChainValue === 'sui'
+          ? Promise.resolve(assets.tokens.filter((token) => `${token.name ?? ''} ${token.symbol ?? ''} ${token.mint}`.toLowerCase().includes(query.toLowerCase())).map((token) => ({ id: token.mint, symbol: token.symbol ?? formatAddress(token.mint), decimals: token.decimals, usdPrice: token.priceUsd ?? 0, isVerified: true, tags: ['verified'], tokenProgram: token.programId })))
+          : searchJupiterTokens(query))
         .then(async (tokens) => {
           const isMintQuery = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(query);
           const eligible = tokens.filter((token) =>
@@ -2602,10 +2625,11 @@ function PopupPage() {
             priceUsd: prices[token.id]?.usdPrice ?? token.usdPrice ?? 0,
             amountUi: 0,
             asset: {
-              kind: 'spl-token' as const,
-              mint: token.id,
-              decimals: token.decimals,
-              programId: token.tokenProgram ?? (isStock ? TOKEN_2022_PROGRAM_ID : 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA')
+              ...(selectedChainValue === 'ethereum' || selectedChainValue === 'monad'
+                ? { kind: 'evm-token' as const, tokenAddress: token.id, decimals: token.decimals, symbol: token.symbol }
+                : selectedChainValue === 'sui'
+                  ? { kind: 'sui-coin' as const, coinType: token.id, decimals: token.decimals }
+                  : { kind: 'spl-token' as const, mint: token.id, decimals: token.decimals, programId: token.tokenProgram ?? (isStock ? TOKEN_2022_PROGRAM_ID : 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA') })
             }
           } satisfies RebalanceAsset);
           }).filter((asset) => isMintQuery || asset.priceUsd > 0);
@@ -2625,7 +2649,7 @@ function PopupPage() {
       cancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, [swapStockSearch, view]);
+  }, [assets.tokens, selectedChainValue, swapStockSearch, view]);
 
   const selectedAsset = sendAssetOptions.find((option) => option.id === assetId) ?? sendAssetOptions[0];
   const selectedTokenHolding =
@@ -2646,11 +2670,16 @@ function PopupPage() {
       ? null
       : assets.tokens.find((token) => `${token.mint}:${token.programId}` === swapInputAssetId) ?? null;
   const selectedSwapInputDecimals = getSwapAssetDecimals(selectedSwapInputAsset);
-  const swapOutputOptions = useMemo<SwapOutputOption[]>(() => {
-    if (selectedChainValue !== 'solana') {
-      return [];
+  const nativeSwapMint = selectedChainValue === 'solana' ? JUPITER_SOL_MINT : selectedChainValue === 'sui' ? '0x2::sui::SUI' : LIFI_NATIVE_TOKEN_ADDRESS[selectedChainValue];
+  useEffect(() => {
+    if (view !== 'swap') return;
+    const currentIsSolanaMint = COMMON_SWAP_TOKENS.some((token) => token.mint === swapOutputMint);
+    if (selectedChainValue !== 'solana' && (currentIsSolanaMint || !swapOutputMint)) {
+      const firstToken = assets.tokens[0]?.mint;
+      setSwapOutputMint(firstToken && firstToken !== nativeSwapMint ? firstToken : nativeSwapMint);
     }
-
+  }, [assets.tokens, nativeSwapMint, selectedChainValue, swapOutputMint, view]);
+  const swapOutputOptions = useMemo<SwapOutputOption[]>(() => {
     const ownedTokens: SwapOutputOption[] = assets.tokens.map((token) => ({
       mint: token.mint,
       symbol: token.symbol ?? formatAddress(token.mint)
@@ -2669,7 +2698,10 @@ function PopupPage() {
       assetClass: 'crypto',
       priceUsd: token.priceUsd
     }));
-    return [...COMMON_SWAP_TOKENS, ...ownedTokens, ...stockTokens, ...discoveredTokens].filter(
+    const native = selectedChainValue === 'solana'
+      ? COMMON_SWAP_TOKENS
+      : [{ mint: selectedChainValue === 'sui' ? '0x2::sui::SUI' : LIFI_NATIVE_TOKEN_ADDRESS[selectedChainValue], symbol: assets.nativeSymbol ?? selectedChainValue.toUpperCase(), name: assets.nativeName }];
+    return [...native, ...ownedTokens, ...(selectedChainValue === 'solana' ? stockTokens : []), ...discoveredTokens].filter(
       (token, index, allTokens) => allTokens.findIndex((candidate) => candidate.mint === token.mint) === index
     );
   }, [assets.tokens, rebalanceStockCatalog, selectedChainValue, swapTokenSearchResults]);
@@ -2683,12 +2715,12 @@ function PopupPage() {
         return {
           id: option.mint,
           name:
-            option.mint === JUPITER_SOL_MINT
-              ? 'Solana'
+            option.mint === nativeSwapMint
+              ? assets.nativeName ?? selectedChainValue
               : ownedToken?.name ?? option.name ?? option.symbol ?? formatAddress(option.mint),
           symbol: option.symbol ?? ownedToken?.symbol ?? formatAddress(option.mint),
           balance:
-            option.mint === JUPITER_SOL_MINT
+            option.mint === nativeSwapMint
               ? privacyModeEnabled
                 ? '***'
                 : homeBalance
@@ -2697,11 +2729,11 @@ function PopupPage() {
                   ? '***'
                   : formatTokenAmount(ownedToken)
                 : 'Not owned yet',
-          logoUri: option.mint === JUPITER_SOL_MINT ? SOLANA_LOGO_URL : ownedToken?.logoUri ?? option.logoUri,
-          sol: option.mint === JUPITER_SOL_MINT
+          logoUri: option.mint === nativeSwapMint ? assets.nativeLogoUri ?? (selectedChainValue === 'solana' ? SOLANA_LOGO_URL : undefined) : ownedToken?.logoUri ?? option.logoUri,
+          sol: selectedChainValue === 'solana' && option.mint === nativeSwapMint
         };
       }),
-    [assets.tokens, homeBalance, privacyModeEnabled, swapOutputOptions]
+    [assets.nativeLogoUri, assets.nativeName, assets.tokens, homeBalance, nativeSwapMint, privacyModeEnabled, selectedChainValue, swapOutputOptions]
   );
 
   async function handleOpenInTab() {
@@ -3459,11 +3491,14 @@ function PopupPage() {
       return;
     }
 
-    const inputMint = nextAsset.asset.kind === 'spl-token' ? nextAsset.asset.mint : JUPITER_SOL_MINT;
-    const defaultOutputMint =
-      inputMint === COMMON_SWAP_TOKENS[1].mint
-        ? JUPITER_SOL_MINT
-        : COMMON_SWAP_TOKENS[1].mint;
+    const chainNativeMint = selectedChainValue === 'solana' ? JUPITER_SOL_MINT : selectedChainValue === 'sui' ? '0x2::sui::SUI' : LIFI_NATIVE_TOKEN_ADDRESS[selectedChainValue];
+    const inputMint = nextAsset.asset.kind === 'spl-token' ? nextAsset.asset.mint
+      : nextAsset.asset.kind === 'sui-coin' ? nextAsset.asset.coinType
+        : nextAsset.asset.kind === 'evm-token' ? nextAsset.asset.tokenAddress : chainNativeMint;
+    const fallbackToken = assets.tokens.find((token) => token.mint !== inputMint)?.mint;
+    const defaultOutputMint = selectedChainValue === 'solana'
+      ? inputMint === COMMON_SWAP_TOKENS[1].mint ? JUPITER_SOL_MINT : COMMON_SWAP_TOKENS[1].mint
+      : inputMint === chainNativeMint ? fallbackToken ?? '' : chainNativeMint;
 
     setSwapInputAssetId(nextAsset.id);
     setSwapOutputMint(defaultOutputMint);
@@ -5111,17 +5146,14 @@ function PopupPage() {
               type="button"
               className="quick-action-card"
               onClick={() => {
-                if (!isSolanaChain) {
-                  return;
-                }
                 setSwapQuote(null);
                 setSwapResult(null);
                 setSwapError(null);
                 setView('swap');
               }}
               aria-label="Swap"
-              title={isSolanaChain ? 'Swap' : `Swap coming soon on ${nativeAssetName}`}
-              disabled={isWatchOnlyWallet || !isSolanaChain}
+              title="Swap"
+              disabled={isWatchOnlyWallet}
             >
               <span className="quick-action-icon"><ArrowLeftRight size={18} /></span>
               <span>Swap</span>
@@ -5297,7 +5329,7 @@ function PopupPage() {
                     </div>
                   </button>
 
-                  {assets.tokens.length === 0 ? (
+                  {visibleHomeTokens.length === 0 ? (
                     <p className="muted">
                       {isSolanaChain
                         ? 'No SPL token balances found yet.'
@@ -5309,7 +5341,7 @@ function PopupPage() {
                     </p>
               ) : (
                     <div className="token-list">
-                      {assets.tokens.map((token) => (
+                      {visibleHomeTokens.map((token) => (
                         <TokenRow
                           key={`${token.mint}:${token.programId}`}
                           token={token}
@@ -5953,7 +5985,7 @@ function PopupPage() {
                   {isSuiChain
                     ? 'Sui activity is coming soon. For now, Grape supports holdings and native SUI send.'
                     : isMonadChain
-                      ? 'Monad activity is coming soon. For now, Grape supports holdings and native MON send.'
+                      ? 'Indexed Monad history is coming soon. Grape already records sends made here and supports MON, custom tokens, dApps, and bridging.'
                       : 'Ethereum activity is coming soon. For now, Grape supports holdings and native ETH send.'}
                 </p>
               ) : null}
@@ -6393,7 +6425,7 @@ function PopupPage() {
                 <Input
                   value={recipient}
                   onChange={(event) => setRecipient(event.target.value)}
-                  placeholder="Address or .sol/.skr domain"
+                  placeholder={isSolanaChain ? 'Address or .sol/.skr domain' : `${nativeSendLabel} wallet address`}
                   className="send-recipient-input"
                 />
                 <button
@@ -7168,6 +7200,17 @@ function PopupPage() {
               <span>
                 <strong>Privacy mode</strong>
                 <small className="muted">Hide portfolio values and token balances with ***</small>
+              </span>
+            </label>
+            <label className="incident-toggle compact-settings-toggle">
+              <input
+                type="checkbox"
+                checked={Boolean(wallet.hideLowValueTokens)}
+                onChange={(event) => void setHideLowValueTokens(event.target.checked)}
+              />
+              <span>
+                <strong>Hide low-value tokens</strong>
+                <small className="muted">Hide tokens worth less than 0.10 USDC, including tokens without reliable pricing.</small>
               </span>
             </label>
             {isSolanaChain ? (
@@ -8154,23 +8197,6 @@ function PopupPage() {
   }
 
   function renderSwap() {
-    if (!isSolanaChain) {
-      return (
-        <Card title="Swap">
-          <p className="muted">
-            {isSuiChain
-              ? 'Swaps are coming soon for Sui wallets. Grape currently supports native SUI send and holdings only.'
-              : isMonadChain
-                ? 'Swaps are coming soon for Monad wallets. Grape currently supports native MON send and holdings only.'
-                : 'Swaps are coming soon for Ethereum wallets. Grape currently supports native ETH send and holdings only.'}
-          </p>
-          <Button tone="secondary" onClick={() => setView('home')}>
-            Back to wallet
-          </Button>
-        </Card>
-      );
-    }
-
     if (isWatchOnlyWallet) {
       return (
         <Card title="Watch-only wallet">
@@ -8183,11 +8209,11 @@ function PopupPage() {
     }
 
     const inputAssetSymbol =
-      swapInputAssetId === 'sol'
-        ? 'SOL'
+      selectedSwapInputAsset?.asset.kind === 'sol' || selectedSwapInputAsset?.asset.kind === 'sui' || selectedSwapInputAsset?.asset.kind === 'mon' || selectedSwapInputAsset?.asset.kind === 'eth'
+        ? selectedSwapInputAsset.symbol
         : selectedSwapInputHolding?.symbol ?? selectedSwapInputAsset?.label.replace(/ token$/i, '') ?? 'Token';
     const inputAssetBalance = selectedSwapInputAsset?.balance ?? '0';
-    const isNativeSwapOutput = effectiveSwapOutputMint === JUPITER_SOL_MINT;
+    const isNativeSwapOutput = effectiveSwapOutputMint === nativeSwapMint;
     const outputAssetSymbol = swapUseCustomOutputMint
       ? effectiveSwapOutputMint
         ? formatAddress(effectiveSwapOutputMint)
@@ -8273,8 +8299,8 @@ function PopupPage() {
         return;
       }
       const sourceAmount =
-        swapInputAssetId === 'sol'
-          ? Math.max((assets.lamports ?? 0) / 1_000_000_000 - 0.00001, 0)
+        selectedSwapInputAsset.asset.kind === 'sol' || selectedSwapInputAsset.asset.kind === 'sui' || selectedSwapInputAsset.asset.kind === 'mon' || selectedSwapInputAsset.asset.kind === 'eth'
+          ? Math.max((assets.lamports ?? 0) / 10 ** (assets.nativeDecimals ?? 9) - (selectedChainValue === 'solana' ? 0.00001 : 0), 0)
           : Number(selectedSwapInputHolding?.amount ?? '0');
       const nextAmount = Math.max(sourceAmount * ratio, 0);
       setSwapAmount(formatSwapAmountInput(nextAmount, selectedSwapInputDecimals));
@@ -8285,13 +8311,16 @@ function PopupPage() {
     function handleFlipSwapDirection() {
       const nextOutputMint = effectiveSwapOutputMint;
       const nextInputId =
-        nextOutputMint === JUPITER_SOL_MINT
-          ? 'sol'
+        nextOutputMint === nativeSwapMint
+          ? selectedChainValue
           : assets.tokens.find((token) => token.mint === nextOutputMint)
             ? `${nextOutputMint}:${assets.tokens.find((token) => token.mint === nextOutputMint)?.programId}`
             : null;
-      const currentInputMint =
-        selectedSwapInputAsset?.asset.kind === 'sol' ? JUPITER_SOL_MINT : selectedSwapInputAsset?.asset.kind === 'spl-token' ? selectedSwapInputAsset.asset.mint : null;
+      const currentInputMint = selectedSwapInputAsset?.asset.kind === 'sol' || selectedSwapInputAsset?.asset.kind === 'sui' || selectedSwapInputAsset?.asset.kind === 'mon' || selectedSwapInputAsset?.asset.kind === 'eth'
+        ? nativeSwapMint
+        : selectedSwapInputAsset?.asset.kind === 'spl-token' ? selectedSwapInputAsset.asset.mint
+          : selectedSwapInputAsset?.asset.kind === 'sui-coin' ? selectedSwapInputAsset.asset.coinType
+            : selectedSwapInputAsset?.asset.kind === 'evm-token' ? selectedSwapInputAsset.asset.tokenAddress : null;
 
       if (!nextInputId || !currentInputMint) {
         return;

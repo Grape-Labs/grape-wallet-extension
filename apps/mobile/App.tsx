@@ -83,6 +83,7 @@ import {
   scanMobileMnemonicAccounts,
   loadWalletAssets,
   loadWalletAssetsFast,
+  loadMobileMonadTokenAsset,
   MOBILE_WALLET_PASSCODE_LENGTH,
   persistMobileWalletState,
   sendWalletAsset,
@@ -99,6 +100,7 @@ import {
   fetchMobileJupiterStocks,
   getMobileSupportedBridgeDestinations,
   MOBILE_JUPITER_SOL_MINT,
+  searchMobileLifiTokens,
   searchMobileJupiterTokens
 } from './src/config';
 import type { MobileTokenMarketData, MobileTokenPriceHistoryPoint } from './src/config';
@@ -130,6 +132,7 @@ const THEME_BACKGROUND_ASSETS: Partial<Record<GrapeTheme, number>> = {
 
 type Screen = 'loading' | 'setup' | 'locked' | 'ready';
 type SetupMode = 'create' | 'passkey' | 'import';
+type SetupStep = 'choose' | 'details';
 type PasskeyRecoveryMode = 'passkey-phrase' | 'passkey-only' | 'trusted-recovery';
 type ImportKind = 'mnemonic' | 'private-key' | 'restore';
 type MainTab = 'home' | 'receive' | 'discover' | 'governance' | 'activity' | 'settings';
@@ -231,10 +234,10 @@ const GRAPE_DISCOVER_WALLET_ICON =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAYAAAGVn0euAAAABGdBTUEAALGPC/xhBQAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAAYKADAAQAAAABAAAAYAAAAACpM19OAAABnWlUWHRYTUw6Y29tLmFkb2JlLnhtcAAAAAAAPHg6eG1wbWV0YSB4bWxuczp4PSJhZG9iZTpuczptZXRhLyIgeDp4bXB0az0iWE1QIENvcmUgNi4wLjAiPgogICA8cmRmOlJERiB4bWxuczpyZGY9Imh0dHA6Ly93d3cudzMub3JnLzE5OTkvMDIvMjItcmRmLXN5bnRheC1ucyMiPgogICAgICA8cmRmOkRlc2NyaXB0aW9uIHJkZjphYm91dD0iIgogICAgICAgICAgICB4bWxuczpleGlmPSJodHRwOi8vbnMuYWRvYmUuY29tL2V4aWYvMS4wLyI+CiAgICAgICAgIDxleGlmOlBpeGVsWERpbWVuc2lvbj41MTI8L2V4aWY6UGl4ZWxYRGltZW5zaW9uPgogICAgICAgICA8ZXhpZjpQaXhlbFlEaW1lbnNpb24+NTEyPC9leGlmOlBpeGVsWURpbWVuc2lvbj4KICAgICAgPC9yZGY6RGVzY3JpcHRpb24+CiAgIDwvcmRmOlJERj4KPC94OnhtcG1ldGE+CrgvSFcAABjESURBVHgB7V0HlCRHee6eDXenfEI5HJYQIJTRI5xlJcIDwxPBCCGULNmEBxJIFjbPzwbx1pb0wM9EG2xLYMmERzgJBSQOnYIXUBZnnYRY6Y69uLe3t2lmZ6ZnplNV//7+nq3emp7uSTu7dyddv7dbVX+qv6qrq6v/+v8aw5jPRbiYX6UNZZVF8KBOwEzqemxqan8dF+ULjryOC5YfPMDEFRHcw+Uxi97Aac1le/QjBjAhp55PT3MavzIKIPzgUZXntK/XeAunSgDn6y6FdJ3gLkaOjlaO4VTBOV9zMcKx6DOc0irq4YQJVFpDrArjG+kwzguPQhWlT1mFS0xZmhRByc3Jf3Qm6J0NpSsJ7na6kPMtEYeEkiQV6L1imi5XQuafbnLdUzcTvZolCQrKukRdNVNH6PkaItOM6KI7zcRlT35/S4mOWE20ZNoR54POLAtarQuK8hMlOk0Vhgp0MOdVLTKgGhVDurItbwSiILmHcHl+8BKnFUf+G6dKWF06Olp8FQMdW/5HHTIJwNL0Kz9OxyXRhTDfpi+nItMQAwZlVA1ega5Io4vgXoXCBycCtJIhQQ7X0gptDU2F6Elm9PFcnT842FuDnE8hTRsnCNbO+PKLSbKZZ8IVH0rCtQVLqzxNSM3YVkQspOTLz0+W6AzO+zLIPj9Oh3GeaRwRrB7K2Su4zNeLU3SkJ2mI80pGagqaQCGfeIKWuR79typbLt1cLFI4khkWF5i1xIc9ojMUfWrKjHyN59xTmGjDhuIhXFYMpZK4Si97XrCWy75P6xRN0xQPaUkRFafpRLdCf6/Kvhv8SuVVqleoYE1TZuJLJ0wqx2E6fcOx7eaND2AUHKgzUECeXuY8T3RxWFtlzGg+BNe1RNj0eFuCGhGjAqHjG3WLTtdWfmiA+qVF17bFtMuIh133ZO4GvopS/ldXFWGhmNiGldBpIS5nmConpVNCXIq/TyThamB4BYoRz3tzDXC2kFbJTt8/Lw1XJ6cR4Ywnr2V8/PID2lknqFMAHodoMmxFRuJ0zYwlP3hwR9l7YzUvv1bw6Uuc50fWlfTjgkuXcLngyc/agm7hfNJVV0HRlf/CXTCaN686ZGnv7Zy3neA+IzD+yHkIMafK7kCPabylWs70llz/lllcUh21MJ1QzzOVXnYE3bmj6Lxe59bxOrwmrxPpeSbSy3peCUiCpc6m09N0tBKaLforl/T2nK7KmDszeLk8pwS2NZtOTdFRzMiX0iwISOIFFC0hGee61U8XValOr/hS0zhxszLe0+8rlejSJIF1oyiJqBlMlIzne8ioueENecrQSAraxESsvbqwrvx3lec0mO02zjcUmITEi/33zDi0ivoVHkXplulmVfadYA3TlKcpce5SdKkpM+vIeJlxSTCdp+17UNpMh+sC5pX3LPndYPZrkzXFS/7WwKMXldYqnVclbpYujgtyc3TZLGx+yxWlWbwChifBFL2etn0PmNmfoHfJkvFtXdC886yxl6XrgjLd36r2XGnLLeAJLRMYk2LG+EJbk9u8m7YnCVgzPr4vPjjLfAsaXVYQ/Hy+7ZqRsnsrVHwdHagUHvP9dzVTrhIEjzG9FwS5ZrRx/O1btixVdcVxHZXHHXEBCywHwb3tClCKuEGwdcz2z0njz7riQkFkKfqsEH+VRrvocFbKDWhjScgfiiCA6aP28nGXij599b6xsX0WXblWKoTSocat0HZC0/I0Z7nyxtq+q5bwqeJ7MtiYhKv4wV09sx/PSfgSTIpJcBgCK8YAtaxbw4YPbqHUh6riyi+zAo4frEkSopSbLPpn6/i1Y7QP4/je6HCVz7vyHxjv+sHvFKzjVGDVxsKSBDAcyteY4RWd5cirGT85Q+HXkYJzih52GafD4vmKQ59nmpEJ5zVxnF5u5TbN6AzxfG/GXBGHcRlfDn/kdMlS4yRO9QuqF7m8evXwkouwK6DjVL4nY5zMeVlZ0tj4rxgapdwTfBXL9IFCyf/zaglDICAbf4/jLuUVTAjaruVHfT94SpU5lcHsU815SS94Yu75QTkfKi1pkmlLFfm5Rnq1hRsepiWsMAvGZ0zNmFaCGMeXKuvpxETpcMahgeHHho5TecgP7dLlsrxBwbqasgLYqhlJEsqWdMaXCsnfZ55LobkziVfBhoZoP5bhedTdpaiqQEosRnGpskoHB6nXteWPGIepJcAW2b2b1lKNgRIN/EaIRi/7+KxwCvQexa9S36GfM01+wjlewbqeYkdtR6iIxB5NgcKZhsuVvPiIqsyaobcxTL98l1YPr6YlTJMdpgPQiOcZj29Tz6vIbyva/AQ1nHVUHfNOrWl6O1fKPZsmTCmVhmc402Dsy0Y0C4KTDn2LK9/0UK5mqOiVMR7D4gEdFs9LtzprxeGLUmYFeczHKxMOPRjiYv9KE3MbjMzjzdAVTILP7Z/GZSxaGXfihZierFDdLrq9mV4dp+MyNp4X7oFtpxesZ+lQVkiW6OuN+JgGxo7pRjTt4FpZSrQkr3epEa7n8aK1mzFggRoZtJrRLioeb4l7uYdFme6MVzw5WH1JMZ4M6o7FJ15Jt8qBU7V/hcpq/8TO+pdXt+rcK2dvDyxmD2Sl/Cfs8ha04c3r4KFR8t+xmHq0XVee5E260mn59dTAT6aFWjeRvWLEt89tgbR1EnzEDiuFYfb72zgnFvuH2FS1yDHduBDhbmCcrpWyqqcV2pZoYCr8HQuFXXR7M4ZNRK9VCmwmOr0ZfRwPC+A9zI998NviuI7K474fLpvZgtaqgKFC4WDViFZ5mA777M8yH9ua2uFrSFu1q9V/hTVkAjLry79TjUBvfvWpLB2QxPNimY6sSPkzRYuOipxmkujbhrFgeIXe3TYjGJRSraZ5X36hk3oa8wwMdLzgs0XwECu/0xNXwcCLyan24rsL+FPTPr2zsRK7CDvlio+yytPlZDePbqjVce+2VLnZE1rnfDNzXEv0HRC11YBxl04tC3k7e4QU/VqrmSXoIjjv3QmPkB9N2f7bWJc+aSznNCDDLrhygPng/PfNDdOV0JuBcdtL7qm2kN8F7n44U1/NsK5fA7D7wM4fGmRrRzEMWZ78YRymymU/uEPl46kX0BZl5I3jrG4/zKoCuEK+NFWmM9ktEr11PR5CTNnVq+TRNzZW6NjRovM6WKxXKzin/LDmKuKSp2BexN05X8hgXOFhQn+B3THXT5WPwt2Jpl54TN7UlTuBCsKXCzY4vhQXqJQYmpzcL46btqsOX+jluhcgOiJ0eCk69UsSlqPksj02LrftMguD4akSZyzYVYeAkkPXx3FchsV6J/MOYvjF8QxHw6w4XJV3Wu5JTGNjeCpYR+kIzHwsqOzW+wd7gh5lXJpgxkHJGrdHpp0uuicyruTUTgJxOUzDmytxeLzccBY6Yrkfvv6FzGyMM+KuHBGH1ZXJqBs+PWbmMKZzPNpcRx8DZExjWQxUV2zYgB07+rYwR39P8L44p2mYofHq2WHr0DiOy3xvMhmjDpctO+sZv++Snvc9sZ0aKoiHfyfTzuviW8mXLgS9959V6Nx/168GLFx00aoehBhsmMNUc8Wy+BjLmMp7b4rjsDMzs3WqfKSqAyELA0xTduhTCtZxWqrQ37AwVDLFQpAWucwX8i9hCymcUbiMYcUzZnTx9hJ2ZEYVAD7dW1We5YD+SaTR+yVfoncWyvQeRdOx0nFGXUkWjh2UZ+I0cNWLXmjYSwt7W6eBslmlGDuv67hsliKHXkUDF8Hojui0Heexb/VFFg5FnCQh5TJ9ivEVbFYk4dHT4ctrdHTOnV+n43035gedvb3Js6HztZxn30SuAIq+P4kJnoKhgkk4hjGvEEG4C9mIhunS8EnwhrOQztDfb5zF5XLZ+F8drvKZHiPVX28AsTdMJ6X5G0WflKL3R5LgjWAtN0C6Qbjh3Ndn1IxfJTwIDE/l4+mAYQYMy5h0TBynl+FqFq5edVjX8rxzyLcXO5C/iAuFs+kFeDZCfx8Mpa12ia7UaXjHknn5Qi/PuDbdPjhQH2bEeMjp7jexrghXwJe+kwiF6nyAqlTVdZBToW+qcjwtWxSt/30vCJ3A2fNWr7OreVZcKYHdye/wFimXpUfPqX1h3koV2FJVdCq1Z+h8pYxr0UUKjkjKT7EbMJd5C1fRLFjKrsCqck6xC/nLpMpca84MmYQfHJzzjQvlwB05iW7BYBir4cdMWgWeRZ9kxdw8XZxKU5LhVi3vOafRLBiclcMtT92sw1brb5kGb4DU7aQJuEozTUdxkbMta3kaTewJeK8kwgHEe2F2I89MfTH15YzwrY5lc7hBmCarEXxeDcj0m6nzunSNJ7liuHdfmKbAvscb4Yzj28YjaTQLBufddb79mF2u0Ctxx+lUhscv0D+s03Ged/mZLg5ftLJS0psRf8mV2tP0DgVjT30OAYfit0QwUX1J8dKCPfsZzl7+i6ZwvCJ2E1DK6Sm7FcRphR08rdNwnt0U4nS7omyilx9XyrlT4rI0JRQNJmCfQx/S6HYJnP0fWMFGlbMfBdOwX0UjunZw85qF9IrMXuNVejkpL/LGEwxfcqLRNWNv1xoAC1DTVWTvgUYYPC23GhNJDdylMGFV47Q4ACZNEUya8LJvPMzSeBcczh4orFx4raF94xXCkyX0SGSPljhutymLHF2u2oBIgftQfq+coesw62AjHxeOpthtlE1ThF1qVCP0lF1w0nh2S7g3SqdzqLmYoks47Hy3VHKvUnt7IIw0X9xuIMN80bFXLF/ae7wv6bgDzZ79YIU3LJiVMA2P5Hrk1keM/k3Xmqa7uIq9TGvb6nlnlkj+GC4cqdYjfbLV82wzgKPP4xNC/MXLtHsW5gnYRnQ8Fsu3YfPovHjHYSWUhwV1LTynng4yxHtNCDsk6u8194Od5nV9Zs+b+k3zrXhrHBXn9Qzanjfkxw83+x6M4xa6/ATRsjOIHltmmmdiLWEjoPS8Ff39848R66biGx3nBOwVbdZHMdwTnLyUNz8BD65268ImWS8HhSKQdKxGJuwI8Mf7QLvyOqV/1rIO5RNblA4YL+Utrntip/IWhA8HoH1HKcgpOm3LZtc9rVuVrSM6CL6Aa/Q67ICe4fjsbtURl8ODBnXeqdeJ8OjxzbZdZ6+I8y5aGZ6ifQjki+wRUDbAmT5XLpQCI657Ct4nM6pTMBqL8CG+/qVi9Ty7+da7zXVPsqS8Ne5YhPeRzEl5zXzlx/lTTcZxwrQyXBnv3afHDLcsoaQ7LsyVx/Sbz6XRdwOOs932PfEwY22/adRNA7wLJ8jYKgx6Hl4iLxgmDcMfJttPPYX9eg2vIIx9MqZcvo9p8m7kSb1m5rReg07pNc1Ecwq8EddlA/nZo/v6unfqVzc6QckY97yVmG6ewRz56Db49yj4QqfsFSaCuehZxOzUuDeoJ6TdFB3+IvutDlca76R2q33zfgK6pUgncgq+/OcDejM3MK8kI/9/JeOEtx5gZgeJlp7gGsfu0yOO6yPzGGGaR+IErP3xvWGKwPCX9mamPJKTODx2W8nwt71+2bIxnJjX0BraiX4ve56cT3+mj/AdZbFwO8sL1Jtds+gukH4NxWawNQ1X4OjabcMCIw0XKTNp+2fD3f5+/gbQR6ieB86z4T89bVc3trci+AHeul/jMwN1unjelcFzRY/+Gk5HZtETV2p4CdxIoxcBDmedLPn0rdHZ+T1n0zk44e+XTfSsVATdPV7xVi5S93VWzSCccnG68m1ah0RZNFDiyJUcbD9ZvDixcmztQodhmqdJuFeHJ0C0xlWlYh7czEmW0SofjrkQrCPryjon8VmevIX93zvrpQXiypb8d7NjsVKYRyEc8b++KVd7GINe/TBOSUHn5BUPp+ixR+InN+o8nM/Z4jIsL0OPPJ0XN3Yq7zbe65wuy2t0HugpLZ9uHpqkOnd1Ve8wwpVKrvxX3JyIlds6XfJ3j0CZmbJ4f6QZMjhECHtG6S4p3LBxiw5Dh00oPnTo6PZK9VBK1fBGKc42j7b7WUZ+1g24EU+2Ij6i6uO04smfNKJPwlV8qongyJXFBUl0iwZjZ210XmQjQaTGQ61UjjiA76nOAP/Mdi2Gphn/jE3nK15OcW5R06/Tp4azByDIYkTxQc86R8Vm9Sq8Ho2CqWq4mcO64luQFM67Z+BxjJ7NAqaHZhXdDtc4RLFEMXDqhxya8Sm8ZdONqiNR9zQ/TQqXluKY17MiJcGctejDabTN4Djc/GKt/gChQuFefTO+NPy8lqGW6/kGGUIJhym5qcVz22/+xMPXH6wD1QubMIkmAIWPp1hqznlbE+2Hw18PitPEy0uW9FrQM9qR7uuVTXniMlR5ad+cLzE8DPxi0di1G0cI0/iVGhFwRZ/YiDP4lbJJ6WSBXuu4wV2Kh1PXCzY6XvCgjUAxjNY/TeJjGL8QrbL8NE5lilYovgiyvqDHbUfealXoQ+unaP8kfugZWVLhWlxCnS/hbxP+1rmC7sARap+ZaHKoy9gYHYLVVbRMRjseSKprUWHDO+lQzOPhCU/cmZgWyggbeYeuRN6it4NmM+NbvSCnhHiZa7YiagOdFzqFtMrLdOicO3gwcMwNOjw6dLIVGdggGp6Z8c+Lt0Edx8Uy0J6xnVb3nLT0utrO4yCyfoTQ1Jx/hFWbsG35UzwVNUtGdEa2jHkc8/DJ+HZYypWtwrl4GF0r0FmfxBHc0fshqbNcN7inUPDfPbR9boNnaKhwcD7vvwshOzVPVpwfYT8bEGxy9fi4fdyqVUOhqwafkJgr0am2TTexbjoPymNow/+gLa4OR1sf6kpEZNs93YSBf6MIyj2sK6vy6NihkZFy3TZjksjJSToCjY9s/hh5vmU1XuPrctBp1cPhZivHjfkJfyjqNGl5PkqddVV66ykCxgbHxuwVaby7DZxHMzqwpJR3nOCO1pUjk0eY4uUbwfJa5a9Y9FHFy6llNV+mJsnGTfuZksNtQVDbsUl0uyWsrEVp4HVZzLXRgRjpJ6PBvmq8U0kOjk5ruNBetjg1kN2aOzK5Z3fQsdA9MmNwm9LqnA98XsvQtIr7+jLRMg/GyrzorQ8fTuOFzR6bVUY0XQg/M55GG4cPGAMZLA2jkDOEsE0iBE2zl8Y50ssyb8zA0hotefU2pXPtJhhMA7Wf/VZ6rEZcZbyQ+zlkTj0BOAtzzfBTycfHxHm57Dr0FcWLJ8nK5fyzeV5X52km8STBijPig0oOp9ymJLrdEgZ9TQSRRevuAC/RUjb9YHY7R2d7TvCo3uC0PML61pcK4tJ4w628uBhTzktpfDocdL+uFOmsuAxVtqZwKKq28pn9zYyOpjIlc9FTXlpyJF+s4esr2bmGVwry+jlDxhwlfpNxKxp9n1uiHyC9AzFpf5j79Jqjc8r0PfzVGOYYy7S4UX8A7yrI+D7SX0DmljnO2RzsE9DhOtU5xQn/LIRO1txEbgO3RdHscak16Z+LKWWqrvExAOJHf7xl3Uz07khq6ACOXMevudyAm6abdqqSAGMc0yTxKtjMFjrIrcydehVTIyqyzngyz1F8e3ya/z0tRwzrjQEOYtBM6zxapxv+xGRCy/Mj9Brw2aq3MLqfaXeO5+BhdHJOyWCdWDcbOrKuCdW+PEBekT6mGo1xLHn+b7dlOIj6B0oGOm1ibAMlBvI3k2tN0rno+OhpYt2a8XQb3/Bx7XZlLC/TZ7xZyQ18Y9vmh43nVLm1lMze/swbFC2iYn931OvN1LhlRZeU7nhyeh3ODNymcLpuCrbQ6aLfAByOv101CsF9hx+90mUPtTYuE6c6G5OKIdNLx3Pwqyq3kx7xxkMOgw6R9VbXrR05exTt1Ho6CquayM6DyPrBVjqQ+AU8Qx8UFbob004YVqqmIZ5EIHMSsu51p+lDqy5qvmrhlzXXrWSwTqzbHtWZnSqLYMqzOGA4arygrD2Z/C5wpsQFiONtuopSslQq/WDayVHini3XhZs4Z/mELqxTp+3ZI/kKQ3Qwws2fVR2mUozKX3t5+oQ97r8dMfeI9Zi7UN7MP2Y3tpbqjmhgGOOYZo4DT4ZLIz4+rPCC/Ti8lAZ1HOdZB9Zlj+zEbihdxmOPaaWhHR+dujW3qXUzsL2JVuDUypqbF+94rpPr7kYbXjYyEC6d8bbTW3jUqg5D5w/B72JJu43cgs1/3ITIrs8yWTbX0a6sVxS9N0Gn4yMLxoTq5U3TVZ12AH595Colh2Wy7E5lLRRfZPZdqAraldvXj8BBzewFW3LkddGurIzmsQETtxHKblfIK40eP4XVh6kj+skaeIU+g5PC2jaGEQxoIe/sIxDKhOxXWn921F5vnFZiypjzNXUQJtTGngCBFiueddr0I1hmR8q8UpncYToZ6/8a512M6N+iI9+a1ic4oGIlaGr2FVgGy0rj2Qtv0gMyR5/Gs1DjFqJGdsMUPMzbRPxedKs9kH+UluPwm8/hwIPn8BUbfUWrm8AwxjEN07Yqdy/d3h7Y2wO7sgf+H7nH/6XkToLfAAAAAElFTkSuQmCC";
 const GRAPE_DISCOVER_WALLET_ICON_JS = JSON.stringify(GRAPE_DISCOVER_WALLET_ICON);
 const GRAPE_DISCOVER_FAVORITES = [
-  { label: 'Governance', subtitle: 'Participate in DAO proposals', url: 'https://governance.so' },
-  { label: 'Grape DAO', subtitle: 'Open the Grape governance realm', url: 'https://www.governance.so/dao/By2sVGZXwfQq6rAiAM3rNPJ9iQfb5e2QhnF4YjJ4Bip' },
   { label: 'Verification', subtitle: 'Manage verified identities', url: 'https://verification.governance.so' },
-  { label: 'Jupiter', subtitle: 'Swap on Solana', url: 'https://jup.ag' }
+  { label: 'Access', subtitle: 'Open token-gated communities', url: 'https://access.governance.so' },
+  { label: 'Reputation', subtitle: 'Explore community reputation', url: OG_REPUTATION_DISCOVERY_URL },
+  { label: 'Governance', subtitle: 'Participate in DAO proposals', url: 'https://governance.so' }
 ] as const;
 
 const CUSTOM_THEME_FIELDS: Array<{ key: keyof CustomThemeConfig; label: string }> = [
@@ -1160,9 +1163,11 @@ function GrapeApp() {
   const [screen, setScreen] = useState<Screen>('loading');
   const [launchStatus, setLaunchStatus] = useState('Loading your wallet state');
   const [mainTab, setMainTab] = useState<MainTab>('home');
+  const [balanceUnit, setBalanceUnit] = useState<'USDC' | 'SOL'>('USDC');
   const [walletState, setWalletState] = useState<MobileWalletState>(createEmptyMobileWalletState());
   const [error, setError] = useState<string | null>(null);
   const [setupMode, setSetupMode] = useState<SetupMode>('create');
+  const [setupStep, setSetupStep] = useState<SetupStep>('choose');
   const [mnemonicLength, setMnemonicLength] = useState<WalletMnemonicLength>(12);
   const [generatedMnemonic, setGeneratedMnemonic] = useState(() => createWalletMnemonic(12));
   const [importKind, setImportKind] = useState<ImportKind>('mnemonic');
@@ -1206,6 +1211,10 @@ function GrapeApp() {
   const [sendAssetId, setSendAssetId] = useState<string | null>(null);
   const [sendAssetPickerVisible, setSendAssetPickerVisible] = useState(false);
   const [sendAssetSearch, setSendAssetSearch] = useState('');
+  const [monadTokenAddress, setMonadTokenAddress] = useState('');
+  const [monadTokenAsset, setMonadTokenAsset] = useState<MobileAsset | null>(null);
+  const [monadTokenLoading, setMonadTokenLoading] = useState(false);
+  const [monadTokenError, setMonadTokenError] = useState<string | null>(null);
   const [swapScreenVisible, setSwapScreenVisible] = useState(false);
   const [swapInputAssetId, setSwapInputAssetId] = useState<string | null>(null);
   const [swapOutputAssetId, setSwapOutputAssetId] = useState<string | null>(null);
@@ -1312,7 +1321,7 @@ function GrapeApp() {
   const [discoverCanGoForward, setDiscoverCanGoForward] = useState(false);
   const [discoverLoading, setDiscoverLoading] = useState(false);
   const [discoverLoadError, setDiscoverLoadError] = useState<string | null>(null);
-  const [discoverControlsExpanded, setDiscoverControlsExpanded] = useState(false);
+  const [discoverControlsExpanded, setDiscoverControlsExpanded] = useState(true);
   const [discoverConnectedOrigins, setDiscoverConnectedOrigins] = useState<string[]>([]);
   const [discoverApproval, setDiscoverApproval] = useState<DiscoverApproval | null>(null);
   const [discoverApprovalPassword, setDiscoverApprovalPassword] = useState('');
@@ -1339,7 +1348,7 @@ function GrapeApp() {
     () => getMobileTheme(walletState.selectedTheme ?? DEFAULT_THEME, walletState.customTheme),
     [walletState.customTheme, walletState.selectedTheme]
   );
-  const setupCredentialKind: MobileWalletState['credentialKind'] = 'passcode';
+  const setupCredentialKind: MobileWalletState['credentialKind'] = 'password';
   const setupCredentialLabel = getCredentialLabel(setupCredentialKind);
   const setupCredentialTitle = getCredentialTitle(setupCredentialKind);
   const setupCredentialInvalidMessage = getCredentialInvalidMessage(setupCredentialKind);
@@ -1432,14 +1441,27 @@ function GrapeApp() {
       totalUsd: pricedAssets.reduce((sum, asset) => sum + parseMobileUsdLabel(asset.valueLabel), 0)
     };
   }, [assets]);
+  const solPriceUsd = getMobileAssetPriceUsd(assets.find((asset) => asset.symbol.toUpperCase() === 'SOL') ?? ({ valueLabel: '' } as MobileAsset));
+  const canShowSolBalance = pricedPortfolio.count > 0 && solPriceUsd > 0;
   const holdingsSummary = pricedPortfolio.count > 0
-    ? `${pricedPortfolio.totalUsd.toLocaleString(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDC`
+    ? balanceUnit === 'SOL' && canShowSolBalance
+      ? `${(pricedPortfolio.totalUsd / solPriceUsd).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })} SOL`
+      : `${pricedPortfolio.totalUsd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDC`
     : assets.length === 0
       ? '--'
       : headlineAsset?.amountLabel ?? '--';
   const visibleSortedAssets = useMemo(() => {
     return assets
       .filter((asset) => !walletState.hideZeroBalances || (asset.amountUi ?? 0) > 0)
+      .filter((asset) => {
+        if (!walletState.hideLowValueTokens || asset.tokenType === 'native') return true;
+        if (!/^\s*\$/.test(asset.valueLabel)) return false;
+        const labeledValue = parseMobileUsdLabel(asset.valueLabel);
+        const holdingValue = asset.valueLabel.includes('price')
+          ? labeledValue * (asset.amountUi ?? 0)
+          : labeledValue;
+        return holdingValue >= 0.1;
+      })
       .sort((left, right) => {
         const valueDifference = parseMobileUsdLabel(right.valueLabel) - parseMobileUsdLabel(left.valueLabel);
         if (Math.abs(valueDifference) > 0.000001) return valueDifference;
@@ -1447,7 +1469,7 @@ function GrapeApp() {
         if (Math.abs(amountDifference) > 0.000001) return amountDifference;
         return left.symbol.localeCompare(right.symbol);
       });
-  }, [assets, walletState.hideZeroBalances]);
+  }, [assets, walletState.hideLowValueTokens, walletState.hideZeroBalances]);
   const selectedAsset = useMemo(
     () => assets.find((asset) => asset.id === selectedAssetId) ?? null,
     [assets, selectedAssetId]
@@ -1599,20 +1621,61 @@ function GrapeApp() {
     () => new Set([...governance.discoveredDaos, ...governance.daos.map((dao) => dao.daoId), ...walletState.trackedGovernanceDaoIds]),
     [governance.daos, governance.discoveredDaos, walletState.trackedGovernanceDaoIds]
   );
+  const sendAssets = useMemo(
+    () => monadTokenAsset && !assets.some((asset) => asset.id === monadTokenAsset.id) ? [...assets, monadTokenAsset] : assets,
+    [assets, monadTokenAsset]
+  );
   const selectedSendAsset = useMemo(() => {
     if (sendAssetId) {
-      return assets.find((asset) => asset.id === sendAssetId) ?? null;
+      return sendAssets.find((asset) => asset.id === sendAssetId) ?? null;
     }
 
-    return assets[0] ?? null;
-  }, [assets, sendAssetId]);
+    return sendAssets[0] ?? null;
+  }, [sendAssets, sendAssetId]);
+  useEffect(() => {
+    if (!sendScreenVisible || selectedWallet?.chain !== 'monad') {
+      setMonadTokenAsset(null);
+      setMonadTokenError(null);
+      setMonadTokenLoading(false);
+      return;
+    }
+    const tokenAddress = monadTokenAddress.trim();
+    if (!tokenAddress) {
+      setMonadTokenAsset(null);
+      setMonadTokenError(null);
+      return;
+    }
+    let cancelled = false;
+    const timeout = setTimeout(() => {
+      setMonadTokenLoading(true);
+      void loadMobileMonadTokenAsset(selectedWallet.address, tokenAddress)
+        .then((asset) => {
+          if (cancelled) return;
+          setMonadTokenAsset(asset);
+          setSendAssetId(asset.id);
+          setMonadTokenError(null);
+        })
+        .catch((tokenError) => {
+          if (cancelled) return;
+          setMonadTokenAsset(null);
+          setMonadTokenError(tokenError instanceof Error ? tokenError.message : 'Unable to load this Monad token.');
+        })
+        .finally(() => {
+          if (!cancelled) setMonadTokenLoading(false);
+        });
+    }, 350);
+    return () => {
+      cancelled = true;
+      clearTimeout(timeout);
+    };
+  }, [monadTokenAddress, selectedWallet?.address, selectedWallet?.chain, sendScreenVisible]);
   const filteredSendAssets = useMemo(() => {
     const query = sendAssetSearch.trim().toLowerCase();
     if (!query) {
-      return assets;
+      return sendAssets;
     }
 
-    return assets.filter((asset) => {
+    return sendAssets.filter((asset) => {
       const haystacks = [
         asset.name,
         asset.symbol,
@@ -1622,9 +1685,9 @@ function GrapeApp() {
 
       return haystacks.some((value) => value.toLowerCase().includes(query));
     });
-  }, [assets, sendAssetSearch]);
+  }, [sendAssetSearch, sendAssets]);
   const swappableAssets = useMemo(
-    () => (selectedWallet?.chain === 'solana' ? assets.filter((asset) => asset.chain === 'solana') : []),
+    () => selectedWallet ? assets.filter((asset) => asset.chain === selectedWallet.chain) : [],
     [assets, selectedWallet?.chain]
   );
   const swapSelectableAssets = useMemo(() => {
@@ -1766,9 +1829,20 @@ function GrapeApp() {
   }, [selectedSwapInputAsset, swapAmount]);
 
   useEffect(() => {
-    if ((!swapScreenVisible && !rebalanceScreenVisible) || selectedWallet?.chain !== 'solana' || swapDiscoveredAssets.length > 0) return;
+    if ((!swapScreenVisible && !rebalanceScreenVisible) || !selectedWallet || swapDiscoveredAssets.length > 0) return;
     let cancelled = false;
     setSwapDiscoveryLoading(true);
+    if (selectedWallet.chain === 'ethereum' || selectedWallet.chain === 'monad') {
+      void searchMobileLifiTokens(selectedWallet.chain, '').then((tokens) => {
+        if (!cancelled) setSwapDiscoveredAssets(tokens.map((token) => ({ id: `lifi:${token.address}`, chain: selectedWallet.chain, name: token.name, symbol: token.symbol, amountLabel: `0 ${token.symbol}`, amountUi: 0, address: token.address, decimals: token.decimals, logoUri: token.logoURI, valueLabel: token.priceUSD ? `$${token.priceUSD}` : '', tokenType: 'erc20' as const })));
+      }).finally(() => { if (!cancelled) setSwapDiscoveryLoading(false); });
+      return () => { cancelled = true; };
+    }
+    if (selectedWallet.chain === 'sui') {
+      setSwapDiscoveredAssets(assets.filter((asset) => asset.chain === 'sui'));
+      setSwapDiscoveryLoading(false);
+      return () => { cancelled = true; };
+    }
     void Promise.all([
       fetchMobileJupiterStocks().catch(() => []),
       ...MOBILE_POPULAR_SWAP_SYMBOLS.map((symbol) => searchMobileJupiterTokens(symbol).catch(() => []))
@@ -1785,7 +1859,7 @@ function GrapeApp() {
         if (!cancelled) setSwapDiscoveryLoading(false);
       });
     return () => { cancelled = true; };
-  }, [rebalanceScreenVisible, selectedWallet?.chain, swapDiscoveredAssets.length, swapScreenVisible]);
+  }, [assets, rebalanceScreenVisible, selectedWallet, swapDiscoveredAssets.length, swapScreenVisible]);
 
   useEffect(() => {
     const query = (swapOutputPickerVisible ? swapAssetSearch : rebalanceAssetSearch).trim();
@@ -1793,7 +1867,9 @@ function GrapeApp() {
     let cancelled = false;
     const timeout = setTimeout(() => {
       setSwapDiscoveryLoading(true);
-      void searchMobileJupiterTokens(query)
+      void (selectedWallet?.chain === 'ethereum' || selectedWallet?.chain === 'monad'
+        ? searchMobileLifiTokens(selectedWallet.chain, query).then((tokens) => tokens.map((token) => ({ id: token.address, symbol: token.symbol, name: token.name, decimals: token.decimals, logoURI: token.logoURI, isVerified: true, tags: ['verified'] })))
+        : searchMobileJupiterTokens(query))
         .then(async (tokens) => {
           const mintQuery = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(query);
           const eligible = tokens.filter((token) =>
@@ -1807,7 +1883,9 @@ function GrapeApp() {
           const prices: Awaited<ReturnType<typeof fetchMobileJupiterPrices>> =
             await fetchMobileJupiterPrices(eligible.map((token) => token.id)).catch(() => ({}));
           if (cancelled) return;
-          const next = eligible.map((token) => mobileJupiterTokenToAsset(token, prices[token.id]?.usdPrice ?? null));
+          const next = selectedWallet?.chain === 'ethereum' || selectedWallet?.chain === 'monad'
+            ? eligible.map((token) => ({ id: `lifi:${token.id}`, chain: selectedWallet.chain, name: token.name ?? token.symbol, symbol: token.symbol, amountLabel: `0 ${token.symbol}`, amountUi: 0, valueLabel: '', address: token.id, decimals: token.decimals, logoUri: 'logoURI' in token ? token.logoURI : undefined, tokenType: 'erc20' as const }))
+            : eligible.map((token) => mobileJupiterTokenToAsset(token as MobileJupiterToken, prices[token.id]?.usdPrice ?? null));
           setSwapDiscoveredAssets((current) => [...current, ...next.filter((asset) => !current.some((entry) => entry.address === asset.address))]);
         })
         .finally(() => {
@@ -1818,7 +1896,7 @@ function GrapeApp() {
       cancelled = true;
       clearTimeout(timeout);
     };
-  }, [rebalanceAssetSearch, rebalanceScreenVisible, swapAssetSearch, swapOutputPickerVisible]);
+  }, [rebalanceAssetSearch, rebalanceScreenVisible, selectedWallet?.chain, swapAssetSearch, swapOutputPickerVisible]);
 
   useEffect(() => {
     let mounted = true;
@@ -3030,7 +3108,8 @@ function GrapeApp() {
               state: walletState,
               payload: restorePayload.trim(),
               pairingCode: restorePairingCode.trim(),
-              password: setupPassword
+              password: setupPassword,
+              credentialKind: setupCredentialKind
             })
           : importKind === 'mnemonic'
           ? await createWalletSet({
@@ -3592,6 +3671,13 @@ function GrapeApp() {
     });
   }
 
+  async function handleSetHideLowValueTokens(value: boolean) {
+    await saveState({
+      ...walletState,
+      hideLowValueTokens: value
+    });
+  }
+
   async function handleSetBiometricEnabled(value: boolean) {
     const nextState: MobileWalletState = {
       ...walletState,
@@ -4109,6 +4195,7 @@ function GrapeApp() {
               setSendScreenVisible(false);
               if (nextState.setup !== 'ready' || nextState.wallets.length === 0) {
                 setUnlocked(false);
+                setSetupStep('choose');
                 setScreen('setup');
                 setMainTab('home');
               }
@@ -4811,6 +4898,8 @@ function GrapeApp() {
           ]}
           onPress={() => {
             setSetupMode('create');
+            setGeneratedMnemonic(createWalletMnemonic(mnemonicLength));
+            setSetupStep('details');
             setConfirmBackedUp(false);
             setConfirmPasskeyOnlyAccess(false);
             setError(null);
@@ -4833,6 +4922,7 @@ function GrapeApp() {
           ]}
           onPress={() => {
             setSetupMode('import');
+            setSetupStep('details');
             setConfirmBackedUp(false);
             setConfirmPasskeyOnlyAccess(false);
             setError(null);
@@ -4891,9 +4981,20 @@ function GrapeApp() {
               </Text>
             </View>
 
-            {renderSetupModeChoices()}
+            {setupStep === 'choose' ? renderSetupModeChoices() : (
+              <Pressable
+                style={styles.detailBackRow}
+                onPress={() => {
+                  setSetupStep('choose');
+                  setError(null);
+                }}
+              >
+                <Feather name="chevron-left" size={18} color={activeTheme.text} />
+                <Text style={styles.detailBackText}>Back to wallet options</Text>
+              </Pressable>
+            )}
 
-            <View style={[styles.sectionCard, styles.formCard]}>
+            {setupStep === 'details' ? <View style={[styles.sectionCard, styles.formCard]}>
               {setupMode === 'create' ? (
                 <>
                   <Text style={styles.sectionTitle}>Recovery phrase</Text>
@@ -5058,8 +5159,9 @@ function GrapeApp() {
                     contentStyle={styles.paperInputContent}
                     outlineStyle={styles.paperOutline}
                     textColor={activeTheme.text}
-                    keyboardType="number-pad"
-                    maxLength={MOBILE_WALLET_PASSCODE_LENGTH}
+                    keyboardType="default"
+                    autoCapitalize="none"
+                    autoCorrect={false}
                   />
                   <PaperTextInput
                     value={setupPasswordConfirm}
@@ -5071,8 +5173,9 @@ function GrapeApp() {
                     contentStyle={styles.paperInputContent}
                     outlineStyle={styles.paperOutline}
                     textColor={activeTheme.text}
-                    keyboardType="number-pad"
-                    maxLength={MOBILE_WALLET_PASSCODE_LENGTH}
+                    keyboardType="default"
+                    autoCapitalize="none"
+                    autoCorrect={false}
                   />
                 </>
               ) : null}
@@ -5093,7 +5196,7 @@ function GrapeApp() {
               >
                 {submitLoading ? 'Please wait…' : setupMode === 'create' ? 'Create wallet' : setupMode === 'passkey' ? 'Create with passkey' : 'Import wallet'}
               </PaperButton>
-            </View>
+            </View> : null}
           </Animated.View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -5256,18 +5359,7 @@ function GrapeApp() {
             </View>
           </View>
 
-          {discoverControlsExpanded ? (
-            <>
-              {!discoverWallet ? (
-                <View style={styles.discoverEmptyCard}>
-                  <Text style={styles.discoverEmptyTitle}>Add a Solana wallet to use Discover.</Text>
-                  <Text style={styles.sectionHint}>
-                    Grape Discover currently injects the Solana provider only. Create or import a Solana wallet first.
-                  </Text>
-                </View>
-              ) : null}
-
-              <View style={styles.discoverToolbar}>
+          <View style={styles.discoverToolbar}>
                 <PaperTextInput
                   value={discoverUrlInput}
                   onChangeText={setDiscoverUrlInput}
@@ -5290,9 +5382,9 @@ function GrapeApp() {
                 >
                   Open
                 </PaperButton>
-              </View>
+          </View>
 
-              <View style={styles.discoverControls}>
+          <View style={styles.discoverControls}>
                 <Pressable
                   style={[styles.discoverControlButton, !discoverCanGoBack ? styles.discoverControlButtonDisabled : null]}
                   disabled={!discoverCanGoBack}
@@ -5313,8 +5405,19 @@ function GrapeApp() {
                 <Pressable style={styles.discoverControlButton} onPress={() => void Linking.openURL(discoverCurrentUrl || discoverUrl)}>
                   <Feather name="external-link" size={18} color={activeTheme.text} />
                 </Pressable>
-              </View>
+          </View>
 
+          {discoverControlsExpanded ? (
+            <>
+              {!discoverWallet ? (
+                <View style={styles.discoverEmptyCard}>
+                  <Text style={styles.discoverEmptyTitle}>Add a Solana wallet to connect to apps.</Text>
+                  <Text style={styles.sectionHint}>
+                    You can still browse normally. Connecting and signing currently require a Solana wallet.
+                  </Text>
+                </View>
+              ) : null}
+              <Text style={styles.swapPickerSectionLabel}>GRAPE TOOLS</Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.discoverFavoriteRow}>
                 {GRAPE_DISCOVER_FAVORITES.map((favorite) => (
                   <Pressable
@@ -5759,10 +5862,17 @@ function GrapeApp() {
                 <Feather name={walletState.privacyMode ? 'eye-off' : 'eye'} size={16} color={activeTheme.text} />
               </Pressable>
             </View>
-            <Text style={styles.cardBalance}>{maskValue(holdingsSummary, walletState.privacyMode)}</Text>
+            <Pressable
+              disabled={!canShowSolBalance}
+              onPress={() => setBalanceUnit((unit) => unit === 'USDC' ? 'SOL' : 'USDC')}
+              accessibilityRole="button"
+              accessibilityLabel={canShowSolBalance ? `Show balance in ${balanceUnit === 'USDC' ? 'SOL' : 'USDC'}` : 'Portfolio balance'}
+            >
+              <Text style={styles.cardBalance}>{maskValue(holdingsSummary, walletState.privacyMode)}</Text>
+            </Pressable>
             <Text style={styles.cardSubtle}>
               {pricedPortfolio.count > 0
-                ? `Estimated USDC value · ${pricedPortfolio.count} priced asset${pricedPortfolio.count === 1 ? '' : 's'}`
+                ? `${canShowSolBalance ? 'Tap balance to switch USDC / SOL · ' : ''}${pricedPortfolio.count} priced asset${pricedPortfolio.count === 1 ? '' : 's'}`
                 : `${assets.length} asset${assets.length === 1 ? '' : 's'} in this wallet`}
             </Text>
           </View>
@@ -5775,13 +5885,13 @@ function GrapeApp() {
               <Text style={styles.quickActionLabel}>Send</Text>
             </Pressable>
             <Pressable
-              style={selectedWallet?.chain === 'solana' ? styles.quickActionButton : styles.quickActionButtonDisabled}
-              onPress={selectedWallet?.chain === 'solana' ? () => openSwapScreen() : undefined}
+              style={selectedWallet ? styles.quickActionButton : styles.quickActionButtonDisabled}
+              onPress={selectedWallet ? () => openSwapScreen() : undefined}
             >
               <View style={styles.quickActionIcon}>
-                <MaterialCommunityIcons name="swap-horizontal" size={21} color={selectedWallet?.chain === 'solana' ? activeTheme.text : activeTheme.muted} />
+                <MaterialCommunityIcons name="swap-horizontal" size={21} color={selectedWallet ? activeTheme.text : activeTheme.muted} />
               </View>
-              <Text style={selectedWallet?.chain === 'solana' ? styles.quickActionLabel : styles.quickActionLabelMuted}>Swap</Text>
+              <Text style={selectedWallet ? styles.quickActionLabel : styles.quickActionLabelMuted}>Swap</Text>
             </Pressable>
             <Pressable
               style={selectedWallet && bridgeDestinationChains.length > 0 ? styles.quickActionButton : styles.quickActionButtonDisabled}
@@ -5841,7 +5951,7 @@ function GrapeApp() {
             <Text style={styles.sectionHint}>
               {assetsLoading
                 ? 'Refreshing'
-                : `${visibleSortedAssets.length} asset${visibleSortedAssets.length === 1 ? '' : 's'}${walletState.hideZeroBalances && visibleSortedAssets.length !== assets.length ? ` · ${assets.length - visibleSortedAssets.length} hidden` : ''}`}
+                : `${visibleSortedAssets.length} asset${visibleSortedAssets.length === 1 ? '' : 's'}${visibleSortedAssets.length !== assets.length ? ` · ${assets.length - visibleSortedAssets.length} hidden` : ''}`}
             </Text>
           </View>
           <View style={styles.homeAssetList}>
@@ -5851,7 +5961,11 @@ function GrapeApp() {
                 <Text style={styles.sectionHint}>Loading holdings...</Text>
               </View>
             ) : visibleSortedAssets.length === 0 ? (
-              <Text style={styles.sectionHint}>{walletState.hideZeroBalances && assets.length > 0 ? 'All zero-balance assets are hidden.' : 'No assets found for this wallet.'}</Text>
+              <Text style={styles.sectionHint}>
+                {(walletState.hideZeroBalances || walletState.hideLowValueTokens) && assets.length > 0
+                  ? 'All assets are hidden by your balance filters.'
+                  : 'No assets found for this wallet.'}
+              </Text>
             ) : (
               visibleSortedAssets.map((asset) => (
                 (() => {
@@ -6242,6 +6356,25 @@ function GrapeApp() {
 
         <View style={[styles.sectionCard, styles.formCard]}>
           <Text style={styles.sectionTitle}>Transfer details</Text>
+          {selectedWallet?.chain === 'monad' ? (
+            <>
+              <PaperTextInput
+                value={monadTokenAddress}
+                onChangeText={setMonadTokenAddress}
+                placeholder="Optional Monad token contract"
+                autoCapitalize="none"
+                autoCorrect={false}
+                mode="outlined"
+                style={styles.paperInput}
+                contentStyle={styles.paperInputContent}
+                outlineStyle={styles.paperOutline}
+                textColor={activeTheme.text}
+                right={monadTokenLoading ? <PaperTextInput.Icon icon="loading" /> : undefined}
+              />
+              {monadTokenError ? <Text style={styles.errorText}>{monadTokenError}</Text> : null}
+              {monadTokenAsset ? <Text style={styles.sectionHint}>Loaded {monadTokenAsset.symbol}; it is selected for this transfer.</Text> : null}
+            </>
+          ) : null}
           {selectedSendAsset ? (
             <View style={styles.sendSelectedAssetCard}>
               <View style={styles.sendSelectedAssetGlyph}>
@@ -6261,7 +6394,7 @@ function GrapeApp() {
           <PaperTextInput
             value={sendRecipient}
             onChangeText={setSendRecipient}
-            placeholder="Recipient"
+            placeholder={selectedWallet?.chain === 'solana' ? 'Address or .sol/.skr domain' : `${selectedChainMeta.label} wallet address`}
             autoCapitalize="none"
             autoCorrect={false}
             mode="outlined"
@@ -6277,6 +6410,9 @@ function GrapeApp() {
               />
             }
           />
+          {selectedWallet?.chain !== 'solana' ? (
+            <Text style={styles.sectionHint}>Enter a valid {selectedChainMeta.label} address. Solana domains are not supported on this network.</Text>
+          ) : null}
           <PaperTextInput
             value={sendAmount}
             onChangeText={setSendAmount}
@@ -7014,6 +7150,18 @@ function GrapeApp() {
                 onValueChange={(value) => void handleSetHideZeroBalances(value)}
                 trackColor={{ true: activeTheme.primaryButton, false: 'rgba(255,255,255,0.16)' }}
                 thumbColor={walletState.hideZeroBalances ? '#f7f2ff' : '#d0c0df'}
+              />
+            </View>
+            <View style={styles.settingsRow}>
+              <View style={styles.settingsCopy}>
+                <Text style={styles.settingsTitle}>Hide low-value tokens</Text>
+                <Text style={styles.sectionHint}>Hide tokens worth less than 0.10 USDC, including tokens without reliable pricing. Native assets remain visible.</Text>
+              </View>
+              <Switch
+                value={walletState.hideLowValueTokens}
+                onValueChange={(value) => void handleSetHideLowValueTokens(value)}
+                trackColor={{ true: activeTheme.primaryButton, false: 'rgba(255,255,255,0.16)' }}
+                thumbColor={walletState.hideLowValueTokens ? '#f7f2ff' : '#d0c0df'}
               />
             </View>
             <View style={styles.settingsRow}>
@@ -7867,6 +8015,35 @@ function GrapeApp() {
         )}
 
         {renderSettingsSection(
+          'help',
+          'Get help',
+          'Docs and community support',
+          <>
+            <Text style={styles.sectionHint}>Find setup guidance or ask Grape moderators and developers for help.</Text>
+            <View style={styles.walletToolsRow}>
+              <PaperButton
+                mode="outlined"
+                icon="book-open-outline"
+                style={[styles.paperSecondaryButton, styles.walletToolButton]}
+                onPress={() => void Linking.openURL('https://docs.grapes.network')}
+              >
+                Help docs
+              </PaperButton>
+              <PaperButton
+                mode="contained"
+                icon="message-outline"
+                style={[styles.paperPrimaryButton, styles.walletToolButton]}
+                buttonColor={activeTheme.primaryButton}
+                textColor={activeTheme.primaryButtonText}
+                onPress={() => void Linking.openURL('https://discord.gg/grapedao')}
+              >
+                Ask on Discord
+              </PaperButton>
+            </View>
+          </>
+        )}
+
+        {renderSettingsSection(
           'session',
           'Session',
           unlocked ? 'Unlocked' : 'Locked',
@@ -7915,14 +8092,6 @@ function GrapeApp() {
                 }
               ]}
             >
-              {mainTab === 'discover' || mainTab === 'home' ? null : (
-                <View style={styles.mobileAppBar}>
-                  <View style={styles.mobileAppBarCopy}>
-                    {renderBrandWordmark()}
-                  </View>
-                </View>
-              )}
-
             {error ? (
               <View style={styles.inlineErrorCard}>
                 <Text style={styles.errorText}>{error}</Text>
@@ -7962,25 +8131,18 @@ function GrapeApp() {
             <Text style={[styles.footerLabel, mainTab === 'home' ? styles.footerLabelActive : null]}>Home</Text>
           </Pressable>
           <Pressable
-            style={[styles.footerButton, mainTab === 'discover' ? styles.footerButtonActive : null]}
-            onPress={() => setMainTab('discover')}
-          >
-            <MaterialCommunityIcons name="compass-outline" size={24} color={mainTab === 'discover' ? activeTheme.text : activeTheme.muted} />
-            <Text style={[styles.footerLabel, mainTab === 'discover' ? styles.footerLabelActive : null]}>Discover</Text>
-          </Pressable>
-          <Pressable
-            style={[styles.footerButton, mainTab === 'governance' ? styles.footerButtonActive : null]}
-            onPress={() => setMainTab('governance')}
-          >
-            <MaterialCommunityIcons name="bank-outline" size={24} color={mainTab === 'governance' ? activeTheme.text : activeTheme.muted} />
-            <Text style={[styles.footerLabel, mainTab === 'governance' ? styles.footerLabelActive : null]}>Gov</Text>
-          </Pressable>
-          <Pressable
             style={[styles.footerButton, mainTab === 'activity' ? styles.footerButtonActive : null]}
             onPress={() => setMainTab('activity')}
           >
             <MaterialCommunityIcons name="history" size={24} color={mainTab === 'activity' ? activeTheme.text : activeTheme.muted} />
             <Text style={[styles.footerLabel, mainTab === 'activity' ? styles.footerLabelActive : null]}>Activity</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.footerButton, mainTab === 'discover' ? styles.footerButtonActive : null]}
+            onPress={() => setMainTab('discover')}
+          >
+            <MaterialCommunityIcons name="compass-outline" size={24} color={mainTab === 'discover' ? activeTheme.text : activeTheme.muted} />
+            <Text style={[styles.footerLabel, mainTab === 'discover' ? styles.footerLabelActive : null]}>Discover</Text>
           </Pressable>
           <Pressable
             style={[styles.footerButton, mainTab === 'settings' ? styles.footerButtonActive : null]}
