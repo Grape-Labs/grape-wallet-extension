@@ -54,12 +54,12 @@ import {
   type MobileBridgeQuoteSummary,
   type MobileJupiterQuoteResponse
 } from './config';
-import { createSuiClient, executeSuiSwap, getSuiCollectibles, getSuiSwapQuote, resolveSuiVaultSecret } from '@grape/sui';
 import {
   deriveMobileSuiAccount0,
   exportMobileSuiWalletSecret,
   formatMobileSuiAmount,
   getMobileSuiHoldings,
+  getMobileSuiCollectibles,
   getMobileSuiSendUnsupportedMessage,
   importMobileSuiPrivateKey
 } from './sui';
@@ -917,11 +917,7 @@ export async function getWalletSwapQuote(input: {
     return { inputMint: fromToken, outputMint: toToken, inputAmountUi: input.amount, slippageBps: input.slippageBps, selectedRouteId: 'best', routes: [{ id: 'best', label: 'Best route', quoteResponse: { ...quote, _grapeSwapChain: input.wallet.chain }, outputAmountUi: formatUiAmount(estimate?.toAmount ?? '0', estimate?.toToken?.decimals ?? 18), priceImpactPct: null, routeLabels: [String(quote.toolDetails?.name ?? 'LI.FI')] }] };
   }
   if (input.wallet.chain === 'sui') {
-    const client = createSuiClient(DEFAULT_SUI_NETWORK, getMobileSuiRpcUrl(DEFAULT_SUI_NETWORK));
-    const fromCoinType = input.inputAsset.tokenType === 'sui-coin' ? input.inputAsset.address ?? '' : '0x2::sui::SUI';
-    const toCoinType = input.outputAsset.tokenType === 'sui-coin' ? input.outputAsset.address ?? '' : '0x2::sui::SUI';
-    const quote = await getSuiSwapQuote(client, { fromCoinType, toCoinType, amountIn: parseDecimalAmount(input.amount, input.inputAsset.decimals ?? 9) });
-    return { inputMint: fromCoinType, outputMint: toCoinType, inputAmountUi: input.amount, slippageBps: input.slippageBps, selectedRouteId: 'best', routes: [{ id: 'best', label: 'Best route', quoteResponse: { _grapeSwapChain: 'sui', fromCoinType, toCoinType, amountIn: quote.amountIn, slippageBps: input.slippageBps }, outputAmountUi: formatUiAmount(quote.amountOut, input.outputAsset.decimals ?? 0), priceImpactPct: null, routeLabels: quote.providers }] };
+    throw new Error('Sui swaps are temporarily unavailable in the Android build while the mobile-native route is being prepared.');
   }
 
   const inputMint = input.inputAsset.tokenType === 'spl' ? input.inputAsset.address ?? '' : JUPITER_SOL_MINT;
@@ -1011,10 +1007,7 @@ export async function executeWalletSwap(input: {
     return { signature, inputMint: estimate?.fromToken?.address ?? '', outputMint: estimate?.toToken?.address ?? '', inputAmountUi: formatUiAmount(estimate?.fromAmount ?? '0', estimate?.fromToken?.decimals ?? 18), outputAmountUi: formatUiAmount(estimate?.toAmount ?? '0', estimate?.toToken?.decimals ?? 18) };
   }
   if (input.wallet.chain === 'sui') {
-    const client = createSuiClient(DEFAULT_SUI_NETWORK, getMobileSuiRpcUrl(DEFAULT_SUI_NETWORK));
-    const quote = await getSuiSwapQuote(client, { fromCoinType: String(genericQuote.fromCoinType), toCoinType: String(genericQuote.toCoinType), amountIn: BigInt(String(genericQuote.amountIn)) });
-    const signature = await executeSuiSwap(client, resolveSuiVaultSecret(secret as VaultSecret), { quote, slippageBps: Number(genericQuote.slippageBps ?? 50) });
-    return { signature, inputMint: quote.fromCoinType, outputMint: quote.toCoinType, inputAmountUi: quote.amountIn, outputAmountUi: quote.amountOut };
+    throw new Error('Sui swaps are temporarily unavailable in the Android build while the mobile-native route is being prepared.');
   }
   const solanaQuote = input.quoteResponse as MobileJupiterQuoteResponse;
   const { resolveSolanaVaultSecret } = loadSolanaDeriveModule();
@@ -2680,8 +2673,7 @@ function isValidSolanaPublicKey(value: string) {
 
 async function loadSuiAssets(address: string): Promise<MobileAsset[]> {
   const holdings = await getMobileSuiHoldings(address, DEFAULT_SUI_NETWORK);
-  const client = createSuiClient(DEFAULT_SUI_NETWORK, getMobileSuiRpcUrl(DEFAULT_SUI_NETWORK));
-  const collectibles = await getSuiCollectibles(client, address).catch(() => []);
+  const collectibles = await getMobileSuiCollectibles(address, DEFAULT_SUI_NETWORK).catch(() => []);
   return [
     {
       id: 'sui',

@@ -138,9 +138,6 @@ importers:
       '@grape/solana':
         specifier: workspace:*
         version: link:../../packages/solana
-      '@grape/sui':
-        specifier: workspace:*
-        version: link:../../packages/sui
       '@mysten/sui':
         specifier: ^2.6.0
         version: 2.6.0(typescript@5.9.3)
@@ -213,6 +210,10 @@ importers:
       react-native-webview:
         specifier: 13.15.0
         version: 13.15.0(react-native@0.81.5(@babel/core@7.29.0)(@types/react@19.2.14)(bufferutil@4.1.0)(react@19.1.0)(utf-8-validate@6.0.6))(react@19.1.0)
+    devDependencies:
+      babel-preset-expo:
+        specifier: ~54.0.9
+        version: 54.0.12(@babel/core@7.29.0)(@babel/runtime@7.28.6)(expo@54.0.36(@babel/core@7.29.0)(bufferutil@4.1.0)(graphql@16.13.1)(react-native-webview@13.15.0(react-native@0.81.5(@babel/core@7.29.0)(@types/react@19.2.14)(bufferutil@4.1.0)(react@19.1.0)(utf-8-validate@6.0.6))(react@19.1.0))(react-native@0.81.5(@babel/core@7.29.0)(@types/react@19.2.14)(bufferutil@4.1.0)(react@19.1.0)(utf-8-validate@6.0.6))(react@19.1.0)(utf-8-validate@6.0.6))(react-refresh@0.14.2)
 
   apps/passkey-web:
     dependencies:

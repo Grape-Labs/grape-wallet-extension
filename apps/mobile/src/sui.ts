@@ -1,6 +1,5 @@
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
-import { SuiGrpcClient } from '@mysten/sui/grpc';
-import { MIST_PER_SUI, SUI_TYPE_ARG, normalizeSuiAddress } from '@mysten/sui/utils';
+import { SUI_TYPE_ARG, normalizeSuiAddress } from '@mysten/sui/utils';
 import type { VaultSecret } from '@grape/core';
 import { getMobileSuiRpcUrl } from './config';
 
@@ -16,6 +15,56 @@ export type MobileSuiHolding = {
   rawAmount: string;
   logoUri?: string;
 };
+
+export type MobileSuiCollectible = {
+  objectId: string;
+  objectType: string;
+  name: string;
+  description?: string;
+  imageUrl?: string;
+};
+
+export async function getMobileSuiCollectibles(owner: string, network: 'mainnet' | 'devnet' = DEFAULT_SUI_NETWORK): Promise<MobileSuiCollectible[]> {
+  const collectibles: MobileSuiCollectible[] = [];
+  let cursor: string | null = null;
+  do {
+    const page: { data?: any[]; hasNextPage?: boolean; nextCursor?: string | null } = await mobileSuiRpc(network, 'suix_getOwnedObjects', [
+      normalizeSuiAddress(owner),
+      { options: { showType: true, showContent: true, showDisplay: true } },
+      cursor,
+      100
+    ]);
+    for (const entry of page.data ?? []) {
+      const object = entry.data ?? entry;
+      if (typeof object.type !== 'string' || object.type.startsWith('0x2::coin::Coin<')) continue;
+      const display = object.display?.data ?? {};
+      const json = object.content?.fields ?? {};
+      const name = mobileSuiString(display.name) ?? mobileSuiString(json.name);
+      const rawImage = mobileSuiString(display.image_url) ?? mobileSuiString(display.image) ?? mobileSuiString(json.image_url) ?? mobileSuiString(json.url);
+      if (!object.display && !name && !rawImage) continue;
+      collectibles.push({
+        objectId: object.objectId,
+        objectType: object.type,
+        name: name ?? object.type.split('::').at(-1) ?? 'Sui object',
+        description: mobileSuiString(display.description) ?? mobileSuiString(json.description) ?? undefined,
+        imageUrl: normalizeMobileSuiAssetUrl(rawImage)
+      });
+    }
+    cursor = page.hasNextPage ? page.nextCursor ?? null : null;
+  } while (cursor && collectibles.length < 500);
+  return collectibles;
+}
+
+function mobileSuiString(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function normalizeMobileSuiAssetUrl(value: string | null) {
+  if (!value) return undefined;
+  if (value.startsWith('ipfs://')) return `https://ipfs.io/ipfs/${value.slice(7)}`;
+  if (value.startsWith('ar://')) return `https://arweave.net/${value.slice(5)}`;
+  return value;
+}
 
 export function deriveMobileSuiAccount0(mnemonic: string) {
   const keypair = Ed25519Keypair.deriveKeypair(mnemonic, SUI_DERIVATION_PATH);
@@ -69,26 +118,23 @@ export function validateMobileSuiPrivateKey(privateKey: string) {
 
 export async function getMobileSuiHoldings(owner: string, network: 'mainnet' | 'devnet' = DEFAULT_SUI_NETWORK) {
   const normalizedOwner = normalizeSuiAddress(owner);
-  const client = new SuiGrpcClient({ network, baseUrl: getMobileSuiRpcUrl(network) });
-  const balances: Awaited<ReturnType<SuiGrpcClient['listBalances']>>['balances'] = [];
-  let cursor: string | null = null;
-  do {
-    const page = await client.listBalances({ owner: normalizedOwner, cursor, limit: 1000 });
-    balances.push(...page.balances);
-    cursor = page.hasNextPage ? page.cursor : null;
-  } while (cursor);
+  const balances = await mobileSuiRpc<Array<{ coinType: string; totalBalance: string }>>(network, 'suix_getAllBalances', [normalizedOwner]);
   const coins: MobileSuiHolding[] = [];
   let totalMist = '0';
 
   for (const balance of balances) {
     if (isNativeSuiCoinType(balance.coinType)) {
-      totalMist = balance.balance ?? '0';
+      totalMist = balance.totalBalance ?? '0';
       continue;
     }
 
-    const metadata = (await client.getCoinMetadata({ coinType: balance.coinType }).catch(() => null))?.coinMetadata;
+    const metadata = await mobileSuiRpc<{ decimals?: number; symbol?: string; name?: string; iconUrl?: string } | null>(
+      network,
+      'suix_getCoinMetadata',
+      [balance.coinType]
+    ).catch(() => null);
     const decimals = metadata?.decimals ?? 0;
-    const amount = formatSuiAmount(balance.balance ?? '0', decimals);
+    const amount = formatSuiAmount(balance.totalBalance ?? '0', decimals);
 
     coins.push({
       coinType: balance.coinType,
@@ -96,12 +142,26 @@ export async function getMobileSuiHoldings(owner: string, network: 'mainnet' | '
       name: metadata?.name ?? formatSuiCoinSymbol(balance.coinType),
       decimals,
       amount,
-      rawAmount: balance.balance ?? '0',
+      rawAmount: balance.totalBalance ?? '0',
       logoUri: metadata?.iconUrl ?? undefined
     });
   }
 
   return { totalMist, coins };
+}
+
+let mobileSuiRpcId = 0;
+
+async function mobileSuiRpc<T>(network: 'mainnet' | 'devnet', method: string, params: unknown[]): Promise<T> {
+  const response = await fetch(getMobileSuiRpcUrl(network), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: ++mobileSuiRpcId, method, params })
+  });
+  if (!response.ok) throw new Error(`Sui RPC request failed (${response.status}).`);
+  const payload = await response.json() as { result?: T; error?: { message?: string } };
+  if (payload.error) throw new Error(payload.error.message ?? 'Sui RPC request failed.');
+  return payload.result as T;
 }
 
 export function formatMobileSuiAmount(rawAmount: string, decimals: number) {

@@ -6,7 +6,7 @@ import {
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { Transaction } from '@mysten/sui/transactions';
 import { isValidSuiAddress, MIST_PER_SUI, normalizeSuiAddress, SUI_TYPE_ARG } from '@mysten/sui/utils';
-import { AggregatorClient, type RouterDataV3 } from '@cetusprotocol/aggregator-sdk';
+import type { RouterDataV3 } from '@cetusprotocol/aggregator-sdk';
 import type { SuiClientTypes } from '@mysten/sui/client';
 
 export const SUI_DERIVATION_PATH = `m/44'/784'/0'/0'/0'`;
@@ -101,6 +101,7 @@ export async function getSuiSwapQuote(
 ): Promise<SuiSwapQuote> {
   if (input.fromCoinType.trim() === input.toCoinType.trim()) throw new Error('Choose a different output token.');
   if (input.amountIn <= 0n) throw new Error('Enter an amount greater than zero.');
+  const { AggregatorClient } = await import('@cetusprotocol/aggregator-sdk');
   const aggregator = new AggregatorClient({ client });
   const router = await aggregator.findRouters({
     from: input.fromCoinType.trim(),
@@ -124,6 +125,7 @@ export async function executeSuiSwap(
   keypair: Ed25519Keypair,
   input: { quote: SuiSwapQuote; slippageBps: number }
 ): Promise<string> {
+  const { AggregatorClient } = await import('@cetusprotocol/aggregator-sdk');
   const aggregator = new AggregatorClient({ client, signer: keypair.toSuiAddress() });
   const transaction = new Transaction();
   transaction.setSender(keypair.toSuiAddress());
