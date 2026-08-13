@@ -1,6 +1,6 @@
 # Grape Mobile
 
-Android-first mobile app scaffold for Grape.
+Cross-platform iOS and Android app for Grape.
 
 This target is intentionally separate from the extension runtime. It is meant to reuse the wallet domain packages while replacing:
 
@@ -28,6 +28,12 @@ For Android:
 
 ```bash
 pnpm --filter @grape/mobile android
+```
+
+For iOS Simulator (macOS with Xcode):
+
+```bash
+pnpm --filter @grape/mobile ios
 ```
 
 ## Environment
@@ -72,3 +78,28 @@ This uses the repo-root [eas.json](/Users/kirk/Development/grape-wallet-extensio
 You will need an Expo account and EAS login before the cloud build can start.
 
 This scaffold is intentionally not included in the root build pipeline yet.
+
+## iOS builds
+
+For an internally distributed `.ipa`:
+
+```bash
+pnpm --filter @grape/mobile ipa
+```
+
+For an App Store build:
+
+```bash
+pnpm --filter @grape/mobile ios-prod
+```
+
+For an EAS-hosted iOS Simulator build:
+
+```bash
+pnpm --filter @grape/mobile ios-sim
+```
+
+Device and App Store builds require an Apple Developer account and signing
+credentials. Deterministic passkey wallets are currently disabled on iOS while
+the native credential bridge is updated; standard imported and created wallets
+use the iOS Keychain and remain supported.

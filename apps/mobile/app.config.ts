@@ -10,6 +10,15 @@ const config: ExpoConfig = {
   assetBundlePatterns: ['**/*'],
   plugins: [
     [
+      'expo-splash-screen',
+      {
+        backgroundColor: '#0d0010',
+        image: './assets/icon-app.png',
+        imageWidth: 184,
+        resizeMode: 'contain'
+      }
+    ],
+    [
       'expo-camera',
       {
         cameraPermission: 'Allow Grape to use the camera to scan wallet restore QR codes.'
