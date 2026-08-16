@@ -1,10 +1,10 @@
 {
   "name": "grape-wallet-extension",
   "private": true,
-  "version": "0.5.152",
+  "version": "0.5.153",
   "packageManager": "pnpm@10.6.3",
   "scripts": {
-    "build": "pnpm --filter @grape/core build && pnpm --filter @grape/solana build && pnpm --filter @grape/sui build && pnpm --filter @grape/monad build && pnpm --filter @grape/ethereum build && pnpm --filter @grape/ui build && pnpm --filter @grape/wallet-adapter build && pnpm --filter @grape/extension build && pnpm --filter @grape/passkey-web build",
+    "build": "pnpm --filter @grape/core run build && pnpm --filter @grape/solana run build && pnpm --filter @grape/sui run build && pnpm --filter @grape/monad run build && pnpm --filter @grape/ethereum run build && pnpm --filter @grape/ui run build && pnpm --filter @grape/wallet-adapter run build && pnpm --filter @grape/extension run build && pnpm --filter @grape/passkey-web run build",
     "dev": "pnpm --filter @grape/extension dev",
     "version:bump:extension": "node scripts/bump-extension-version.mjs",
     "passkey-web:dev": "pnpm --filter @grape/passkey-web dev",
@@ -17,7 +17,7 @@
     "mobile:ipa": "pnpm --filter @grape/mobile exec eas build -p ios --profile preview",
     "mobile:ios-prod": "pnpm --filter @grape/mobile exec eas build -p ios --profile production",
     "mobile:ios-sim": "pnpm --filter @grape/mobile exec eas build -p ios --profile simulator",
-    "postinstall": "pnpm --filter @grape/core build && pnpm --filter @grape/solana build && pnpm --filter @grape/sui build && pnpm --filter @grape/monad build && pnpm --filter @grape/ethereum build",
+    "postinstall": "pnpm --filter @grape/core run build && pnpm --filter @grape/solana run build && pnpm --filter @grape/sui run build && pnpm --filter @grape/monad run build && pnpm --filter @grape/ethereum run build",
     "lint": "eslint . --ext .ts,.tsx",
     "typecheck": "pnpm -r typecheck",
     "test": "vitest run"

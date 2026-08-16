@@ -746,18 +746,27 @@ function formatTokenAmount(token: TokenHolding): string {
     if (absolute >= 1_000_000_000) {
       return `${(numeric / 1_000_000_000).toLocaleString(undefined, {
         minimumFractionDigits: 0,
-        maximumFractionDigits: 1
+        maximumFractionDigits: 2
       })}B`;
     }
     if (absolute >= 1_000_000) {
       return `${(numeric / 1_000_000).toLocaleString(undefined, {
         minimumFractionDigits: 0,
-        maximumFractionDigits: 1
+        maximumFractionDigits: 2
       })}M`;
     }
+
+    const maximumFractionDigits =
+      absolute >= 1
+        ? 2
+        : absolute >= 0.01
+          ? 4
+          : absolute >= 0.0001
+            ? 6
+            : Math.min(Math.max(token.decimals, 8), 12);
     return numeric.toLocaleString(undefined, {
       minimumFractionDigits: 0,
-      maximumFractionDigits: Math.min(Math.max(token.decimals, 0), 2)
+      maximumFractionDigits
     });
   }
   return token.amount;

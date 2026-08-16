@@ -13,6 +13,7 @@ import {
   ImageBackground,
   KeyboardAvoidingView,
   Linking,
+  PanResponder,
   Platform,
   Pressable,
   ScrollView,
@@ -991,6 +992,37 @@ function formatSwapAmountInput(amount: number, maxDecimals: number) {
   return amount.toFixed(precision).replace(/\.?0+$/, '');
 }
 
+function formatMobileTokenQuantity(asset: MobileAsset): string {
+  const numeric = typeof asset.amountUi === 'number'
+    ? asset.amountUi
+    : Number(asset.amountLabel.replace(/,/g, '').trim().split(/\s+/)[0]);
+
+  if (!Number.isFinite(numeric)) {
+    return asset.amountLabel;
+  }
+
+  const absolute = Math.abs(numeric);
+  if (absolute >= 1_000_000_000) {
+    return `${(numeric / 1_000_000_000).toLocaleString(undefined, { maximumFractionDigits: 2 })}B ${asset.symbol}`;
+  }
+  if (absolute >= 1_000_000) {
+    return `${(numeric / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 2 })}M ${asset.symbol}`;
+  }
+
+  const maximumFractionDigits =
+    absolute >= 1
+      ? 2
+      : absolute >= 0.01
+        ? 4
+        : absolute >= 0.0001
+          ? 6
+          : Math.min(Math.max(asset.decimals ?? 8, 8), 12);
+  return `${numeric.toLocaleString(undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits
+  })} ${asset.symbol}`;
+}
+
 function isSvgUri(uri?: string) {
   return typeof uri === 'string' && uri.trim().toLowerCase().includes('.svg');
 }
@@ -1321,12 +1353,17 @@ function GrapeApp() {
   const [discoverCanGoForward, setDiscoverCanGoForward] = useState(false);
   const [discoverLoading, setDiscoverLoading] = useState(false);
   const [discoverLoadError, setDiscoverLoadError] = useState<string | null>(null);
-  const [discoverControlsExpanded, setDiscoverControlsExpanded] = useState(true);
+  const [discoverControlsExpanded, setDiscoverControlsExpanded] = useState(false);
   const [discoverConnectedOrigins, setDiscoverConnectedOrigins] = useState<string[]>([]);
   const [discoverApproval, setDiscoverApproval] = useState<DiscoverApproval | null>(null);
   const [discoverApprovalPassword, setDiscoverApprovalPassword] = useState('');
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const discoverWebViewRef = useRef<WebView>(null);
+  useEffect(() => {
+    if (mainTab === 'discover') {
+      setDiscoverControlsExpanded(false);
+    }
+  }, [mainTab]);
   const parsedRestorePayload = useMemo(() => {
     if (!restorePayload.trim()) {
       return null;
@@ -1363,6 +1400,20 @@ function GrapeApp() {
   const screenPadding = isCompact ? 10 : 12;
   const footerInset = isCompact ? 16 : 20;
   const footerClearance = footerInset + 80;
+  const discoverHomeSwipeResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponderCapture: (_event, gestureState) =>
+          gestureState.dx < -28 && Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.5,
+        onPanResponderRelease: (_event, gestureState) => {
+          if (gestureState.dx < -80 && Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.5) {
+            setMainTab('home');
+          }
+        },
+        onPanResponderTerminationRequest: () => true
+      }),
+    []
+  );
   const deviceLinkQrSize = Math.max(240, Math.min(width - 120, 320));
   const paperTheme = useMemo(
     () => ({
@@ -1449,7 +1500,7 @@ function GrapeApp() {
       : `${pricedPortfolio.totalUsd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDC`
     : assets.length === 0
       ? '--'
-      : headlineAsset?.amountLabel ?? '--';
+      : headlineAsset ? formatMobileTokenQuantity(headlineAsset) : '--';
   const visibleSortedAssets = useMemo(() => {
     return assets
       .filter((asset) => asset.tokenType === 'nft' || !walletState.hideZeroBalances || (asset.amountUi ?? 0) > 0)
@@ -5336,33 +5387,66 @@ function GrapeApp() {
 
   function renderDiscoverTab() {
     return (
-      <View style={[styles.discoverScreen, { paddingBottom: footerClearance }]}>
-        <View style={styles.discoverBrowserBar}>
+      <View
+        style={[styles.discoverScreen, { paddingBottom: footerClearance }]}
+        {...discoverHomeSwipeResponder.panHandlers}
+      >
+        <View
+          style={[
+            styles.discoverBrowserBar,
+            !discoverControlsExpanded ? styles.discoverBrowserBarCollapsed : null
+          ]}
+        >
           <View style={styles.discoverBrowserBarPrimary}>
+            {!discoverControlsExpanded ? (
+              <View style={styles.discoverCollapsedNavigation}>
+                <Pressable
+                  style={[styles.discoverCompactControlButton, !discoverCanGoBack ? styles.discoverControlButtonDisabled : null]}
+                  disabled={!discoverCanGoBack}
+                  hitSlop={6}
+                  onPress={() => discoverWebViewRef.current?.goBack()}
+                >
+                  <Feather name="chevron-left" size={17} color={discoverCanGoBack ? activeTheme.text : activeTheme.muted} />
+                </Pressable>
+                <Pressable
+                  style={[styles.discoverCompactControlButton, !discoverCanGoForward ? styles.discoverControlButtonDisabled : null]}
+                  disabled={!discoverCanGoForward}
+                  hitSlop={6}
+                  onPress={() => discoverWebViewRef.current?.goForward()}
+                >
+                  <Feather name="chevron-right" size={17} color={discoverCanGoForward ? activeTheme.text : activeTheme.muted} />
+                </Pressable>
+              </View>
+            ) : null}
             <View style={styles.discoverHeaderCopy}>
-              <Text style={styles.discoverBrowserTitle}>Grape Discover</Text>
+              {discoverControlsExpanded ? <Text style={styles.discoverBrowserTitle}>Grape Discover</Text> : null}
               <Text style={styles.discoverWebviewMeta} numberOfLines={1} ellipsizeMode="middle">
                 {formatDiscoverUrlDisplay(discoverCurrentUrl || discoverUrl)}
               </Text>
             </View>
             <View style={styles.discoverBrowserBarActions}>
-              <View style={styles.discoverBetaPill}>
-                <Text style={styles.discoverBetaPillText}>Solana beta</Text>
-              </View>
+              {discoverControlsExpanded ? (
+                <View style={styles.discoverBetaPill}>
+                  <Text style={styles.discoverBetaPillText}>Solana beta</Text>
+                </View>
+              ) : null}
               <Pressable
-                style={styles.discoverControlButton}
+                style={discoverControlsExpanded ? styles.discoverControlButton : styles.discoverCompactControlButton}
                 onPress={() => setDiscoverControlsExpanded((currentValue) => !currentValue)}
+                hitSlop={discoverControlsExpanded ? undefined : 6}
+                accessibilityRole="button"
+                accessibilityLabel={discoverControlsExpanded ? 'Collapse browser controls' : 'Expand browser controls'}
               >
                 <Feather
-                  name={discoverControlsExpanded ? 'chevron-up' : 'sliders'}
-                  size={18}
+                  name={discoverControlsExpanded ? 'chevron-up' : 'more-horizontal'}
+                  size={17}
                   color={activeTheme.text}
                 />
               </Pressable>
             </View>
           </View>
 
-          <View style={styles.discoverToolbar}>
+          {discoverControlsExpanded ? <View style={styles.discoverToolbar}>
                 <PaperTextInput
                   value={discoverUrlInput}
                   onChangeText={setDiscoverUrlInput}
@@ -5385,9 +5469,9 @@ function GrapeApp() {
                 >
                   Open
                 </PaperButton>
-          </View>
+          </View> : null}
 
-          <View style={styles.discoverControls}>
+          {discoverControlsExpanded ? <View style={styles.discoverControls}>
                 <Pressable
                   style={[styles.discoverControlButton, !discoverCanGoBack ? styles.discoverControlButtonDisabled : null]}
                   disabled={!discoverCanGoBack}
@@ -5408,7 +5492,7 @@ function GrapeApp() {
                 <Pressable style={styles.discoverControlButton} onPress={() => void Linking.openURL(discoverCurrentUrl || discoverUrl)}>
                   <Feather name="external-link" size={18} color={activeTheme.text} />
                 </Pressable>
-          </View>
+          </View> : null}
 
           {discoverControlsExpanded ? (
             <>
@@ -5611,7 +5695,7 @@ function GrapeApp() {
 
             <View style={styles.assetDetailBalanceBlock}>
               <Text style={styles.assetDetailLabel}>Your balance</Text>
-              <Text style={styles.assetDetailBalance}>{maskValue(selectedAsset.amountLabel, walletState.privacyMode)}</Text>
+              <Text style={styles.assetDetailBalance}>{maskValue(formatMobileTokenQuantity(selectedAsset), walletState.privacyMode)}</Text>
               {selectedAsset.valueLabel ? (
                 <Text style={styles.assetDetailBalanceMeta}>
                   Estimated value {maskValue(selectedAsset.valueLabel, walletState.privacyMode)}
@@ -5986,7 +6070,7 @@ function GrapeApp() {
                         {asset.valueLabel ? (
                           <Text style={styles.assetValue}>{maskValue(asset.valueLabel, walletState.privacyMode)}</Text>
                         ) : null}
-                        <Text style={styles.assetValueMeta}>{maskValue(asset.amountLabel, walletState.privacyMode)}</Text>
+                        <Text style={styles.assetValueMeta}>{maskValue(formatMobileTokenQuantity(asset), walletState.privacyMode)}</Text>
                       </View>
                     </Pressable>
                   );
@@ -6338,7 +6422,7 @@ function GrapeApp() {
                   </Text>
                 </View>
                 <View style={styles.assetValueStack}>
-                  <Text style={styles.assetValue}>{maskValue(selectedSendAsset.amountLabel, walletState.privacyMode)}</Text>
+                  <Text style={styles.assetValue}>{maskValue(formatMobileTokenQuantity(selectedSendAsset), walletState.privacyMode)}</Text>
                   <Text style={styles.assetValueMeta}>Tap to switch</Text>
                 </View>
               </>
@@ -6390,7 +6474,7 @@ function GrapeApp() {
                 </Text>
               </View>
               <Text style={styles.sendSelectedAssetBalance}>
-                {maskValue(selectedSendAsset.amountLabel, walletState.privacyMode)}
+                {maskValue(formatMobileTokenQuantity(selectedSendAsset), walletState.privacyMode)}
               </Text>
             </View>
           ) : null}
@@ -6528,7 +6612,7 @@ function GrapeApp() {
                         <Text style={styles.sendSelectedAssetMeta}>{selectedInputSubtitle ?? selectedSwapInputAsset.symbol}</Text>
                       </View>
                       <View style={styles.assetValueStack}>
-                        <Text style={styles.assetValue}>{maskValue(selectedSwapInputAsset.amountLabel, walletState.privacyMode)}</Text>
+                        <Text style={styles.assetValue}>{maskValue(formatMobileTokenQuantity(selectedSwapInputAsset), walletState.privacyMode)}</Text>
                         <Text style={styles.assetValueMeta}>Tap to switch</Text>
                       </View>
                     </>
@@ -8204,31 +8288,36 @@ function GrapeApp() {
             onDismiss={handleRejectDiscoverRequest}
             contentContainerStyle={[styles.sendAssetPickerModal, styles.discoverApprovalModal]}
           >
-            <View style={styles.sendAssetPickerHeader}>
-              <Text style={styles.sectionTitle}>Approve in Grape Discover</Text>
-              <Text style={styles.sectionHint}>
-                {discoverApproval
-                  ? `${discoverApproval.originHost} wants to ${discoverApproval.request.method === 'connect'
-                    ? 'connect to your wallet'
-                    : discoverApproval.request.method === 'signMessage'
-                      ? 'sign a message'
-                      : discoverApproval.request.method === 'signTransaction' || discoverApproval.request.method === 'signAllTransactions'
-                        ? 'sign a transaction'
-                        : 'send a transaction'}`
-                  : ''}
-              </Text>
-            </View>
             {discoverApproval ? (
-              <View style={styles.stack}>
-                <View style={styles.exportSecretCard}>
-                  <Text style={styles.exportSecretLabel}>Origin</Text>
-                  <Text style={styles.settingsMono}>{discoverApproval.origin}</Text>
-                </View>
-                <View style={styles.exportSecretCard}>
-                  <Text style={styles.exportSecretLabel}>Wallet</Text>
-                  <Text style={styles.settingsMono}>{discoverWallet ? `${discoverWallet.name} • ${discoverWallet.address}` : 'No Solana wallet selected'}</Text>
-                </View>
-                {discoverApprovalRequiresReauth ? (
+              <>
+                <ScrollView
+                  style={styles.discoverApprovalScroll}
+                  contentContainerStyle={styles.discoverApprovalContent}
+                  keyboardShouldPersistTaps="handled"
+                  showsVerticalScrollIndicator={false}
+                >
+                  <View style={styles.sendAssetPickerHeader}>
+                    <Text style={styles.sectionTitle}>Approve in Grape Discover</Text>
+                    <Text style={styles.sectionHint}>
+                      {`${discoverApproval.originHost} wants to ${discoverApproval.request.method === 'connect'
+                        ? 'connect to your wallet'
+                        : discoverApproval.request.method === 'signMessage'
+                          ? 'sign a message'
+                          : discoverApproval.request.method === 'signTransaction' || discoverApproval.request.method === 'signAllTransactions'
+                            ? 'sign a transaction'
+                            : 'send a transaction'}`}
+                    </Text>
+                  </View>
+                  <View style={styles.stack}>
+                    <View style={styles.exportSecretCard}>
+                      <Text style={styles.exportSecretLabel}>Origin</Text>
+                      <Text style={styles.settingsMono}>{discoverApproval.origin}</Text>
+                    </View>
+                    <View style={styles.exportSecretCard}>
+                      <Text style={styles.exportSecretLabel}>Wallet</Text>
+                      <Text style={styles.settingsMono}>{discoverWallet ? `${discoverWallet.name} • ${discoverWallet.address}` : 'No Solana wallet selected'}</Text>
+                    </View>
+                    {discoverApprovalRequiresReauth ? (
                   <View style={styles.exportSecretCard}>
                     <Text style={styles.exportSecretLabel}>Signing mode</Text>
                     <Text style={styles.sectionHint}>
@@ -8269,9 +8358,15 @@ function GrapeApp() {
                 ) : null}
                 {discoverApprovalRequiresReauth && walletState.passkeyWallet && !passkeyAvailable && passkeyUnavailableMessage ? (
                   <Text style={styles.sectionHint}>{passkeyUnavailableMessage}</Text>
-                ) : null}
-                <View style={styles.walletToolsRow}>
-                  <PaperButton mode="outlined" style={[styles.paperSecondaryButton, styles.walletToolButton]} onPress={handleRejectDiscoverRequest}>
+                    ) : null}
+                  </View>
+                </ScrollView>
+                <View style={[styles.walletToolsRow, styles.discoverApprovalActions]}>
+                  <PaperButton
+                    mode="outlined"
+                    style={[styles.paperSecondaryButton, styles.walletToolButton, styles.discoverApprovalButton]}
+                    onPress={handleRejectDiscoverRequest}
+                  >
                     Reject
                   </PaperButton>
                   {discoverApprovalRequiresReauth ? (
@@ -8279,7 +8374,7 @@ function GrapeApp() {
                       {walletState.biometricEnabled && biometricAvailable && !walletState.passkeyWallet ? (
                         <PaperButton
                           mode="outlined"
-                          style={[styles.paperSecondaryButton, styles.walletToolButton]}
+                          style={[styles.paperSecondaryButton, styles.walletToolButton, styles.discoverApprovalButton]}
                           disabled={submitLoading || biometricLoading}
                           onPress={() => void handleApproveDiscoverRequestWithBiometric()}
                         >
@@ -8288,7 +8383,7 @@ function GrapeApp() {
                       ) : null}
                       <PaperButton
                         mode="contained"
-                        style={[styles.paperPrimaryButton, styles.walletToolButton]}
+                        style={[styles.paperPrimaryButton, styles.walletToolButton, styles.discoverApprovalButton]}
                         buttonColor={activeTheme.primaryButton}
                         textColor={activeTheme.primaryButtonText}
                         disabled={
@@ -8312,17 +8407,19 @@ function GrapeApp() {
                   ) : (
                     <PaperButton
                       mode="contained"
-                      style={[styles.paperPrimaryButton, styles.walletToolButton]}
+                      style={[styles.paperPrimaryButton, styles.walletToolButton, styles.discoverApprovalButton]}
                       buttonColor={activeTheme.primaryButton}
                       textColor={activeTheme.primaryButtonText}
                       disabled={submitLoading}
-                      onPress={() => void handleApproveDiscoverRequest()}
-                    >
-                      {submitLoading ? 'Approving...' : 'Approve'}
+                    onPress={() => void handleApproveDiscoverRequest()}
+                  >
+                      {submitLoading
+                        ? discoverApproval.request.method === 'connect' ? 'Connecting...' : 'Approving...'
+                        : discoverApproval.request.method === 'connect' ? 'Connect' : 'Approve'}
                     </PaperButton>
                   )}
                 </View>
-              </View>
+              </>
             ) : null}
           </PaperModal>
           <PaperModal
@@ -8421,7 +8518,7 @@ function GrapeApp() {
                           {assetSubtitle ? <Text style={styles.assetMeta}>{assetSubtitle}</Text> : null}
                         </View>
                         <View style={styles.assetValueStack}>
-                          <Text style={styles.assetValue}>{maskValue(asset.amountLabel, walletState.privacyMode)}</Text>
+                          <Text style={styles.assetValue}>{maskValue(formatMobileTokenQuantity(asset), walletState.privacyMode)}</Text>
                           {asset.valueLabel ? (
                             <Text style={styles.assetValueMeta}>{maskValue(asset.valueLabel, walletState.privacyMode)}</Text>
                           ) : null}
@@ -8486,7 +8583,7 @@ function GrapeApp() {
                           {assetSubtitle ? <Text style={styles.assetMeta}>{assetSubtitle}</Text> : null}
                         </View>
                         <View style={styles.assetValueStack}>
-                          <Text style={styles.assetValue}>{maskValue(asset.amountLabel, walletState.privacyMode)}</Text>
+                          <Text style={styles.assetValue}>{maskValue(formatMobileTokenQuantity(asset), walletState.privacyMode)}</Text>
                           {asset.valueLabel ? <Text style={styles.assetValueMeta}>{maskValue(asset.valueLabel, walletState.privacyMode)}</Text> : null}
                         </View>
                         {active ? <Feather name="check" size={18} color={activeTheme.text} style={styles.rowCheckIcon} /> : null}
@@ -8518,7 +8615,12 @@ function GrapeApp() {
               autoCapitalize="none"
               autoCorrect={false}
             />
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.swapPopularPills}>
+            <ScrollView
+              horizontal
+              style={styles.swapPopularScroller}
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.swapPopularPills}
+            >
               {popularSwapAssets.map((asset) => (
                 <Pressable
                   key={asset.address ?? asset.id}
@@ -8567,7 +8669,7 @@ function GrapeApp() {
                             {assetSubtitle ? <Text style={styles.assetMeta}>{assetSubtitle}</Text> : null}
                           </View>
                           <View style={styles.assetValueStack}>
-                            <Text style={styles.assetValue}>{maskValue(asset.amountLabel, walletState.privacyMode)}</Text>
+                            <Text style={styles.assetValue}>{maskValue(formatMobileTokenQuantity(asset), walletState.privacyMode)}</Text>
                             {asset.valueLabel ? <Text style={styles.assetValueMeta}>{maskValue(asset.valueLabel, walletState.privacyMode)}</Text> : null}
                           </View>
                           {active ? <Feather name="check" size={18} color={activeTheme.text} style={styles.rowCheckIcon} /> : null}
@@ -9433,11 +9535,22 @@ function createStyles(palette: MobileThemePalette) {
           : 'rgba(255,255,255,0.06)',
     gap: 10
   },
+  discoverBrowserBarCollapsed: {
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 16,
+    gap: 0
+  },
   discoverBrowserBarPrimary: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 10
+  },
+  discoverCollapsedNavigation: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2
   },
   discoverBrowserBarActions: {
     flexDirection: 'row',
@@ -9512,6 +9625,13 @@ function createStyles(palette: MobileThemePalette) {
     borderWidth: 1,
     borderColor: palette.panelBorder,
     backgroundColor: 'rgba(255,255,255,0.06)'
+  },
+  discoverCompactControlButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center'
   },
   discoverControlButtonDisabled: {
     opacity: 0.48
@@ -9975,6 +10095,9 @@ function createStyles(palette: MobileThemePalette) {
           : 'rgba(17, 10, 24, 0.94)'
   },
   discoverApprovalModal: {
+    height: '68%',
+    maxHeight: '84%',
+    overflow: 'hidden',
     backgroundColor:
       palette.id === 'apple'
         ? 'rgba(18,18,24,0.96)'
@@ -9982,16 +10105,42 @@ function createStyles(palette: MobileThemePalette) {
           ? 'rgba(255,250,244,0.98)'
           : 'rgba(18,10,10,0.97)'
   },
+  discoverApprovalScroll: {
+    flex: 1,
+    minHeight: 0
+  },
+  discoverApprovalContent: {
+    paddingBottom: 14
+  },
+  discoverApprovalActions: {
+    flexShrink: 0,
+    flexWrap: 'wrap',
+    minHeight: 58,
+    paddingTop: 14,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: palette.panelBorder
+  },
+  discoverApprovalButton: {
+    minHeight: 48
+  },
   sendAssetPickerHeader: {
     gap: 4,
     marginBottom: 12
   },
   sendAssetPickerList: {
-    marginTop: 14
+    marginTop: 14,
+    flexShrink: 1
+  },
+  swapPopularScroller: {
+    flexGrow: 0,
+    flexShrink: 0,
+    height: 52
   },
   swapPopularPills: {
+    alignItems: 'center',
     gap: 8,
-    paddingTop: 12,
+    paddingTop: 8,
+    paddingBottom: 8,
     paddingRight: 8
   },
   swapPopularPill: {
