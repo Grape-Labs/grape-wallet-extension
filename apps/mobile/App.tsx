@@ -45,6 +45,7 @@ import { DEFAULT_CUSTOM_THEME, DEFAULT_THEME, parseDeviceLinkPayloadText, type C
 import { chains, getMobileTheme, mobileThemes, type MobileThemePalette } from './src/theme';
 import {
   addWalletSet,
+  addMobileLedgerWallets,
   addPrivateKeyWallet,
   createBridgeActivity,
   createSwapActivity,
@@ -52,6 +53,7 @@ import {
   createSendActivity,
   createWalletMnemonic,
   createPrivateKeyWallet,
+  createMobileLedgerWalletState,
   createWalletSet,
   castWalletGovernanceVote,
   createMobileDeviceLinkSession,
@@ -105,6 +107,7 @@ import {
   searchMobileJupiterTokens
 } from './src/config';
 import type { MobileTokenMarketData, MobileTokenPriceHistoryPoint } from './src/config';
+import type { MobileLedgerAccount, MobileLedgerDevice } from './src/ledger';
 import type {
   MobileGovernanceEligibleDao,
   MobileGovernanceResponse,
@@ -135,7 +138,7 @@ type Screen = 'loading' | 'setup' | 'locked' | 'ready';
 type SetupMode = 'create' | 'passkey' | 'import';
 type SetupStep = 'choose' | 'details';
 type PasskeyRecoveryMode = 'passkey-phrase' | 'passkey-only' | 'trusted-recovery';
-type ImportKind = 'mnemonic' | 'private-key' | 'restore';
+type ImportKind = 'mnemonic' | 'private-key' | 'restore' | 'ledger';
 type MainTab = 'home' | 'receive' | 'discover' | 'governance' | 'activity' | 'settings';
 
 type DiscoverProviderRequest = {
@@ -666,6 +669,8 @@ function formatWalletSource(wallet: MobileWallet) {
       return 'Created in Grape';
     case 'imported-private-key':
       return 'Imported private key';
+    case 'ledger':
+      return 'Ledger hardware wallet';
     case 'imported-mnemonic':
     default:
       return 'Imported recovery phrase';
@@ -1208,6 +1213,12 @@ function GrapeApp() {
   const [mnemonicAccountCandidates, setMnemonicAccountCandidates] = useState<MobileDerivedAccountCandidate[]>([]);
   const [selectedMnemonicAccountPaths, setSelectedMnemonicAccountPaths] = useState<string[]>([]);
   const [mnemonicAccountScanLoading, setMnemonicAccountScanLoading] = useState(false);
+  const [ledgerDevices, setLedgerDevices] = useState<MobileLedgerDevice[]>([]);
+  const [ledgerAccounts, setLedgerAccounts] = useState<MobileLedgerAccount[]>([]);
+  const [selectedLedgerDeviceId, setSelectedLedgerDeviceId] = useState<string | null>(null);
+  const [selectedLedgerAccountPaths, setSelectedLedgerAccountPaths] = useState<string[]>([]);
+  const [ledgerScanLoading, setLedgerScanLoading] = useState(false);
+  const ledgerScanStopRef = useRef<(() => void) | null>(null);
   const [importPrivateKey, setImportPrivateKey] = useState('');
   const [importPrivateKeyChain, setImportPrivateKeyChain] = useState<MobileWalletState['selectedChain']>('solana');
   const [restorePayload, setRestorePayload] = useState('');
@@ -3129,7 +3140,105 @@ function GrapeApp() {
     );
   }
 
+  async function handleScanLedgerDevices() {
+    ledgerScanStopRef.current?.();
+    setLedgerDevices([]);
+    setLedgerAccounts([]);
+    setSelectedLedgerDeviceId(null);
+    setLedgerScanLoading(true);
+    setError(null);
+    try {
+      const { scanMobileLedgerDevices } = await import('./src/ledger');
+      const stop = await scanMobileLedgerDevices((device) => {
+        setLedgerDevices((current) => current.some((entry) => entry.id === device.id) ? current : [...current, device]);
+      });
+      ledgerScanStopRef.current = stop;
+      setTimeout(() => {
+        stop();
+        if (ledgerScanStopRef.current === stop) ledgerScanStopRef.current = null;
+        setLedgerScanLoading(false);
+      }, 10_000);
+    } catch (scanError) {
+      setLedgerScanLoading(false);
+      setError(scanError instanceof Error ? scanError.message : 'Unable to scan for Ledger devices.');
+    }
+  }
+
+  async function handleSelectLedgerDevice(device: MobileLedgerDevice) {
+    ledgerScanStopRef.current?.();
+    ledgerScanStopRef.current = null;
+    setLedgerScanLoading(true);
+    setSelectedLedgerDeviceId(device.id);
+    setLedgerAccounts([]);
+    setError(null);
+    try {
+      const { scanMobileLedgerAccounts } = await import('./src/ledger');
+      const accounts = await scanMobileLedgerAccounts(device.id, 5);
+      setLedgerAccounts(accounts);
+      setSelectedLedgerAccountPaths(
+        accounts.filter((account) => account.index === 0 || account.lamports > 0).map((account) => account.derivationPath)
+      );
+    } catch (scanError) {
+      setError(scanError instanceof Error ? scanError.message : 'Unable to read Ledger accounts.');
+    } finally {
+      setLedgerScanLoading(false);
+    }
+  }
+
+  function renderLedgerImport() {
+    return (
+      <View style={styles.mnemonicDiscovery}>
+        <Text style={styles.sectionHint}>Unlock your Ledger, enable Bluetooth, and open the Solana app.</Text>
+        <PaperButton
+          mode="outlined"
+          onPress={() => void handleScanLedgerDevices()}
+          loading={ledgerScanLoading && ledgerDevices.length === 0}
+          disabled={ledgerScanLoading && ledgerDevices.length === 0}
+          textColor={activeTheme.text}
+        >
+          Scan for Ledger
+        </PaperButton>
+        {ledgerDevices.map((device) => (
+          <Pressable
+            key={device.id}
+            style={selectedLedgerDeviceId === device.id ? styles.mnemonicAccountCardSelected : styles.mnemonicAccountCard}
+            onPress={() => void handleSelectLedgerDevice(device)}
+          >
+            <MaterialCommunityIcons name="usb-flash-drive-outline" size={24} color={activeTheme.mint} />
+            <View style={styles.mnemonicAccountCopy}>
+              <Text style={styles.mnemonicAccountTitle}>{device.name}</Text>
+              <Text style={styles.mnemonicAccountAddress}>Connect and scan Solana accounts</Text>
+            </View>
+          </Pressable>
+        ))}
+        {ledgerAccounts.map((account) => {
+          const selected = selectedLedgerAccountPaths.includes(account.derivationPath);
+          return (
+            <Pressable
+              key={account.derivationPath}
+              style={selected ? styles.mnemonicAccountCardSelected : styles.mnemonicAccountCard}
+              onPress={() => setSelectedLedgerAccountPaths((current) =>
+                selected ? current.filter((path) => path !== account.derivationPath) : [...current, account.derivationPath]
+              )}
+            >
+              <Checkbox status={selected ? 'checked' : 'unchecked'} color={activeTheme.mint} />
+              <View style={styles.mnemonicAccountCopy}>
+                <Text style={styles.mnemonicAccountTitle}>Ledger account {account.index + 1} · {account.balanceLabel}</Text>
+                <Text style={styles.mnemonicAccountAddress}>{shortenAddress(account.address)}</Text>
+                <Text style={styles.mnemonicAccountPath}>{account.derivationPath}</Text>
+              </View>
+            </Pressable>
+          );
+        })}
+      </View>
+    );
+  }
+
   async function handleImportWallet() {
+    if (importKind === 'ledger' && (!selectedLedgerDeviceId || selectedLedgerAccountPaths.length === 0)) {
+      setError('Connect a Ledger and choose at least one account.');
+      return;
+    }
     if (importKind === 'restore' && !restorePayload.trim()) {
       setError('Restore payload is required.');
       return;
@@ -3157,7 +3266,14 @@ function GrapeApp() {
     try {
       await waitForNextFrame();
       const nextState =
-        importKind === 'restore'
+        importKind === 'ledger'
+          ? await createMobileLedgerWalletState({
+              deviceId: selectedLedgerDeviceId!,
+              accounts: ledgerAccounts.filter((account) => selectedLedgerAccountPaths.includes(account.derivationPath)),
+              password: setupPassword,
+              credentialKind: setupCredentialKind
+            })
+          : importKind === 'restore'
           ? await importMobileDeviceLink({
               state: walletState,
               payload: restorePayload.trim(),
@@ -3244,6 +3360,11 @@ function GrapeApp() {
       return;
     }
 
+    if (setupMode === 'import' && importKind === 'ledger' && (!selectedLedgerDeviceId || selectedLedgerAccountPaths.length === 0)) {
+      setError('Connect a Ledger and choose at least one account.');
+      return;
+    }
+
     let completed = false;
     setSubmitLoading(true);
     setSubmitStatus(setupMode === 'create'
@@ -3259,6 +3380,12 @@ function GrapeApp() {
           state: walletState,
           mnemonic: generatedMnemonic,
           source: 'created'
+        });
+      } else if (importKind === 'ledger') {
+        nextState = await addMobileLedgerWallets({
+          state: walletState,
+          deviceId: selectedLedgerDeviceId!,
+          accounts: ledgerAccounts.filter((account) => selectedLedgerAccountPaths.includes(account.derivationPath))
         });
       } else if (importKind === 'restore') {
         nextState = await importMobileDeviceLink({
@@ -5102,9 +5229,10 @@ function GrapeApp() {
                       value={importKind}
                       onValueChange={(value) => setImportKind(value as ImportKind)}
                       buttons={[
-                        { value: 'mnemonic', label: 'Recovery phrase' },
-                        { value: 'private-key', label: 'Private key' },
-                        { value: 'restore', label: 'Restore from Grape' }
+                        { value: 'mnemonic', label: 'Phrase' },
+                        { value: 'private-key', label: 'Key' },
+                        { value: 'restore', label: 'Grape' },
+                        { value: 'ledger', label: 'Ledger' }
                       ]}
                       style={styles.paperSegments}
                       density="small"
@@ -5148,7 +5276,7 @@ function GrapeApp() {
                         textColor={activeTheme.text}
                       />
                     </>
-                  ) : (
+                  ) : importKind === 'restore' ? (
                     <>
                       <Text style={styles.sectionHint}>Scan the QR from another Grape device or paste the restore payload manually.</Text>
                       <View style={styles.walletToolsRow}>
@@ -5197,7 +5325,7 @@ function GrapeApp() {
                         textColor={activeTheme.text}
                       />
                     </>
-                  )}
+                  ) : renderLedgerImport()}
                 </>
               )}
 
@@ -7880,9 +8008,10 @@ function GrapeApp() {
                       value={importKind}
                       onValueChange={(value) => setImportKind(value as ImportKind)}
                       buttons={[
-                        { value: 'mnemonic', label: 'Recovery phrase' },
-                        { value: 'private-key', label: 'Private key' },
-                        { value: 'restore', label: 'Restore from Grape' }
+                        { value: 'mnemonic', label: 'Phrase' },
+                        { value: 'private-key', label: 'Key' },
+                        { value: 'restore', label: 'Grape' },
+                        { value: 'ledger', label: 'Ledger' }
                       ]}
                       style={styles.paperSegments}
                       density="small"
@@ -7926,7 +8055,7 @@ function GrapeApp() {
                         textColor={activeTheme.text}
                       />
                     </>
-                  ) : (
+                  ) : importKind === 'restore' ? (
                     <>
                       <Text style={styles.sectionHint}>Scan the QR from another Grape device or paste the restore payload manually.</Text>
                       <View style={styles.walletToolsRow}>
@@ -7975,7 +8104,7 @@ function GrapeApp() {
                         textColor={activeTheme.text}
                       />
                     </>
-                  )}
+                  ) : renderLedgerImport()}
                 </>
               )}
 

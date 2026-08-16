@@ -23,11 +23,23 @@ const config: ExpoConfig = {
       {
         cameraPermission: 'Allow Grape to use the camera to scan wallet restore QR codes.'
       }
+    ],
+    [
+      'react-native-ble-plx',
+      {
+        isBackgroundEnabled: false,
+        modes: ['central'],
+        bluetoothAlwaysPermission: 'Allow Grape to connect to your Ledger hardware wallet.'
+      }
     ]
   ],
   android: {
     package: 'xyz.grape.wallet',
-    permissions: ['android.permission.CAMERA'],
+    permissions: [
+      'android.permission.CAMERA',
+      'android.permission.BLUETOOTH_SCAN',
+      'android.permission.BLUETOOTH_CONNECT'
+    ],
     adaptiveIcon: {
       foregroundImage: './assets/icon-android-foreground.png',
       backgroundColor: '#100312'

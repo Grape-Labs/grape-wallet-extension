@@ -73,7 +73,7 @@ import type { MobileVerificationResponse } from './verification';
 import type { MobilePasskeyWalletConfig } from './passkeys';
 import { GRAPE_PASSKEY_WALLET_SPEC_VERSION } from '../../../packages/core/src/passkeys';
 
-export type MobileWalletSource = 'created' | 'imported-mnemonic' | 'imported-private-key';
+export type MobileWalletSource = 'created' | 'imported-mnemonic' | 'imported-private-key' | 'ledger';
 
 export type MobileWallet = {
   id: string;
@@ -83,6 +83,7 @@ export type MobileWallet = {
   derivationPath: string;
   source: MobileWalletSource;
   secretRef: string;
+  ledgerDeviceId?: string;
 };
 
 export type MobileActivity = {
@@ -551,6 +552,61 @@ export async function addPrivateKeyWallet(input: {
   return normalized;
 }
 
+export async function addMobileLedgerWallets(input: {
+  state: MobileWalletState;
+  deviceId: string;
+  accounts: MobileDerivedAccountCandidate[];
+}): Promise<MobileWalletState> {
+  if (input.accounts.length === 0) throw new Error('Choose at least one Ledger account.');
+  const duplicates = input.accounts.filter((account) =>
+    findExistingWalletByAddress(input.state.wallets, 'solana', account.address)
+  );
+  if (duplicates.length > 0) throw new Error('One or more selected Ledger accounts already exist in Grape.');
+
+  const walletLabel = getNextWalletLabel(input.state.wallets);
+  const addedWallets = input.accounts.map((account, index) => ({
+    ...createWallet(
+      input.accounts.length > 1 ? `${walletLabel} · Ledger ${index + 1}` : `${walletLabel} · Ledger`,
+      'solana',
+      account.address,
+      account.derivationPath,
+      'ledger',
+      ''
+    ),
+    ledgerDeviceId: input.deviceId
+  }));
+  const nextState = normalizeMobileWalletState({
+    ...input.state,
+    wallets: [...input.state.wallets, ...addedWallets],
+    selectedChain: 'solana',
+    selectedWalletIds: { ...input.state.selectedWalletIds, solana: addedWallets[0].id }
+  });
+  await persistMobileWalletState(nextState);
+  return nextState;
+}
+
+export async function createMobileLedgerWalletState(input: {
+  deviceId: string;
+  accounts: MobileDerivedAccountCandidate[];
+  password: string;
+  credentialKind?: MobileCredentialKind;
+}): Promise<MobileWalletState> {
+  const credentialKind = resolveMobileCredentialKind(input.credentialKind, false, false);
+  if (!validateMobileWalletCredential(input.password, credentialKind)) {
+    throw new Error(getInvalidMobileCredentialMessage(credentialKind));
+  }
+  const passwordSalt = createSecretRef();
+  const passwordHash = await createPasswordHash(input.password, passwordSalt);
+  const baseState = {
+    ...createEmptyMobileWalletState(),
+    setup: 'ready' as const,
+    credentialKind,
+    passwordSalt,
+    passwordHash
+  };
+  return addMobileLedgerWallets({ state: baseState, deviceId: input.deviceId, accounts: input.accounts });
+}
+
 export async function removeMobileWallet(input: {
   state: MobileWalletState;
   walletId: string;
@@ -563,7 +619,9 @@ export async function removeMobileWallet(input: {
   const nextWallets = input.state.wallets.filter((wallet) => wallet.id !== input.walletId);
   const nextActivities = input.state.activities.filter((activity) => activity.walletId !== input.walletId);
 
-  await deleteStoredSecretIfUnused(input.state.wallets, targetWallet.secretRef, input.walletId);
+  if (targetWallet.secretRef) {
+    await deleteStoredSecretIfUnused(input.state.wallets, targetWallet.secretRef, input.walletId);
+  }
 
   if (nextWallets.length === 0) {
     const emptyState = createEmptyMobileWalletState();
@@ -995,6 +1053,9 @@ export async function executeWalletSwap(input: {
   wallet: MobileWallet;
   quoteResponse: MobileJupiterQuoteResponse | Record<string, unknown>;
 }): Promise<MobileSwapExecuteResponse> {
+  if (input.wallet.source === 'ledger') {
+    throw new Error('Ledger swaps are not available on mobile yet.');
+  }
   const secret = await loadWalletSecret(input.wallet.secretRef);
   const genericQuote = input.quoteResponse as Record<string, unknown>;
   if (input.wallet.chain === 'ethereum' || input.wallet.chain === 'monad') {
@@ -1079,6 +1140,9 @@ export async function executeWalletBridge(input: {
   toChain: GrapeChain;
   destinationWalletId?: string;
 }): Promise<MobileBridgeExecuteResponse> {
+  if (input.wallet.source === 'ledger') {
+    throw new Error('Ledger bridge execution is not available on mobile yet.');
+  }
   const destinationWallet = resolveBridgeDestination(input.state, input.toChain, input.destinationWalletId);
   const transactionRequest = extractExecutableBridgeTransactionRequest(input.quoteResponse, input.wallet.chain);
   if (!transactionRequest) {
@@ -1292,6 +1356,9 @@ export async function castWalletGovernanceVote(input: {
   if (input.wallet.chain !== 'solana') {
     throw new Error('Governance voting is currently supported for Solana wallets only.');
   }
+  if (input.wallet.source === 'ledger') {
+    throw new Error('Ledger governance voting is not available on mobile yet.');
+  }
 
   const secret = await loadWalletSecretWithWalletFallback(input.state, input.wallet);
   const { resolveSolanaVaultSecret } = loadSolanaDeriveModule();
@@ -1475,7 +1542,7 @@ export async function sendWalletAsset(input: {
   recipient: string;
   amount: string;
 }): Promise<string> {
-  const secret = await loadWalletSecret(input.wallet.secretRef);
+  const secret = input.wallet.source === 'ledger' ? null : await loadWalletSecret(input.wallet.secretRef);
 
   if (input.wallet.chain !== 'solana' && /\.(?:sol|skr)$/i.test(input.recipient.trim())) {
     throw new Error(`${input.wallet.chain === 'sui' ? 'Sui' : input.wallet.chain === 'monad' ? 'Monad' : 'Ethereum'} sends require a wallet address. .sol and .skr domains are only supported on Solana.`);
@@ -1494,9 +1561,11 @@ export async function sendWalletAsset(input: {
       const web3 = loadSolanaWeb3Module();
       const { Connection, PublicKey } = web3;
       const connection = new Connection(getMobileSolanaRpcUrl(DEFAULT_SOLANA_NETWORK), 'confirmed');
-      const keypair = secret.kind === 'mnemonic'
+      const keypair = secret?.kind === 'mnemonic'
         ? resolveSolanaVaultSecret({ kind: 'mnemonic', mnemonic: secret.mnemonic })
-        : resolveSolanaVaultSecret({ kind: 'private-key', secretKey: secret.secretKey });
+        : secret?.kind === 'private-key'
+          ? resolveSolanaVaultSecret({ kind: 'private-key', secretKey: secret.secretKey })
+          : null;
       const owner = new PublicKey(input.wallet.address);
       const transaction =
         input.asset.tokenType === 'spl'
@@ -1538,6 +1607,17 @@ export async function sendWalletAsset(input: {
           `Not enough SOL. You need ${(Number(requiredLamports) / 1_000_000_000).toFixed(9)} SOL including network fee, but only ${(balanceLamports / 1_000_000_000).toFixed(9)} SOL is available.`
         );
       }
+      if (input.wallet.source === 'ledger') {
+        if (!input.wallet.ledgerDeviceId) throw new Error('This Ledger wallet is missing its paired device identifier.');
+        const { signAndSendMobileLedgerTransaction } = await import('./ledger');
+        return signAndSendMobileLedgerTransaction({
+          deviceId: input.wallet.ledgerDeviceId,
+          derivationPath: input.wallet.derivationPath,
+          publicKey: input.wallet.address,
+          transaction
+        });
+      }
+      if (!keypair) throw new Error('Wallet signing key is unavailable.');
       transaction.sign(keypair);
       return connection.sendRawTransaction(transaction.serialize());
     }
@@ -1548,6 +1628,7 @@ export async function sendWalletAsset(input: {
       throw new Error(getMobileSuiSendUnsupportedMessage());
     }
     case 'ethereum': {
+      if (!secret) throw new Error('Ledger Ethereum signing is not available on mobile yet.');
       const { sendEthereum, sendEthereumToken } = loadEthereumModule();
       const vaultSecret = secret.kind === 'mnemonic'
         ? { kind: 'mnemonic' as const, mnemonic: secret.mnemonic }
@@ -1567,6 +1648,7 @@ export async function sendWalletAsset(input: {
           });
     }
     case 'monad': {
+      if (!secret) throw new Error('Ledger Monad signing is not available on mobile yet.');
       const { sendMonad, sendMonadToken } = loadMonadModule();
       const vaultSecret = secret.kind === 'mnemonic'
         ? { kind: 'mnemonic' as const, mnemonic: secret.mnemonic }
@@ -1596,6 +1678,9 @@ export async function exportMobileWalletPrivateKey(input: {
   password?: string;
   allowUnlockedSession?: boolean;
 }): Promise<MobileWalletExport> {
+  if (input.wallet.source === 'ledger') {
+    throw new Error('Ledger private keys never leave the hardware device and cannot be exported.');
+  }
   const password = input.password?.trim() ?? '';
   const credentialLabel = getMobileCredentialLabel(input.state.credentialKind);
   if (password) {
@@ -1654,6 +1739,16 @@ export async function signMobileSolanaProviderMessage(input: {
   if (input.wallet.chain !== 'solana') {
     throw new Error('Grape Discover currently supports Solana wallet injection only.');
   }
+  if (input.wallet.source === 'ledger') {
+    if (!input.wallet.ledgerDeviceId) throw new Error('This Ledger wallet is missing its paired device identifier.');
+    const { signMobileLedgerMessage } = await import('./ledger');
+    const signature = await signMobileLedgerMessage({
+      deviceId: input.wallet.ledgerDeviceId,
+      derivationPath: input.wallet.derivationPath,
+      message: base64ToBytes(input.message)
+    });
+    return { publicKey: input.wallet.address, signature: bytesToBase64(signature) };
+  }
 
   const secret = await loadWalletSecretWithWalletFallback(input.state, input.wallet);
   const { resolveSolanaVaultSecret } = loadSolanaDeriveModule();
@@ -1677,6 +1772,16 @@ export async function signMobileSolanaProviderTransaction(input: {
   if (input.wallet.chain !== 'solana') {
     throw new Error('Grape Discover currently supports Solana wallet injection only.');
   }
+  if (input.wallet.source === 'ledger') {
+    if (!input.wallet.ledgerDeviceId) throw new Error('This Ledger wallet is missing its paired device identifier.');
+    const { signMobileLedgerSerializedTransaction } = await import('./ledger');
+    return { transaction: await signMobileLedgerSerializedTransaction({
+      deviceId: input.wallet.ledgerDeviceId,
+      derivationPath: input.wallet.derivationPath,
+      publicKey: input.wallet.address,
+      transaction: input.transaction
+    }) };
+  }
 
   const secret = await loadWalletSecretWithWalletFallback(input.state, input.wallet);
   const { resolveSolanaVaultSecret } = loadSolanaDeriveModule();
@@ -1699,6 +1804,20 @@ export async function signMobileSolanaProviderTransactions(input: {
   if (input.wallet.chain !== 'solana') {
     throw new Error('Grape Discover currently supports Solana wallet injection only.');
   }
+  if (input.wallet.source === 'ledger') {
+    if (!input.wallet.ledgerDeviceId) throw new Error('This Ledger wallet is missing its paired device identifier.');
+    const { signMobileLedgerSerializedTransaction } = await import('./ledger');
+    const transactions: string[] = [];
+    for (const transaction of input.transactions) {
+      transactions.push(await signMobileLedgerSerializedTransaction({
+        deviceId: input.wallet.ledgerDeviceId,
+        derivationPath: input.wallet.derivationPath,
+        publicKey: input.wallet.address,
+        transaction
+      }));
+    }
+    return { transactions };
+  }
 
   const secret = await loadWalletSecretWithWalletFallback(input.state, input.wallet);
   const { resolveSolanaVaultSecret } = loadSolanaDeriveModule();
@@ -1720,6 +1839,17 @@ export async function signAndSendMobileSolanaProviderTransaction(input: {
 }) {
   if (input.wallet.chain !== 'solana') {
     throw new Error('Grape Discover currently supports Solana wallet injection only.');
+  }
+  if (input.wallet.source === 'ledger') {
+    if (!input.wallet.ledgerDeviceId) throw new Error('This Ledger wallet is missing its paired device identifier.');
+    const { signAndSendMobileLedgerSerializedTransaction } = await import('./ledger');
+    const signature = await signAndSendMobileLedgerSerializedTransaction({
+      deviceId: input.wallet.ledgerDeviceId,
+      derivationPath: input.wallet.derivationPath,
+      publicKey: input.wallet.address,
+      transaction: input.transaction
+    });
+    return { signature };
   }
 
   const secret = await loadWalletSecretWithWalletFallback(input.state, input.wallet);
@@ -1753,6 +1883,9 @@ export async function createMobileDeviceLinkSession(input: {
   password?: string;
   allowUnlockedSession?: boolean;
 }): Promise<MobileDeviceLinkSession> {
+  if (input.wallet.source === 'ledger') {
+    throw new Error('Ledger wallets must be paired directly on each mobile device.');
+  }
   const credentialLabel = getMobileCredentialLabel(input.state.credentialKind);
   if (!input.allowUnlockedSession) {
     if (!input.password?.trim()) {

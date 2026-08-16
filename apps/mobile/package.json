@@ -21,6 +21,8 @@
     "@grape/mobile-passkeys": "workspace:*",
     "@grape/monad": "workspace:*",
     "@grape/solana": "workspace:*",
+    "@ledgerhq/hw-app-solana": "7.10.7",
+    "@ledgerhq/react-native-hw-transport-ble": "6.41.0",
     "@mysten/sui": "^2.6.0",
     "@react-native-async-storage/async-storage": "^2.2.0",
     "@solana/spl-governance": "^0.3.28",
@@ -45,7 +47,8 @@
     "react-native-safe-area-context": "~5.6.0",
     "react-native-svg": "15.12.1",
     "react-native-web": "^0.21.2",
-    "react-native-webview": "13.15.0"
+    "react-native-webview": "13.15.0",
+    "rxjs": "7.8.2"
   },
   "devDependencies": {
     "babel-preset-expo": "~54.0.9"

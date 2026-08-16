@@ -103,3 +103,20 @@ Device and App Store builds require an Apple Developer account and signing
 credentials. Deterministic passkey wallets are currently disabled on iOS while
 the native credential bridge is updated; standard imported and created wallets
 use the iOS Keychain and remain supported.
+
+## Ledger hardware wallets
+
+The mobile app supports importing Solana accounts from a Bluetooth Ledger device.
+This requires a native development or EAS build; Ledger is not available in Expo Go.
+
+To import:
+
+1. Unlock the Ledger, enable Bluetooth, and open the Solana app.
+2. In Grape, open Settings → Wallet manager → Import wallet → Ledger.
+3. Scan, select the device, choose one or more derived accounts, and import.
+4. Keep the Ledger nearby and confirm transactions physically when sending or signing.
+
+Only public addresses, derivation paths, and the paired device identifier are stored
+by Grape. Ledger private keys never leave the hardware device. Mobile Ledger support
+currently targets Solana over Bluetooth; USB-only devices and other chains are not yet
+supported.

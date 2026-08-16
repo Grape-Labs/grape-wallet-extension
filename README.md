@@ -166,6 +166,22 @@ The extension output is written to:
 apps/extension/dist
 ```
 
+The same build also creates a ready-to-distribute versioned archive and SHA-256 file:
+
+```text
+apps/extension/releases/grape_wallet_extension.<version>.zip
+apps/extension/releases/grape_wallet_extension.<version>.zip.sha256
+```
+
+Verify a downloaded archive from the releases directory with:
+
+```bash
+shasum -a 256 -c grape_wallet_extension.<version>.zip.sha256
+```
+
+The ZIP contains the contents of `dist` directly, so `manifest.json` is at the
+archive root and the file is ready for Chrome Web Store upload or manual distribution.
+
 ## Keep The Same Chromium Extension
 
 If you want Chromium to treat rebuilt packages as the same extension, keep one stable extension key and reuse it on every build.

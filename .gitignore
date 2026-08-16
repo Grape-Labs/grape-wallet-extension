@@ -9,5 +9,6 @@ coverage
 .env.local
 .env.*.local
 .extension-keys/
+apps/extension/releases/
 .DS_Store
 .claude
