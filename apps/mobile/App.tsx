@@ -9407,10 +9407,10 @@ function createStyles(palette: MobileThemePalette) {
     elevation: 0
   },
   homeHeroCard: {
-    paddingHorizontal: 2,
-    paddingTop: Platform.OS === 'android' ? 16 : 8,
-    paddingBottom: 16,
-    gap: 14,
+    paddingHorizontal: 4,
+    paddingTop: Platform.OS === 'android' ? 14 : 6,
+    paddingBottom: 18,
+    gap: 16,
     borderWidth: 0,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: palette.panelBorder,
@@ -9519,25 +9519,29 @@ function createStyles(palette: MobileThemePalette) {
     flex: 1
   },
   balanceBlock: {
-    gap: 4,
-    paddingVertical: 4
+    gap: 5,
+    paddingVertical: 12,
+    alignItems: 'center'
   },
   balanceHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 10
+    justifyContent: 'center',
+    gap: 8
   },
   cardBalance: {
     color: palette.text,
-    fontSize: 38,
+    fontSize: 46,
     fontWeight: '900',
-    letterSpacing: -1
+    letterSpacing: -1.8,
+    lineHeight: 52,
+    textAlign: 'center'
   },
   cardSubtle: {
     color: palette.muted,
     fontSize: 12,
-    flexShrink: 1
+    flexShrink: 1,
+    textAlign: 'center'
   },
   privacyToggleButton: {
     width: 28,
@@ -9565,42 +9569,41 @@ function createStyles(palette: MobileThemePalette) {
   },
   quickActionsRow: {
     flexDirection: 'row',
-    gap: 6,
+    gap: 8,
     flexWrap: 'nowrap'
   },
   quickActionButton: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 5,
-    minHeight: 58,
-    borderRadius: 14,
-    paddingVertical: 5,
-    backgroundColor: 'transparent'
+    gap: 7,
+    minHeight: 72,
+    borderRadius: 18,
+    paddingVertical: 9,
+    backgroundColor: palette.softPanel,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: palette.panelBorder
   },
   quickActionButtonDisabled: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 5,
-    minHeight: 58,
-    borderRadius: 14,
-    paddingVertical: 5,
-    backgroundColor: 'transparent',
+    gap: 7,
+    minHeight: 72,
+    borderRadius: 18,
+    paddingVertical: 9,
+    backgroundColor: palette.softPanel,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: palette.panelBorder,
     opacity: 0.5
   },
   quickActionIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor:
-      palette.id === 'champagne'
-        ? 'rgba(128,93,36,0.10)'
-        : 'rgba(255,255,255,0.08)',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: palette.panelBorder
+    backgroundColor: 'transparent'
   },
   quickActionGlyph: {
     color: palette.text,
@@ -9610,7 +9613,7 @@ function createStyles(palette: MobileThemePalette) {
   quickActionLabel: {
     color: palette.text,
     fontSize: 12,
-    fontWeight: '700'
+    fontWeight: '800'
   },
   quickActionLabelMuted: {
     color: palette.muted,
@@ -10060,11 +10063,12 @@ function createStyles(palette: MobileThemePalette) {
     gap: 0
   },
   homeAssetRow: {
-    minHeight: 64,
-    gap: 11,
-    paddingHorizontal: 2,
-    paddingVertical: 9,
-    borderRadius: 0
+    minHeight: 70,
+    gap: 13,
+    paddingHorizontal: 6,
+    paddingVertical: 11,
+    borderRadius: 16,
+    borderBottomWidth: 0
   },
   assetRowActive: {
     backgroundColor:
@@ -10111,7 +10115,8 @@ function createStyles(palette: MobileThemePalette) {
   assetValueStack: {
     alignItems: 'flex-end',
     justifyContent: 'center',
-    gap: 4
+    gap: 3,
+    maxWidth: '43%'
   },
   assetValue: {
     color: palette.text,

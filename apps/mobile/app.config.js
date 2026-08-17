@@ -1,6 +1,5 @@
-import type { ExpoConfig } from 'expo/config';
-
-const config: ExpoConfig = {
+/** @type {import('expo/config').ExpoConfig} */
+const config = {
   name: 'Grape',
   slug: 'grape-wallet-mobile',
   version: '0.4.0',
@@ -68,4 +67,4 @@ const config: ExpoConfig = {
   }
 };
 
-export default config;
+module.exports = config;

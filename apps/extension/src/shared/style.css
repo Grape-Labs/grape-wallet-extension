@@ -8168,7 +8168,12 @@ body[data-surface='popup'] .wallet-home-controls .menu-button {
 body[data-surface='popup'] .portfolio-copy {
   gap: 5px;
   margin: 0;
-  padding: 8px 0 0;
+  padding: 12px 0 4px;
+  text-align: center;
+}
+
+body[data-surface='popup'] .portfolio-label-row {
+  justify-content: center;
 }
 
 body[data-surface='popup'] .portfolio-label {
@@ -8177,9 +8182,9 @@ body[data-surface='popup'] .portfolio-label {
 }
 
 body[data-surface='popup'] .portfolio-copy .hero-balance {
-  font-size: 2.45rem;
+  font-size: 2.8rem;
   line-height: 1.02;
-  letter-spacing: -0.055em;
+  letter-spacing: -0.06em;
 }
 
 body[data-surface='popup'] .privacy-toggle-button {
@@ -8190,17 +8195,17 @@ body[data-surface='popup'] .privacy-toggle-button {
 }
 
 body[data-surface='popup'] .wallet-home-header-compact {
-  justify-content: flex-start;
+  justify-content: center;
   margin: 0;
 }
 
 body[data-surface='popup'] .wallet-address-inline {
   width: auto;
-  justify-content: flex-start;
+  justify-content: center;
 }
 
 body[data-surface='popup'] .wallet-address-copy-trigger {
-  justify-content: flex-start;
+  justify-content: center;
 }
 
 body[data-surface='popup'] .account-primary {
@@ -8214,26 +8219,29 @@ body[data-surface='popup'] .home-quick-actions {
 }
 
 body[data-surface='popup'] .home-quick-actions.quick-actions.compact .quick-action-card {
-  min-height: 58px;
-  gap: 5px;
-  padding: 5px 2px;
-  border: 0;
-  border-radius: 14px;
-  background: transparent;
-  color: var(--theme-muted);
-  font-size: 0.66rem;
+  min-height: 68px;
+  gap: 6px;
+  padding: 8px 3px;
+  border: 1px solid color-mix(in srgb, var(--theme-divider) 72%, transparent);
+  border-radius: 17px;
+  background: color-mix(in srgb, var(--theme-surface-soft) 88%, transparent);
+  color: var(--theme-text);
+  font-size: 0.68rem;
+  font-weight: 750;
 }
 
 body[data-surface='popup'] .home-quick-actions .quick-action-icon {
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--theme-accent) 15%, var(--theme-surface-soft));
+  background: transparent;
+  color: var(--theme-accent);
 }
 
 body[data-surface='popup'] .home-quick-actions .quick-action-card:hover {
   color: var(--theme-text);
-  background: var(--theme-surface-soft);
+  border-color: color-mix(in srgb, var(--theme-accent) 28%, var(--theme-divider));
+  background: var(--theme-surface-soft-hover);
 }
 
 body[data-surface='popup'] .wallet-home-tabs {
@@ -8266,16 +8274,17 @@ body[data-surface='popup'] .asset-panel-card .card-body {
 }
 
 body[data-surface='popup'] .asset-panel-card .token-item {
-  min-height: 62px;
-  padding: 9px 2px;
+  min-height: 68px;
+  padding: 11px 6px;
   border: 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--theme-divider) 72%, transparent);
-  border-radius: 0;
+  border-bottom: 0;
+  border-radius: 14px;
 }
 
 body[data-surface='popup'] .asset-panel-card .token-row-button:hover .token-item {
-  padding-inline: 7px;
+  padding-inline: 9px;
   border-radius: 12px;
+  background: color-mix(in srgb, var(--theme-surface-soft) 78%, transparent);
 }
 
 body[data-surface='popup'] .asset-panel-card .token-avatar {
