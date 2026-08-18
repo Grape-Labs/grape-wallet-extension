@@ -1196,7 +1196,7 @@ function isHexColor(value: string) {
 }
 
 function GrapeApp() {
-  const { width } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
   const [screen, setScreen] = useState<Screen>('loading');
   const [launchStatus, setLaunchStatus] = useState('Loading your wallet state');
   const [mainTab, setMainTab] = useState<MainTab>('home');
@@ -1249,6 +1249,7 @@ function GrapeApp() {
   const [sendLoading, setSendLoading] = useState(false);
   const [unlocked, setUnlocked] = useState(false);
   const [walletListExpanded, setWalletListExpanded] = useState(false);
+  const [homeWalletMenuExpanded, setHomeWalletMenuExpanded] = useState(false);
   const [chainPickerVisible, setChainPickerVisible] = useState(false);
   const [sendScreenVisible, setSendScreenVisible] = useState(false);
   const [sendAssetId, setSendAssetId] = useState<string | null>(null);
@@ -1460,10 +1461,15 @@ function GrapeApp() {
     () => dedupeVisibleWallets(walletState.wallets.filter((wallet) => wallet.chain === walletState.selectedChain)),
     [walletState.selectedChain, walletState.wallets]
   );
+  useEffect(() => {
+    setHomeWalletMenuExpanded(false);
+  }, [walletState.selectedChain]);
   const availableChains = useMemo(
     () => chains.filter((item) => walletState.wallets.some((wallet) => wallet.chain === item.id)),
     [walletState.wallets]
   );
+  const walletPickerHeight = Math.min(height - 160, Math.max(280, Math.min(520, 132 + chainWallets.length * 62)));
+  const chainPickerHeight = Math.min(height - 160, Math.max(360, Math.min(580, 140 + availableChains.length * 88)));
   const walletsByChain = useMemo(
     () =>
       chains
@@ -3173,10 +3179,11 @@ function GrapeApp() {
     setError(null);
     try {
       const { scanMobileLedgerAccounts } = await import('./src/ledger');
-      const accounts = await scanMobileLedgerAccounts(device.id, 5);
+      const accounts = await scanMobileLedgerAccounts(device.id, 10);
       setLedgerAccounts(accounts);
+      const fundedAccounts = accounts.filter((account) => account.lamports > 0);
       setSelectedLedgerAccountPaths(
-        accounts.filter((account) => account.index === 0 || account.lamports > 0).map((account) => account.derivationPath)
+        (fundedAccounts.length > 0 ? fundedAccounts : accounts.slice(0, 1)).map((account) => account.derivationPath)
       );
     } catch (scanError) {
       setError(scanError instanceof Error ? scanError.message : 'Unable to read Ledger accounts.');
@@ -3211,7 +3218,7 @@ function GrapeApp() {
             </View>
           </Pressable>
         ))}
-        {ledgerAccounts.map((account) => {
+        {ledgerAccounts.map((account, accountPosition) => {
           const selected = selectedLedgerAccountPaths.includes(account.derivationPath);
           return (
             <Pressable
@@ -3223,7 +3230,7 @@ function GrapeApp() {
             >
               <Checkbox status={selected ? 'checked' : 'unchecked'} color={activeTheme.mint} />
               <View style={styles.mnemonicAccountCopy}>
-                <Text style={styles.mnemonicAccountTitle}>Ledger account {account.index + 1} · {account.balanceLabel}</Text>
+                <Text style={styles.mnemonicAccountTitle}>Ledger account {accountPosition + 1} · {account.balanceLabel}</Text>
                 <Text style={styles.mnemonicAccountAddress}>{shortenAddress(account.address)}</Text>
                 <Text style={styles.mnemonicAccountPath}>{account.derivationPath}</Text>
               </View>
@@ -6131,33 +6138,17 @@ function GrapeApp() {
         </View>
 
         {chainWallets.length > 1 ? (
-          <View style={[styles.section, styles.homeSection]}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Wallets</Text>
-              <Text style={styles.sectionHint}>{chainWallets.length} on {selectedChainMeta.label}</Text>
-            </View>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.walletSwitchRow}
-            >
-              {chainWallets.map((wallet) => {
-                const active = wallet.id === selectedWallet?.id;
-                return (
-                  <Pressable
-                    key={wallet.id}
-                    style={[styles.walletSwitchChip, active ? styles.walletSwitchChipActive : null]}
-                    onPress={() => void handleSelectWallet(wallet.id, wallet.chain)}
-                  >
-                    <Text style={[styles.walletSwitchChipTitle, active ? styles.walletSwitchChipTitleActive : null]}>
-                      {wallet.name}
-                    </Text>
-                    <Text style={styles.walletSwitchChipAddress}>{shortenAddress(wallet.address)}</Text>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-          </View>
+          <Pressable
+            style={styles.homeWalletMenuButton}
+            onPress={() => setHomeWalletMenuExpanded(true)}
+            accessibilityRole="button"
+            accessibilityLabel={`Switch wallet. ${chainWallets.length} wallets on ${selectedChainMeta.label}`}
+          >
+            <MaterialCommunityIcons name="wallet-outline" size={18} color={activeTheme.text} />
+            <Text style={styles.homeWalletMenuButtonLabel}>Switch wallet</Text>
+            <Text style={styles.homeWalletMenuButtonCurrent} numberOfLines={1}>{selectedWallet?.name ?? 'Select'}</Text>
+            <Feather name="chevron-down" size={18} color={activeTheme.muted} />
+          </Pressable>
         ) : null}
 
         <View style={[styles.section, styles.homeSection]}>
@@ -8371,15 +8362,59 @@ function GrapeApp() {
         )}
         <Portal>
           <PaperModal
+            visible={homeWalletMenuExpanded}
+            onDismiss={() => setHomeWalletMenuExpanded(false)}
+            contentContainerStyle={[styles.sendAssetPickerModal, styles.walletPickerModal, { height: walletPickerHeight }]}
+          >
+            <View style={styles.modalSheetHeader}>
+              <View style={styles.modalSheetHeaderCopy}>
+                <Text style={styles.sectionTitle}>Switch wallet</Text>
+                <Text style={styles.sectionHint}>{chainWallets.length} wallets on {selectedChainMeta.label}</Text>
+              </View>
+              <Pressable style={styles.modalSheetClose} onPress={() => setHomeWalletMenuExpanded(false)} accessibilityLabel="Close wallet menu">
+                <Feather name="x" size={20} color={activeTheme.text} />
+              </Pressable>
+            </View>
+            <ScrollView style={styles.modalSheetScroll} contentContainerStyle={styles.homeWalletMenu} showsVerticalScrollIndicator={false}>
+              {chainWallets.map((wallet) => {
+                const active = wallet.id === selectedWallet?.id;
+                return (
+                  <Pressable
+                    key={wallet.id}
+                    style={[styles.homeWalletMenuItem, active ? styles.homeWalletMenuItemActive : null]}
+                    onPress={() => {
+                      setHomeWalletMenuExpanded(false);
+                      void handleSelectWallet(wallet.id, wallet.chain);
+                    }}
+                  >
+                    <View style={styles.homeWalletSwitcherIcon}>
+                      <MaterialCommunityIcons name="wallet-outline" size={17} color={active ? activeTheme.grape : activeTheme.text} />
+                    </View>
+                    <View style={styles.homeWalletMenuItemCopy}>
+                      <Text style={[styles.walletSwitchChipTitle, active ? styles.walletSwitchChipTitleActive : null]}>{wallet.name}</Text>
+                      <Text style={styles.walletSwitchChipAddress}>{shortenAddress(wallet.address)}</Text>
+                    </View>
+                    {active ? <Feather name="check" size={18} color={activeTheme.grape} /> : null}
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </PaperModal>
+          <PaperModal
             visible={chainPickerVisible}
             onDismiss={() => setChainPickerVisible(false)}
-            contentContainerStyle={[styles.sendAssetPickerModal, styles.chainPickerModal]}
+            contentContainerStyle={[styles.sendAssetPickerModal, styles.chainPickerModal, { height: chainPickerHeight }]}
           >
-            <View style={styles.sendAssetPickerHeader}>
-              <Text style={styles.sectionTitle}>Switch chain</Text>
-              <Text style={styles.sectionHint}>Choose which chain wallet to open from the top card.</Text>
+            <View style={styles.modalSheetHeader}>
+              <View style={styles.modalSheetHeaderCopy}>
+                <Text style={styles.sectionTitle}>Switch chain</Text>
+                <Text style={styles.sectionHint}>Choose which chain wallet to open.</Text>
+              </View>
+              <Pressable style={styles.modalSheetClose} onPress={() => setChainPickerVisible(false)} accessibilityLabel="Close chain menu">
+                <Feather name="x" size={20} color={activeTheme.text} />
+              </Pressable>
             </View>
-            <View style={styles.stack}>
+            <ScrollView style={styles.modalSheetScroll} contentContainerStyle={styles.modalSheetList} showsVerticalScrollIndicator={false}>
               {availableChains.map((chain) => {
                 const meta = chainMeta(chain.id);
                 const chainOptionWallets = dedupeVisibleWallets(walletState.wallets.filter((wallet) => wallet.chain === chain.id));
@@ -8410,7 +8445,7 @@ function GrapeApp() {
                   </Pressable>
                 );
               })}
-            </View>
+            </ScrollView>
           </PaperModal>
           <PaperModal
             visible={!!discoverApproval}
@@ -9837,22 +9872,56 @@ function createStyles(palette: MobileThemePalette) {
     fontSize: 14,
     fontWeight: '700'
   },
-  walletSwitchRow: {
-    gap: 10,
-    paddingRight: 6
-  },
-  walletSwitchChip: {
-    minWidth: 138,
+  homeWalletMenuButton: {
+    alignSelf: 'center',
+    maxWidth: '100%',
+    minHeight: 44,
     paddingHorizontal: 14,
-    paddingVertical: 12,
-    borderRadius: 18,
-    backgroundColor: 'rgba(255,255,255,0.05)',
-    borderWidth: 1,
+    borderRadius: 22,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: palette.panelBorder,
-    gap: 4
+    backgroundColor: palette.softPanel,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8
   },
-  walletSwitchChipActive: {
-    backgroundColor: 'rgba(255,255,255,0.1)'
+  homeWalletMenuButtonLabel: {
+    color: palette.text,
+    fontSize: 13,
+    fontWeight: '800'
+  },
+  homeWalletMenuButtonCurrent: {
+    color: palette.muted,
+    fontSize: 12,
+    fontWeight: '600',
+    maxWidth: 120
+  },
+  homeWalletSwitcherIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.06)'
+  },
+  homeWalletMenu: {
+    gap: 7
+  },
+  homeWalletMenuItem: {
+    minHeight: 54,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    borderRadius: 13,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10
+  },
+  homeWalletMenuItemActive: {
+    backgroundColor: 'rgba(255,255,255,0.07)'
+  },
+  homeWalletMenuItemCopy: {
+    flex: 1,
+    gap: 2
   },
   walletSwitchChipTitle: {
     color: palette.text,
@@ -10218,15 +10287,59 @@ function createStyles(palette: MobileThemePalette) {
     borderWidth: 1,
     borderColor: palette.panelBorder,
     backgroundColor: pickerModalBackground,
-    maxHeight: '76%'
+    maxHeight: '76%',
+    overflow: 'hidden'
   },
   chainPickerModal: {
+    paddingTop: Platform.OS === 'ios' ? 26 : 22,
+    paddingBottom: Platform.OS === 'ios' ? 24 : 20,
     backgroundColor:
       palette.id === 'apple'
         ? 'rgba(20, 24, 32, 0.94)'
         : palette.id === 'champagne'
           ? 'rgba(255, 248, 240, 0.96)'
           : 'rgba(17, 10, 24, 0.94)'
+  },
+  walletPickerModal: {
+    paddingTop: Platform.OS === 'ios' ? 26 : 22,
+    paddingBottom: Platform.OS === 'ios' ? 24 : 20,
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(20, 24, 32, 0.96)'
+        : palette.id === 'champagne'
+          ? 'rgba(255, 248, 240, 0.98)'
+          : 'rgba(17, 10, 24, 0.96)'
+  },
+  modalSheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 14,
+    paddingBottom: 16,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: palette.panelBorder
+  },
+  modalSheetHeaderCopy: {
+    flex: 1,
+    gap: 4
+  },
+  modalSheetClose: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: palette.softPanel,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: palette.panelBorder
+  },
+  modalSheetScroll: {
+    flex: 1,
+    minHeight: 0,
+    marginTop: 14
+  },
+  modalSheetList: {
+    gap: 12,
+    paddingBottom: 4
   },
   discoverApprovalModal: {
     height: '68%',

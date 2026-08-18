@@ -56,19 +56,27 @@ export async function scanMobileLedgerDevices(
   return () => subscription.unsubscribe();
 }
 
-export async function scanMobileLedgerAccounts(deviceId: string, count = 5): Promise<MobileLedgerAccount[]> {
+export async function scanMobileLedgerAccounts(deviceId: string, count = 10): Promise<MobileLedgerAccount[]> {
   const transport = await TransportBLE.open(deviceId, 15_000);
   try {
     const ledger = new Solana(transport);
     const web3 = await import('@solana/web3.js');
     const connection = new web3.Connection(getMobileSolanaRpcUrl('mainnet-beta'), 'confirmed');
+    const pathCandidates = Array.from({ length: count }, (_value, index) => [
+      { index, derivationPath: `44'/501'/${index}'` },
+      { index, derivationPath: `44'/501'/${index}'/0'` }
+    ]).flat();
     const accounts: Array<Omit<MobileLedgerAccount, 'lamports' | 'balanceLabel'>> = [];
-    for (let index = 0; index < count; index += 1) {
-      const derivationPath = `44'/501'/${index}'/0'`;
+    const seenAddresses = new Set<string>();
+    for (const candidate of pathCandidates) {
+      const { index, derivationPath } = candidate;
       const result = await ledger.getAddress(derivationPath, false);
+      const address = new web3.PublicKey(result.address).toBase58();
+      if (seenAddresses.has(address)) continue;
+      seenAddresses.add(address);
       accounts.push({
         index,
-        address: new web3.PublicKey(result.address).toBase58(),
+        address,
         derivationPath
       });
     }
@@ -80,7 +88,7 @@ export async function scanMobileLedgerAccounts(deviceId: string, count = 5): Pro
         lamports,
         balanceLabel: `${(lamports / 1_000_000_000).toLocaleString(undefined, { maximumFractionDigits: 6 })} SOL`
       };
-    });
+    }).sort((left, right) => right.lamports - left.lamports || left.index - right.index || left.derivationPath.localeCompare(right.derivationPath));
   } finally {
     await transport.close().catch(() => undefined);
   }
