@@ -126,6 +126,7 @@ export type MobileWalletState = {
   privacyMode: boolean;
   hideZeroBalances: boolean;
   hideLowValueTokens: boolean;
+  rebalanceAddonEnabled: boolean;
   biometricEnabled: boolean;
   activities: MobileActivity[];
 };
@@ -323,6 +324,7 @@ export function createEmptyMobileWalletState(): MobileWalletState {
     privacyMode: false,
     hideZeroBalances: true,
     hideLowValueTokens: false,
+    rebalanceAddonEnabled: false,
     biometricEnabled: false,
     activities: []
   };
@@ -361,6 +363,24 @@ export async function loadMobileWalletState(): Promise<MobileWalletState> {
 export async function persistMobileWalletState(state: MobileWalletState) {
   const normalized = normalizeMobileWalletState(state);
   await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
+}
+
+export async function updateMobileWalletLabel(
+  state: MobileWalletState,
+  walletId: string,
+  label: string
+): Promise<MobileWalletState> {
+  const normalizedLabel = label.trim();
+  if (!normalizedLabel) throw new Error('Wallet label cannot be empty.');
+  if (normalizedLabel.length > 64) throw new Error('Wallet label must be 64 characters or fewer.');
+  if (!state.wallets.some((wallet) => wallet.id === walletId)) throw new Error('Wallet not found.');
+
+  const nextState = normalizeMobileWalletState({
+    ...state,
+    wallets: state.wallets.map((wallet) => wallet.id === walletId ? { ...wallet, name: normalizedLabel } : wallet)
+  });
+  await persistMobileWalletState(nextState);
+  return nextState;
 }
 
 export async function createWalletSet(input: {
@@ -418,6 +438,7 @@ export async function createWalletSet(input: {
     privacyMode: false,
     hideZeroBalances: true,
     hideLowValueTokens: false,
+    rebalanceAddonEnabled: false,
     biometricEnabled: false,
     activities: []
   };
@@ -510,6 +531,7 @@ export async function createPrivateKeyWallet(input: {
     privacyMode: false,
     hideZeroBalances: true,
     hideLowValueTokens: false,
+    rebalanceAddonEnabled: false,
     biometricEnabled: false,
     activities: []
   };
@@ -2642,6 +2664,7 @@ function normalizeMobileWalletState(state: MobileWalletState): MobileWalletState
     themeMotionIntensity: normalizeThemeMotionIntensity(state.themeMotionIntensity),
     autoConnectEnabled: state.autoConnectEnabled ?? DEFAULT_AUTO_CONNECT_ENABLED,
     dappApprovalMode: normalizeDappApprovalMode(state.dappApprovalMode),
+    rebalanceAddonEnabled: state.rebalanceAddonEnabled === true,
     trustedDappOrigins: normalizeTrustedDappOrigins(state.trustedDappOrigins),
     trackedReputationSpaceIds: normalizeTrackedReputationSpaceIds(state.trackedReputationSpaceIds),
     trackedVerificationSpaceIds: normalizeTrackedVerificationSpaceIds(state.trackedVerificationSpaceIds),

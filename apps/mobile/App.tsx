@@ -13,7 +13,6 @@ import {
   ImageBackground,
   KeyboardAvoidingView,
   Linking,
-  PanResponder,
   Platform,
   Pressable,
   ScrollView,
@@ -93,6 +92,7 @@ import {
   updateTrackedGovernanceDaos,
   updateTrackedReputationSpaces,
   updateTrackedVerificationSpaces,
+  updateMobileWalletLabel,
   unlockMobileWalletState,
   validateMobileWalletCredential
 } from './src/wallet';
@@ -242,6 +242,15 @@ const GRAPE_DISCOVER_FAVORITES = [
   { label: 'Access', subtitle: 'Open token-gated communities', url: 'https://access.governance.so' },
   { label: 'Reputation', subtitle: 'Explore community reputation', url: OG_REPUTATION_DISCOVERY_URL },
   { label: 'Governance', subtitle: 'Participate in DAO proposals', url: 'https://governance.so' }
+] as const;
+
+const SOLANA_DISCOVER_FAVORITES = [
+  { label: 'Jupiter', subtitle: 'Swap, trade, and earn', url: 'https://jup.ag' },
+  { label: 'Famous Fox Federation', subtitle: 'Fox tools and ecosystem', url: 'https://famousfoxes.com' },
+  { label: 'Tensor', subtitle: 'Trade Solana NFTs', url: 'https://www.tensor.trade' },
+  { label: 'Magic Eden', subtitle: 'Explore Solana collectibles', url: 'https://magiceden.io' },
+  { label: 'Kamino', subtitle: 'Borrow, lend, and liquidity', url: 'https://kamino.com' },
+  { label: 'Sanctum', subtitle: 'Liquid staking on Solana', url: 'https://app.sanctum.so' }
 ] as const;
 
 const CUSTOM_THEME_FIELDS: Array<{ key: keyof CustomThemeConfig; label: string }> = [
@@ -675,6 +684,23 @@ function formatWalletSource(wallet: MobileWallet) {
     default:
       return 'Imported recovery phrase';
   }
+}
+
+const walletSourceOrder: MobileWallet['source'][] = ['created', 'imported-mnemonic', 'imported-private-key', 'ledger'];
+
+function getWalletSourceGroupLabel(source: MobileWallet['source']) {
+  switch (source) {
+    case 'created': return 'Created in Grape';
+    case 'imported-mnemonic': return 'Recovery phrase imports';
+    case 'imported-private-key': return 'Private key imports';
+    case 'ledger': return 'Ledger wallets';
+  }
+}
+
+function groupWalletsBySource(wallets: MobileWallet[]) {
+  return walletSourceOrder
+    .map((source) => ({ source, label: getWalletSourceGroupLabel(source), wallets: wallets.filter((wallet) => wallet.source === source) }))
+    .filter((group) => group.wallets.length > 0);
 }
 
 function maskValue(value: string, privacyMode: boolean) {
@@ -1250,6 +1276,8 @@ function GrapeApp() {
   const [unlocked, setUnlocked] = useState(false);
   const [walletListExpanded, setWalletListExpanded] = useState(false);
   const [homeWalletMenuExpanded, setHomeWalletMenuExpanded] = useState(false);
+  const [labelWallet, setLabelWallet] = useState<MobileWallet | null>(null);
+  const [walletLabelInput, setWalletLabelInput] = useState('');
   const [chainPickerVisible, setChainPickerVisible] = useState(false);
   const [sendScreenVisible, setSendScreenVisible] = useState(false);
   const [sendAssetId, setSendAssetId] = useState<string | null>(null);
@@ -1282,6 +1310,7 @@ function GrapeApp() {
   const [rebalanceExecuting, setRebalanceExecuting] = useState(false);
   const [rebalanceProgress, setRebalanceProgress] = useState<string | null>(null);
   const [rebalanceRiskAccepted, setRebalanceRiskAccepted] = useState(false);
+  const [rebalanceEnablePrompt, setRebalanceEnablePrompt] = useState(false);
   const [bridgeScreenVisible, setBridgeScreenVisible] = useState(false);
   const [bridgeAmount, setBridgeAmount] = useState('');
   const [bridgeToChain, setBridgeToChain] = useState<MobileWalletState['selectedChain']>('ethereum');
@@ -1412,20 +1441,6 @@ function GrapeApp() {
   const screenPadding = isCompact ? 10 : 12;
   const footerInset = isCompact ? 16 : 20;
   const footerClearance = footerInset + 80;
-  const discoverHomeSwipeResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onMoveShouldSetPanResponderCapture: (_event, gestureState) =>
-          gestureState.dx < -28 && Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.5,
-        onPanResponderRelease: (_event, gestureState) => {
-          if (gestureState.dx < -80 && Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.5) {
-            setMainTab('home');
-          }
-        },
-        onPanResponderTerminationRequest: () => true
-      }),
-    []
-  );
   const deviceLinkQrSize = Math.max(240, Math.min(width - 120, 320));
   const paperTheme = useMemo(
     () => ({
@@ -1470,16 +1485,8 @@ function GrapeApp() {
   );
   const walletPickerHeight = Math.min(height - 160, Math.max(280, Math.min(520, 132 + chainWallets.length * 62)));
   const chainPickerHeight = Math.min(height - 160, Math.max(360, Math.min(580, 140 + availableChains.length * 88)));
-  const walletsByChain = useMemo(
-    () =>
-      chains
-        .map((chain) => ({
-          chain,
-          wallets: dedupeVisibleWallets(walletState.wallets.filter((wallet) => wallet.chain === chain.id))
-        }))
-        .filter((entry) => entry.wallets.length > 0),
-    [walletState.wallets]
-  );
+  const walletGroups = useMemo(() => groupWalletsBySource(dedupeVisibleWallets(walletState.wallets)), [walletState.wallets]);
+  const chainWalletGroups = useMemo(() => groupWalletsBySource(chainWallets), [chainWallets]);
   const filteredActivity = useMemo(
     () => {
       if (!selectedWallet) {
@@ -3530,6 +3537,19 @@ function GrapeApp() {
     setBridgeScreenVisible(false);
   }
 
+  async function handleSaveWalletLabel() {
+    if (!labelWallet) return;
+    try {
+      const nextState = await updateMobileWalletLabel(walletState, labelWallet.id, walletLabelInput);
+      setWalletState(nextState);
+      setLabelWallet(null);
+      setWalletLabelInput('');
+      setError(null);
+    } catch (unknownError) {
+      setError(unknownError instanceof Error ? unknownError.message : 'Unable to update wallet label.');
+    }
+  }
+
   async function handleRefreshAssets() {
     if (!selectedWallet) {
       return;
@@ -3864,6 +3884,17 @@ function GrapeApp() {
       ...walletState,
       hideLowValueTokens: value
     });
+  }
+
+  async function handleSetRebalanceAddonEnabled(value: boolean) {
+    await saveState({ ...walletState, rebalanceAddonEnabled: value });
+    setRebalanceEnablePrompt(false);
+    setRebalanceRiskAccepted(false);
+    if (!value) {
+      setRebalanceScreenVisible(false);
+      setRebalancePlan([]);
+      setRebalanceProgress(null);
+    }
   }
 
   async function handleSetBiometricEnabled(value: boolean) {
@@ -4717,23 +4748,7 @@ function GrapeApp() {
   }
 
   function openRebalanceScreen() {
-    if (!rebalanceRiskAccepted) {
-      Alert.alert(
-        'Experimental rebalancer',
-        'A rebalance uses multiple independent on-chain swaps. If a later quote or signature fails, earlier swaps remain final and the portfolio may be partially rebalanced.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'I understand',
-            onPress: () => {
-              setRebalanceRiskAccepted(true);
-              enterRebalanceScreen();
-            }
-          }
-        ]
-      );
-      return;
-    }
+    if (!walletState.rebalanceAddonEnabled) return;
     enterRebalanceScreen();
   }
 
@@ -5522,10 +5537,7 @@ function GrapeApp() {
 
   function renderDiscoverTab() {
     return (
-      <View
-        style={[styles.discoverScreen, { paddingBottom: footerClearance }]}
-        {...discoverHomeSwipeResponder.panHandlers}
-      >
+      <View style={[styles.discoverScreen, { paddingBottom: footerClearance }]}>
         <View
           style={[
             styles.discoverBrowserBar,
@@ -5533,32 +5545,14 @@ function GrapeApp() {
           ]}
         >
           <View style={styles.discoverBrowserBarPrimary}>
-            {!discoverControlsExpanded ? (
-              <View style={styles.discoverCollapsedNavigation}>
-                <Pressable
-                  style={[styles.discoverCompactControlButton, !discoverCanGoBack ? styles.discoverControlButtonDisabled : null]}
-                  disabled={!discoverCanGoBack}
-                  hitSlop={6}
-                  onPress={() => discoverWebViewRef.current?.goBack()}
-                >
-                  <Feather name="chevron-left" size={17} color={discoverCanGoBack ? activeTheme.text : activeTheme.muted} />
-                </Pressable>
-                <Pressable
-                  style={[styles.discoverCompactControlButton, !discoverCanGoForward ? styles.discoverControlButtonDisabled : null]}
-                  disabled={!discoverCanGoForward}
-                  hitSlop={6}
-                  onPress={() => discoverWebViewRef.current?.goForward()}
-                >
-                  <Feather name="chevron-right" size={17} color={discoverCanGoForward ? activeTheme.text : activeTheme.muted} />
-                </Pressable>
+            {discoverControlsExpanded ? (
+              <View style={styles.discoverHeaderCopy}>
+                <Text style={styles.discoverBrowserTitle}>Grape Discover</Text>
+                <Text style={styles.discoverWebviewMeta} numberOfLines={1} ellipsizeMode="middle">
+                  {formatDiscoverUrlDisplay(discoverCurrentUrl || discoverUrl)}
+                </Text>
               </View>
             ) : null}
-            <View style={styles.discoverHeaderCopy}>
-              {discoverControlsExpanded ? <Text style={styles.discoverBrowserTitle}>Grape Discover</Text> : null}
-              <Text style={styles.discoverWebviewMeta} numberOfLines={1} ellipsizeMode="middle">
-                {formatDiscoverUrlDisplay(discoverCurrentUrl || discoverUrl)}
-              </Text>
-            </View>
             <View style={styles.discoverBrowserBarActions}>
               {discoverControlsExpanded ? (
                 <View style={styles.discoverBetaPill}>
@@ -5652,6 +5646,19 @@ function GrapeApp() {
                   </Pressable>
                 ))}
               </ScrollView>
+              <Text style={styles.swapPickerSectionLabel}>POPULAR SOLANA APPS</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.discoverFavoriteRow}>
+                {SOLANA_DISCOVER_FAVORITES.map((favorite) => (
+                  <Pressable
+                    key={favorite.url}
+                    style={styles.discoverFavoriteCard}
+                    onPress={() => handleDiscoverNavigate(favorite.url)}
+                  >
+                    <Text style={styles.discoverFavoriteTitle}>{favorite.label}</Text>
+                    <Text style={styles.discoverFavoriteSubtitle}>{favorite.subtitle}</Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
             </>
           ) : null}
         </View>
@@ -5685,6 +5692,7 @@ function GrapeApp() {
                 setDiscoverLoadError(null);
               }}
               setSupportMultipleWindows={false}
+              allowsBackForwardNavigationGestures={false}
               javaScriptEnabled
               sharedCookiesEnabled
               thirdPartyCookiesEnabled
@@ -6065,11 +6073,23 @@ function GrapeApp() {
                 </Text>
               </View>
             </View>
-            <Pressable style={styles.refreshChip} onPress={() => void handleRefreshAssets()}>
-              <Animated.View style={[styles.refreshGlyphWrap, { transform: [{ rotate: refreshRotation }] }]}>
-                <MaterialCommunityIcons name="refresh" size={22} color={activeTheme.text} />
-              </Animated.View>
-            </Pressable>
+            <View style={styles.homeHeaderActions}>
+              {chainWallets.length > 1 ? (
+                <Pressable
+                  style={styles.refreshChip}
+                  onPress={() => setHomeWalletMenuExpanded(true)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Switch wallet. ${chainWallets.length} wallets on ${selectedChainMeta.label}`}
+                >
+                  <MaterialCommunityIcons name="wallet-outline" size={21} color={activeTheme.text} />
+                </Pressable>
+              ) : null}
+              <Pressable style={styles.refreshChip} onPress={() => void handleRefreshAssets()} accessibilityLabel="Refresh assets">
+                <Animated.View style={[styles.refreshGlyphWrap, { transform: [{ rotate: refreshRotation }] }]}>
+                  <MaterialCommunityIcons name="refresh" size={22} color={activeTheme.text} />
+                </Animated.View>
+              </Pressable>
+            </View>
           </View>
 
           <View style={styles.balanceBlock}>
@@ -6135,21 +6155,22 @@ function GrapeApp() {
               <Text style={styles.quickActionLabel}>Receive</Text>
             </Pressable>
           </View>
+          {selectedWallet?.chain === 'solana' && walletState.rebalanceAddonEnabled ? (
+            <Pressable
+              style={styles.rebalanceShortcut}
+              onPress={openRebalanceScreen}
+              accessibilityRole="button"
+              accessibilityLabel="Open Solana portfolio rebalancer"
+            >
+              <MaterialCommunityIcons name="chart-donut-variant" size={21} color={activeTheme.mint} />
+              <View style={styles.rebalanceShortcutCopy}>
+                <Text style={styles.rebalanceShortcutTitle}>Rebalance portfolio</Text>
+                <Text style={styles.rebalanceShortcutHint}>Set target weights and execute through Jupiter</Text>
+              </View>
+              <Feather name="chevron-right" size={18} color={activeTheme.muted} />
+            </Pressable>
+          ) : null}
         </View>
-
-        {chainWallets.length > 1 ? (
-          <Pressable
-            style={styles.homeWalletMenuButton}
-            onPress={() => setHomeWalletMenuExpanded(true)}
-            accessibilityRole="button"
-            accessibilityLabel={`Switch wallet. ${chainWallets.length} wallets on ${selectedChainMeta.label}`}
-          >
-            <MaterialCommunityIcons name="wallet-outline" size={18} color={activeTheme.text} />
-            <Text style={styles.homeWalletMenuButtonLabel}>Switch wallet</Text>
-            <Text style={styles.homeWalletMenuButtonCurrent} numberOfLines={1}>{selectedWallet?.name ?? 'Select'}</Text>
-            <Feather name="chevron-down" size={18} color={activeTheme.muted} />
-          </Pressable>
-        ) : null}
 
         <View style={[styles.section, styles.homeSection]}>
           <View style={styles.sectionHeader}>
@@ -7370,6 +7391,75 @@ function GrapeApp() {
                 thumbColor={walletState.hideLowValueTokens ? '#f7f2ff' : '#d0c0df'}
               />
             </View>
+            {selectedWallet?.chain === 'solana' ? (
+              <View style={styles.stack}>
+                <View style={styles.settingsRow}>
+                  <View style={styles.settingsCopy}>
+                    <Text style={styles.settingsTitle}>Experimental rebalancer</Text>
+                    <Text style={styles.sectionHint}>Opt in to multi-transaction portfolio rebalancing through Jupiter.</Text>
+                  </View>
+                  <Switch
+                    value={walletState.rebalanceAddonEnabled}
+                    onValueChange={(value) => {
+                      if (value) {
+                        setRebalanceRiskAccepted(false);
+                        setRebalanceEnablePrompt(true);
+                      } else {
+                        void handleSetRebalanceAddonEnabled(false);
+                      }
+                    }}
+                    trackColor={{ true: activeTheme.primaryButton, false: 'rgba(255,255,255,0.16)' }}
+                    thumbColor={walletState.rebalanceAddonEnabled ? '#f7f2ff' : '#d0c0df'}
+                  />
+                </View>
+                {rebalanceEnablePrompt && !walletState.rebalanceAddonEnabled ? (
+                  <View style={styles.inlineErrorCard}>
+                    <Text style={styles.settingsTitle}>Understand the risks before enabling</Text>
+                    <Text style={styles.sectionHint}>• Each swap is an independent on-chain transaction.</Text>
+                    <Text style={styles.sectionHint}>• Earlier swaps remain final if a later quote, signature, or transaction fails.</Text>
+                    <Text style={styles.sectionHint}>• Prices, routes, slippage, fees, and liquidity can change during execution.</Text>
+                    <Text style={styles.sectionHint}>• Tokenized assets may have issuer, custody, transfer, and jurisdiction restrictions.</Text>
+                    <View style={styles.settingsRow}>
+                      <Checkbox
+                        status={rebalanceRiskAccepted ? 'checked' : 'unchecked'}
+                        onPress={() => setRebalanceRiskAccepted((accepted) => !accepted)}
+                        color={activeTheme.primaryButton}
+                      />
+                      <Pressable
+                        style={styles.settingsCopy}
+                        onPress={() => setRebalanceRiskAccepted((accepted) => !accepted)}
+                        accessibilityRole="checkbox"
+                        accessibilityState={{ checked: rebalanceRiskAccepted }}
+                      >
+                        <Text style={styles.sectionHint}>I understand that execution is non-atomic and may stop after partial completion.</Text>
+                      </Pressable>
+                    </View>
+                    <View style={styles.walletToolsRow}>
+                      <PaperButton
+                        mode="contained"
+                        disabled={!rebalanceRiskAccepted}
+                        style={[styles.paperPrimaryButton, styles.walletToolButton]}
+                        buttonColor={activeTheme.primaryButton}
+                        textColor={activeTheme.primaryButtonText}
+                        onPress={() => void handleSetRebalanceAddonEnabled(true)}
+                      >
+                        Enable rebalancer
+                      </PaperButton>
+                      <PaperButton
+                        mode="outlined"
+                        style={[styles.paperSecondaryButton, styles.walletToolButton]}
+                        onPress={() => {
+                          setRebalanceEnablePrompt(false);
+                          setRebalanceRiskAccepted(false);
+                        }}
+                      >
+                        Cancel
+                      </PaperButton>
+                    </View>
+                  </View>
+                ) : null}
+              </View>
+            ) : null}
             <View style={styles.settingsRow}>
               <View style={styles.settingsCopy}>
                 <Text style={styles.settingsTitle}>Biometric unlock</Text>
@@ -8163,14 +8253,14 @@ function GrapeApp() {
                   )}
                 </Text>
               </View>
-              {walletsByChain.map(({ chain, wallets }) => {
-                const meta = chainMeta(chain.id);
+              {walletGroups.map(({ source, label, wallets }) => {
                 return (
-                  <View key={chain.id} style={styles.walletGroupSection}>
-                    <Text style={styles.walletGroupTitle}>{chain.label}</Text>
+                  <View key={source} style={styles.walletGroupSection}>
+                    <Text style={styles.walletGroupTitle}>{label}</Text>
                     <View style={styles.stack}>
                       {wallets.map((wallet) => {
                         const active = wallet.id === walletState.selectedWalletIds[wallet.chain];
+                        const meta = chainMeta(wallet.chain);
                         return (
                           <Pressable
                             key={wallet.id}
@@ -8199,6 +8289,17 @@ function GrapeApp() {
                                   <Text style={styles.activePillText}>Active</Text>
                                 </View>
                               ) : null}
+                              <Pressable
+                                style={styles.walletDeleteButton}
+                                accessibilityLabel={`Edit label for ${wallet.name}`}
+                                onPress={(event) => {
+                                  event.stopPropagation();
+                                  setLabelWallet(wallet);
+                                  setWalletLabelInput(wallet.name);
+                                }}
+                              >
+                                <Feather name="edit-2" size={16} color={activeTheme.text} />
+                              </Pressable>
                               <Pressable
                                 style={styles.walletDeleteButton}
                                 onPress={(event) => {
@@ -8376,29 +8477,70 @@ function GrapeApp() {
               </Pressable>
             </View>
             <ScrollView style={styles.modalSheetScroll} contentContainerStyle={styles.homeWalletMenu} showsVerticalScrollIndicator={false}>
-              {chainWallets.map((wallet) => {
-                const active = wallet.id === selectedWallet?.id;
-                return (
-                  <Pressable
-                    key={wallet.id}
-                    style={[styles.homeWalletMenuItem, active ? styles.homeWalletMenuItemActive : null]}
-                    onPress={() => {
-                      setHomeWalletMenuExpanded(false);
-                      void handleSelectWallet(wallet.id, wallet.chain);
-                    }}
-                  >
-                    <View style={styles.homeWalletSwitcherIcon}>
-                      <MaterialCommunityIcons name="wallet-outline" size={17} color={active ? activeTheme.grape : activeTheme.text} />
-                    </View>
-                    <View style={styles.homeWalletMenuItemCopy}>
-                      <Text style={[styles.walletSwitchChipTitle, active ? styles.walletSwitchChipTitleActive : null]}>{wallet.name}</Text>
-                      <Text style={styles.walletSwitchChipAddress}>{shortenAddress(wallet.address)}</Text>
-                    </View>
-                    {active ? <Feather name="check" size={18} color={activeTheme.grape} /> : null}
-                  </Pressable>
-                );
-              })}
+              {chainWalletGroups.map((group) => (
+                <View key={group.source} style={styles.walletGroupSection}>
+                  <Text style={styles.walletGroupTitle}>{group.label}</Text>
+                  {group.wallets.map((wallet) => {
+                    const active = wallet.id === selectedWallet?.id;
+                    return (
+                      <Pressable
+                        key={wallet.id}
+                        style={[styles.homeWalletMenuItem, active ? styles.homeWalletMenuItemActive : null]}
+                        onPress={() => {
+                          setHomeWalletMenuExpanded(false);
+                          void handleSelectWallet(wallet.id, wallet.chain);
+                        }}
+                      >
+                        <View style={styles.homeWalletSwitcherIcon}>
+                          <MaterialCommunityIcons name="wallet-outline" size={17} color={active ? activeTheme.grape : activeTheme.text} />
+                        </View>
+                        <View style={styles.homeWalletMenuItemCopy}>
+                          <Text style={[styles.walletSwitchChipTitle, active ? styles.walletSwitchChipTitleActive : null]}>{wallet.name}</Text>
+                          <Text style={styles.walletSwitchChipAddress}>{shortenAddress(wallet.address)}</Text>
+                        </View>
+                        {active ? <Feather name="check" size={18} color={activeTheme.grape} /> : null}
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              ))}
             </ScrollView>
+          </PaperModal>
+          <PaperModal
+            visible={Boolean(labelWallet)}
+            onDismiss={() => setLabelWallet(null)}
+            contentContainerStyle={[styles.sendAssetPickerModal, styles.walletLabelModal]}
+          >
+            <View style={styles.modalSheetHeader}>
+              <View style={styles.modalSheetHeaderCopy}>
+                <Text style={styles.sectionTitle}>Wallet label</Text>
+                <Text style={styles.sectionHint}>{labelWallet ? shortenAddress(labelWallet.address) : ''}</Text>
+              </View>
+              <Pressable style={styles.modalSheetClose} onPress={() => setLabelWallet(null)} accessibilityLabel="Close label editor">
+                <Feather name="x" size={20} color={activeTheme.text} />
+              </Pressable>
+            </View>
+            <PaperTextInput
+              value={walletLabelInput}
+              onChangeText={setWalletLabelInput}
+              placeholder="Wallet label"
+              mode="outlined"
+              maxLength={64}
+              autoFocus
+              style={styles.paperInput}
+              contentStyle={styles.paperInputContent}
+              outlineStyle={styles.paperOutline}
+              textColor={activeTheme.text}
+            />
+            <PaperButton
+              mode="contained"
+              disabled={!walletLabelInput.trim()}
+              onPress={() => void handleSaveWalletLabel()}
+              buttonColor={activeTheme.primaryButton}
+              textColor={activeTheme.primaryButtonText}
+            >
+              Save label
+            </PaperButton>
           </PaperModal>
           <PaperModal
             visible={chainPickerVisible}
@@ -9685,12 +9827,12 @@ function createStyles(palette: MobileThemePalette) {
     flex: 1,
     gap: 12,
     minHeight: 0,
-    paddingTop: Platform.OS === 'android' ? 28 : 10
+    paddingTop: 0
   },
   discoverBrowserBar: {
     paddingHorizontal: 14,
     paddingBottom: 10,
-    paddingTop: Platform.OS === 'android' ? 28 : 16,
+    paddingTop: 12,
     borderRadius: 22,
     borderWidth: 1,
     borderColor: palette.panelBorder,
@@ -9703,21 +9845,22 @@ function createStyles(palette: MobileThemePalette) {
     gap: 10
   },
   discoverBrowserBarCollapsed: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    zIndex: 20,
+    elevation: 8,
     paddingHorizontal: 8,
     paddingVertical: 6,
     borderRadius: 16,
-    gap: 0
+    gap: 0,
+    backgroundColor: palette.panel
   },
   discoverBrowserBarPrimary: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 10
-  },
-  discoverCollapsedNavigation: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 2
   },
   discoverBrowserBarActions: {
     flexDirection: 'row',
@@ -9872,29 +10015,14 @@ function createStyles(palette: MobileThemePalette) {
     fontSize: 14,
     fontWeight: '700'
   },
-  homeWalletMenuButton: {
-    alignSelf: 'center',
-    maxWidth: '100%',
-    minHeight: 44,
-    paddingHorizontal: 14,
-    borderRadius: 22,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: palette.panelBorder,
-    backgroundColor: palette.softPanel,
+  homeHeaderActions: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8
   },
-  homeWalletMenuButtonLabel: {
-    color: palette.text,
-    fontSize: 13,
-    fontWeight: '800'
-  },
-  homeWalletMenuButtonCurrent: {
-    color: palette.muted,
-    fontSize: 12,
-    fontWeight: '600',
-    maxWidth: 120
+  walletLabelModal: {
+    gap: 16,
+    padding: 20
   },
   homeWalletSwitcherIcon: {
     width: 36,
