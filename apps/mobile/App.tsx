@@ -159,6 +159,18 @@ type DiscoverApproval = {
   rememberOrigin: boolean;
 };
 
+type DiscoverBookmark = {
+  url: string;
+  title: string;
+  iconUrl: string;
+};
+
+type DiscoverTab = {
+  id: string;
+  url: string;
+  title: string;
+};
+
 type MobileRebalanceLeg = {
   id: string;
   side: 'sell' | 'buy';
@@ -183,6 +195,8 @@ const MOBILE_POPULAR_SWAP_SYMBOLS = ['USDC', 'USDT', 'SOL', 'JUP', 'BONK'] as co
 const PASSKEY_WALLET_CREATION_ENABLED = false;
 const MOBILE_WALLET_VALUE_CACHE_KEY = 'grape:wallet-value-cache:v1';
 const MOBILE_WALLET_VALUE_CACHE_TTL_MS = 5 * 60 * 1000;
+const MOBILE_DISCOVER_BOOKMARKS_KEY = 'grape:discover-bookmarks:v1';
+const MOBILE_DISCOVER_TABS_KEY = 'grape:discover-tabs:v1';
 
 function mobileJupiterTokenToAsset(
   token: MobileJupiterToken,
@@ -252,6 +266,23 @@ const SOLANA_DISCOVER_FAVORITES = [
   { label: 'Kamino', subtitle: 'Borrow, lend, and liquidity', url: 'https://kamino.com' },
   { label: 'Sanctum', subtitle: 'Liquid staking on Solana', url: 'https://app.sanctum.so' }
 ] as const;
+
+function getDiscoverSiteIcon(url: string) {
+  try {
+    return `${new URL(url).origin}/favicon.ico`;
+  } catch {
+    return '';
+  }
+}
+
+function createDiscoverTab(url = GRAPE_DISCOVER_DEFAULT_URL, title = 'Governance'):
+  DiscoverTab {
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    url,
+    title
+  };
+}
 
 const CUSTOM_THEME_FIELDS: Array<{ key: keyof CustomThemeConfig; label: string }> = [
   { key: 'background', label: 'Background' },
@@ -1395,11 +1426,74 @@ function GrapeApp() {
   const [discoverLoading, setDiscoverLoading] = useState(false);
   const [discoverLoadError, setDiscoverLoadError] = useState<string | null>(null);
   const [discoverControlsExpanded, setDiscoverControlsExpanded] = useState(false);
+  const [discoverBookmarks, setDiscoverBookmarks] = useState<DiscoverBookmark[]>([]);
+  const [discoverTabs, setDiscoverTabs] = useState<DiscoverTab[]>(() => [createDiscoverTab()]);
+  const [activeDiscoverTabId, setActiveDiscoverTabId] = useState('');
+  const [discoverBrowserStateLoaded, setDiscoverBrowserStateLoaded] = useState(false);
   const [discoverConnectedOrigins, setDiscoverConnectedOrigins] = useState<string[]>([]);
   const [discoverApproval, setDiscoverApproval] = useState<DiscoverApproval | null>(null);
   const [discoverApprovalPassword, setDiscoverApprovalPassword] = useState('');
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const discoverWebViewRef = useRef<WebView>(null);
+  const activeDiscoverTab = useMemo(
+    () => discoverTabs.find((tab) => tab.id === activeDiscoverTabId) ?? discoverTabs[0],
+    [activeDiscoverTabId, discoverTabs]
+  );
+  const discoverIsBookmarked = useMemo(
+    () => discoverBookmarks.some((bookmark) => bookmark.url === (discoverCurrentUrl || discoverUrl)),
+    [discoverBookmarks, discoverCurrentUrl, discoverUrl]
+  );
+
+  useEffect(() => {
+    let mounted = true;
+    void Promise.all([
+      AsyncStorage.getItem(MOBILE_DISCOVER_BOOKMARKS_KEY),
+      AsyncStorage.getItem(MOBILE_DISCOVER_TABS_KEY)
+    ]).then(([bookmarksRaw, tabsRaw]) => {
+      if (!mounted) return;
+      try {
+        const bookmarks = bookmarksRaw ? JSON.parse(bookmarksRaw) as DiscoverBookmark[] : [];
+        if (Array.isArray(bookmarks)) setDiscoverBookmarks(bookmarks.filter((item) => item?.url && item?.title));
+      } catch {
+        // Keep an empty bookmark library if older browser data is malformed.
+      }
+      try {
+        const savedTabs = tabsRaw ? JSON.parse(tabsRaw) as DiscoverTab[] : [];
+        const validTabs = Array.isArray(savedTabs) ? savedTabs.filter((item) => item?.id && item?.url) : [];
+        if (validTabs.length > 0) {
+          setDiscoverTabs(validTabs);
+          setActiveDiscoverTabId(validTabs[0].id);
+          setDiscoverUrl(validTabs[0].url);
+          setDiscoverCurrentUrl(validTabs[0].url);
+          setDiscoverUrlInput(validTabs[0].url);
+        }
+      } catch {
+        // Keep the default tab if older browser data is malformed.
+      }
+      setDiscoverBrowserStateLoaded(true);
+    });
+    return () => { mounted = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!activeDiscoverTabId && discoverTabs[0]) setActiveDiscoverTabId(discoverTabs[0].id);
+  }, [activeDiscoverTabId, discoverTabs]);
+
+  useEffect(() => {
+    if (!discoverBrowserStateLoaded) return;
+    void AsyncStorage.setItem(MOBILE_DISCOVER_BOOKMARKS_KEY, JSON.stringify(discoverBookmarks));
+  }, [discoverBookmarks, discoverBrowserStateLoaded]);
+
+  useEffect(() => {
+    if (!discoverBrowserStateLoaded) return;
+    void AsyncStorage.setItem(MOBILE_DISCOVER_TABS_KEY, JSON.stringify(discoverTabs));
+  }, [discoverBrowserStateLoaded, discoverTabs]);
+
+  useEffect(() => {
+    const iconUrls = [...GRAPE_DISCOVER_FAVORITES, ...SOLANA_DISCOVER_FAVORITES]
+      .map((favorite) => getDiscoverSiteIcon(favorite.url));
+    void Promise.all(iconUrls.map((iconUrl) => Image.prefetch(iconUrl).catch(() => false)));
+  }, []);
   useEffect(() => {
     if (mainTab === 'discover') {
       setDiscoverControlsExpanded(false);
@@ -2649,6 +2743,7 @@ function GrapeApp() {
     setDiscoverUrlInput(nextUrl);
     setDiscoverUrl(nextUrl);
     setDiscoverCurrentUrl(nextUrl);
+    setDiscoverTabs((tabs) => tabs.map((tab) => tab.id === activeDiscoverTabId ? { ...tab, url: nextUrl } : tab));
     setDiscoverLoadError(null);
     setMainTab('discover');
     setError(null);
@@ -2659,11 +2754,62 @@ function GrapeApp() {
       setDiscoverCurrentUrl(nextState.url);
       setDiscoverUrlInput(nextState.url);
       setDiscoverLoadError(null);
+      setDiscoverTabs((tabs) => tabs.map((tab) => tab.id === activeDiscoverTabId
+        ? { ...tab, url: nextState.url, title: nextState.title?.trim() || tab.title }
+        : tab));
     }
     setDiscoverCanGoBack(nextState.canGoBack);
     setDiscoverCanGoForward(nextState.canGoForward);
     setDiscoverLoading(nextState.loading);
     setDiscoverTitle(nextState.title?.trim() ? nextState.title : 'Grape Discover');
+  }
+
+  function handleSelectDiscoverTab(tab: DiscoverTab) {
+    setActiveDiscoverTabId(tab.id);
+    setDiscoverUrl(tab.url);
+    setDiscoverCurrentUrl(tab.url);
+    setDiscoverUrlInput(tab.url);
+    setDiscoverTitle(tab.title);
+    setDiscoverLoadError(null);
+  }
+
+  function handleAddDiscoverTab() {
+    const tab = createDiscoverTab();
+    setDiscoverTabs((tabs) => [...tabs, tab]);
+    handleSelectDiscoverTab(tab);
+  }
+
+  function handleCloseDiscoverTab(tabId: string) {
+    setDiscoverTabs((tabs) => {
+      if (tabs.length === 1) {
+        const replacement = createDiscoverTab();
+        setTimeout(() => handleSelectDiscoverTab(replacement), 0);
+        return [replacement];
+      }
+      const closingIndex = tabs.findIndex((tab) => tab.id === tabId);
+      const nextTabs = tabs.filter((tab) => tab.id !== tabId);
+      if (tabId === activeDiscoverTabId) {
+        const replacement = nextTabs[Math.min(Math.max(closingIndex, 0), nextTabs.length - 1)];
+        if (replacement) setTimeout(() => handleSelectDiscoverTab(replacement), 0);
+      }
+      return nextTabs;
+    });
+  }
+
+  function handleToggleDiscoverBookmark() {
+    const url = discoverCurrentUrl || discoverUrl;
+    const iconUrl = getDiscoverSiteIcon(url);
+    if (iconUrl) void Image.prefetch(iconUrl).catch(() => false);
+    setDiscoverBookmarks((bookmarks) => {
+      if (bookmarks.some((bookmark) => bookmark.url === url)) {
+        return bookmarks.filter((bookmark) => bookmark.url !== url);
+      }
+      return [...bookmarks, {
+        url,
+        title: discoverTitle || formatDiscoverUrlDisplay(url),
+        iconUrl
+      }];
+    });
   }
 
   function handleDiscoverShouldStart(requestUrl: string) {
@@ -5621,10 +5767,34 @@ function GrapeApp() {
                 <Pressable style={styles.discoverControlButton} onPress={() => void Linking.openURL(discoverCurrentUrl || discoverUrl)}>
                   <Feather name="external-link" size={18} color={activeTheme.text} />
                 </Pressable>
+                <Pressable style={styles.discoverControlButton} onPress={handleToggleDiscoverBookmark} accessibilityLabel={discoverIsBookmarked ? 'Remove bookmark' : 'Bookmark this page'}>
+                  <Feather name={discoverIsBookmarked ? 'star' : 'bookmark'} size={18} color={discoverIsBookmarked ? activeTheme.grape : activeTheme.text} />
+                </Pressable>
           </View> : null}
 
           {discoverControlsExpanded ? (
             <>
+              <View style={styles.discoverSectionHeader}>
+                <Text style={styles.swapPickerSectionLabel}>TABS</Text>
+                <Pressable style={styles.discoverAddButton} onPress={handleAddDiscoverTab} accessibilityLabel="Open a new tab">
+                  <Feather name="plus" size={16} color={activeTheme.text} />
+                  <Text style={styles.discoverAddButtonText}>New tab</Text>
+                </Pressable>
+              </View>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.discoverTabRow}>
+                {discoverTabs.map((tab) => (
+                  <Pressable
+                    key={tab.id}
+                    style={[styles.discoverTabChip, tab.id === activeDiscoverTabId ? styles.discoverTabChipActive : null]}
+                    onPress={() => handleSelectDiscoverTab(tab)}
+                  >
+                    <Text style={styles.discoverTabTitle} numberOfLines={1}>{tab.title || formatDiscoverUrlDisplay(tab.url)}</Text>
+                    <Pressable onPress={() => handleCloseDiscoverTab(tab.id)} hitSlop={8} accessibilityLabel={`Close ${tab.title || 'tab'}`}>
+                      <Feather name="x" size={14} color={activeTheme.muted} />
+                    </Pressable>
+                  </Pressable>
+                ))}
+              </ScrollView>
               {!discoverWallet ? (
                 <View style={styles.discoverEmptyCard}>
                   <Text style={styles.discoverEmptyTitle}>Add a Solana wallet to connect to apps.</Text>
@@ -5632,6 +5802,22 @@ function GrapeApp() {
                     You can still browse normally. Connecting and signing currently require a Solana wallet.
                   </Text>
                 </View>
+              ) : null}
+              {discoverBookmarks.length > 0 ? (
+                <>
+                  <Text style={styles.swapPickerSectionLabel}>BOOKMARKS</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.discoverFavoriteRow}>
+                    {discoverBookmarks.map((bookmark) => (
+                      <Pressable key={bookmark.url} style={styles.discoverFavoriteCard} onPress={() => handleDiscoverNavigate(bookmark.url)}>
+                        <View style={styles.discoverFavoriteHeader}>
+                          {bookmark.iconUrl ? <Image source={{ uri: bookmark.iconUrl }} style={styles.discoverFavoriteIcon} /> : <Feather name="globe" size={24} color={activeTheme.grape} />}
+                          <Text style={styles.discoverFavoriteTitle} numberOfLines={1}>{bookmark.title}</Text>
+                        </View>
+                        <Text style={styles.discoverFavoriteSubtitle} numberOfLines={1}>{formatDiscoverUrlDisplay(bookmark.url)}</Text>
+                      </Pressable>
+                    ))}
+                  </ScrollView>
+                </>
               ) : null}
               <Text style={styles.swapPickerSectionLabel}>GRAPE TOOLS</Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.discoverFavoriteRow}>
@@ -5641,7 +5827,10 @@ function GrapeApp() {
                     style={styles.discoverFavoriteCard}
                     onPress={() => handleDiscoverNavigate(favorite.url)}
                   >
-                    <Text style={styles.discoverFavoriteTitle}>{favorite.label}</Text>
+                    <View style={styles.discoverFavoriteHeader}>
+                      <Image source={{ uri: getDiscoverSiteIcon(favorite.url) }} style={styles.discoverFavoriteIcon} />
+                      <Text style={styles.discoverFavoriteTitle}>{favorite.label}</Text>
+                    </View>
                     <Text style={styles.discoverFavoriteSubtitle}>{favorite.subtitle}</Text>
                   </Pressable>
                 ))}
@@ -5654,7 +5843,10 @@ function GrapeApp() {
                     style={styles.discoverFavoriteCard}
                     onPress={() => handleDiscoverNavigate(favorite.url)}
                   >
-                    <Text style={styles.discoverFavoriteTitle}>{favorite.label}</Text>
+                    <View style={styles.discoverFavoriteHeader}>
+                      <Image source={{ uri: getDiscoverSiteIcon(favorite.url) }} style={styles.discoverFavoriteIcon} />
+                      <Text style={styles.discoverFavoriteTitle}>{favorite.label}</Text>
+                    </View>
                     <Text style={styles.discoverFavoriteSubtitle}>{favorite.subtitle}</Text>
                   </Pressable>
                 ))}
@@ -5671,6 +5863,7 @@ function GrapeApp() {
           ) : null}
           <View style={styles.discoverWebviewFrame}>
             <WebView
+              key={activeDiscoverTab?.id ?? 'discover-default'}
               ref={discoverWebViewRef}
               source={{ uri: discoverUrl }}
               originWhitelist={['http://*', 'https://*']}
@@ -5690,7 +5883,9 @@ function GrapeApp() {
               }}
               onLoadStart={() => {
                 setDiscoverLoadError(null);
+                setDiscoverLoading(true);
               }}
+              onLoadEnd={() => setDiscoverLoading(false)}
               setSupportMultipleWindows={false}
               allowsBackForwardNavigationGestures={false}
               javaScriptEnabled
@@ -5698,6 +5893,15 @@ function GrapeApp() {
               thirdPartyCookiesEnabled
               style={styles.discoverWebview}
             />
+            {discoverLoading ? (
+              <View style={styles.discoverLoadingOverlay} pointerEvents="none">
+                <View style={styles.discoverLoadingCard}>
+                  <ActivityIndicator size="large" color={activeTheme.grape} />
+                  <Text style={styles.discoverLoadingTitle}>Loading page…</Text>
+                  <Text style={styles.discoverLoadingUrl} numberOfLines={1}>{formatDiscoverUrlDisplay(discoverCurrentUrl || discoverUrl)}</Text>
+                </View>
+              </View>
+            ) : null}
           </View>
         </View>
       </View>
@@ -9846,13 +10050,16 @@ function createStyles(palette: MobileThemePalette) {
   },
   discoverBrowserBarCollapsed: {
     position: 'absolute',
-    top: 8,
-    right: 8,
+    bottom: 8,
+    left: '50%',
+    marginLeft: -18,
     zIndex: 20,
     elevation: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    borderRadius: 16,
+    width: 36,
+    height: 30,
+    paddingHorizontal: 2,
+    paddingVertical: 0,
+    borderRadius: 15,
     gap: 0,
     backgroundColor: palette.panel
   },
@@ -9937,9 +10144,9 @@ function createStyles(palette: MobileThemePalette) {
     backgroundColor: 'rgba(255,255,255,0.06)'
   },
   discoverCompactControlButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 10,
+    width: 30,
+    height: 28,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center'
   },
@@ -9960,7 +10167,19 @@ function createStyles(palette: MobileThemePalette) {
     backgroundColor: 'rgba(255,255,255,0.05)',
     gap: 4
   },
+  discoverFavoriteHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8
+  },
+  discoverFavoriteIcon: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    backgroundColor: 'rgba(255,255,255,0.08)'
+  },
   discoverFavoriteTitle: {
+    flex: 1,
     color: palette.text,
     fontSize: 15,
     fontWeight: '800'
@@ -10002,6 +10221,82 @@ function createStyles(palette: MobileThemePalette) {
     flex: 1,
     minHeight: 0,
     backgroundColor: '#05060a'
+  },
+  discoverLoadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(5,6,10,0.82)',
+    zIndex: 10
+  },
+  discoverLoadingCard: {
+    maxWidth: 260,
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 24,
+    paddingVertical: 20,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: palette.panelBorder,
+    backgroundColor: palette.panel
+  },
+  discoverLoadingTitle: {
+    color: palette.text,
+    fontSize: 15,
+    fontWeight: '800'
+  },
+  discoverLoadingUrl: {
+    color: palette.muted,
+    fontSize: 11,
+    maxWidth: 220
+  },
+  discoverSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between'
+  },
+  discoverAddButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: palette.panelBorder,
+    backgroundColor: 'rgba(255,255,255,0.05)'
+  },
+  discoverAddButtonText: {
+    color: palette.text,
+    fontSize: 11,
+    fontWeight: '800'
+  },
+  discoverTabRow: {
+    gap: 8,
+    paddingBottom: 2
+  },
+  discoverTabChip: {
+    width: 150,
+    minHeight: 38,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    paddingHorizontal: 11,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: palette.panelBorder,
+    backgroundColor: 'rgba(255,255,255,0.04)'
+  },
+  discoverTabChipActive: {
+    borderColor: palette.grape,
+    backgroundColor: 'rgba(139,92,246,0.14)'
+  },
+  discoverTabTitle: {
+    flex: 1,
+    color: palette.text,
+    fontSize: 12,
+    fontWeight: '700'
   },
   discoverTrustedOriginRow: {
     flexDirection: 'row',
