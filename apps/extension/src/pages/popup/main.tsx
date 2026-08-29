@@ -48,6 +48,9 @@ import type {
   CollectibleItem,
   CollectionHolding,
   IncidentResponseResponse,
+  ReclaimableTokenAccount,
+  ReclaimableTokenAccountsResponse,
+  ReclaimTokenAccountsResponse,
   RecipientResolutionResponse,
   StakeAccountRow,
   TokenActionResponse,
@@ -91,7 +94,7 @@ const APP_VERSION = extensionPackage.version?.trim() || 'unknown';
 const OG_REPUTATION_DISCOVERY_URL = 'https://vine.governance.so';
 import { OnboardingView } from '../onboarding/OnboardingView';
 
-type PopupView = 'home' | 'send' | 'receive' | 'swap' | 'bridge' | 'settings' | 'asset' | 'security' | 'approval';
+type PopupView = 'home' | 'send' | 'receive' | 'swap' | 'bridge' | 'settings' | 'asset' | 'security' | 'reclaim-rent' | 'approval';
 type HomeTab = 'tokens' | 'rebalance' | 'community' | 'governance' | 'collectibles' | 'activity' | 'staking';
 type AssetOption =
   | {
@@ -1531,6 +1534,13 @@ function PopupPage() {
   const [securityReport, setSecurityReport] = useState<WalletSecurityReportResponse | null>(null);
   const [securityLoading, setSecurityLoading] = useState(false);
   const [securityError, setSecurityError] = useState<string | null>(null);
+  const [reclaimAccounts, setReclaimAccounts] = useState<ReclaimableTokenAccount[]>([]);
+  const [selectedReclaimAccounts, setSelectedReclaimAccounts] = useState<Set<string>>(new Set());
+  const [reclaimLoading, setReclaimLoading] = useState(false);
+  const [reclaimSubmitting, setReclaimSubmitting] = useState(false);
+  const [reclaimPassword, setReclaimPassword] = useState('');
+  const [reclaimError, setReclaimError] = useState<string | null>(null);
+  const [reclaimResult, setReclaimResult] = useState<ReclaimTokenAccountsResponse | null>(null);
   const [incidentSafeWallet, setIncidentSafeWallet] = useState('');
   const [incidentReserveSol, setIncidentReserveSol] = useState('0.02');
   const [incidentPassword, setIncidentPassword] = useState('');
@@ -1809,6 +1819,12 @@ function PopupPage() {
   }, [view, state?.wallet.setup, state?.session.locked]);
 
   useEffect(() => {
+    if (view === 'reclaim-rent' && state?.wallet.setup === 'ready' && !state.session.locked) {
+      void refreshReclaimableAccounts();
+    }
+  }, [view, state?.wallet.setup, state?.session.locked]);
+
+  useEffect(() => {
     if (!state?.canUseUnlockedSigner) {
       return;
     }
@@ -1856,7 +1872,7 @@ function PopupPage() {
   }, [homeTab, selectedChainValue]);
 
   useEffect(() => {
-    if ((selectedChainValue === 'sui' || selectedChainValue === 'monad' || selectedChainValue === 'ethereum') && (view === 'security' || view === 'asset')) {
+    if ((selectedChainValue === 'sui' || selectedChainValue === 'monad' || selectedChainValue === 'ethereum') && (view === 'security' || view === 'asset' || view === 'reclaim-rent')) {
       setView('home');
     }
   }, [selectedChainValue, view]);
@@ -3542,6 +3558,48 @@ function PopupPage() {
       setSecurityError(error instanceof Error ? error.message : 'Unable to load the security report.');
     } finally {
       setSecurityLoading(false);
+    }
+  }
+
+  async function refreshReclaimableAccounts() {
+    try {
+      setReclaimLoading(true);
+      setReclaimError(null);
+      const response = await sendRuntimeMessage<ReclaimableTokenAccountsResponse>({
+        type: 'wallet_get_reclaimable_token_accounts'
+      });
+      setReclaimAccounts(response.accounts);
+      setSelectedReclaimAccounts((selected) => new Set([...selected].filter((address) => response.accounts.some((account) => account.accountAddress === address))));
+    } catch (error) {
+      setReclaimError(error instanceof Error ? error.message : 'Unable to scan for reclaimable token accounts.');
+    } finally {
+      setReclaimLoading(false);
+    }
+  }
+
+  async function handleReclaimRent() {
+    const accounts = reclaimAccounts.filter((account) => selectedReclaimAccounts.has(account.accountAddress));
+    if (accounts.length === 0) return;
+    const grossSol = accounts.reduce((total, account) => total + account.lamports, 0) / 1_000_000_000;
+    if (!window.confirm(`Close ${accounts.length} empty token account${accounts.length === 1 ? '' : 's'} and reclaim approximately ${grossSol.toFixed(6)} SOL before network fees? This cannot be undone.`)) return;
+    try {
+      setReclaimSubmitting(true);
+      setReclaimError(null);
+      setReclaimResult(null);
+      const result = await sendRuntimeMessage<ReclaimTokenAccountsResponse>({
+        type: 'wallet_reclaim_token_accounts',
+        accounts: accounts.map(({ mint, accountAddress, programId }) => ({ mint, accountAddress, programId })),
+        password: state?.activeWallet?.signerKind === 'ledger' || canUseUnlockedSigner ? undefined : reclaimPassword || undefined
+      });
+      setReclaimResult(result);
+      setReclaimPassword('');
+      setSelectedReclaimAccounts(new Set());
+      await refresh();
+      await refreshReclaimableAccounts();
+    } catch (error) {
+      setReclaimError(error instanceof Error ? error.message : 'Unable to reclaim token-account rent.');
+    } finally {
+      setReclaimSubmitting(false);
     }
   }
 
@@ -7475,6 +7533,11 @@ function PopupPage() {
               <Button tone="secondary" onClick={() => setView('security')}>
                 Security
               </Button>
+              {isSolanaChain ? (
+                <Button tone="secondary" onClick={() => setView('reclaim-rent')}>
+                  Reclaim rent
+                </Button>
+              ) : null}
               <Button tone="secondary" onClick={() => openExtensionPage('options.html')}>
                 Full settings
               </Button>
@@ -7889,6 +7952,90 @@ function PopupPage() {
       collectionName: matchedCollectible?.collectionName ?? null,
       collectionSymbol: matchedCollectible?.collectionSymbol ?? null
     };
+  }
+
+  function renderReclaimRent() {
+    const selectedAccounts = reclaimAccounts.filter((account) => selectedReclaimAccounts.has(account.accountAddress));
+    const selectedLamports = selectedAccounts.reduce((total, account) => total + account.lamports, 0);
+    const allSelected = reclaimAccounts.length > 0 && selectedAccounts.length === reclaimAccounts.length;
+
+    return (
+      <Card className="reclaim-rent-card">
+        <div className="inline reclaim-rent-heading">
+          <button type="button" className="send-back-button" onClick={() => setView('settings')} aria-label="Back to settings"><ArrowLeft size={20} /></button>
+          <div>
+            <h2>Reclaim SOL rent</h2>
+            <p className="muted">Close empty token accounts you no longer need and recover their rent deposit.</p>
+          </div>
+        </div>
+
+        <label className="reclaim-account-row reclaim-select-all">
+          <input
+            type="checkbox"
+            checked={allSelected}
+            disabled={reclaimAccounts.length === 0}
+            onChange={() => setSelectedReclaimAccounts(allSelected ? new Set() : new Set(reclaimAccounts.map((account) => account.accountAddress)))}
+          />
+          <span className="reclaim-account-copy">
+            <strong>Empty accounts</strong>
+            <small className="muted">{reclaimAccounts.length} available to reclaim</small>
+          </span>
+          <strong>{(reclaimAccounts.reduce((total, account) => total + account.lamports, 0) / 1_000_000_000).toFixed(6)} SOL</strong>
+        </label>
+
+        <div className="reclaim-account-list">
+          {reclaimLoading ? <p className="muted">Scanning token accounts…</p> : null}
+          {!reclaimLoading && reclaimAccounts.length === 0 ? <p className="muted">No empty token accounts are currently eligible to close.</p> : null}
+          {reclaimAccounts.map((account) => {
+            const metadata = assets.tokens.find((token) => token.mint === account.mint);
+            const label = metadata?.symbol || metadata?.name || account.symbol || account.name || 'Unknown token';
+            const logoUri = metadata?.logoUri || account.logoUri;
+            return (
+              <label key={account.accountAddress} className="reclaim-account-row">
+                <input
+                  type="checkbox"
+                  checked={selectedReclaimAccounts.has(account.accountAddress)}
+                  onChange={() => setSelectedReclaimAccounts((selected) => {
+                    const next = new Set(selected);
+                    if (next.has(account.accountAddress)) next.delete(account.accountAddress);
+                    else next.add(account.accountAddress);
+                    return next;
+                  })}
+                />
+                <span className="reclaim-token-icon">
+                  {logoUri ? <img src={logoUri} alt="" /> : label.slice(0, 1).toUpperCase()}
+                </span>
+                <span className="reclaim-account-copy">
+                  <strong>{label}</strong>
+                  <small className="muted mono">{formatAddress(account.accountAddress)}</small>
+                </span>
+                <span className="muted">{(account.lamports / 1_000_000_000).toFixed(7)} SOL</span>
+              </label>
+            );
+          })}
+        </div>
+
+        <div className="reclaim-summary">
+          <div><strong>Reclaim</strong><small className="muted">{selectedAccounts.length} account{selectedAccounts.length === 1 ? '' : 's'} selected</small></div>
+          <div className="reclaim-summary-value"><strong>{(selectedLamports / 1_000_000_000).toFixed(6)} SOL</strong><small className="muted">before network fees</small></div>
+        </div>
+        {!canUseUnlockedSigner && state?.activeWallet?.signerKind !== 'ledger' ? (
+          <Input type="password" value={reclaimPassword} onChange={(event) => setReclaimPassword(event.target.value)} placeholder="Wallet password" />
+        ) : null}
+        {state?.activeWallet?.signerKind === 'ledger' ? <p className="muted">Keep your Ledger connected, unlock it, and open the Solana app. Each transaction requires device approval.</p> : null}
+        {reclaimResult ? <p className="success-box">Closed {reclaimResult.closedAccounts} account{reclaimResult.closedAccounts === 1 ? '' : 's'} and reclaimed {(reclaimResult.reclaimedLamports / 1_000_000_000).toFixed(6)} SOL before fees.</p> : null}
+        {reclaimError ? <p className="danger-box">{reclaimError}</p> : null}
+        <div className="inline reclaim-actions">
+          <Button tone="secondary" onClick={() => setView('settings')}>Cancel</Button>
+          <Button
+            onClick={() => void handleReclaimRent()}
+            disabled={selectedAccounts.length === 0 || reclaimSubmitting || (!canUseUnlockedSigner && state?.activeWallet?.signerKind !== 'ledger' && !reclaimPassword.trim())}
+          >
+            {reclaimSubmitting ? 'Reclaiming…' : 'Review & reclaim'}
+          </Button>
+        </div>
+      </Card>
+    );
   }
 
   function renderSecurity() {
@@ -9070,6 +9217,8 @@ function PopupPage() {
                     ? 'Review request'
                   : view === 'security'
                     ? 'Security'
+                    : view === 'reclaim-rent'
+                      ? 'Reclaim rent'
                     : 'Settings'
       }
       subtitle={
@@ -9089,6 +9238,8 @@ function PopupPage() {
                     ? 'Approve or reject this request from the currently open wallet surface.'
                   : view === 'security'
                     ? 'Check delegates and run containment actions.'
+                    : view === 'reclaim-rent'
+                      ? 'Recover SOL held by empty token accounts.'
                     : 'Manage your wallet and connections.'
       }
       actions={view === 'home' ? undefined : <div className="inline popup-actions">{renderWalletMenu()}</div>}
@@ -9099,6 +9250,7 @@ function PopupPage() {
       {view === 'asset' ? renderAsset() : null}
       {view === 'approval' ? renderApproval() : null}
       {view === 'security' ? renderSecurity() : null}
+      {view === 'reclaim-rent' ? renderReclaimRent() : null}
       {view === 'swap' ? renderSwap() : null}
       {view === 'bridge' ? renderBridge() : null}
       {view === 'settings' ? renderSettings() : null}

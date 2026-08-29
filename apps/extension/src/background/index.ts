@@ -110,6 +110,7 @@ import {
 } from '@solana/spl-governance';
 import { sendEthereumTokenWithLedger, sendEthereumWithLedger } from '../../../../packages/ethereum/src/ledger';
 import { sendMonadTokenWithLedger, sendMonadWithLedger } from '../../../../packages/monad/src/ledger';
+import { signAndSendLedgerSerializedTransaction, signAndSendLedgerTransaction } from '../../../../packages/solana/src/ledger';
 import { sendSuiCoinWithLedger, sendSuiWithLedger, signSuiTransactionBytesWithLedger } from '../../../../packages/sui/src/ledger';
 import {
   createSuiClient,
@@ -2618,14 +2619,14 @@ class WalletController {
   private async submitTransactionForWallet(
     selectedWallet: NonNullable<ReturnType<typeof getSelectedWallet>>,
     activePublicKey: string,
-    secret: VaultSecret,
+    secret: VaultSecret | null,
     connection: Connection,
     transaction: Transaction
   ) {
     try {
       return selectedWallet.signer.kind === 'ledger'
-        ? throwLedgerUnsupported()
-        : await signAndSendTransaction(transaction, this.resolveSolanaSignerForWallet(secret, selectedWallet, activePublicKey), connection);
+        ? await signAndSendLedgerTransaction(transaction, activePublicKey, selectedWallet.signer.derivationPath, connection)
+        : await signAndSendTransaction(transaction, this.resolveSolanaSignerForWallet(secret as VaultSecret, selectedWallet, activePublicKey), connection);
     } catch (error) {
       throw normalizeSigningError(error);
     } finally {
@@ -2636,7 +2637,7 @@ class WalletController {
   private async submitInstructionBatches(
     selectedWallet: NonNullable<ReturnType<typeof getSelectedWallet>>,
     activePublicKey: string,
-    secret: VaultSecret,
+    secret: VaultSecret | null,
     connection: Connection,
     owner: PublicKey,
     instructions: TransactionInstruction[],
@@ -4448,6 +4449,96 @@ class WalletController {
     };
   }
 
+  async getReclaimableTokenAccounts() {
+    const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    if (selectedWallet.chain !== 'solana') {
+      throw new RpcError('UNSUPPORTED_CHAIN', 'Rent reclaim is available for Solana wallets only.');
+    }
+    const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
+    if (!activeAccount) throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
+
+    const connection = this.createConnection(walletState.selectedNetwork, walletState);
+    const owner = new PublicKey(activeAccount.publicKey);
+    const tokenAccounts = (await this.scanWalletTokenAccounts(connection, owner, {})).filter(
+      (account) =>
+        BigInt(account.rawAmount) === 0n &&
+        !account.delegate &&
+        (!account.closeAuthority || account.closeAuthority === owner.toBase58())
+    );
+    if (tokenAccounts.length === 0) {
+      return { accounts: [], totalLamports: 0, network: walletState.selectedNetwork };
+    }
+    const accountInfos = await connection.getMultipleAccountsInfo(
+      tokenAccounts.map((account) => new PublicKey(account.accountAddress)),
+      'confirmed'
+    );
+    const accounts = tokenAccounts.flatMap((account, index) => {
+      const info = accountInfos[index];
+      if (!info || info.lamports <= 0) return [];
+      return [{
+        mint: account.mint,
+        accountAddress: account.accountAddress,
+        programId: account.programId,
+        lamports: info.lamports,
+        name: account.name,
+        symbol: account.symbol,
+        logoUri: account.logoUri
+      }];
+    });
+    return {
+      accounts,
+      totalLamports: accounts.reduce((total, account) => total + account.lamports, 0),
+      network: walletState.selectedNetwork
+    };
+  }
+
+  async reclaimTokenAccounts(input: {
+    accounts: Array<{ mint: string; accountAddress: string; programId: string }>;
+    password?: string;
+  }) {
+    const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    this.assertInteractiveWallet(selectedWallet);
+    if (selectedWallet.chain !== 'solana') {
+      throw new RpcError('UNSUPPORTED_CHAIN', 'Rent reclaim is available for Solana wallets only.');
+    }
+    const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
+    if (!activeAccount) throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
+
+    const connection = this.createConnection(walletState.selectedNetwork, walletState);
+    const owner = new PublicKey(activeAccount.publicKey);
+    const fresh = await this.getReclaimableTokenAccounts();
+    const freshByAddress = new Map(fresh.accounts.map((account) => [account.accountAddress, account]));
+    const selected = input.accounts.map((account) => {
+      const verified = freshByAddress.get(account.accountAddress);
+      if (!verified || verified.mint !== account.mint || verified.programId !== account.programId) {
+        throw new RpcError('TOKEN_ACCOUNT_NOT_RECLAIMABLE', `Token account ${account.accountAddress} is no longer eligible to close.`);
+      }
+      return verified;
+    });
+    const transactions = await Promise.all(
+      selected.map((account) => buildCloseTokenAccountTransaction(connection, owner, account))
+    );
+    const secret = selectedWallet.signer.kind === 'ledger'
+      ? null
+      : await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
+    const signatures = await this.submitInstructionBatches(
+      selectedWallet,
+      activeAccount.publicKey,
+      secret,
+      connection,
+      owner,
+      transactions.flatMap((transaction) => transaction.instructions),
+      6
+    );
+    await this.invalidateAssetCache(this.getAssetCacheKey(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey));
+    return {
+      signatures,
+      reclaimedLamports: selected.reduce((total, account) => total + account.lamports, 0),
+      closedAccounts: selected.length,
+      network: walletState.selectedNetwork
+    };
+  }
+
   async getSecurityReport() {
     const { walletState, selectedWallet } = await this.ensureReadyWallet();
     if (selectedWallet.chain !== 'solana') {
@@ -4857,9 +4948,12 @@ class WalletController {
       throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
     }
 
-    const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
     const genericQuote = input.quoteResponse as Record<string, unknown>;
     if (selectedWallet.chain === 'ethereum' || selectedWallet.chain === 'monad') {
+      if (selectedWallet.signer.kind === 'ledger') {
+        throw new RpcError('LEDGER_UNSUPPORTED', 'Ledger swaps are not yet available for EVM wallets.');
+      }
+      const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
       const transactionRequest = extractExecutableBridgeTransactionRequest(genericQuote, selectedWallet.chain);
       if (!transactionRequest?.to) throw new RpcError('SWAP_UNSUPPORTED', 'This route did not include an executable transaction.');
       const signature = selectedWallet.chain === 'ethereum'
@@ -4869,6 +4963,10 @@ class WalletController {
       return { signature, inputMint: estimate?.fromToken?.address ?? '', outputMint: estimate?.toToken?.address ?? '', inputAmountUi: formatUiAmount(estimate?.fromAmount ?? '0', estimate?.fromToken?.decimals ?? 18), outputAmountUi: formatUiAmount(estimate?.toAmount ?? '0', estimate?.toToken?.decimals ?? 18) };
     }
     if (selectedWallet.chain === 'sui') {
+      if (selectedWallet.signer.kind === 'ledger') {
+        throw new RpcError('LEDGER_UNSUPPORTED', 'Ledger swaps are not yet available for Sui wallets.');
+      }
+      const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
       const client = createSuiClient(this.resolveSuiNetwork(walletState.selectedNetwork), walletState.chainState.sui.customRpcUrl);
       const freshQuote = await getSuiSwapQuote(client, { fromCoinType: String(genericQuote.fromCoinType), toCoinType: String(genericQuote.toCoinType), amountIn: BigInt(String(genericQuote.amountIn)) });
       const signature = await executeSuiSwap(client, resolveSuiVaultSecret(secret), { quote: freshQuote, slippageBps: Number(genericQuote.slippageBps ?? 50) });
@@ -4884,14 +4982,22 @@ class WalletController {
 
     let signature: string;
     try {
-        signature =
-          selectedWallet.signer.kind === 'ledger'
-            ? throwLedgerUnsupported()
-            : await signAndSendSerializedTransaction(
-                swap.swapTransaction,
-                this.resolveSolanaSignerForWallet(secret, selectedWallet, activeAccount.publicKey),
-                this.resolveRpcEndpoint(walletState.selectedNetwork, walletState)
-              );
+      const rpcEndpoint = this.resolveRpcEndpoint(walletState.selectedNetwork, walletState);
+      if (selectedWallet.signer.kind === 'ledger') {
+        signature = await signAndSendLedgerSerializedTransaction(
+          swap.swapTransaction,
+          activeAccount.publicKey,
+          selectedWallet.signer.derivationPath,
+          rpcEndpoint
+        );
+      } else {
+        const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
+        signature = await signAndSendSerializedTransaction(
+          swap.swapTransaction,
+          this.resolveSolanaSignerForWallet(secret, selectedWallet, activeAccount.publicKey),
+          rpcEndpoint
+        );
+      }
     } catch (error) {
       throw normalizeSigningError(error);
     }
@@ -9876,6 +9982,15 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
               password: message.password
             })
           );
+          break;
+        case 'wallet_get_reclaimable_token_accounts':
+          sendResponse(await controller.getReclaimableTokenAccounts());
+          break;
+        case 'wallet_reclaim_token_accounts':
+          sendResponse(await controller.reclaimTokenAccounts({
+            accounts: message.accounts,
+            password: message.password
+          }));
           break;
         case 'wallet_get_swap_quote':
           sendResponse(

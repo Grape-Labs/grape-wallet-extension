@@ -129,7 +129,7 @@ export function ApprovalView(props: {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [approved, setApproved] = useState(false);
+  const [resolution, setResolution] = useState<'approved' | 'rejected' | null>(null);
   const [walletState, setWalletState] = useState<WalletStateResponse | null>(null);
   const [biometricSupported, setBiometricSupported] = useState(false);
   const [biometricUnlocking, setBiometricUnlocking] = useState(false);
@@ -329,6 +329,22 @@ export function ApprovalView(props: {
   }
 
   useEffect(() => {
+    if (!resolution) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      if (inline) {
+        onResolved?.();
+      } else {
+        closeCurrentWindow();
+      }
+    }, 2000);
+
+    return () => window.clearTimeout(timer);
+  }, [resolution, inline, onResolved]);
+
+  useEffect(() => {
     void isBiometricUnlockSupported().then(setBiometricSupported).catch(() => setBiometricSupported(false));
     void sendRuntimeMessage<WalletStateResponse>({ type: 'wallet_get_state' })
       .then(setWalletState)
@@ -339,13 +355,16 @@ export function ApprovalView(props: {
     try {
       setSubmitting(true);
       setError(null);
-      await sendRuntimeMessage({
+      const response = await sendRuntimeMessage<{ approved: boolean }>({
         type: 'approval_respond',
         approvalId,
         approved: true,
         password: passwordOverride ?? (requiresPassword ? password : undefined)
       });
-      setApproved(true);
+      if (!response.approved) {
+        throw new Error('The approval request was not approved.');
+      }
+      setResolution('approved');
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'Unable to approve request.');
     } finally {
@@ -401,17 +420,20 @@ export function ApprovalView(props: {
     );
   }
 
-  if (approved) {
+  if (resolution) {
+    const wasApproved = resolution === 'approved';
     return (
-      <Card className="action-status-card action-status-card-success">
+      <Card className={`action-status-card ${wasApproved ? 'action-status-card-success' : 'action-status-card-rejected'}`}>
         <div className="action-status-body">
-          <div className="action-status-check" aria-hidden="true">
+          <div className={wasApproved ? 'action-status-check' : 'action-status-rejected'} aria-hidden="true">
             <span />
           </div>
-          <StatusPill tone="success">Success</StatusPill>
+          <StatusPill tone={wasApproved ? 'success' : 'danger'}>{wasApproved ? 'Success' : 'Rejected'}</StatusPill>
           <div className="action-status-copy">
-            <h2>{successCopy.title}</h2>
-            <p className="muted">{successCopy.body}</p>
+            <h2>{wasApproved ? successCopy.title : 'Request rejected'}</h2>
+            <p className="muted">
+              {wasApproved ? successCopy.body : 'The request was declined and no transaction was approved.'}
+            </p>
           </div>
           <Button className="button-block" onClick={() => void handleResolved()}>
             Done
@@ -779,12 +801,23 @@ export function ApprovalView(props: {
             tone="danger"
             disabled={submitting}
             onClick={async () => {
-              await sendRuntimeMessage({
-                type: 'approval_respond',
-                approvalId,
-                approved: false
-              });
-              await handleResolved();
+              try {
+                setSubmitting(true);
+                setError(null);
+                const response = await sendRuntimeMessage<{ approved: boolean }>({
+                  type: 'approval_respond',
+                  approvalId,
+                  approved: false
+                });
+                if (response.approved) {
+                  throw new Error('The approval request returned an unexpected result.');
+                }
+                setResolution('rejected');
+              } catch (nextError) {
+                setError(nextError instanceof Error ? nextError.message : 'Unable to reject request.');
+              } finally {
+                setSubmitting(false);
+              }
             }}
           >
             Reject

@@ -110,6 +110,29 @@ export type WalletAssetsResponse = {
   stale?: boolean;
 };
 
+export type ReclaimableTokenAccount = {
+  mint: string;
+  accountAddress: string;
+  programId: string;
+  lamports: number;
+  name?: string;
+  symbol?: string;
+  logoUri?: string;
+};
+
+export type ReclaimableTokenAccountsResponse = {
+  accounts: ReclaimableTokenAccount[];
+  totalLamports: number;
+  network: WalletState['selectedNetwork'];
+};
+
+export type ReclaimTokenAccountsResponse = {
+  signatures: string[];
+  reclaimedLamports: number;
+  closedAccounts: number;
+  network: WalletState['selectedNetwork'];
+};
+
 export type WalletReputationSpace = {
   daoId: string;
   repMint: string;

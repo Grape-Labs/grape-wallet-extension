@@ -693,6 +693,18 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     password: z.string().min(1).optional()
   }),
   z.object({
+    type: z.literal('wallet_get_reclaimable_token_accounts')
+  }),
+  z.object({
+    type: z.literal('wallet_reclaim_token_accounts'),
+    accounts: z.array(z.object({
+      mint: z.string().min(32),
+      accountAddress: z.string().min(32),
+      programId: z.string().min(32)
+    })).min(1).max(64),
+    password: z.string().min(1).optional()
+  }),
+  z.object({
     type: z.literal('wallet_get_swap_quote'),
     amount: decimalAmountSchema,
     slippageBps: z.number().int().min(1).max(5000),

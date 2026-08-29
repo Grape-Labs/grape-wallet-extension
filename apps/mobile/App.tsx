@@ -1358,6 +1358,7 @@ function GrapeApp() {
   const [passkeyAvailable, setPasskeyAvailable] = useState(false);
   const [passkeyUnavailableMessage, setPasskeyUnavailableMessage] = useState<string | null>(null);
   const [biometricLoading, setBiometricLoading] = useState(false);
+  const automaticBiometricUnlockAttemptedRef = useRef(false);
   const [reputation, setReputation] = useState<MobileReputationResponse>({
     spaces: [],
     totalPoints: '0',
@@ -1476,6 +1477,23 @@ function GrapeApp() {
     });
     return () => { mounted = false; };
   }, []);
+
+  useEffect(() => {
+    if (
+      screen !== 'locked' ||
+      automaticBiometricUnlockAttemptedRef.current ||
+      !walletState.biometricEnabled ||
+      !biometricAvailable ||
+      walletState.passkeyWallet ||
+      submitLoading ||
+      biometricLoading
+    ) {
+      return;
+    }
+
+    automaticBiometricUnlockAttemptedRef.current = true;
+    void handleBiometricUnlock({ silentCancellation: true });
+  }, [biometricAvailable, biometricLoading, screen, submitLoading, walletState.biometricEnabled, walletState.passkeyWallet]);
 
   useEffect(() => {
     if (!activeDiscoverTabId && discoverTabs[0]) setActiveDiscoverTabId(discoverTabs[0].id);
@@ -4810,7 +4828,7 @@ function GrapeApp() {
     setQrScannerTarget(null);
   }
 
-  async function handleBiometricUnlock() {
+  async function handleBiometricUnlock(options?: { silentCancellation?: boolean }) {
     if (!walletState.biometricEnabled || !biometricAvailable || submitLoading || biometricLoading) {
       return;
     }
@@ -4826,7 +4844,9 @@ function GrapeApp() {
       });
 
       if (!result.success) {
-        setError('Biometric unlock was cancelled.');
+        if (!options?.silentCancellation) {
+          setError('Biometric unlock was cancelled.');
+        }
         return;
       }
 
@@ -5719,7 +5739,6 @@ function GrapeApp() {
                   size={17}
                   color={activeTheme.text}
                 />
-                {!discoverControlsExpanded ? <Text style={styles.discoverCompactControlText}>Browser</Text> : null}
               </Pressable>
             </View>
           </View>
@@ -10055,14 +10074,14 @@ function createStyles(palette: MobileThemePalette) {
     position: 'absolute',
     bottom: 8,
     left: '50%',
-    marginLeft: -48,
+    marginLeft: -20,
     zIndex: 20,
     elevation: 8,
-    width: 96,
-    height: 36,
-    paddingHorizontal: 6,
+    width: 40,
+    height: 40,
+    paddingHorizontal: 2,
     paddingVertical: 0,
-    borderRadius: 15,
+    borderRadius: 20,
     gap: 0,
     backgroundColor: palette.panel
   },
@@ -10147,18 +10166,11 @@ function createStyles(palette: MobileThemePalette) {
     backgroundColor: 'rgba(255,255,255,0.06)'
   },
   discoverCompactControlButton: {
-    width: 82,
-    height: 32,
-    borderRadius: 16,
-    flexDirection: 'row',
-    gap: 6,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center'
-  },
-  discoverCompactControlText: {
-    color: palette.text,
-    fontSize: 11,
-    fontWeight: '800'
   },
   discoverControlButtonDisabled: {
     opacity: 0.48

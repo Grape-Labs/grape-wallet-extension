@@ -241,6 +241,89 @@ body[data-surface='popup'] .wallet-splash-title {
   }
 }
 
+.reclaim-rent-card {
+  display: grid;
+  gap: 14px;
+}
+
+.reclaim-rent-heading {
+  align-items: flex-start;
+}
+
+.reclaim-rent-heading h2,
+.reclaim-rent-heading p {
+  margin: 0;
+}
+
+.reclaim-account-list {
+  max-height: 390px;
+  overflow-y: auto;
+  border-block: 1px solid var(--theme-divider);
+}
+
+.reclaim-account-row {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 58px;
+  padding: 9px 2px;
+  border-bottom: 1px solid var(--theme-divider);
+  cursor: pointer;
+}
+
+.reclaim-select-all {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  border-bottom: 0;
+}
+
+.reclaim-account-copy {
+  display: grid;
+  min-width: 0;
+}
+
+.reclaim-account-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.reclaim-token-icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  overflow: hidden;
+  border-radius: 50%;
+  color: var(--theme-text);
+  background: var(--theme-accent-soft);
+  font-weight: 800;
+}
+
+.reclaim-token-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.reclaim-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.reclaim-summary > div {
+  display: grid;
+}
+
+.reclaim-summary-value {
+  text-align: right;
+}
+
+.reclaim-actions {
+  justify-content: space-between;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .wallet-splash-halo-primary,
   .wallet-splash-halo-secondary,
@@ -8452,6 +8535,10 @@ body[data-surface='popup'] .bottom-nav-item {
   border-color: color-mix(in srgb, var(--theme-success) 24%, var(--theme-card-border));
 }
 
+.action-status-card-rejected {
+  border-color: color-mix(in srgb, var(--theme-danger) 24%, var(--theme-card-border));
+}
+
 .action-status-body {
   display: grid;
   gap: 14px;
@@ -8495,6 +8582,42 @@ body[data-surface='popup'] .bottom-nav-item {
 .action-status-check {
   background: color-mix(in srgb, var(--theme-success) 16%, transparent);
   border: 1px solid color-mix(in srgb, var(--theme-success) 28%, transparent);
+}
+
+.action-status-rejected {
+  width: 56px;
+  height: 56px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--theme-danger) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-danger) 28%, transparent);
+}
+
+.action-status-rejected span {
+  width: 24px;
+  height: 24px;
+  position: relative;
+}
+
+.action-status-rejected span::before,
+.action-status-rejected span::after {
+  content: '';
+  position: absolute;
+  top: 11px;
+  left: 2px;
+  width: 20px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--theme-danger);
+}
+
+.action-status-rejected span::before {
+  transform: rotate(45deg);
+}
+
+.action-status-rejected span::after {
+  transform: rotate(-45deg);
 }
 
 .action-status-check span {
