@@ -49,6 +49,11 @@ and makes biometric unlock faster on mobile.
 
 ## Mobile
 
+- Redesigned the Discover browser with compact desktop-style tabs above a single
+  navigation and address row, leaving substantially more room for web content.
+- Moved app shortcuts, bookmarks, and secondary browser actions into the overflow
+  menu while keeping back, forward, reload, address, and bookmark controls close
+  at hand.
 - The wallet now attempts biometric unlock automatically when opened on the lock
   screen and biometrics are enabled.
 - Cancelling the automatic biometric prompt no longer displays an unnecessary

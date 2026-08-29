@@ -5707,68 +5707,29 @@ function GrapeApp() {
     return (
       <View style={[styles.discoverScreen, { paddingBottom: footerClearance }]}>
         <View
-          style={[
-            styles.discoverBrowserBar,
-            !discoverControlsExpanded ? [styles.discoverBrowserBarCollapsed, { bottom: footerClearance + 10 }] : null
-          ]}
+          style={styles.discoverBrowserBar}
         >
-          <View style={styles.discoverBrowserBarPrimary}>
-            {discoverControlsExpanded ? (
-              <View style={styles.discoverHeaderCopy}>
-                <Text style={styles.discoverBrowserTitle}>Grape Discover</Text>
-                <Text style={styles.discoverWebviewMeta} numberOfLines={1} ellipsizeMode="middle">
-                  {formatDiscoverUrlDisplay(discoverCurrentUrl || discoverUrl)}
-                </Text>
-              </View>
-            ) : null}
-            <View style={styles.discoverBrowserBarActions}>
-              {discoverControlsExpanded ? (
-                <View style={styles.discoverBetaPill}>
-                  <Text style={styles.discoverBetaPillText}>Solana beta</Text>
-                </View>
-              ) : null}
-              <Pressable
-                style={discoverControlsExpanded ? styles.discoverControlButton : styles.discoverCompactControlButton}
-                onPress={() => setDiscoverControlsExpanded((currentValue) => !currentValue)}
-                hitSlop={discoverControlsExpanded ? undefined : 6}
-                accessibilityRole="button"
-                accessibilityLabel={discoverControlsExpanded ? 'Collapse browser controls' : 'Expand browser controls'}
-              >
-                <Feather
-                  name={discoverControlsExpanded ? 'chevron-up' : 'more-horizontal'}
-                  size={17}
-                  color={activeTheme.text}
-                />
-              </Pressable>
-            </View>
+          <View style={styles.discoverTabsBar}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.discoverTabRow}>
+              {discoverTabs.map((tab) => (
+                <Pressable
+                  key={tab.id}
+                  style={[styles.discoverTabChip, tab.id === activeDiscoverTabId ? styles.discoverTabChipActive : null]}
+                  onPress={() => handleSelectDiscoverTab(tab)}
+                >
+                  <Text style={styles.discoverTabTitle} numberOfLines={1}>{tab.title || formatDiscoverUrlDisplay(tab.url)}</Text>
+                  <Pressable onPress={() => handleCloseDiscoverTab(tab.id)} hitSlop={8} accessibilityLabel={`Close ${tab.title || 'tab'}`}>
+                    <Feather name="x" size={13} color={activeTheme.muted} />
+                  </Pressable>
+                </Pressable>
+              ))}
+            </ScrollView>
+            <Pressable style={styles.discoverNewTabButton} onPress={handleAddDiscoverTab} accessibilityLabel="Open a new tab">
+              <Feather name="plus" size={17} color={activeTheme.text} />
+            </Pressable>
           </View>
 
-          {discoverControlsExpanded ? <View style={styles.discoverToolbar}>
-                <PaperTextInput
-                  value={discoverUrlInput}
-                  onChangeText={setDiscoverUrlInput}
-                  placeholder="Enter a Solana app URL"
-                  mode="outlined"
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  style={[styles.paperInput, styles.discoverAddressInput]}
-                  contentStyle={styles.paperInputContent}
-                  outlineStyle={styles.paperOutline}
-                  textColor={activeTheme.text}
-                  onSubmitEditing={() => handleDiscoverNavigate()}
-                />
-                <PaperButton
-                  mode="contained"
-                  style={styles.discoverGoButton}
-                  buttonColor={activeTheme.primaryButton}
-                  textColor={activeTheme.primaryButtonText}
-                  onPress={() => handleDiscoverNavigate()}
-                >
-                  Open
-                </PaperButton>
-          </View> : null}
-
-          {discoverControlsExpanded ? <View style={styles.discoverControls}>
+          <View style={styles.discoverNavigationBar}>
                 <Pressable
                   style={[styles.discoverControlButton, !discoverCanGoBack ? styles.discoverControlButtonDisabled : null]}
                   disabled={!discoverCanGoBack}
@@ -5786,37 +5747,41 @@ function GrapeApp() {
                 <Pressable style={styles.discoverControlButton} onPress={() => discoverWebViewRef.current?.reload()}>
                   <MaterialCommunityIcons name="refresh" size={18} color={activeTheme.text} />
                 </Pressable>
-                <Pressable style={styles.discoverControlButton} onPress={() => void Linking.openURL(discoverCurrentUrl || discoverUrl)}>
-                  <Feather name="external-link" size={18} color={activeTheme.text} />
+                <View style={styles.discoverAddressBar}>
+                  <Feather name="sliders" size={14} color={activeTheme.muted} />
+                  <TextInput
+                    value={discoverUrlInput}
+                    onChangeText={setDiscoverUrlInput}
+                    placeholder="Search or enter address"
+                    placeholderTextColor={activeTheme.muted}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    returnKeyType="go"
+                    selectTextOnFocus
+                    style={styles.discoverAddressTextInput}
+                    onSubmitEditing={() => handleDiscoverNavigate()}
+                  />
+                  <Pressable onPress={handleToggleDiscoverBookmark} hitSlop={8} accessibilityLabel={discoverIsBookmarked ? 'Remove bookmark' : 'Bookmark this page'}>
+                    <Feather name={discoverIsBookmarked ? 'star' : 'bookmark'} size={16} color={discoverIsBookmarked ? activeTheme.grape : activeTheme.muted} />
+                  </Pressable>
+                </View>
+                <Pressable
+                  style={styles.discoverControlButton}
+                  onPress={() => setDiscoverControlsExpanded((currentValue) => !currentValue)}
+                  accessibilityLabel={discoverControlsExpanded ? 'Hide browser menu' : 'Show browser menu'}
+                >
+                  <Feather name="more-vertical" size={18} color={activeTheme.text} />
                 </Pressable>
-                <Pressable style={styles.discoverControlButton} onPress={handleToggleDiscoverBookmark} accessibilityLabel={discoverIsBookmarked ? 'Remove bookmark' : 'Bookmark this page'}>
-                  <Feather name={discoverIsBookmarked ? 'star' : 'bookmark'} size={18} color={discoverIsBookmarked ? activeTheme.grape : activeTheme.text} />
-                </Pressable>
-          </View> : null}
+          </View>
 
           {discoverControlsExpanded ? (
             <>
-              <View style={styles.discoverSectionHeader}>
-                <Text style={styles.swapPickerSectionLabel}>TABS</Text>
-                <Pressable style={styles.discoverAddButton} onPress={handleAddDiscoverTab} accessibilityLabel="Open a new tab">
-                  <Feather name="plus" size={16} color={activeTheme.text} />
-                  <Text style={styles.discoverAddButtonText}>New tab</Text>
+              <View style={styles.discoverMenuActions}>
+                <Pressable style={styles.discoverMenuAction} onPress={() => void Linking.openURL(discoverCurrentUrl || discoverUrl)}>
+                  <Feather name="external-link" size={16} color={activeTheme.text} />
+                  <Text style={styles.discoverMenuActionText}>Open externally</Text>
                 </Pressable>
               </View>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.discoverTabRow}>
-                {discoverTabs.map((tab) => (
-                  <Pressable
-                    key={tab.id}
-                    style={[styles.discoverTabChip, tab.id === activeDiscoverTabId ? styles.discoverTabChipActive : null]}
-                    onPress={() => handleSelectDiscoverTab(tab)}
-                  >
-                    <Text style={styles.discoverTabTitle} numberOfLines={1}>{tab.title || formatDiscoverUrlDisplay(tab.url)}</Text>
-                    <Pressable onPress={() => handleCloseDiscoverTab(tab.id)} hitSlop={8} accessibilityLabel={`Close ${tab.title || 'tab'}`}>
-                      <Feather name="x" size={14} color={activeTheme.muted} />
-                    </Pressable>
-                  </Pressable>
-                ))}
-              </ScrollView>
               {!discoverWallet ? (
                 <View style={styles.discoverEmptyCard}>
                   <Text style={styles.discoverEmptyTitle}>Add a Solana wallet to connect to apps.</Text>
@@ -10051,15 +10016,14 @@ function createStyles(palette: MobileThemePalette) {
   },
   discoverScreen: {
     flex: 1,
-    gap: 12,
+    gap: 6,
     minHeight: 0,
     paddingTop: 0
   },
   discoverBrowserBar: {
-    paddingHorizontal: 14,
-    paddingBottom: 10,
-    paddingTop: 12,
-    borderRadius: 22,
+    paddingHorizontal: 6,
+    paddingVertical: 6,
+    borderRadius: 14,
     borderWidth: 1,
     borderColor: palette.panelBorder,
     backgroundColor:
@@ -10068,7 +10032,7 @@ function createStyles(palette: MobileThemePalette) {
         : palette.id === 'champagne'
           ? 'rgba(255,255,255,0.76)'
           : 'rgba(255,255,255,0.06)',
-    gap: 10
+    gap: 5
   },
   discoverBrowserBarCollapsed: {
     position: 'absolute',
@@ -10156,9 +10120,9 @@ function createStyles(palette: MobileThemePalette) {
     marginTop: 10
   },
   discoverControlButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
+    width: 34,
+    height: 34,
+    borderRadius: 9,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
@@ -10215,7 +10179,7 @@ function createStyles(palette: MobileThemePalette) {
     flex: 1,
     minHeight: 0,
     overflow: 'hidden',
-    borderRadius: 28,
+    borderRadius: 14,
     borderWidth: 1,
     borderColor: palette.panelBorder,
     backgroundColor:
@@ -10294,18 +10258,18 @@ function createStyles(palette: MobileThemePalette) {
     fontWeight: '800'
   },
   discoverTabRow: {
-    gap: 8,
-    paddingBottom: 2
+    gap: 5,
+    paddingRight: 4
   },
   discoverTabChip: {
-    width: 150,
-    minHeight: 38,
+    width: 132,
+    height: 31,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 8,
-    paddingHorizontal: 11,
-    borderRadius: 12,
+    paddingHorizontal: 9,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: palette.panelBorder,
     backgroundColor: 'rgba(255,255,255,0.04)'
@@ -10317,7 +10281,71 @@ function createStyles(palette: MobileThemePalette) {
   discoverTabTitle: {
     flex: 1,
     color: palette.text,
-    fontSize: 12,
+    fontSize: 11,
+    fontWeight: '700'
+  },
+  discoverTabsBar: {
+    minHeight: 31,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4
+  },
+  discoverNewTabButton: {
+    width: 31,
+    height: 31,
+    flexShrink: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: palette.panelBorder,
+    backgroundColor: 'rgba(255,255,255,0.04)'
+  },
+  discoverNavigationBar: {
+    minHeight: 36,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3
+  },
+  discoverAddressBar: {
+    flex: 1,
+    height: 34,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    paddingHorizontal: 10,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: palette.panelBorder,
+    backgroundColor: 'rgba(0,0,0,0.2)'
+  },
+  discoverAddressTextInput: {
+    flex: 1,
+    minWidth: 0,
+    height: 34,
+    paddingVertical: 0,
+    color: palette.text,
+    fontSize: 12
+  },
+  discoverMenuActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end'
+  },
+  discoverMenuAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: palette.panelBorder,
+    backgroundColor: 'rgba(255,255,255,0.04)'
+  },
+  discoverMenuActionText: {
+    color: palette.text,
+    fontSize: 11,
     fontWeight: '700'
   },
   discoverTrustedOriginRow: {
