@@ -18,20 +18,20 @@ type BasePalette = {
 };
 
 export const basePalette: BasePalette = {
-  bg: '#09040d',
-  panel: 'rgba(30, 14, 38, 0.8)',
-  panelBorder: 'rgba(255,255,255,0.12)',
-  softPanel: 'rgba(255,255,255,0.07)',
-  text: '#fbf7ff',
-  muted: '#bbaece',
-  subtle: '#d8cae8',
+  bg: '#08090d',
+  panel: 'rgba(18, 19, 24, 0.96)',
+  panelBorder: 'rgba(255,255,255,0.08)',
+  softPanel: '#18191d',
+  text: '#f5f5f7',
+  muted: '#999ba3',
+  subtle: '#c4c5ca',
   grape: '#d15fff',
   pink: '#ff7ccc',
   mint: '#8bf7c6',
   warning: '#ffd479',
   danger: '#ff8ea1',
-  frost: 'rgba(255,255,255,0.08)',
-  shadow: 'rgba(6, 0, 12, 0.55)'
+  frost: 'rgba(255,255,255,0.05)',
+  shadow: 'rgba(0, 0, 0, 0.42)'
 };
 
 export const chains = [
@@ -448,9 +448,27 @@ export function getMobileTheme(theme: GrapeTheme | undefined, customTheme?: Cust
     };
   }
 
-  return {
+  const themedPalette = {
     ...basePalette,
     ...paletteOverrides[normalizedTheme],
     ...themeMap[normalizedTheme]
+  };
+
+  return {
+    ...themedPalette,
+    bg: '#08090d',
+    panel: 'rgba(18, 19, 24, 0.96)',
+    panelBorder: 'rgba(255,255,255,0.08)',
+    softPanel: '#18191d',
+    text: '#f5f5f7',
+    muted: '#999ba3',
+    subtle: '#c4c5ca',
+    frost: 'rgba(255,255,255,0.05)',
+    shadow: 'rgba(0,0,0,0.42)',
+    backgroundImageOpacity: Math.min(themedPalette.backgroundImageOpacity, 0.12),
+    backgroundImageBlur: Math.max(themedPalette.backgroundImageBlur, 2),
+    bgGlowTop: 'rgba(255,255,255,0.015)',
+    bgGlowBottom: 'rgba(255,255,255,0.01)',
+    footerBg: 'rgba(8, 9, 13, 0.97)'
   };
 }

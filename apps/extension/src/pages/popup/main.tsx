@@ -19,6 +19,7 @@ import {
   ExternalLink,
   Fingerprint,
   Flame,
+  Globe2,
   Home,
   Landmark,
   Menu,
@@ -94,7 +95,7 @@ const APP_VERSION = extensionPackage.version?.trim() || 'unknown';
 const OG_REPUTATION_DISCOVERY_URL = 'https://vine.governance.so';
 import { OnboardingView } from '../onboarding/OnboardingView';
 
-type PopupView = 'home' | 'send' | 'receive' | 'swap' | 'bridge' | 'settings' | 'asset' | 'security' | 'reclaim-rent' | 'approval';
+type PopupView = 'home' | 'discover' | 'send' | 'receive' | 'swap' | 'bridge' | 'settings' | 'asset' | 'security' | 'reclaim-rent' | 'approval';
 type HomeTab = 'tokens' | 'rebalance' | 'community' | 'governance' | 'collectibles' | 'activity' | 'staking';
 type AssetOption =
   | {
@@ -196,6 +197,17 @@ const CHAIN_OPTIONS = [
   { id: 'ethereum', label: 'Ethereum', shortLabel: 'ETH', enabled: true }
 ] as const;
 const VISIBLE_CHAIN_OPTIONS = CHAIN_OPTIONS.filter((chain) => chain.enabled);
+const DISCOVER_DAPPS = [
+  { name: 'Grape Governance', description: 'Open the Grape DAO directly', category: 'Governance', url: 'https://www.governance.so/dao/By2sVGZXwfQq6rAiAM3rNPJ9iQfb5e2QhnF4YjJ4Bip' },
+  { name: 'Verification', description: 'Manage verified identities', category: 'Community', url: 'https://verification.governance.so' },
+  { name: 'Access', description: 'Open token-gated communities', category: 'Community', url: 'https://access.governance.so' },
+  { name: 'Reputation', description: 'Explore community reputation', category: 'Community', url: OG_REPUTATION_DISCOVERY_URL },
+  { name: 'Jupiter', description: 'Swap, trade, and earn', category: 'DeFi', url: 'https://jup.ag' },
+  { name: 'Tensor', description: 'Trade Solana NFTs', category: 'Collectibles', url: 'https://www.tensor.trade' },
+  { name: 'Magic Eden', description: 'Explore Solana collectibles', category: 'Collectibles', url: 'https://magiceden.io' },
+  { name: 'Kamino', description: 'Borrow, lend, and provide liquidity', category: 'DeFi', url: 'https://kamino.com' },
+  { name: 'Sanctum', description: 'Liquid staking on Solana', category: 'Staking', url: 'https://app.sanctum.so' }
+] as const;
 
 function getSelectedWalletIdForChain(
   wallet: WalletStateResponse['wallet'],
@@ -206,7 +218,7 @@ function getSelectedWalletIdForChain(
 
 function parseInitialView(): PopupView {
   const nextView = new URLSearchParams(window.location.search).get('view');
-  if (nextView === 'send' || nextView === 'receive' || nextView === 'settings' || nextView === 'security') {
+  if (nextView === 'discover' || nextView === 'send' || nextView === 'receive' || nextView === 'settings' || nextView === 'security') {
     return nextView;
   }
   if (nextView === 'swap' || nextView === 'bridge') {
@@ -1062,7 +1074,13 @@ function TokenRow(props: { token: TokenHolding; onSelect?: () => void; privacyMo
   const valueLabel = formatUsd(props.token.valueUsd);
   const quantityLabel = `${formatTokenAmount(props.token)}${props.token.symbol ? ` ${props.token.symbol}` : ''}`;
   const primaryLabel = props.token.name ?? props.token.symbol ?? formatAddress(props.token.mint);
-  const unitPriceLabel = formatUnitPrice(props.token.priceUsd);
+  const tokenQuantity = Number(props.token.amount);
+  const derivedUnitPrice =
+    props.token.priceUsd ??
+    (typeof props.token.valueUsd === 'number' && Number.isFinite(tokenQuantity) && tokenQuantity > 0
+      ? props.token.valueUsd / tokenQuantity
+      : null);
+  const unitPriceLabel = formatUnitPrice(derivedUnitPrice);
   const subtitleParts = [
     unitPriceLabel ? unitPriceLabel : props.token.symbol && props.token.symbol !== primaryLabel ? props.token.symbol : null
   ].filter((value, index, values): value is string => !!value && values.indexOf(value) === index);
@@ -1344,6 +1362,7 @@ function PopupPage() {
   });
   const [view, setView] = useState<PopupView>(() => parseInitialView());
   const [homeTab, setHomeTab] = useState<HomeTab>('tokens');
+  const [discoverQuery, setDiscoverQuery] = useState('');
   const [copiedAddress, setCopiedAddress] = useState(false);
   const [receiveQr, setReceiveQr] = useState('');
   const [assetId, setAssetId] = useState(() => parseInitialAssetId());
@@ -2352,7 +2371,18 @@ function PopupPage() {
   const portfolioValue = useMemo(() => formatUsd(assets.totalUsdValue) ?? homeBalance, [assets.totalUsdValue, homeBalance]);
   const nativeAssetValue = useMemo(() => formatUsd(assets.nativeValueUsd), [assets.nativeValueUsd]);
   const nativeAssetChange = useMemo(() => formatPercent(assets.nativePriceChange24h), [assets.nativePriceChange24h]);
-  const nativeAssetUnitPrice = useMemo(() => formatUnitPrice(assets.nativePriceUsd), [assets.nativePriceUsd]);
+  const nativeAssetUnitPrice = useMemo(() => {
+    const nativeQuantity =
+      typeof assets.lamports === 'number' && Number.isFinite(assets.lamports)
+        ? assets.lamports / 10 ** (assets.nativeDecimals ?? 9)
+        : null;
+    const derivedUnitPrice =
+      assets.nativePriceUsd ??
+      (typeof assets.nativeValueUsd === 'number' && nativeQuantity !== null && nativeQuantity > 0
+        ? assets.nativeValueUsd / nativeQuantity
+        : null);
+    return formatUnitPrice(derivedUnitPrice);
+  }, [assets.lamports, assets.nativeDecimals, assets.nativePriceUsd, assets.nativeValueUsd]);
   const collectibleItems = useMemo(
     () =>
       (assets.collections ?? []).flatMap((collection) =>
@@ -6713,6 +6743,89 @@ function PopupPage() {
     );
   }
 
+  function renderDiscover() {
+    const query = discoverQuery.trim().toLowerCase();
+    const recentConnections = [...(state?.permissions ?? [])]
+      .sort((left, right) => right.updatedAt - left.updatedAt)
+      .slice(0, 6);
+    const visibleDapps = DISCOVER_DAPPS.filter((dapp) =>
+      !query || `${dapp.name} ${dapp.description} ${dapp.category}`.toLowerCase().includes(query)
+    );
+    const openDapp = (url: string) => window.open(url, '_blank', 'noopener,noreferrer');
+
+    return (
+      <div className="discover-page">
+        <section className="discover-hero">
+          <div className="discover-hero-icon" aria-hidden="true"><Globe2 size={22} /></div>
+          <div>
+            <h2>Explore Solana</h2>
+            <p>Discover apps or return to sites connected to Grape.</p>
+          </div>
+        </section>
+
+        <label className="discover-search">
+          <Search size={17} aria-hidden="true" />
+          <input
+            type="search"
+            value={discoverQuery}
+            onChange={(event) => setDiscoverQuery(event.target.value)}
+            placeholder="Search dApps"
+            aria-label="Search dApps"
+          />
+        </label>
+
+        <section className="discover-section" aria-labelledby="recent-dapps-title">
+          <div className="discover-section-heading">
+            <h3 id="recent-dapps-title">Recently connected</h3>
+            <span>{recentConnections.length}</span>
+          </div>
+          {recentConnections.length > 0 ? (
+            <div className="discover-recent-grid">
+              {recentConnections.map((connection) => {
+                let hostname = connection.origin;
+                try { hostname = new URL(connection.origin).hostname.replace(/^www\./, ''); } catch { /* Keep the origin. */ }
+                const label = connection.title?.trim() || hostname;
+                return (
+                  <button key={connection.origin} type="button" className="discover-recent-card" onClick={() => openDapp(connection.origin)}>
+                    <span className="discover-app-icon">{label.slice(0, 1).toUpperCase()}</span>
+                    <span className="discover-recent-copy">
+                      <strong>{label}</strong>
+                      <small>{hostname}</small>
+                    </span>
+                    <ExternalLink size={14} aria-hidden="true" />
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="discover-empty discover-empty-recent">Sites you connect to will appear here.</p>
+          )}
+        </section>
+
+        <section className="discover-section" aria-labelledby="discover-dapps-title">
+          <div className="discover-section-heading">
+            <h3 id="discover-dapps-title">Discover dApps</h3>
+            <span>{visibleDapps.length}</span>
+          </div>
+          <div className="discover-app-list">
+            {visibleDapps.map((dapp) => (
+              <button key={dapp.url} type="button" className="discover-app-row" onClick={() => openDapp(dapp.url)}>
+                <span className="discover-app-icon">{dapp.name.slice(0, 1)}</span>
+                <span className="discover-app-copy">
+                  <strong>{dapp.name}</strong>
+                  <small>{dapp.description}</small>
+                </span>
+                <span className="discover-app-category">{dapp.category}</span>
+                <ChevronRight size={17} aria-hidden="true" />
+              </button>
+            ))}
+            {visibleDapps.length === 0 ? <p className="discover-empty">No dApps match “{discoverQuery.trim()}”.</p> : null}
+          </div>
+        </section>
+      </div>
+    );
+  }
+
   function renderAsset() {
     const isCollectibleView = !!selectedCollectible;
     const showMetadataCards = isCollectibleView || !assetActionMode;
@@ -9203,6 +9316,8 @@ function PopupPage() {
       title={
         view === 'home'
           ? ''
+          : view === 'discover'
+            ? 'Discover'
           : view === 'send'
             ? 'Send'
             : view === 'receive'
@@ -9224,6 +9339,8 @@ function PopupPage() {
       subtitle={
         view === 'home'
           ? undefined
+          : view === 'discover'
+            ? 'Explore apps and revisit connected sites.'
           : view === 'send'
             ? 'Send directly from the popup.'
             : view === 'receive'
@@ -9245,6 +9362,7 @@ function PopupPage() {
       actions={view === 'home' ? undefined : <div className="inline popup-actions">{renderWalletMenu()}</div>}
     >
       {view === 'home' ? renderHome() : null}
+      {view === 'discover' ? renderDiscover() : null}
       {view === 'send' ? renderSend() : null}
       {view === 'receive' ? renderReceive() : null}
       {view === 'asset' ? renderAsset() : null}
@@ -9268,12 +9386,12 @@ function PopupPage() {
         </button>
         <button
           type="button"
-          className={`bottom-nav-item ${view === 'receive' ? 'active' : ''}`.trim()}
-          onClick={() => setView('receive')}
-          aria-label="Receive"
-          title="Receive"
+          className={`bottom-nav-item ${view === 'discover' ? 'active' : ''}`.trim()}
+          onClick={() => setView('discover')}
+          aria-label="Discover dApps"
+          title="Discover dApps"
         >
-          <QrCode size={20} />
+          <Globe2 size={20} />
         </button>
         <button
           type="button"

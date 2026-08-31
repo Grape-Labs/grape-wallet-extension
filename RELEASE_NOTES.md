@@ -16,9 +16,29 @@ and makes biometric unlock faster on mobile.
 
 ## Browser extension
 
+- Cleaned up the unlock password field into a single compact dark control with
+  integrated reveal and biometric actions.
+- Standardized extension themes around the new near-black surface system; themes
+  now retain their accent identity without changing the app's overall structure,
+  contrast, or visual density.
+- Refreshed the extension home screen with a minimal dark layout, neutral header
+  controls, compact actions, clean text navigation, and an open asset list.
+- Reduced decorative backgrounds, borders, nested cards, and accent-color noise
+  while preserving the existing wallet workflows and theme identity.
+- Asset rows now consistently show the per-token USD price and 24-hour change
+  beneath SOL and token names, matching the mobile portfolio layout.
+- Missing mainnet market data is refreshed immediately instead of remaining absent
+  until the balance cache expires.
+- Replaced the duplicate bottom Receive shortcut with a Discover tab for browsing
+  curated Solana dApps and reopening recently connected sites. Receive remains in
+  the primary wallet action row.
+
 ### Transaction approvals
 
 - Fixed rejected transactions incorrectly appearing to be approved afterward.
+- Fixed some versioned swap confirmations showing matching SOL sent and received
+  instead of the purchased token and its USD value when address lookup tables
+  were used.
 - Approval and rejection results now appear in the original approval popup.
 - Resolved approval popups close automatically after two seconds, reducing popup
   buildup when handling multiple transactions.
@@ -49,6 +69,12 @@ and makes biometric unlock faster on mobile.
 
 ## Mobile
 
+- Applied the same restrained dark design system to mobile themes, the wallet
+  header, balance hierarchy, action controls, asset rows, and bottom navigation.
+- Theme backgrounds are now deliberately subtle, with theme identity concentrated
+  in active icons, buttons, and highlights instead of large decorative surfaces.
+- The wallet selection menu now shows the combined cached value across all
+  wallets and the individual USD value of every listed wallet.
 - Redesigned the Discover browser with compact desktop-style tabs above a single
   navigation and address row, leaving substantially more room for web content.
 - Moved app shortcuts, bookmarks, and secondary browser actions into the overflow

@@ -277,6 +277,11 @@ function summarizeBalanceChanges(instructions: ResolvedInstruction[]): Transacti
     const programId = instruction.programId.toBase58();
 
     if (programId === SystemProgram.programId.toBase58()) {
+      // Never substitute an unresolved address-lookup-table account into a
+      // system transfer. Doing so can fabricate matching SOL debit/credit rows.
+      if (instruction.keys.some((key) => !key)) {
+        continue;
+      }
       try {
         const decoded = SystemInstruction.decodeInstructionType(
           new TransactionInstruction({
@@ -847,8 +852,41 @@ export function summarizeTransaction(serialized: string): TransactionSummary {
 }
 
 export async function inspectTransaction(serialized: string, connection: Connection): Promise<TransactionSummary> {
-  const summary = summarizeTransaction(serialized);
   const parsed = parseSerializedTransaction(serialized);
+  const summary = summarizeTransaction(serialized);
+
+  if (parsed.kind === 'versioned' && parsed.transaction.message.addressTableLookups.length > 0) {
+    try {
+      const lookupTableAccounts = await Promise.all(
+        parsed.transaction.message.addressTableLookups.map(async (lookup) => {
+          const response = await connection.getAddressLookupTable(lookup.accountKey);
+          if (!response.value) {
+            throw new Error(`Address lookup table ${lookup.accountKey.toBase58()} is unavailable.`);
+          }
+          return response.value;
+        })
+      );
+      const accountKeys = parsed.transaction.message.getAccountKeys({ addressLookupTableAccounts: lookupTableAccounts });
+      const resolvedInstructions = parsed.transaction.message.compiledInstructions.flatMap<ResolvedInstruction>((instruction) => {
+        const programId = accountKeys.get(instruction.programIdIndex);
+        if (!programId) {
+          return [];
+        }
+        return [{
+          programId,
+          keys: instruction.accountKeyIndexes.map((index) => accountKeys.get(index) ?? null),
+          data: instruction.data
+        }];
+      });
+      const instructions = resolvedInstructions.map((instruction) => summarizeInstruction(instruction));
+      summary.instructions = instructions;
+      summary.instructionCount = instructions.length;
+      summary.balanceChanges = summarizeBalanceChanges(resolvedInstructions);
+      summary.warnings = instructions.flatMap((instruction) => (instruction.warning ? [instruction.warning] : []));
+    } catch {
+      // Keep the conservative partial summary and its lookup-table warning.
+    }
+  }
 
   try {
     const message = parsed.kind === 'versioned' ? parsed.transaction.message : parsed.transaction.compileMessage();

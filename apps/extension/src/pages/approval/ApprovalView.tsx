@@ -14,6 +14,7 @@ import { closeCurrentWindow } from '../../shared/window';
 const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
 const TOKEN_2022_PROGRAM_ID = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
+const WRAPPED_SOL_MINT = 'So11111111111111111111111111111111111111112';
 
 function formatAddress(address: string | undefined, start = 6, end = 6): string {
   if (!address) {
@@ -210,7 +211,13 @@ export function ApprovalView(props: {
     normalizeAddress(approval.transactionSummary.feePayer) === normalizeAddress(approval.publicKey);
   const normalizedWalletImpactChanges = useMemo(() => {
     const hasConcreteSolSend = walletImpactChanges.some(
-      (change) => change.direction === 'out' && (change.assetLabel === 'SOL' || change.assetAddress === 'So11111111111111111111111111111111111111112')
+      (change) => change.direction === 'out' && change.assetLabel === 'SOL' && !change.assetAddress
+    );
+    const hasNonSolTokenReceive = walletImpactChanges.some(
+      (change) =>
+        change.direction === 'in' &&
+        !!change.assetAddress &&
+        normalizeAddress(change.assetAddress) !== normalizeAddress(WRAPPED_SOL_MINT)
     );
 
     return walletImpactChanges
@@ -220,10 +227,16 @@ export function ApprovalView(props: {
         }
 
         return !(
-          change.direction === 'out' &&
-          change.assetLabel === 'Token' &&
-          !change.assetAddress &&
-          normalizeAddress(change.ownerAddress) === normalizeAddress(approval.publicKey)
+          (change.direction === 'out' &&
+            change.assetLabel === 'Token' &&
+            !change.assetAddress &&
+            normalizeAddress(change.ownerAddress) === normalizeAddress(approval.publicKey)) ||
+          // Jupiter first funds a wallet-owned wrapped-SOL account and then
+          // consumes it inside the swap. That intermediate credit is not SOL
+          // the user receives and must not replace the actual output token.
+          (hasNonSolTokenReceive &&
+            change.direction === 'in' &&
+            normalizeAddress(change.assetAddress) === normalizeAddress(WRAPPED_SOL_MINT))
         );
       })
       .sort((left, right) => {

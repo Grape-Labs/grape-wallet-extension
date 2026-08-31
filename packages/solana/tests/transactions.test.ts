@@ -1,6 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import bs58 from 'bs58';
-import { Keypair, PublicKey, SystemProgram, Transaction, TransactionInstruction } from '@solana/web3.js';
+import {
+  AddressLookupTableAccount,
+  Keypair,
+  PublicKey,
+  SystemProgram,
+  Transaction,
+  TransactionInstruction,
+  TransactionMessage,
+  VersionedTransaction
+} from '@solana/web3.js';
 
 import { bytesToBase64 } from '@grape/core';
 
@@ -27,6 +36,33 @@ function createSerializedTransfer() {
       verifySignatures: false
     })
   );
+}
+
+function createVersionedLookupTransfer() {
+  const feePayer = Keypair.generate().publicKey;
+  const recipient = Keypair.generate().publicKey;
+  const lookupTable = new AddressLookupTableAccount({
+    key: Keypair.generate().publicKey,
+    state: {
+      deactivationSlot: 0xffffffffffffffffn,
+      lastExtendedSlot: 0,
+      lastExtendedSlotStartIndex: 0,
+      authority: undefined,
+      addresses: [recipient]
+    }
+  });
+  const message = new TransactionMessage({
+    payerKey: feePayer,
+    recentBlockhash: '11111111111111111111111111111111',
+    instructions: [SystemProgram.transfer({ fromPubkey: feePayer, toPubkey: recipient, lamports: 7_233_136 })]
+  }).compileToV0Message([lookupTable]);
+
+  return {
+    feePayer,
+    recipient,
+    lookupTable,
+    serialized: bytesToBase64(new VersionedTransaction(message).serialize())
+  };
 }
 
 function createSerializedTokenTransfer() {
@@ -164,6 +200,24 @@ describe('transactions', () => {
     expect(summary.simulation?.ok).toBe(true);
     expect(summary.simulation?.unitsConsumed).toBe(5400);
     expect(summary.simulation?.logs).toHaveLength(1);
+  });
+
+  it('resolves lookup-table accounts before calculating balance changes', async () => {
+    const { feePayer, recipient, lookupTable, serialized } = createVersionedLookupTransfer();
+    const connection = {
+      getAddressLookupTable: vi.fn().mockResolvedValue({ value: lookupTable }),
+      getFeeForMessage: vi.fn().mockResolvedValue({ value: 5000 }),
+      simulateTransaction: vi.fn().mockResolvedValue({ value: { err: null, logs: [] } })
+    } as const;
+
+    const summary = await inspectTransaction(serialized, connection as never);
+
+    expect(summary.warnings).not.toContain('Address lookup tables are present. Some account decoding may be incomplete.');
+    expect(summary.balanceChanges).toEqual(expect.arrayContaining([
+      expect.objectContaining({ account: feePayer.toBase58(), direction: 'out', assetLabel: 'SOL' }),
+      expect.objectContaining({ account: recipient.toBase58(), direction: 'in', assetLabel: 'SOL' })
+    ]));
+    expect(summary.balanceChanges.some((change) => change.account === SystemProgram.programId.toBase58())).toBe(false);
   });
 
   it('attributes outgoing token transfers to the signing wallet', () => {

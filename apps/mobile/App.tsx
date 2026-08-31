@@ -1553,8 +1553,8 @@ function GrapeApp() {
   const isWide = width >= 768;
   const contentMaxWidth = isWide ? 680 : 560;
   const screenPadding = isCompact ? 10 : 12;
-  const footerInset = isCompact ? 16 : 20;
-  const footerClearance = footerInset + 80;
+  const footerInset = 0;
+  const footerClearance = 74;
   const deviceLinkQrSize = Math.max(240, Math.min(width - 120, 320));
   const paperTheme = useMemo(
     () => ({
@@ -1597,10 +1597,21 @@ function GrapeApp() {
     () => chains.filter((item) => walletState.wallets.some((wallet) => wallet.chain === item.id)),
     [walletState.wallets]
   );
-  const walletPickerHeight = Math.min(height - 160, Math.max(280, Math.min(520, 132 + chainWallets.length * 62)));
+  const walletPickerHeight = Math.min(height - 120, Math.max(340, Math.min(600, 210 + chainWallets.length * 62)));
   const chainPickerHeight = Math.min(height - 160, Math.max(360, Math.min(580, 140 + availableChains.length * 88)));
   const walletGroups = useMemo(() => groupWalletsBySource(dedupeVisibleWallets(walletState.wallets)), [walletState.wallets]);
   const chainWalletGroups = useMemo(() => groupWalletsBySource(chainWallets), [chainWallets]);
+  const cachedWalletValues = walletState.wallets
+    .map((wallet) => walletValueCache[wallet.id]?.valueUsd)
+    .filter((value): value is number => Number.isFinite(value));
+  const cachedWalletTotal = cachedWalletValues.reduce((sum, value) => sum + value, 0);
+  const formatCachedWalletValue = (value: number) =>
+    value.toLocaleString(undefined, {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    });
   const filteredActivity = useMemo(
     () => {
       if (!selectedWallet) {
@@ -1684,7 +1695,7 @@ function GrapeApp() {
     });
   }, [assets, assetsLoading, selectedWallet]);
   useEffect(() => {
-    if (!walletListExpanded) return;
+    if (!walletListExpanded && !homeWalletMenuExpanded) return;
     let active = true;
     const staleWallets = walletState.wallets.filter((candidate) => {
       const cached = walletValueCache[candidate.id];
@@ -1710,7 +1721,7 @@ function GrapeApp() {
     return () => {
       active = false;
     };
-  }, [walletListExpanded, walletState.wallets]);
+  }, [homeWalletMenuExpanded, walletListExpanded, walletState.wallets]);
   useEffect(() => {
     let active = true;
     setAssetPriceHistory([]);
@@ -7431,18 +7442,6 @@ function GrapeApp() {
       ...governance.daos.map((dao) => dao.daoId),
       ...walletState.trackedGovernanceDaoIds
     ]).size;
-    const cachedWalletValues = walletState.wallets
-      .map((wallet) => walletValueCache[wallet.id]?.valueUsd)
-      .filter((value): value is number => Number.isFinite(value));
-    const cachedWalletTotal = cachedWalletValues.reduce((sum, value) => sum + value, 0);
-    const formatCachedWalletValue = (value: number) =>
-      value.toLocaleString(undefined, {
-        style: 'currency',
-        currency: 'USD',
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2
-      });
-
     const toggleSettingsSection = (section: string) => {
       setExpandedSettingsSections((previous) => {
         const next = new Set(previous);
@@ -8626,28 +8625,28 @@ function GrapeApp() {
             style={[styles.footerButton, mainTab === 'home' ? styles.footerButtonActive : null]}
             onPress={() => setMainTab('home')}
           >
-            <MaterialCommunityIcons name="home-variant-outline" size={24} color={mainTab === 'home' ? activeTheme.text : activeTheme.muted} />
+            <MaterialCommunityIcons name="home-variant-outline" size={24} color={mainTab === 'home' ? activeTheme.grape : activeTheme.muted} />
             <Text style={[styles.footerLabel, mainTab === 'home' ? styles.footerLabelActive : null]}>Home</Text>
           </Pressable>
           <Pressable
             style={[styles.footerButton, mainTab === 'activity' ? styles.footerButtonActive : null]}
             onPress={() => setMainTab('activity')}
           >
-            <MaterialCommunityIcons name="history" size={24} color={mainTab === 'activity' ? activeTheme.text : activeTheme.muted} />
+            <MaterialCommunityIcons name="history" size={24} color={mainTab === 'activity' ? activeTheme.grape : activeTheme.muted} />
             <Text style={[styles.footerLabel, mainTab === 'activity' ? styles.footerLabelActive : null]}>Activity</Text>
           </Pressable>
           <Pressable
             style={[styles.footerButton, mainTab === 'discover' ? styles.footerButtonActive : null]}
             onPress={() => setMainTab('discover')}
           >
-            <MaterialCommunityIcons name="compass-outline" size={24} color={mainTab === 'discover' ? activeTheme.text : activeTheme.muted} />
+            <MaterialCommunityIcons name="compass-outline" size={24} color={mainTab === 'discover' ? activeTheme.grape : activeTheme.muted} />
             <Text style={[styles.footerLabel, mainTab === 'discover' ? styles.footerLabelActive : null]}>Discover</Text>
           </Pressable>
           <Pressable
             style={[styles.footerButton, mainTab === 'settings' ? styles.footerButtonActive : null]}
             onPress={() => setMainTab('settings')}
           >
-            <MaterialCommunityIcons name="cog-outline" size={24} color={mainTab === 'settings' ? activeTheme.text : activeTheme.muted} />
+            <MaterialCommunityIcons name="cog-outline" size={24} color={mainTab === 'settings' ? activeTheme.grape : activeTheme.muted} />
             <Text style={[styles.footerLabel, mainTab === 'settings' ? styles.footerLabelActive : null]}>Settings</Text>
           </Pressable>
         </View>
@@ -8668,6 +8667,20 @@ function GrapeApp() {
               </Pressable>
             </View>
             <ScrollView style={styles.modalSheetScroll} contentContainerStyle={styles.homeWalletMenu} showsVerticalScrollIndicator={false}>
+              <View style={styles.walletValueSummary}>
+                <View>
+                  <Text style={styles.walletValueSummaryLabel}>All wallets</Text>
+                  <Text style={styles.walletValueSummaryMeta}>
+                    {cachedWalletValues.length} of {walletState.wallets.length} wallets valued
+                  </Text>
+                </View>
+                <Text style={styles.walletValueSummaryAmount}>
+                  {maskValue(
+                    cachedWalletValues.length > 0 ? formatCachedWalletValue(cachedWalletTotal) : 'Loading…',
+                    walletState.privacyMode
+                  )}
+                </Text>
+              </View>
               {chainWalletGroups.map((group) => (
                 <View key={group.source} style={styles.walletGroupSection}>
                   <Text style={styles.walletGroupTitle}>{group.label}</Text>
@@ -8689,7 +8702,17 @@ function GrapeApp() {
                           <Text style={[styles.walletSwitchChipTitle, active ? styles.walletSwitchChipTitleActive : null]}>{wallet.name}</Text>
                           <Text style={styles.walletSwitchChipAddress}>{shortenAddress(wallet.address)}</Text>
                         </View>
-                        {active ? <Feather name="check" size={18} color={activeTheme.grape} /> : null}
+                        <View style={styles.homeWalletMenuItemValue}>
+                          <Text style={styles.walletCachedValue}>
+                            {maskValue(
+                              walletValueCache[wallet.id]
+                                ? formatCachedWalletValue(walletValueCache[wallet.id].valueUsd)
+                                : 'Loading…',
+                              walletState.privacyMode
+                            )}
+                          </Text>
+                          {active ? <Feather name="check" size={18} color={activeTheme.grape} /> : null}
+                        </View>
                       </Pressable>
                     );
                   })}
@@ -9303,9 +9326,9 @@ function createStyles(palette: MobileThemePalette) {
     justifyContent: 'center'
   },
   mainContent: {
-    paddingTop: 18,
-    paddingBottom: 140,
-    gap: 20
+    paddingTop: 14,
+    paddingBottom: 110,
+    gap: 16
   },
   centered: {
     flex: 1,
@@ -9780,8 +9803,7 @@ function createStyles(palette: MobileThemePalette) {
     paddingBottom: 18,
     gap: 16,
     borderWidth: 0,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: palette.panelBorder,
+    borderBottomWidth: 0,
     borderRadius: 0,
     backgroundColor: 'transparent'
   },
@@ -9834,17 +9856,11 @@ function createStyles(palette: MobileThemePalette) {
     alignItems: 'center'
   },
   refreshChip: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: palette.id === 'apple' ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.08)',
-    borderWidth: 1,
-    borderColor:
-      palette.id === 'apple'
-        ? 'rgba(255,255,255,0.14)'
-        : palette.id === 'champagne'
-          ? 'rgba(128,93,36,0.08)'
-          : 'rgba(255,255,255,0.08)',
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: 'transparent',
+    borderWidth: 0,
     alignItems: 'center',
     justifyContent: 'center'
   },
@@ -9888,28 +9904,29 @@ function createStyles(palette: MobileThemePalette) {
   },
   balanceBlock: {
     gap: 5,
-    paddingVertical: 12,
-    alignItems: 'center'
+    paddingTop: 18,
+    paddingBottom: 8,
+    alignItems: 'flex-start'
   },
   balanceHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
     gap: 8
   },
   cardBalance: {
     color: palette.text,
-    fontSize: 46,
-    fontWeight: '900',
+    fontSize: 48,
+    fontWeight: '800',
     letterSpacing: -1.8,
     lineHeight: 52,
-    textAlign: 'center'
+    textAlign: 'left'
   },
   cardSubtle: {
     color: palette.muted,
     fontSize: 12,
     flexShrink: 1,
-    textAlign: 'center'
+    textAlign: 'left'
   },
   privacyToggleButton: {
     width: 28,
@@ -9917,14 +9934,8 @@ function createStyles(palette: MobileThemePalette) {
     borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: palette.panelBorder,
-    backgroundColor:
-      palette.id === 'apple'
-        ? 'rgba(255,255,255,0.08)'
-        : palette.id === 'champagne'
-          ? 'rgba(255,255,255,0.72)'
-          : 'rgba(255,255,255,0.06)'
+    borderWidth: 0,
+    backgroundColor: 'transparent'
   },
   privacyToggleButtonActive: {
     borderColor: palette.primaryButton,
@@ -9945,12 +9956,11 @@ function createStyles(palette: MobileThemePalette) {
     alignItems: 'center',
     justifyContent: 'center',
     gap: 7,
-    minHeight: 72,
+    minHeight: 74,
     borderRadius: 18,
     paddingVertical: 9,
     backgroundColor: palette.softPanel,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: palette.panelBorder
+    borderWidth: 0
   },
   quickActionButtonDisabled: {
     flex: 1,
@@ -9961,8 +9971,7 @@ function createStyles(palette: MobileThemePalette) {
     borderRadius: 18,
     paddingVertical: 9,
     backgroundColor: palette.softPanel,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: palette.panelBorder,
+    borderWidth: 0,
     opacity: 0.5
   },
   quickActionIcon: {
@@ -10396,6 +10405,10 @@ function createStyles(palette: MobileThemePalette) {
     flex: 1,
     gap: 2
   },
+  homeWalletMenuItemValue: {
+    alignItems: 'flex-end',
+    gap: 4
+  },
   walletSwitchChipTitle: {
     color: palette.text,
     fontSize: 14,
@@ -10607,7 +10620,7 @@ function createStyles(palette: MobileThemePalette) {
   homeAssetRow: {
     minHeight: 70,
     gap: 13,
-    paddingHorizontal: 6,
+    paddingHorizontal: 0,
     paddingVertical: 11,
     borderRadius: 16,
     borderBottomWidth: 0
@@ -11964,27 +11977,29 @@ function createStyles(palette: MobileThemePalette) {
     flexDirection: 'row',
     justifyContent: 'space-between',
     gap: 6,
-    padding: 8,
-    borderRadius: 30,
-    borderWidth: 1,
-    borderColor: palette.panelBorder,
+    paddingHorizontal: 18,
+    paddingVertical: 6,
+    borderRadius: 0,
+    borderWidth: 0,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: palette.panelBorder,
     backgroundColor: palette.footerBg,
     shadowColor: '#000',
-    shadowOpacity: 0.3,
-    shadowRadius: 24,
-    shadowOffset: { width: 0, height: 12 },
-    elevation: 14
+    shadowOpacity: 0,
+    shadowRadius: 0,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 8
   },
   footerButton: {
     flex: 1,
-    minHeight: 62,
+    minHeight: 58,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 3,
-    borderRadius: 22
+    borderRadius: 12
   },
   footerButtonActive: {
-    backgroundColor: 'rgba(255,255,255,0.1)'
+    backgroundColor: 'transparent'
   },
   footerGlyph: {
     color: palette.text,

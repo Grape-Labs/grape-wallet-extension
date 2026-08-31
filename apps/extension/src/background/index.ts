@@ -2679,15 +2679,19 @@ class WalletController {
 
     if (cached) {
       const stale = Date.now() - cached.cachedAt >= ASSET_CACHE_TTL_MS;
+      const marketDataMissing =
+        walletState.selectedNetwork === 'mainnet-beta' &&
+        selectedWallet.chain !== 'monad' &&
+        cached.data.nativePriceUsd == null;
       if (!stale) {
-        if (cached.data.stale && options?.staleWhileRevalidate) {
+        if ((cached.data.stale || marketDataMissing) && options?.staleWhileRevalidate) {
           void this.refreshAssetsCache(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey);
         }
         return {
           ...cached.data,
           cachedAt: cached.cachedAt,
           fromCache: true,
-          stale: !!cached.data.stale
+          stale: !!cached.data.stale || marketDataMissing
         };
       }
 
