@@ -32,6 +32,13 @@ and makes biometric unlock faster on mobile.
 - Replaced the duplicate bottom Receive shortcut with a Discover tab for browsing
   curated Solana dApps and reopening recently connected sites. Receive remains in
   the primary wallet action row.
+- Expanded Discover with category filters, featured recommendations, and official
+  site favicons across DeFi, staking, collectibles, governance, analytics, explorers,
+  community apps, and wallet tools.
+- Added more top spacing to the Discover header for a less cramped popup layout.
+- Hardened token burning with an empty-by-default amount, estimated value-loss and
+  remaining-balance previews, typed confirmation for priced assets, explicit
+  irreversible-action warnings, and a final native confirmation prompt.
 
 ### Transaction approvals
 

@@ -9460,6 +9460,10 @@ body[data-surface='popup'] .discover-page {
   padding: 2px 0 84px;
 }
 
+body[data-surface='popup'] .page-shell:has(.discover-page) {
+  padding-top: 18px;
+}
+
 body[data-surface='popup'] .discover-hero {
   display: flex;
   align-items: center;
@@ -9532,6 +9536,38 @@ body[data-surface='popup'] .discover-search input::placeholder {
   color: #6f7179;
 }
 
+body[data-surface='popup'] .discover-category-strip {
+  display: flex;
+  gap: 7px;
+  margin-top: -12px;
+  padding-bottom: 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+body[data-surface='popup'] .discover-category-strip::-webkit-scrollbar {
+  display: none;
+}
+
+body[data-surface='popup'] .discover-category-strip button {
+  flex: 0 0 auto;
+  min-height: 31px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 999px;
+  background: #17181d;
+  color: #858790;
+  font-size: 0.68rem;
+  font-weight: 650;
+}
+
+body[data-surface='popup'] .discover-category-strip button:hover,
+body[data-surface='popup'] .discover-category-strip button.active {
+  transform: none;
+  background: color-mix(in srgb, var(--theme-accent) 17%, #17181d);
+  color: color-mix(in srgb, var(--theme-accent) 70%, white 30%);
+}
+
 body[data-surface='popup'] .discover-section {
   display: grid;
   gap: 12px;
@@ -9595,6 +9631,13 @@ body[data-surface='popup'] .discover-app-icon {
   border-radius: 12px;
   font-size: 0.84rem;
   font-weight: 750;
+  overflow: hidden;
+}
+
+body[data-surface='popup'] .discover-app-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 body[data-surface='popup'] .discover-recent-copy,
@@ -9647,6 +9690,19 @@ body[data-surface='popup'] .discover-app-category {
   font-size: 0.62rem;
 }
 
+body[data-surface='popup'] .discover-app-badges {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+body[data-surface='popup'] .discover-featured {
+  color: color-mix(in srgb, var(--theme-accent) 76%, white 24%);
+  font-size: 0.6rem;
+  font-weight: 700;
+}
+
 body[data-surface='popup'] .discover-app-row > svg {
   color: #5e6068;
 }
@@ -9663,4 +9719,63 @@ body[data-surface='popup'] .discover-empty-recent {
   padding: 16px;
   border-radius: 13px;
   background: #15161a;
+}
+
+body[data-surface='popup'] .discover-disclaimer {
+  margin: -8px 4px 0;
+  color: #62646c;
+  font-size: 0.65rem;
+  line-height: 1.5;
+  text-align: center;
+}
+
+body[data-surface='popup'] .token-burn-card {
+  border-color: rgba(255, 93, 119, 0.24);
+}
+
+body[data-surface='popup'] .token-burn-warning {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+}
+
+body[data-surface='popup'] .token-burn-warning strong {
+  color: #ff9aad;
+}
+
+body[data-surface='popup'] .token-burn-warning span {
+  color: #c4a0a8;
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+body[data-surface='popup'] .token-burn-amount-shell {
+  display: flex;
+  align-items: center;
+}
+
+body[data-surface='popup'] .token-burn-amount-shell .input {
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+body[data-surface='popup'] .token-burn-max {
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  color: color-mix(in srgb, var(--theme-accent) 76%, white 24%);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+body[data-surface='popup'] .token-burn-impact {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: #15161a;
+}
+
+body[data-surface='popup'] .token-burn-confirmation .warning-box {
+  margin: 0;
+  line-height: 1.5;
 }

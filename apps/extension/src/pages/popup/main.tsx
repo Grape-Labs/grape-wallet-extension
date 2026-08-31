@@ -198,16 +198,54 @@ const CHAIN_OPTIONS = [
 ] as const;
 const VISIBLE_CHAIN_OPTIONS = CHAIN_OPTIONS.filter((chain) => chain.enabled);
 const DISCOVER_DAPPS = [
-  { name: 'Grape Governance', description: 'Open the Grape DAO directly', category: 'Governance', url: 'https://www.governance.so/dao/By2sVGZXwfQq6rAiAM3rNPJ9iQfb5e2QhnF4YjJ4Bip' },
+  { name: 'Grape Governance', description: 'Open the Grape DAO directly', category: 'Governance', url: 'https://www.governance.so/dao/By2sVGZXwfQq6rAiAM3rNPJ9iQfb5e2QhnF4YjJ4Bip', featured: true },
+  { name: 'Jupiter', description: 'Swap, trade, and earn', category: 'DeFi', url: 'https://jup.ag', featured: true },
+  { name: 'Kamino', description: 'Borrow, lend, and provide liquidity', category: 'DeFi', url: 'https://app.kamino.finance', featured: true },
+  { name: 'Sanctum', description: 'Explore Solana liquid staking', category: 'Staking', url: 'https://app.sanctum.so', featured: true },
+  { name: 'Tensor', description: 'Trade Solana collectibles', category: 'Collectibles', url: 'https://www.tensor.trade', featured: true },
+  { name: 'Raydium', description: 'Swap and provide on-chain liquidity', category: 'DeFi', url: 'https://raydium.io/swap' },
+  { name: 'Orca', description: 'Trade tokens and explore liquidity pools', category: 'DeFi', url: 'https://www.orca.so' },
+  { name: 'Drift', description: 'Trade spot and perpetual markets', category: 'DeFi', url: 'https://app.drift.trade' },
+  { name: 'Meteora', description: 'Dynamic liquidity pools and vaults', category: 'DeFi', url: 'https://app.meteora.ag' },
+  { name: 'marginfi', description: 'Lend and borrow Solana assets', category: 'DeFi', url: 'https://app.marginfi.com' },
+  { name: 'Marinade', description: 'Native and liquid SOL staking', category: 'Staking', url: 'https://marinade.finance/app' },
+  { name: 'Jito', description: 'Stake SOL and explore JitoSOL', category: 'Staking', url: 'https://www.jito.network/staking' },
+  { name: 'Magic Eden', description: 'Discover and trade collectibles', category: 'Collectibles', url: 'https://magiceden.us' },
+  { name: 'Metaplex', description: 'Create and manage digital assets', category: 'Collectibles', url: 'https://www.metaplex.com' },
+  { name: 'Birdeye', description: 'Token charts and market analytics', category: 'Analytics', url: 'https://birdeye.so' },
+  { name: 'Solscan', description: 'Explore accounts and transactions', category: 'Explorer', url: 'https://solscan.io' },
+  { name: 'SolanaFM', description: 'Human-readable Solana explorer', category: 'Explorer', url: 'https://solana.fm' },
+  { name: 'Squads', description: 'Manage assets with a multisig', category: 'Tools', url: 'https://v4.squads.so' },
   { name: 'Verification', description: 'Manage verified identities', category: 'Community', url: 'https://verification.governance.so' },
   { name: 'Access', description: 'Open token-gated communities', category: 'Community', url: 'https://access.governance.so' },
-  { name: 'Reputation', description: 'Explore community reputation', category: 'Community', url: OG_REPUTATION_DISCOVERY_URL },
-  { name: 'Jupiter', description: 'Swap, trade, and earn', category: 'DeFi', url: 'https://jup.ag' },
-  { name: 'Tensor', description: 'Trade Solana NFTs', category: 'Collectibles', url: 'https://www.tensor.trade' },
-  { name: 'Magic Eden', description: 'Explore Solana collectibles', category: 'Collectibles', url: 'https://magiceden.io' },
-  { name: 'Kamino', description: 'Borrow, lend, and provide liquidity', category: 'DeFi', url: 'https://kamino.com' },
-  { name: 'Sanctum', description: 'Liquid staking on Solana', category: 'Staking', url: 'https://app.sanctum.so' }
+  { name: 'Reputation', description: 'Explore community reputation', category: 'Community', url: OG_REPUTATION_DISCOVERY_URL }
 ] as const;
+const DISCOVER_CATEGORIES = ['All', 'DeFi', 'Staking', 'Collectibles', 'Governance', 'Community', 'Analytics', 'Explorer', 'Tools'] as const;
+
+function getSiteFavicon(url: string): string | undefined {
+  try {
+    return `${new URL(url).origin}/favicon.ico`;
+  } catch {
+    return undefined;
+  }
+}
+
+function DiscoverAppIcon(props: { name: string; url: string; faviconUrl?: string }) {
+  const [failed, setFailed] = useState(false);
+  const faviconUrl = props.faviconUrl?.trim() || getSiteFavicon(props.url);
+
+  useEffect(() => setFailed(false), [faviconUrl]);
+
+  return (
+    <span className="discover-app-icon" aria-hidden="true">
+      {faviconUrl && !failed ? (
+        <img src={faviconUrl} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(true)} />
+      ) : (
+        props.name.slice(0, 1).toUpperCase()
+      )}
+    </span>
+  );
+}
 
 function getSelectedWalletIdForChain(
   wallet: WalletStateResponse['wallet'],
@@ -1363,6 +1401,7 @@ function PopupPage() {
   const [view, setView] = useState<PopupView>(() => parseInitialView());
   const [homeTab, setHomeTab] = useState<HomeTab>('tokens');
   const [discoverQuery, setDiscoverQuery] = useState('');
+  const [discoverCategory, setDiscoverCategory] = useState<(typeof DISCOVER_CATEGORIES)[number]>('All');
   const [copiedAddress, setCopiedAddress] = useState(false);
   const [receiveQr, setReceiveQr] = useState('');
   const [assetId, setAssetId] = useState(() => parseInitialAssetId());
@@ -1548,6 +1587,7 @@ function PopupPage() {
   const [tokenActionError, setTokenActionError] = useState<string | null>(null);
   const [tokenActionResult, setTokenActionResult] = useState<TokenActionResponse | null>(null);
   const [burnAmount, setBurnAmount] = useState('');
+  const [burnConfirmation, setBurnConfirmation] = useState('');
   const [burnPassword, setBurnPassword] = useState('');
   const [tokenActionSubmitting, setTokenActionSubmitting] = useState<'burn' | 'close' | null>(null);
   const [securityReport, setSecurityReport] = useState<WalletSecurityReportResponse | null>(null);
@@ -3638,6 +3678,31 @@ function PopupPage() {
       return;
     }
 
+    const requestedAmount = Number(burnAmount);
+    const availableAmount = Number(assetDetails.amount);
+    if (!Number.isFinite(requestedAmount) || requestedAmount <= 0 || requestedAmount > availableAmount) {
+      setTokenActionError(`Enter an amount greater than zero and no more than ${assetDetails.amount}.`);
+      return;
+    }
+
+    const symbol = assetDetails.symbol?.trim() || 'TOKEN';
+    const holdingAmount = Number(selectedTokenHolding?.amount);
+    const unitPriceUsd =
+      selectedTokenHolding?.priceUsd ??
+      (typeof selectedTokenHolding?.valueUsd === 'number' && Number.isFinite(holdingAmount) && holdingAmount > 0
+        ? selectedTokenHolding.valueUsd / holdingAmount
+        : null);
+    const estimatedValue =
+      typeof unitPriceUsd === 'number' && Number.isFinite(unitPriceUsd)
+        ? requestedAmount * unitPriceUsd
+        : null;
+    const valueWarning = estimatedValue !== null && estimatedValue > 0
+      ? ` This will destroy approximately ${formatUsd(estimatedValue)} of value.`
+      : '';
+    if (!window.confirm(`Permanently burn ${burnAmount} ${symbol}?${valueWarning} Burned tokens cannot be recovered.`)) {
+      return;
+    }
+
     try {
       setTokenActionSubmitting('burn');
       setTokenActionError(null);
@@ -3652,6 +3717,7 @@ function PopupPage() {
       });
       setTokenActionResult(result);
       setBurnAmount('');
+      setBurnConfirmation('');
       setBurnPassword('');
       await refresh();
       await refreshAssetDetails(assetDetails);
@@ -6749,7 +6815,8 @@ function PopupPage() {
       .sort((left, right) => right.updatedAt - left.updatedAt)
       .slice(0, 6);
     const visibleDapps = DISCOVER_DAPPS.filter((dapp) =>
-      !query || `${dapp.name} ${dapp.description} ${dapp.category}`.toLowerCase().includes(query)
+      (discoverCategory === 'All' || dapp.category === discoverCategory) &&
+      (!query || `${dapp.name} ${dapp.description} ${dapp.category}`.toLowerCase().includes(query))
     );
     const openDapp = (url: string) => window.open(url, '_blank', 'noopener,noreferrer');
 
@@ -6774,6 +6841,19 @@ function PopupPage() {
           />
         </label>
 
+        <div className="discover-category-strip" aria-label="dApp categories">
+          {DISCOVER_CATEGORIES.map((category) => (
+            <button
+              key={category}
+              type="button"
+              className={discoverCategory === category ? 'active' : ''}
+              onClick={() => setDiscoverCategory(category)}
+            >
+              {category}
+            </button>
+          ))}
+        </div>
+
         <section className="discover-section" aria-labelledby="recent-dapps-title">
           <div className="discover-section-heading">
             <h3 id="recent-dapps-title">Recently connected</h3>
@@ -6787,7 +6867,7 @@ function PopupPage() {
                 const label = connection.title?.trim() || hostname;
                 return (
                   <button key={connection.origin} type="button" className="discover-recent-card" onClick={() => openDapp(connection.origin)}>
-                    <span className="discover-app-icon">{label.slice(0, 1).toUpperCase()}</span>
+                    <DiscoverAppIcon name={label} url={connection.origin} faviconUrl={connection.faviconUrl} />
                     <span className="discover-recent-copy">
                       <strong>{label}</strong>
                       <small>{hostname}</small>
@@ -6810,18 +6890,22 @@ function PopupPage() {
           <div className="discover-app-list">
             {visibleDapps.map((dapp) => (
               <button key={dapp.url} type="button" className="discover-app-row" onClick={() => openDapp(dapp.url)}>
-                <span className="discover-app-icon">{dapp.name.slice(0, 1)}</span>
+                <DiscoverAppIcon name={dapp.name} url={dapp.url} />
                 <span className="discover-app-copy">
                   <strong>{dapp.name}</strong>
                   <small>{dapp.description}</small>
                 </span>
-                <span className="discover-app-category">{dapp.category}</span>
+                <span className="discover-app-badges">
+                  <span className="discover-app-category">{dapp.category}</span>
+                  {'featured' in dapp && dapp.featured ? <span className="discover-featured">Featured</span> : null}
+                </span>
                 <ChevronRight size={17} aria-hidden="true" />
               </button>
             ))}
             {visibleDapps.length === 0 ? <p className="discover-empty">No dApps match “{discoverQuery.trim()}”.</p> : null}
           </div>
         </section>
+        <p className="discover-disclaimer">Third-party apps are not operated by Grape. Review each request before connecting or signing.</p>
       </div>
     );
   }
@@ -6883,6 +6967,26 @@ function PopupPage() {
     const detailActionIcon = canBurn ? <Flame size={18} /> : <Trash2 size={18} />;
     const explorerNetwork = wallet.selectedNetwork;
     const tokenImage = assetJsonMetadata?.imageUri ?? selectedCollectible?.imageUri ?? assetDetails.logoUri;
+    const burnAmountNumber = Number(burnAmount);
+    const selectedHoldingAmount = Number(selectedTokenHolding?.amount);
+    const burnUnitPriceUsd =
+      selectedTokenHolding?.priceUsd ??
+      (typeof selectedTokenHolding?.valueUsd === 'number' && Number.isFinite(selectedHoldingAmount) && selectedHoldingAmount > 0
+        ? selectedTokenHolding.valueUsd / selectedHoldingAmount
+        : null);
+    const burnValueUsd =
+      Number.isFinite(burnAmountNumber) &&
+      burnAmountNumber > 0 &&
+      typeof burnUnitPriceUsd === 'number' &&
+      Number.isFinite(burnUnitPriceUsd)
+        ? burnAmountNumber * burnUnitPriceUsd
+        : null;
+    const burnConfirmationPhrase = `BURN ${(assetDetails.symbol?.trim() || 'TOKEN').toUpperCase()}`;
+    const requiresValueConfirmation = burnValueUsd !== null && burnValueUsd > 0;
+    const burnAmountIsValid =
+      Number.isFinite(burnAmountNumber) && burnAmountNumber > 0 && burnAmountNumber <= Number(assetDetails.amount);
+    const burnConfirmationIsValid =
+      !requiresValueConfirmation || burnConfirmation.trim().toUpperCase() === burnConfirmationPhrase;
 
     return (
       <>
@@ -6935,7 +7039,8 @@ function PopupPage() {
                   setTokenActionResult(null);
                   setAssetActionMode(canBurn ? 'burn' : 'close');
                   if (canBurn) {
-                    setBurnAmount(assetDetails.amount);
+                    setBurnAmount('');
+                    setBurnConfirmation('');
                   }
                 }}
                 aria-label={detailActionTitle}
@@ -7105,12 +7210,47 @@ function PopupPage() {
 
         {!isCollectibleView && assetActionMode === 'burn' ? (
           <div ref={assetActionCardRef}>
-          <Card title="Burn tokens">
+          <Card title="Permanently burn tokens" className="token-burn-card">
             <div className="stack">
+              <div className="danger-box token-burn-warning">
+                <strong>This action is permanent.</strong>
+                <span>Burned tokens are destroyed and cannot be restored, transferred, swapped, or refunded.</span>
+              </div>
               <label className="stack">
                 <span className="muted">Amount</span>
-                <Input value={burnAmount} onChange={(event) => setBurnAmount(event.target.value)} placeholder="0" inputMode="decimal" />
+                <div className="send-input-shell token-burn-amount-shell">
+                  <Input
+                    value={burnAmount}
+                    onChange={(event) => {
+                      setBurnAmount(event.target.value);
+                      setTokenActionError(null);
+                    }}
+                    placeholder="0"
+                    inputMode="decimal"
+                  />
+                  <button type="button" className="link-button token-burn-max" onClick={() => setBurnAmount(assetDetails.amount)}>Max</button>
+                </div>
               </label>
+              <div className="token-burn-impact">
+                <KeyValueRow label="Token" value={assetDetails.symbol ?? formatAddress(assetDetails.mint)} />
+                <KeyValueRow label="Amount destroyed" value={burnAmountIsValid ? burnAmount : 'Enter an amount'} />
+                <KeyValueRow label="Estimated value lost" value={burnValueUsd !== null ? formatUsd(burnValueUsd) : 'Price unavailable'} />
+                <KeyValueRow label="Remaining balance" value={burnAmountIsValid ? Math.max(0, Number(assetDetails.amount) - burnAmountNumber).toLocaleString(undefined, { maximumFractionDigits: assetDetails.decimals }) : assetDetails.amount} />
+              </div>
+              {requiresValueConfirmation ? (
+                <label className="stack token-burn-confirmation">
+                  <span className="warning-box">
+                    This token has an estimated value of {formatUsd(burnValueUsd)}. Type <strong>{burnConfirmationPhrase}</strong> to confirm that you intend to destroy it.
+                  </span>
+                  <Input
+                    value={burnConfirmation}
+                    onChange={(event) => setBurnConfirmation(event.target.value)}
+                    placeholder={burnConfirmationPhrase}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                </label>
+              ) : null}
               {!canUseUnlockedSigner ? (
                 <label className="stack">
                   <span className="muted">Password</span>
@@ -7139,11 +7279,17 @@ function PopupPage() {
                 <p className="muted">Wallet is already unlocked. Burn and close actions can sign without re-entering your password.</p>
               )}
               <Button
+                tone="danger"
                 className="button-block"
-                disabled={tokenActionSubmitting === 'burn' || !burnAmount.trim() || (!canUseUnlockedSigner && !burnPassword.trim())}
+                disabled={
+                  tokenActionSubmitting === 'burn' ||
+                  !burnAmountIsValid ||
+                  !burnConfirmationIsValid ||
+                  (!canUseUnlockedSigner && !burnPassword.trim())
+                }
                 onClick={() => void handleBurnToken()}
               >
-                {tokenActionSubmitting === 'burn' ? 'Burning...' : 'Burn'}
+                {tokenActionSubmitting === 'burn' ? 'Burning...' : 'Permanently burn'}
               </Button>
             </div>
           </Card>
