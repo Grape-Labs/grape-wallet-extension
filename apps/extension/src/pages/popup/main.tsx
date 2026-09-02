@@ -97,6 +97,19 @@ import { OnboardingView } from '../onboarding/OnboardingView';
 
 type PopupView = 'home' | 'discover' | 'send' | 'receive' | 'swap' | 'bridge' | 'settings' | 'asset' | 'security' | 'reclaim-rent' | 'approval';
 type HomeTab = 'tokens' | 'rebalance' | 'community' | 'governance' | 'collectibles' | 'activity' | 'staking';
+
+const WALLET_FAQ = [
+  ['Which networks does Grape support?', 'Grape can manage Solana, Sui, Monad, and Ethereum wallets. Available actions vary by chain, and Discover recommendations follow the selected network.'],
+  ['How do swaps and bridges work?', 'Solana swaps use Jupiter routing. Cross-chain routes use LI.FI where supported. Review the input, output, minimum received, price impact, fees, and destination chain before signing.'],
+  ['What is the portfolio rebalancer?', 'The optional Solana rebalancer plans multiple Jupiter swaps around target allocations. Transactions are independent, so execution can stop after a partial rebalance.'],
+  ['What can I do in Discover?', 'Discover provides a chain-specific dApp directory, search, and recently connected sites. Connecting or signing still requires wallet support for that chain and action.'],
+  ['What should I check on an approval?', 'Confirm the requesting site, network, assets sent and received, USD estimates, fees, and warnings. Simulation and pricing are estimates; treat unknown programs with extra care.'],
+  ['Why is market information missing?', 'Unit prices and 24-hour changes appear only when Grape can match an asset to reliable pricing data. Unpriced assets keep their balance and identifier without a misleading estimate.'],
+  ['What are Burn and Reclaim rent?', 'Burn permanently destroys tokens. Reclaim rent closes eligible empty Solana token accounts and returns their rent deposit. Valuable tokens receive stronger warnings, and eligibility is checked again before submission.'],
+  ['How do governance, verification, and reputation work?', 'For Solana wallets, Grape can detect governance participation, track proposals and voting power, and surface configured Verification and OG Reputation spaces. Some custom voter-weight plugins need protocol-specific support.'],
+  ['What security and recovery options are available?', 'Secrets are encrypted locally. Grape supports password protection, biometric session unlock where available, device linking, software-wallet recovery, and supported Ledger flows. Never share recovery material or pairing codes.'],
+  ['Can I use a custom RPC?', 'Yes. You can replace the default endpoint per network. RPC providers can observe wallet addresses and requests, so use one you trust and never enter wallet secrets in an RPC field.']
+] as const;
 type AssetOption =
   | {
       id: string;
@@ -1601,7 +1614,7 @@ function PopupPage() {
   const [governanceVoteResult, setGovernanceVoteResult] = useState<WalletGovernanceVoteResponse | null>(null);
   const [governancePassword, setGovernancePassword] = useState('');
   const [governanceShowFinalizing, setGovernanceShowFinalizing] = useState(false);
-  const [expandedSettingsSections, setExpandedSettingsSections] = useState<Set<'wallet' | 'reputation' | 'verification' | 'governance'>>(
+  const [expandedSettingsSections, setExpandedSettingsSections] = useState<Set<'wallet' | 'reputation' | 'verification' | 'governance' | 'help'>>(
     new Set(['wallet'])
   );
   const [pendingHomeScrollTarget, setPendingHomeScrollTarget] = useState<'community' | 'verification' | 'governance' | null>(null);
@@ -7415,7 +7428,7 @@ function PopupPage() {
     const trackedVerificationCount = wallet.trackedVerificationSpaceIds.length;
     const trackedGovernanceCount = wallet.trackedGovernanceDaoIds.length;
 
-    const toggleSettingsSection = (section: 'wallet' | 'reputation' | 'verification' | 'governance') => {
+    const toggleSettingsSection = (section: 'wallet' | 'reputation' | 'verification' | 'governance' | 'help') => {
       setExpandedSettingsSections((previous) => {
         const next = new Set(previous);
         if (next.has(section)) {
@@ -7428,7 +7441,7 @@ function PopupPage() {
     };
 
     const renderSettingsSection = (props: {
-      section: 'wallet' | 'reputation' | 'verification' | 'governance';
+      section: 'wallet' | 'reputation' | 'verification' | 'governance' | 'help';
       title: string;
       summary: string;
       error?: string | null;
@@ -8209,6 +8222,25 @@ function PopupPage() {
               </>
             )}
           </div>
+          )
+        })}
+        {renderSettingsSection({
+          section: 'help',
+          title: 'Help & FAQ',
+          summary: 'Wallet tools, protocols, approvals, and security',
+          children: (
+            <div className="stack faq-list">
+              {WALLET_FAQ.map(([question, answer]) => (
+                <details className="faq-item" key={question}>
+                  <summary>{question}</summary>
+                  <p className="muted">{answer}</p>
+                </details>
+              ))}
+              <div className="inline wrap-actions">
+                <Button tone="secondary" onClick={() => openExternal('https://docs.grapes.network')}>Help docs</Button>
+                <Button tone="secondary" onClick={() => openExternal('https://discord.gg/grapedao')}>Ask on Discord</Button>
+              </div>
+            </div>
           )
         })}
       </>

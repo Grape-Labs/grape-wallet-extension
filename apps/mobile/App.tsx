@@ -1,4 +1,5 @@
 import { StatusBar } from 'expo-status-bar';
+import Constants from 'expo-constants';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
@@ -24,7 +25,7 @@ import {
   useWindowDimensions,
   View
 } from 'react-native';
-import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import QRCode from 'react-native-qrcode-svg';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -125,6 +126,7 @@ import {
 import { entropyToWalletMnemonic, type WalletMnemonicLength } from '../../packages/solana/src/mnemonic';
 
 const GRAPE_LOGO_IMAGE = require('./assets/grape_logo_white.png');
+const APP_VERSION = Constants.expoConfig?.version ?? 'unknown';
 const THEME_BACKGROUND_ASSETS: Partial<Record<GrapeTheme, number>> = {
   grape: require('./assets/bg_grape_dark.png'),
   comic: require('./assets/bg_comic.png'),
@@ -184,6 +186,19 @@ type MobileRebalanceLeg = {
   targetWeightPct: number;
   reason: string;
 };
+
+const WALLET_FAQ = [
+  { question: 'Which networks does Grape support?', answer: 'Grape can manage Solana, Sui, Monad, and Ethereum wallets. Available actions vary by chain, so the wallet only shows tools and Discover recommendations that apply to the selected network.' },
+  { question: 'How do swaps and bridges work?', answer: 'Solana swaps use Jupiter routing. Cross-chain routes use LI.FI where supported. Always review the input token, output token, minimum received, price impact, fees, and destination chain before signing.' },
+  { question: 'What is the portfolio rebalancer?', answer: 'The optional Solana rebalancer plans multiple Jupiter swaps around target allocations. Each swap is independent, so a partial rebalance is possible if a later transaction fails.' },
+  { question: 'What can I do in Discover?', answer: 'Discover provides chain-specific dApp recommendations, search, bookmarks, recent sites, and browser tabs. Selecting another wallet chain changes the directory. Mobile wallet injection is currently limited to supported Solana dApps; other chain sites remain available for browsing.' },
+  { question: 'What should I check on an approval?', answer: 'Confirm the requesting site, network, assets sent and received, USD estimates, fees, and warnings. Simulation and price data are estimates, and an unknown program warning deserves extra care.' },
+  { question: 'Why is a token price or 24-hour change missing?', answer: 'Market values appear only when Grape can match an asset to reliable pricing data. Unpriced assets still show their balance and identifier instead of a potentially misleading estimate.' },
+  { question: 'What are Burn and Reclaim rent?', answer: 'Burn permanently destroys the selected token amount. Reclaim rent closes eligible empty Solana token accounts and returns their rent deposit. Grape adds stronger warnings when a token has known value and verifies closing eligibility again before submission.' },
+  { question: 'How do governance, verification, and reputation work?', answer: 'For Solana wallets, Grape can detect governance participation, track proposals and voting power, and surface configured Grape Verification and OG Reputation spaces. Some DAOs with custom voter-weight plugins may require protocol-specific support.' },
+  { question: 'How are my wallet and recovery data protected?', answer: 'Wallet secrets are encrypted on the device. Biometrics can unlock the local session when enabled, while your recovery phrase, private key, passkey recovery, or Ledger remains the authority for recovery and signing. Never share recovery material or pairing codes.' },
+  { question: 'Can I use my own RPC?', answer: 'Yes. Custom RPC settings let you replace the default endpoint for a network. RPC providers can observe wallet addresses and requests, so only use a provider you trust and never paste secret keys into an RPC field.' }
+] as const;
 
 const GRAPE_DISCOVER_DEFAULT_URL = 'https://governance.so';
 const OG_REPUTATION_DISCOVERY_URL = 'https://vine.governance.so';
@@ -1321,6 +1336,7 @@ function isHexColor(value: string) {
 }
 
 function GrapeApp() {
+  const safeAreaInsets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
   const [screen, setScreen] = useState<Screen>('loading');
   const [launchStatus, setLaunchStatus] = useState('Loading your wallet state');
@@ -1620,8 +1636,8 @@ function GrapeApp() {
   const isWide = width >= 768;
   const contentMaxWidth = isWide ? 680 : 560;
   const screenPadding = isCompact ? 10 : 12;
-  const footerInset = 0;
-  const footerClearance = 74;
+  const footerInset = Platform.OS === 'android' ? Math.max(safeAreaInsets.bottom, 12) : 0;
+  const footerClearance = 74 + footerInset;
   const deviceLinkQrSize = Math.max(240, Math.min(width - 120, 320));
   const paperTheme = useMemo(
     () => ({
@@ -8596,9 +8612,33 @@ function GrapeApp() {
         {renderSettingsSection(
           'help',
           'Get help',
-          'Docs and community support',
+          'FAQ, docs, and community support',
           <>
-            <Text style={styles.sectionHint}>Find setup guidance or ask Grape moderators and developers for help.</Text>
+            <Text style={styles.sectionHint}>Quick answers about networks, wallet tools, protocols, approvals, and security.</Text>
+            <View style={styles.settingsRow}>
+              <Text style={styles.settingsTitle}>App version</Text>
+              <Text style={styles.settingsMono}>{APP_VERSION}</Text>
+            </View>
+            <View style={styles.faqList}>
+              {WALLET_FAQ.map((item, index) => {
+                const faqKey = `faq-${index}`;
+                const expanded = expandedSettingsSections.has(faqKey);
+                return (
+                  <View key={item.question} style={styles.faqItem}>
+                    <Pressable
+                      style={styles.faqToggle}
+                      accessibilityRole="button"
+                      accessibilityState={{ expanded }}
+                      onPress={() => toggleSettingsSection(faqKey)}
+                    >
+                      <Text style={[styles.faqQuestion, { color: activeTheme.text }]}>{item.question}</Text>
+                      <Feather name={expanded ? 'chevron-up' : 'chevron-down'} size={18} color={activeTheme.muted} />
+                    </Pressable>
+                    {expanded ? <Text style={[styles.faqAnswer, { color: activeTheme.muted }]}>{item.answer}</Text> : null}
+                  </View>
+                );
+              })}
+            </View>
             <View style={styles.walletToolsRow}>
               <PaperButton
                 mode="outlined"
@@ -9667,6 +9707,32 @@ function createStyles(palette: MobileThemePalette) {
     color: palette.muted,
     fontSize: 14,
     lineHeight: 20
+  },
+  faqList: {
+    gap: 10
+  },
+  faqItem: {
+    gap: 6,
+    padding: 14,
+    borderRadius: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'rgba(255,255,255,0.035)'
+  },
+  faqToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10
+  },
+  faqQuestion: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '700'
+  },
+  faqAnswer: {
+    fontSize: 13,
+    lineHeight: 19
   },
   sectionTitle: {
     color: palette.text,

@@ -1,11 +1,12 @@
-# Grape Wallet 0.5.170
+# Grape Wallet 0.5.171
 
-**Version 0.5.170** expands the Discover experience across every supported chain,
+**Version 0.5.171** expands the Discover experience across every supported chain,
 brings richer token market information to mobile, and improves how private RPC
 configuration is handled in extension and mobile builds.
 
 ## Highlights
 
+- Added an expanded in-app FAQ to mobile and the browser extension, covering supported networks, swaps, bridges, Discover, approvals, asset pricing, token management, governance, security, and custom RPCs.
 - Discover recommendations now follow the selected Solana, Sui, Monad, or
   Ethereum wallet.
 - Added dedicated popular-app directories for every supported chain on both the
@@ -16,6 +17,11 @@ configuration is handled in extension and mobile builds.
   variables instead of being committed to the repository.
 
 ## Browser extension
+
+### Help and FAQ
+
+- Added an expandable FAQ inside compact Settings with direct Help docs and Discord links.
+- Covers Grape wallet tools, third-party routing, transaction review, asset pricing, token cleanup, governance, recovery, Ledger, biometrics, and custom RPC privacy.
 
 ### Chain-aware Discover
 
@@ -33,6 +39,14 @@ configuration is handled in extension and mobile builds.
   sites do not appear while browsing Sui, Monad, or Ethereum.
 
 ## Mobile wallet
+
+### Help and FAQ
+
+- Added wallet guidance directly inside Settings so common questions can be answered without leaving the app.
+- Expanded coverage for Grape tools and third-party integrations, including Jupiter swaps, LI.FI bridge routes, the portfolio rebalancer, chain-aware Discover, transaction approvals, Burn, Reclaim rent, governance, Verification, OG Reputation, biometrics, Ledger, and custom RPCs.
+- Clearly distinguishes browsing a recommended dApp from native wallet-provider support on mobile.
+- Corrected mobile release metadata so Settings and native Android/iOS App Info report version **0.5.171** instead of the old **0.4.0** value.
+- Added Android bottom safe-area clearance to keep the wallet navigation above gesture and system navigation controls.
 
 ### Recommendations for every chain
 

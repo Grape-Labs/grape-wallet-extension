@@ -1,8 +1,10 @@
+const { version } = require('../../package.json');
+
 /** @type {import('expo/config').ExpoConfig} */
 const config = {
   name: 'Grape',
   slug: 'grape-wallet-mobile',
-  version: '0.4.0',
+  version,
   icon: './assets/icon-app.png',
   orientation: 'portrait',
   userInterfaceStyle: 'dark',

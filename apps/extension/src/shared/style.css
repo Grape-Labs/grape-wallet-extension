@@ -7996,6 +7996,29 @@ body[data-surface='popup'] .receive-address-value {
   line-height: 1.35;
 }
 
+.faq-list {
+  gap: 8px;
+}
+
+.faq-item {
+  padding: 11px 13px;
+  border: 1px solid var(--theme-divider);
+  border-radius: 15px;
+  background: var(--theme-surface-soft);
+}
+
+.faq-item summary {
+  color: var(--theme-text);
+  font-weight: 700;
+  line-height: 1.35;
+  cursor: pointer;
+}
+
+.faq-item p {
+  margin: 9px 0 1px;
+  line-height: 1.5;
+}
+
 .dapp-mode-grid {
   display: grid;
   gap: 8px;
