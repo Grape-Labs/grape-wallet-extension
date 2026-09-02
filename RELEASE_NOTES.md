@@ -1,101 +1,76 @@
-# Grape Wallet 0.5.161
+# Grape Wallet 0.5.170
 
-This release improves transaction approvals, adds a safe way to reclaim SOL
-held by empty token accounts, expands Ledger support in the browser extension,
-and makes biometric unlock faster on mobile.
+**Version 0.5.170** expands the Discover experience across every supported chain,
+brings richer token market information to mobile, and improves how private RPC
+configuration is handled in extension and mobile builds.
 
 ## Highlights
 
-- Approval popups now show the correct approved or rejected result in place and
-  close automatically after a short delay.
-- Added a Solana rent-reclaim tool for reviewing and closing eligible empty token
-  accounts.
-- Expanded browser-extension Ledger support for Solana transactions, swaps, and
-  rent reclamation.
-- Added automatic biometric unlock when opening the locked mobile wallet.
+- Discover recommendations now follow the selected Solana, Sui, Monad, or
+  Ethereum wallet.
+- Added dedicated popular-app directories for every supported chain on both the
+  browser extension and mobile wallet.
+- Mobile token rows now show the unit USD price and color-coded 24-hour change,
+  matching the extension.
+- Private Solana RPC endpoints are now supplied through local build environment
+  variables instead of being committed to the repository.
 
 ## Browser extension
 
-- Cleaned up the unlock password field into a single compact dark control with
-  integrated reveal and biometric actions.
-- Standardized extension themes around the new near-black surface system; themes
-  now retain their accent identity without changing the app's overall structure,
-  contrast, or visual density.
-- Refreshed the extension home screen with a minimal dark layout, neutral header
-  controls, compact actions, clean text navigation, and an open asset list.
-- Reduced decorative backgrounds, borders, nested cards, and accent-color noise
-  while preserving the existing wallet workflows and theme identity.
-- Asset rows now consistently show the per-token USD price and 24-hour change
-  beneath SOL and token names, matching the mobile portfolio layout.
-- Missing mainnet market data is refreshed immediately instead of remaining absent
-  until the balance cache expires.
-- Replaced the duplicate bottom Receive shortcut with a Discover tab for browsing
-  curated Solana dApps and reopening recently connected sites. Receive remains in
-  the primary wallet action row.
-- Expanded Discover with category filters, featured recommendations, and official
-  site favicons across DeFi, staking, collectibles, governance, analytics, explorers,
-  community apps, and wallet tools.
-- Added more top spacing to the Discover header for a less cramped popup layout.
-- Hardened token burning with an empty-by-default amount, estimated value-loss and
-  remaining-balance previews, typed confirmation for priced assets, explicit
-  irreversible-action warnings, and a final native confirmation prompt.
+### Chain-aware Discover
 
-### Transaction approvals
+- Switching chains now updates the Discover heading, recommendations, featured
+  apps, category filters, recent connections, and empty-state messaging.
+- Solana Discover continues to feature Grape tools and popular Solana apps.
+- Sui Discover includes apps such as Cetus, NAVI Protocol, Suilend, Bluefin,
+  Scallop, Aftermath, and Turbos.
+- Monad Discover includes the official Monad App Hub, Kuru, Uniswap,
+  PancakeSwap, LFJ, aPriori, Magma, and Monad explorers.
+- Ethereum Discover includes Uniswap, Aave, Lido, Safe, Curve, CoW Swap,
+  OpenSea, ENS, and Etherscan.
+- Category filters only show categories that contain apps for the active chain.
+- Recently connected apps are filtered to the selected ecosystem so Solana-only
+  sites do not appear while browsing Sui, Monad, or Ethereum.
 
-- Fixed rejected transactions incorrectly appearing to be approved afterward.
-- Fixed some versioned swap confirmations showing matching SOL sent and received
-  instead of the purchased token and its USD value when address lookup tables
-  were used.
-- Approval and rejection results now appear in the original approval popup.
-- Resolved approval popups close automatically after two seconds, reducing popup
-  buildup when handling multiple transactions.
-- Approval controls are disabled while a response is processing to prevent
-  conflicting approve and reject actions.
-- Added a distinct rejected state confirming that no transaction was approved.
+## Mobile wallet
 
-### Reclaim SOL rent
+### Recommendations for every chain
 
-- Added a **Reclaim rent** tool to Solana wallet settings.
-- The tool scans for eligible empty SPL Token and Token-2022 accounts and shows
-  the SOL recoverable from each account.
-- Accounts can be selected individually or all at once before closing them.
-- Eligibility is verified again immediately before submission to avoid closing an
-  account whose state has changed.
-- The confirmation screen shows the selected account count and estimated SOL to
-  recover before network fees.
-- Supports both software wallets and Ledger wallets.
+- Mobile browser recommendations now change with the selected wallet chain.
+- Added separate popular-app collections for Solana, Sui, Monad, and Ethereum.
+- Grape-specific tools remain available when Solana is selected and are hidden
+  on unrelated chains.
+- Site icons for every chain directory are prefetched for a cleaner browsing
+  experience.
 
-### Ledger
+### Token prices and market changes
 
-- Added Ledger signing and submission for supported Solana transactions in the
-  browser extension.
-- Added Ledger support for Solana swaps.
-- Added Ledger support for closing empty token accounts and reclaiming their rent.
-- EVM and Sui swaps with Ledger remain unavailable and now return a clear
-  unsupported-operation message.
+- Mobile asset rows now preserve the token unit price and 24-hour market change
+  returned by the pricing service.
+- The left side of each supported token row shows its per-token USD rate, such as
+  **$0.9999**.
+- Positive and neutral 24-hour changes appear in green; negative changes appear
+  in red.
+- Total wallet value and token quantity remain visible on the right side.
+- Assets without market data continue to use the existing symbol and address
+  fallback instead of displaying misleading values.
 
-## Mobile
+## RPC configuration
 
-- Applied the same restrained dark design system to mobile themes, the wallet
-  header, balance hierarchy, action controls, asset rows, and bottom navigation.
-- Theme backgrounds are now deliberately subtle, with theme identity concentrated
-  in active icons, buttons, and highlights instead of large decorative surfaces.
-- The wallet selection menu now shows the combined cached value across all
-  wallets and the individual USD value of every listed wallet.
-- Redesigned the Discover browser with compact desktop-style tabs above a single
-  navigation and address row, leaving substantially more room for web content.
-- Moved app shortcuts, bookmarks, and secondary browser actions into the overflow
-  menu while keeping back, forward, reload, address, and bookmark controls close
-  at hand.
-- The wallet now attempts biometric unlock automatically when opened on the lock
-  screen and biometrics are enabled.
-- Cancelling the automatic biometric prompt no longer displays an unnecessary
-  error.
-- Refined lock-screen and biometric-control sizing and alignment.
+- Updated extension and mobile builds to read the preferred Solana RPC from
+  environment configuration.
+- Extension builds use `VITE_GRAPE_MAINNET_RPC_URL`.
+- Mobile builds use `EXPO_PUBLIC_SOLANA_RPC_URL`.
+- RPC credentials are no longer present in tracked source files.
+- The public Solana mainnet endpoint remains available as a non-secret fallback
+  when no private RPC is configured.
+- Ledger account discovery now uses the configured extension RPC first and falls
+  back to the public endpoint if required.
 
-## Safety notes
+## Notes
 
-- Closing a token account is irreversible. Only zero-balance accounts without an
-  active delegate and with a compatible close authority are offered for rent
-  reclamation.
-- Reclaimed amounts are displayed before Solana network fees.
+- Non-Solana recommendations can be browsed in the mobile dApp browser. Native
+  Sui, Monad, and Ethereum provider injection is separate from this directory
+  update and is not included in this release.
+- Client-side RPC endpoints are embedded in distributed extension, APK, and IPA
+  builds and can be observed at runtime even when they are not stored on GitHub.

@@ -211,6 +211,8 @@ function mobileJupiterTokenToAsset(
     amountLabel: 'Not owned',
     amountUi: 0,
     valueLabel: priceUsd && priceUsd > 0 ? `$${priceUsd.toLocaleString(undefined, { maximumFractionDigits: 4 })} price` : '',
+    priceUsd,
+    priceChange24h: null,
     logoUri: token.logoURI,
     chain: 'solana',
     address: token.id,
@@ -229,9 +231,27 @@ function parseMobileUsdLabel(value: string | undefined) {
 }
 
 function getMobileAssetPriceUsd(asset: MobileAsset) {
+  if (typeof asset.priceUsd === 'number' && Number.isFinite(asset.priceUsd) && asset.priceUsd >= 0) {
+    return asset.priceUsd;
+  }
   const labeled = parseMobileUsdLabel(asset.valueLabel);
   if (asset.valueLabel.includes('price')) return labeled;
   return asset.amountUi && asset.amountUi > 0 ? labeled / asset.amountUi : 0;
+}
+
+function formatMobileUnitPrice(value: number | null | undefined) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return null;
+  return value.toLocaleString(undefined, {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: value >= 1 ? 2 : value >= 0.01 ? 4 : 6,
+    maximumFractionDigits: value >= 1 ? 2 : value >= 0.01 ? 4 : 8
+  });
+}
+
+function formatMobilePriceChange(value: number | null | undefined) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
 }
 
 function formatMobileCompactUsd(value: number | null | undefined) {
@@ -268,6 +288,47 @@ const SOLANA_DISCOVER_FAVORITES = [
   { label: 'Kamino', subtitle: 'Borrow, lend, and liquidity', url: 'https://kamino.com' },
   { label: 'Sanctum', subtitle: 'Liquid staking on Solana', url: 'https://app.sanctum.so' }
 ] as const;
+
+const SUI_DISCOVER_FAVORITES = [
+  { label: 'Cetus', subtitle: 'Swap and provide concentrated liquidity', url: 'https://app.cetus.zone' },
+  { label: 'NAVI Protocol', subtitle: 'Lend, borrow, and manage Sui assets', url: 'https://app.naviprotocol.io' },
+  { label: 'Suilend', subtitle: 'Lending and liquid staking on Sui', url: 'https://app.suilend.fi' },
+  { label: 'Bluefin', subtitle: 'Trade spot and perpetual markets', url: 'https://trade.bluefin.io' },
+  { label: 'Scallop', subtitle: 'Lend, borrow, swap, and bridge', url: 'https://app.scallop.io' },
+  { label: 'Aftermath', subtitle: 'Trade, stake, and bridge Sui assets', url: 'https://aftermath.finance' },
+  { label: 'Turbos', subtitle: 'Swap and explore Sui liquidity pools', url: 'https://app.turbos.finance' },
+  { label: 'SuiVision', subtitle: 'Explore Sui accounts and transactions', url: 'https://suivision.xyz' }
+] as const;
+
+const MONAD_DISCOVER_FAVORITES = [
+  { label: 'Monad App Hub', subtitle: 'Official directory of apps on Monad', url: 'https://app.monad.xyz' },
+  { label: 'Kuru', subtitle: 'Trade on Monad’s on-chain order book', url: 'https://app.kuru.io' },
+  { label: 'Uniswap', subtitle: 'Swap tokens and provide liquidity', url: 'https://app.uniswap.org' },
+  { label: 'PancakeSwap', subtitle: 'Trade and provide liquidity on Monad', url: 'https://pancakeswap.finance' },
+  { label: 'LFJ', subtitle: 'Trade and explore Monad liquidity pools', url: 'https://lfj.gg/monad' },
+  { label: 'aPriori', subtitle: 'Liquid staking and MEV infrastructure', url: 'https://stake.apr.io' },
+  { label: 'Magma', subtitle: 'Liquid staking for Monad', url: 'https://www.magmastaking.xyz' },
+  { label: 'Monadscan', subtitle: 'Explore Monad accounts and transactions', url: 'https://monadscan.com' }
+] as const;
+
+const ETHEREUM_DISCOVER_FAVORITES = [
+  { label: 'Uniswap', subtitle: 'Swap tokens and provide liquidity', url: 'https://app.uniswap.org' },
+  { label: 'Aave', subtitle: 'Lend and borrow Ethereum assets', url: 'https://app.aave.com' },
+  { label: 'Lido', subtitle: 'Liquid staking for Ethereum', url: 'https://stake.lido.fi' },
+  { label: 'Safe', subtitle: 'Manage assets with a smart multisig', url: 'https://app.safe.global' },
+  { label: 'Curve', subtitle: 'Trade stablecoins and provide liquidity', url: 'https://curve.finance' },
+  { label: 'CoW Swap', subtitle: 'Trade with intent-based execution', url: 'https://swap.cow.fi' },
+  { label: 'OpenSea', subtitle: 'Discover and trade collectibles', url: 'https://opensea.io' },
+  { label: 'ENS', subtitle: 'Manage Ethereum names and identity', url: 'https://app.ens.domains' },
+  { label: 'Etherscan', subtitle: 'Explore accounts and transactions', url: 'https://etherscan.io' }
+] as const;
+
+const DISCOVER_FAVORITES_BY_CHAIN: Record<MobileWalletState['selectedChain'], readonly { label: string; subtitle: string; url: string }[]> = {
+  solana: SOLANA_DISCOVER_FAVORITES,
+  sui: SUI_DISCOVER_FAVORITES,
+  monad: MONAD_DISCOVER_FAVORITES,
+  ethereum: ETHEREUM_DISCOVER_FAVORITES
+};
 
 function getDiscoverSiteIcon(url: string) {
   try {
@@ -984,6 +1045,11 @@ function buildVerificationSpaceUrl(daoId: string) {
 }
 
 function getAssetSubtitle(asset: MobileAsset, selectedChainLabel: string, selectedChainShort: string) {
+  const unitPrice = formatMobileUnitPrice(asset.priceUsd);
+  if (unitPrice) {
+    return unitPrice;
+  }
+
   const normalizedName = asset.name.trim().toLowerCase();
   const normalizedChainLabel = selectedChainLabel.trim().toLowerCase();
   const normalizedSymbol = asset.symbol.trim().toUpperCase();
@@ -1510,7 +1576,7 @@ function GrapeApp() {
   }, [discoverBrowserStateLoaded, discoverTabs]);
 
   useEffect(() => {
-    const iconUrls = [...GRAPE_DISCOVER_FAVORITES, ...SOLANA_DISCOVER_FAVORITES]
+    const iconUrls = [...GRAPE_DISCOVER_FAVORITES, ...Object.values(DISCOVER_FAVORITES_BY_CHAIN).flat()]
       .map((favorite) => getDiscoverSiteIcon(favorite.url));
     void Promise.all(iconUrls.map((iconUrl) => Image.prefetch(iconUrl).catch(() => false)));
   }, []);
@@ -1536,6 +1602,7 @@ function GrapeApp() {
     [selectedWallet, walletState.wallets]
   );
   const selectedChainMeta = chainMeta(walletState.selectedChain);
+  const selectedDiscoverFavorites = DISCOVER_FAVORITES_BY_CHAIN[walletState.selectedChain];
   const activeTheme = useMemo(
     () => getMobileTheme(walletState.selectedTheme ?? DEFAULT_THEME, walletState.customTheme),
     [walletState.customTheme, walletState.selectedTheme]
@@ -5817,25 +5884,29 @@ function GrapeApp() {
                   </ScrollView>
                 </>
               ) : null}
-              <Text style={styles.swapPickerSectionLabel}>GRAPE TOOLS</Text>
+              {walletState.selectedChain === 'solana' ? (
+                <>
+                  <Text style={styles.swapPickerSectionLabel}>GRAPE TOOLS</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.discoverFavoriteRow}>
+                    {GRAPE_DISCOVER_FAVORITES.map((favorite) => (
+                      <Pressable
+                        key={favorite.url}
+                        style={styles.discoverFavoriteCard}
+                        onPress={() => handleDiscoverNavigate(favorite.url)}
+                      >
+                        <View style={styles.discoverFavoriteHeader}>
+                          <Image source={{ uri: getDiscoverSiteIcon(favorite.url) }} style={styles.discoverFavoriteIcon} />
+                          <Text style={styles.discoverFavoriteTitle}>{favorite.label}</Text>
+                        </View>
+                        <Text style={styles.discoverFavoriteSubtitle}>{favorite.subtitle}</Text>
+                      </Pressable>
+                    ))}
+                  </ScrollView>
+                </>
+              ) : null}
+              <Text style={styles.swapPickerSectionLabel}>POPULAR {selectedChainMeta.label.toUpperCase()} APPS</Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.discoverFavoriteRow}>
-                {GRAPE_DISCOVER_FAVORITES.map((favorite) => (
-                  <Pressable
-                    key={favorite.url}
-                    style={styles.discoverFavoriteCard}
-                    onPress={() => handleDiscoverNavigate(favorite.url)}
-                  >
-                    <View style={styles.discoverFavoriteHeader}>
-                      <Image source={{ uri: getDiscoverSiteIcon(favorite.url) }} style={styles.discoverFavoriteIcon} />
-                      <Text style={styles.discoverFavoriteTitle}>{favorite.label}</Text>
-                    </View>
-                    <Text style={styles.discoverFavoriteSubtitle}>{favorite.subtitle}</Text>
-                  </Pressable>
-                ))}
-              </ScrollView>
-              <Text style={styles.swapPickerSectionLabel}>POPULAR SOLANA APPS</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.discoverFavoriteRow}>
-                {SOLANA_DISCOVER_FAVORITES.map((favorite) => (
+                {selectedDiscoverFavorites.map((favorite) => (
                   <Pressable
                     key={favorite.url}
                     style={styles.discoverFavoriteCard}
@@ -6399,6 +6470,7 @@ function GrapeApp() {
               visibleSortedAssets.map((asset) => (
                 (() => {
                   const assetSubtitle = getAssetSubtitle(asset, selectedChainMeta.label, selectedChainMeta.short);
+                  const assetPriceChange = formatMobilePriceChange(asset.priceChange24h);
                   return (
                     <Pressable key={asset.id} style={[styles.assetRow, styles.homeAssetRow]} onPress={() => setSelectedAssetId(asset.id)}>
                       <View style={styles.assetGlyph}>
@@ -6406,7 +6478,16 @@ function GrapeApp() {
                       </View>
                       <View style={styles.assetCopy}>
                         <Text style={styles.assetName}>{asset.name}</Text>
-                        {assetSubtitle ? <Text style={styles.assetMeta}>{assetSubtitle}</Text> : null}
+                        {assetSubtitle || assetPriceChange ? (
+                          <View style={styles.assetMetaRow}>
+                            {assetSubtitle ? <Text style={styles.assetMeta}>{assetSubtitle}</Text> : null}
+                            {assetPriceChange ? (
+                              <Text style={asset.priceChange24h != null && asset.priceChange24h >= 0 ? styles.assetMetaPositive : styles.assetMetaNegative}>
+                                {assetPriceChange}
+                              </Text>
+                            ) : null}
+                          </View>
+                        ) : null}
                       </View>
                       <View style={styles.assetValueStack}>
                         {asset.valueLabel ? (
@@ -10666,6 +10747,23 @@ function createStyles(palette: MobileThemePalette) {
   assetMeta: {
     color: palette.muted,
     fontSize: 14
+  },
+  assetMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    columnGap: 8,
+    rowGap: 2
+  },
+  assetMetaPositive: {
+    color: palette.mint,
+    fontSize: 14,
+    fontWeight: '700'
+  },
+  assetMetaNegative: {
+    color: palette.danger,
+    fontSize: 14,
+    fontWeight: '700'
   },
   assetValueStack: {
     alignItems: 'flex-end',

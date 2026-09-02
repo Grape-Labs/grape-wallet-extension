@@ -140,6 +140,8 @@ export type MobileAsset = {
   amountLabel: string;
   amountUi?: number;
   valueLabel: string;
+  priceUsd?: number | null;
+  priceChange24h?: number | null;
   logoUri?: string;
   chain: GrapeChain;
   address?: string;
@@ -2522,6 +2524,8 @@ async function loadSolanaAssets(address: string): Promise<MobileAsset[]> {
       amountLabel: `${solAmount.toFixed(4).replace(/\.?0+$/, '')} SOL`,
       amountUi: solAmount,
       valueLabel: formatUsdValue(solUsdPrice ? solAmount * solUsdPrice : null),
+      priceUsd: solUsdPrice,
+      priceChange24h: jupiterPrices[JUPITER_SOL_MINT]?.priceChange24h ?? null,
       logoUri: 'https://media.solana-cdn.com/image/width=100/https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/solana/info/logo.png',
       chain: 'solana',
       address: JUPITER_SOL_MINT,
@@ -2542,6 +2546,8 @@ async function loadSolanaAssets(address: string): Promise<MobileAsset[]> {
       amountLabel: entry.amountLabel,
       amountUi: entry.numericAmount,
       valueLabel: formatUsdValue(tokenUsdPrice ? entry.numericAmount * tokenUsdPrice : null),
+      priceUsd: tokenUsdPrice,
+      priceChange24h: jupiterPrices[entry.mint]?.priceChange24h ?? null,
       logoUri: entry.logoUri,
       chain: 'solana',
       address: entry.mint,
@@ -2899,6 +2905,8 @@ async function loadMonadAssets(address: string): Promise<MobileAsset[]> {
       symbol: 'MON',
       amountLabel: `${holdings.formatted} MON`,
       valueLabel: formatUsdValue(monValueUsd),
+      priceUsd: monPriceUsd,
+      priceChange24h: null,
       chain: 'monad',
       address,
       metadataSource: 'native',

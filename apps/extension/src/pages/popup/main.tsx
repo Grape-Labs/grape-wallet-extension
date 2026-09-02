@@ -197,7 +197,15 @@ const CHAIN_OPTIONS = [
   { id: 'ethereum', label: 'Ethereum', shortLabel: 'ETH', enabled: true }
 ] as const;
 const VISIBLE_CHAIN_OPTIONS = CHAIN_OPTIONS.filter((chain) => chain.enabled);
-const DISCOVER_DAPPS = [
+type DiscoverCategory = 'All' | 'DeFi' | 'Staking' | 'Collectibles' | 'Governance' | 'Community' | 'Analytics' | 'Explorer' | 'Tools';
+type DiscoverDapp = {
+  name: string;
+  description: string;
+  category: Exclude<DiscoverCategory, 'All'>;
+  url: string;
+  featured?: boolean;
+};
+const SOLANA_DISCOVER_DAPPS: DiscoverDapp[] = [
   { name: 'Grape Governance', description: 'Open the Grape DAO directly', category: 'Governance', url: 'https://www.governance.so/dao/By2sVGZXwfQq6rAiAM3rNPJ9iQfb5e2QhnF4YjJ4Bip', featured: true },
   { name: 'Jupiter', description: 'Swap, trade, and earn', category: 'DeFi', url: 'https://jup.ag', featured: true },
   { name: 'Kamino', description: 'Borrow, lend, and provide liquidity', category: 'DeFi', url: 'https://app.kamino.finance', featured: true },
@@ -219,8 +227,54 @@ const DISCOVER_DAPPS = [
   { name: 'Verification', description: 'Manage verified identities', category: 'Community', url: 'https://verification.governance.so' },
   { name: 'Access', description: 'Open token-gated communities', category: 'Community', url: 'https://access.governance.so' },
   { name: 'Reputation', description: 'Explore community reputation', category: 'Community', url: OG_REPUTATION_DISCOVERY_URL }
-] as const;
-const DISCOVER_CATEGORIES = ['All', 'DeFi', 'Staking', 'Collectibles', 'Governance', 'Community', 'Analytics', 'Explorer', 'Tools'] as const;
+];
+const SUI_DISCOVER_DAPPS: DiscoverDapp[] = [
+  { name: 'Cetus', description: 'Swap and provide concentrated liquidity', category: 'DeFi', url: 'https://app.cetus.zone', featured: true },
+  { name: 'NAVI Protocol', description: 'Lend, borrow, and manage Sui assets', category: 'DeFi', url: 'https://app.naviprotocol.io', featured: true },
+  { name: 'Suilend', description: 'Lending and liquid staking on Sui', category: 'DeFi', url: 'https://app.suilend.fi', featured: true },
+  { name: 'Bluefin', description: 'Trade spot and perpetual markets', category: 'DeFi', url: 'https://trade.bluefin.io', featured: true },
+  { name: 'Scallop', description: 'Lend, borrow, swap, and bridge', category: 'DeFi', url: 'https://app.scallop.io' },
+  { name: 'Aftermath', description: 'Trade, stake, and bridge Sui assets', category: 'DeFi', url: 'https://aftermath.finance' },
+  { name: 'Turbos', description: 'Swap and explore Sui liquidity pools', category: 'DeFi', url: 'https://app.turbos.finance' },
+  { name: 'SuiNS', description: 'Names and identity for the Sui ecosystem', category: 'Community', url: 'https://suins.io' },
+  { name: 'SuiVision', description: 'Explore Sui accounts and transactions', category: 'Explorer', url: 'https://suivision.xyz' },
+  { name: 'Sui Explorer', description: 'Official Sui network explorer', category: 'Explorer', url: 'https://suiscan.xyz' },
+  { name: 'Sui Ecosystem', description: 'Discover more apps built on Sui', category: 'Tools', url: 'https://www.sui.io/ecosystem' }
+];
+const MONAD_DISCOVER_DAPPS: DiscoverDapp[] = [
+  { name: 'Monad App Hub', description: 'Official directory of apps on Monad', category: 'Tools', url: 'https://app.monad.xyz', featured: true },
+  { name: 'Kuru', description: 'Trade on Monad’s on-chain order book', category: 'DeFi', url: 'https://app.kuru.io', featured: true },
+  { name: 'Uniswap', description: 'Swap tokens and provide liquidity', category: 'DeFi', url: 'https://app.uniswap.org', featured: true },
+  { name: 'PancakeSwap', description: 'Trade and provide liquidity on Monad', category: 'DeFi', url: 'https://pancakeswap.finance', featured: true },
+  { name: 'LFJ', description: 'Trade and explore Monad liquidity pools', category: 'DeFi', url: 'https://lfj.gg/monad' },
+  { name: 'aPriori', description: 'Liquid staking and MEV infrastructure', category: 'Staking', url: 'https://stake.apr.io' },
+  { name: 'Magma', description: 'Liquid staking for the Monad ecosystem', category: 'Staking', url: 'https://www.magmastaking.xyz' },
+  { name: 'Curvance', description: 'Lending and capital-efficient DeFi', category: 'DeFi', url: 'https://app.curvance.com' },
+  { name: 'Nad.fun', description: 'Discover and launch Monad community tokens', category: 'Community', url: 'https://nad.fun' },
+  { name: 'Monadscan', description: 'Explore Monad accounts and transactions', category: 'Explorer', url: 'https://monadscan.com' },
+  { name: 'MonadVision', description: 'Analytics and block explorer for Monad', category: 'Explorer', url: 'https://monadvision.com' }
+];
+const ETHEREUM_DISCOVER_DAPPS: DiscoverDapp[] = [
+  { name: 'Uniswap', description: 'Swap tokens and provide liquidity', category: 'DeFi', url: 'https://app.uniswap.org', featured: true },
+  { name: 'Aave', description: 'Lend and borrow Ethereum assets', category: 'DeFi', url: 'https://app.aave.com', featured: true },
+  { name: 'Lido', description: 'Liquid staking for Ethereum', category: 'Staking', url: 'https://stake.lido.fi', featured: true },
+  { name: 'Safe', description: 'Manage assets with a smart multisig', category: 'Tools', url: 'https://app.safe.global', featured: true },
+  { name: 'Curve', description: 'Trade stablecoins and provide liquidity', category: 'DeFi', url: 'https://curve.finance' },
+  { name: 'CoW Swap', description: 'Trade with intent-based execution', category: 'DeFi', url: 'https://swap.cow.fi' },
+  { name: '1inch', description: 'Aggregate liquidity across exchanges', category: 'DeFi', url: 'https://app.1inch.io' },
+  { name: 'OpenSea', description: 'Discover and trade collectibles', category: 'Collectibles', url: 'https://opensea.io' },
+  { name: 'ENS', description: 'Manage Ethereum names and identity', category: 'Community', url: 'https://app.ens.domains' },
+  { name: 'Snapshot', description: 'Create and participate in governance', category: 'Governance', url: 'https://snapshot.box' },
+  { name: 'Across', description: 'Bridge assets across Ethereum networks', category: 'Tools', url: 'https://app.across.to' },
+  { name: 'Etherscan', description: 'Explore Ethereum accounts and transactions', category: 'Explorer', url: 'https://etherscan.io' }
+];
+const DISCOVER_DAPPS_BY_CHAIN: Record<WalletStateResponse['wallet']['selectedChain'], DiscoverDapp[]> = {
+  solana: SOLANA_DISCOVER_DAPPS,
+  sui: SUI_DISCOVER_DAPPS,
+  monad: MONAD_DISCOVER_DAPPS,
+  ethereum: ETHEREUM_DISCOVER_DAPPS
+};
+const DISCOVER_CATEGORIES: DiscoverCategory[] = ['All', 'DeFi', 'Staking', 'Collectibles', 'Governance', 'Community', 'Analytics', 'Explorer', 'Tools'];
 
 function getSiteFavicon(url: string): string | undefined {
   try {
@@ -1401,7 +1455,7 @@ function PopupPage() {
   const [view, setView] = useState<PopupView>(() => parseInitialView());
   const [homeTab, setHomeTab] = useState<HomeTab>('tokens');
   const [discoverQuery, setDiscoverQuery] = useState('');
-  const [discoverCategory, setDiscoverCategory] = useState<(typeof DISCOVER_CATEGORIES)[number]>('All');
+  const [discoverCategory, setDiscoverCategory] = useState<DiscoverCategory>('All');
   const [copiedAddress, setCopiedAddress] = useState(false);
   const [receiveQr, setReceiveQr] = useState('');
   const [assetId, setAssetId] = useState(() => parseInitialAssetId());
@@ -1923,6 +1977,11 @@ function PopupPage() {
       setHomeTab('tokens');
     }
   }, [homeTab, selectedChainValue]);
+
+  useEffect(() => {
+    setDiscoverCategory('All');
+    setDiscoverQuery('');
+  }, [selectedChainValue]);
 
   useEffect(() => {
     if ((selectedChainValue === 'sui' || selectedChainValue === 'monad' || selectedChainValue === 'ethereum') && (homeTab === 'community' || homeTab === 'governance')) {
@@ -6811,13 +6870,26 @@ function PopupPage() {
 
   function renderDiscover() {
     const query = discoverQuery.trim().toLowerCase();
+    const discoverDapps = DISCOVER_DAPPS_BY_CHAIN[selectedChainValue];
+    const discoverOrigins = new Set(discoverDapps.map((dapp) => new URL(dapp.url).origin));
+    const discoverCategories = DISCOVER_CATEGORIES.filter(
+      (category) => category === 'All' || discoverDapps.some((dapp) => dapp.category === category)
+    );
     const recentConnections = [...(state?.permissions ?? [])]
+      .filter((connection) => {
+        try {
+          return discoverOrigins.has(new URL(connection.origin).origin);
+        } catch {
+          return false;
+        }
+      })
       .sort((left, right) => right.updatedAt - left.updatedAt)
       .slice(0, 6);
-    const visibleDapps = DISCOVER_DAPPS.filter((dapp) =>
+    const visibleDapps = discoverDapps.filter((dapp) =>
       (discoverCategory === 'All' || dapp.category === discoverCategory) &&
       (!query || `${dapp.name} ${dapp.description} ${dapp.category}`.toLowerCase().includes(query))
     );
+    const chainLabel = CHAIN_OPTIONS.find((chain) => chain.id === selectedChainValue)?.label ?? 'Web3';
     const openDapp = (url: string) => window.open(url, '_blank', 'noopener,noreferrer');
 
     return (
@@ -6825,8 +6897,8 @@ function PopupPage() {
         <section className="discover-hero">
           <div className="discover-hero-icon" aria-hidden="true"><Globe2 size={22} /></div>
           <div>
-            <h2>Explore Solana</h2>
-            <p>Discover apps or return to sites connected to Grape.</p>
+            <h2>Explore {chainLabel}</h2>
+            <p>Discover {chainLabel} apps or return to connected sites.</p>
           </div>
         </section>
 
@@ -6842,7 +6914,7 @@ function PopupPage() {
         </label>
 
         <div className="discover-category-strip" aria-label="dApp categories">
-          {DISCOVER_CATEGORIES.map((category) => (
+          {discoverCategories.map((category) => (
             <button
               key={category}
               type="button"
@@ -6878,7 +6950,7 @@ function PopupPage() {
               })}
             </div>
           ) : (
-            <p className="discover-empty discover-empty-recent">Sites you connect to will appear here.</p>
+            <p className="discover-empty discover-empty-recent">Connected {chainLabel} apps will appear here.</p>
           )}
         </section>
 

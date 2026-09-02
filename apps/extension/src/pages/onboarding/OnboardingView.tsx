@@ -23,6 +23,7 @@ import {
 } from '@grape/solana';
 import { sendRuntimeMessage } from '../../shared/chrome';
 import type { WalletStateResponse } from '../../shared/models';
+import { getRpcEndpoint } from '../../shared/rpc';
 import { authorizeLedgerTransport, requestLedgerAccounts } from '../../../../../packages/solana/src/ledger';
 import { authorizeEthereumLedgerTransport, requestEthereumLedgerAccounts } from '../../../../../packages/ethereum/src/ledger';
 import { authorizeMonadLedgerTransport, requestMonadLedgerAccounts } from '../../../../../packages/monad/src/ledger';
@@ -1424,7 +1425,7 @@ async function requestLedgerCandidates(input: {
       const candidateRpcEndpoints =
         input.network === 'devnet'
           ? ['https://api.devnet.solana.com']
-          : ['https://api.mainnet-beta.solana.com', 'https://rpc.shyft.to?api_key=cb-RCXQBMM7kY7K6'];
+          : [getRpcEndpoint('mainnet-beta'), 'https://api.mainnet-beta.solana.com'];
 
       let accounts;
       let lastError: unknown = null;

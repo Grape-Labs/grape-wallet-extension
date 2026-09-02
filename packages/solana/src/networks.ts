@@ -17,4 +17,3 @@ export function chainToNetwork(chain: string | undefined): GrapeNetwork {
   }
   return 'devnet';
 }
-
