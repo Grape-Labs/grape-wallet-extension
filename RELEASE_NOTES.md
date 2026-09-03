@@ -6,6 +6,7 @@ configuration is handled in extension and mobile builds.
 
 ## Highlights
 
+- Added Android Mobile Wallet Adapter support for native Solana dApps on Saga, Seeker, and other compatible devices.
 - Added an expanded in-app FAQ to mobile and the browser extension, covering supported networks, swaps, bridges, Discover, approvals, asset pricing, token management, governance, security, and custom RPCs.
 - Discover recommendations now follow the selected Solana, Sui, Monad, or
   Ethereum wallet.
@@ -40,13 +41,22 @@ configuration is handled in extension and mobile builds.
 
 ## Mobile wallet
 
+### Solana Mobile
+
+- Grape can now appear as a wallet in native Android dApps using the Solana Mobile Wallet Adapter protocol.
+- Added native association handling for `solana-wallet://` requests in a dedicated Android task, allowing control to return to the requesting dApp when the session finishes.
+- Supports authorization, reauthorization, message signing, legacy and versioned transaction signing, and sign-and-send requests for the selected Solana wallet.
+- Every connection and signing request is shown in a Grape approval sheet with the requesting dApp identity, network, selected wallet, payload count, and safety guidance.
+- Added explicit rejection, invalid-authorization, low-power connection, and session-error handling.
+- Mobile Wallet Adapter is Android-only; the existing in-app Discover browser remains available on both Android and iOS.
+
 ### Help and FAQ
 
 - Added wallet guidance directly inside Settings so common questions can be answered without leaving the app.
 - Expanded coverage for Grape tools and third-party integrations, including Jupiter swaps, LI.FI bridge routes, the portfolio rebalancer, chain-aware Discover, transaction approvals, Burn, Reclaim rent, governance, Verification, OG Reputation, biometrics, Ledger, and custom RPCs.
 - Clearly distinguishes browsing a recommended dApp from native wallet-provider support on mobile.
 - Corrected mobile release metadata so Settings and native Android/iOS App Info report version **0.5.171** instead of the old **0.4.0** value.
-- Added Android bottom safe-area clearance to keep the wallet navigation above gesture and system navigation controls.
+- Made the mobile navigation background span the full screen width and physical bottom edge, while keeping its controls above Android and iOS system navigation areas.
 
 ### Recommendations for every chain
 

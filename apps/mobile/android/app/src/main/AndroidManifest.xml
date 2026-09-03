@@ -30,5 +30,25 @@
         <category android:name="android.intent.category.LAUNCHER"/>
       </intent-filter>
     </activity>
+    <activity
+      android:name=".MobileWalletAdapterActivity"
+      android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|uiMode"
+      android:launchMode="singleTask"
+      android:taskAffinity="xyz.grape.wallet.mwa_host_task"
+      android:windowSoftInputMode="adjustResize"
+      android:theme="@style/Theme.App.SplashScreen"
+      android:exported="true"
+      android:screenOrientation="portrait">
+      <intent-filter android:order="1">
+        <action android:name="android.intent.action.VIEW"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <category android:name="android.intent.category.BROWSABLE"/>
+        <data android:scheme="solana-wallet"/>
+      </intent-filter>
+      <intent-filter android:order="0">
+        <category android:name="android.intent.category.DEFAULT"/>
+        <data android:scheme="solana-wallet"/>
+      </intent-filter>
+    </activity>
   </application>
 </manifest>

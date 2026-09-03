@@ -1,5 +1,19 @@
 import { StatusBar } from 'expo-status-bar';
 import Constants from 'expo-constants';
+import bs58 from 'bs58';
+import { Buffer } from 'buffer';
+import { PublicKey } from '@solana/web3.js';
+import {
+  initializeMWAEventListener,
+  initializeMobileWalletAdapterSession,
+  MWARequestFailReason,
+  MWARequestType,
+  MWASessionEventType,
+  resolve as resolveMWARequest,
+  type MWARequest,
+  type MWASessionEvent,
+  type MobileWalletAdapterConfig
+} from '@solana-mobile/mobile-wallet-adapter-walletlib';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
@@ -9,6 +23,7 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  BackHandler,
   Easing,
   Image,
   ImageBackground,
@@ -127,6 +142,13 @@ import { entropyToWalletMnemonic, type WalletMnemonicLength } from '../../packag
 
 const GRAPE_LOGO_IMAGE = require('./assets/grape_logo_white.png');
 const APP_VERSION = Constants.expoConfig?.version ?? 'unknown';
+const MWA_CONFIG: MobileWalletAdapterConfig = {
+  maxTransactionsPerSigningRequest: 10,
+  maxMessagesPerSigningRequest: 10,
+  supportedTransactionVersions: ['legacy', 0],
+  noConnectionWarningTimeoutMs: 3_000,
+  optionalFeatures: ['solana:signTransactions']
+};
 const THEME_BACKGROUND_ASSETS: Partial<Record<GrapeTheme, number>> = {
   grape: require('./assets/bg_grape_dark.png'),
   comic: require('./assets/bg_comic.png'),
@@ -192,6 +214,7 @@ const WALLET_FAQ = [
   { question: 'How do swaps and bridges work?', answer: 'Solana swaps use Jupiter routing. Cross-chain routes use LI.FI where supported. Always review the input token, output token, minimum received, price impact, fees, and destination chain before signing.' },
   { question: 'What is the portfolio rebalancer?', answer: 'The optional Solana rebalancer plans multiple Jupiter swaps around target allocations. Each swap is independent, so a partial rebalance is possible if a later transaction fails.' },
   { question: 'What can I do in Discover?', answer: 'Discover provides chain-specific dApp recommendations, search, bookmarks, recent sites, and browser tabs. Selecting another wallet chain changes the directory. Mobile wallet injection is currently limited to supported Solana dApps; other chain sites remain available for browsing.' },
+  { question: 'Does Grape support Saga and Seeker dApps?', answer: 'Yes on Android. Grape supports the Solana Mobile Wallet Adapter flow used by Saga, Seeker, and other Android devices. A native dApp can open Grape to connect, sign messages, sign transactions, or sign and send transactions with an explicit approval.' },
   { question: 'What should I check on an approval?', answer: 'Confirm the requesting site, network, assets sent and received, USD estimates, fees, and warnings. Simulation and price data are estimates, and an unknown program warning deserves extra care.' },
   { question: 'Why is a token price or 24-hour change missing?', answer: 'Market values appear only when Grape can match an asset to reliable pricing data. Unpriced assets still show their balance and identifier instead of a potentially misleading estimate.' },
   { question: 'What are Burn and Reclaim rent?', answer: 'Burn permanently destroys the selected token amount. Reclaim rent closes eligible empty Solana token accounts and returns their rent deposit. Grape adds stronger warnings when a token has known value and verifies closing eligibility again before submission.' },
@@ -1518,6 +1541,8 @@ function GrapeApp() {
   const [discoverConnectedOrigins, setDiscoverConnectedOrigins] = useState<string[]>([]);
   const [discoverApproval, setDiscoverApproval] = useState<DiscoverApproval | null>(null);
   const [discoverApprovalPassword, setDiscoverApprovalPassword] = useState('');
+  const [mwaRequest, setMwaRequest] = useState<MWARequest | null>(null);
+  const [mwaStatus, setMwaStatus] = useState<string | null>(null);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const discoverWebViewRef = useRef<WebView>(null);
   const activeDiscoverTab = useMemo(
@@ -1558,6 +1583,57 @@ function GrapeApp() {
       setDiscoverBrowserStateLoaded(true);
     });
     return () => { mounted = false; };
+  }, []);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+
+    let active = true;
+    const listener = initializeMWAEventListener(
+      (request) => {
+        if (!active) return;
+        setMwaStatus(null);
+        setMwaRequest(request);
+      },
+      (sessionEvent: MWASessionEvent) => {
+        if (!active) return;
+        if (sessionEvent.__type === MWASessionEventType.LowPowerNoConnectionEvent) {
+          setMwaStatus('Android battery saver blocked the dApp connection. Disable battery saver and try again.');
+          return;
+        }
+        if (sessionEvent.__type === MWASessionEventType.SessionErrorEvent) {
+          setMwaStatus('The Mobile Wallet Adapter session could not be completed.');
+          return;
+        }
+        if (
+          sessionEvent.__type === MWASessionEventType.SessionServingCompleteEvent ||
+          sessionEvent.__type === MWASessionEventType.SessionTerminatedEvent
+        ) {
+          setMwaRequest(null);
+          setTimeout(() => BackHandler.exitApp(), 120);
+        }
+      }
+    );
+
+    const startSession = async (url: string | null) => {
+      if (!url?.startsWith('solana-wallet:')) return;
+      try {
+        setMwaStatus('Connecting to the Solana dApp…');
+        await initializeMobileWalletAdapterSession('Grape Wallet', MWA_CONFIG);
+        if (active) setMwaStatus(null);
+      } catch (unknownError) {
+        const message = unknownError instanceof Error ? unknownError.message : 'Unable to start Mobile Wallet Adapter.';
+        if (active && !message.toLowerCase().includes('already created')) setMwaStatus(message);
+      }
+    };
+
+    void Linking.getInitialURL().then(startSession);
+    const urlSubscription = Linking.addEventListener('url', ({ url }) => void startSession(url));
+    return () => {
+      active = false;
+      listener.remove();
+      urlSubscription.remove();
+    };
   }, []);
 
   useEffect(() => {
@@ -1636,8 +1712,8 @@ function GrapeApp() {
   const isWide = width >= 768;
   const contentMaxWidth = isWide ? 680 : 560;
   const screenPadding = isCompact ? 10 : 12;
-  const footerInset = Platform.OS === 'android' ? Math.max(safeAreaInsets.bottom, 12) : 0;
-  const footerClearance = 74 + footerInset;
+  const footerSafeInset = Platform.OS === 'android' ? Math.max(safeAreaInsets.bottom, 12) : safeAreaInsets.bottom;
+  const footerClearance = 74 + footerSafeInset;
   const deviceLinkQrSize = Math.max(240, Math.min(width - 120, 320));
   const paperTheme = useMemo(
     () => ({
@@ -3108,6 +3184,126 @@ function GrapeApp() {
     }
 
     rejectDiscoverProviderRequest(request, 'UNSUPPORTED', `Unsupported request method: ${request.method}`);
+  }
+
+  function rejectMwaRequest() {
+    if (!mwaRequest) return;
+    switch (mwaRequest.__type) {
+      case MWARequestType.AuthorizeDappRequest:
+        resolveMWARequest(mwaRequest, { failReason: MWARequestFailReason.UserDeclined });
+        break;
+      case MWARequestType.ReauthorizeDappRequest:
+        resolveMWARequest(mwaRequest, { failReason: MWARequestFailReason.AuthorizationNotValid });
+        break;
+      case MWARequestType.DeauthorizeDappRequest:
+        resolveMWARequest(mwaRequest, {});
+        break;
+      case MWARequestType.SignMessagesRequest:
+        resolveMWARequest(mwaRequest, { failReason: MWARequestFailReason.UserDeclined });
+        break;
+      case MWARequestType.SignTransactionsRequest:
+        resolveMWARequest(mwaRequest, { failReason: MWARequestFailReason.UserDeclined });
+        break;
+      case MWARequestType.SignAndSendTransactionsRequest:
+        resolveMWARequest(mwaRequest, { failReason: MWARequestFailReason.UserDeclined });
+        break;
+    }
+    setMwaRequest(null);
+    setMwaStatus('Request rejected. Returning to the dApp…');
+  }
+
+  async function approveMwaRequest() {
+    if (!mwaRequest || !discoverWallet || !unlocked) return;
+    setSubmitLoading(true);
+    setMwaStatus(null);
+    try {
+      switch (mwaRequest.__type) {
+        case MWARequestType.AuthorizeDappRequest: {
+          const scope = Uint8Array.from(Buffer.from(`${discoverWallet.id}:${discoverWallet.address}`, 'utf8'));
+          resolveMWARequest(mwaRequest, {
+            accounts: [{
+              publicKey: new PublicKey(discoverWallet.address).toBytes(),
+              accountLabel: discoverWallet.name,
+              chains: ['solana:mainnet', 'solana:devnet'],
+              features: ['solana:signTransactions']
+            }],
+            authorizationScope: scope
+          });
+          break;
+        }
+        case MWARequestType.ReauthorizeDappRequest:
+          resolveMWARequest(mwaRequest, { authorizationScope: mwaRequest.authorizationScope });
+          break;
+        case MWARequestType.DeauthorizeDappRequest:
+          resolveMWARequest(mwaRequest, {});
+          break;
+        case MWARequestType.SignMessagesRequest: {
+          const signedPayloads: Uint8Array[] = [];
+          for (const payload of mwaRequest.payloads) {
+            const message = Uint8Array.from(payload);
+            const result = await signMobileSolanaProviderMessage({
+              state: walletState,
+              wallet: discoverWallet,
+              message: Buffer.from(message).toString('base64')
+            });
+            signedPayloads.push(Uint8Array.from(Buffer.concat([Buffer.from(message), Buffer.from(result.signature, 'base64')])));
+          }
+          resolveMWARequest(mwaRequest, { signedPayloads });
+          break;
+        }
+        case MWARequestType.SignTransactionsRequest: {
+          const result = await signMobileSolanaProviderTransactions({
+            state: walletState,
+            wallet: discoverWallet,
+            transactions: mwaRequest.payloads.map((payload) => Buffer.from(payload).toString('base64'))
+          });
+          resolveMWARequest(mwaRequest, {
+            signedPayloads: result.transactions.map((transaction) => Uint8Array.from(Buffer.from(transaction, 'base64')))
+          });
+          break;
+        }
+        case MWARequestType.SignAndSendTransactionsRequest: {
+          const signatures: Uint8Array[] = [];
+          for (const payload of mwaRequest.payloads) {
+            const result = await signAndSendMobileSolanaProviderTransaction({
+              state: walletState,
+              wallet: discoverWallet,
+              transaction: Buffer.from(payload).toString('base64')
+            });
+            signatures.push(Uint8Array.from(bs58.decode(result.signature)));
+          }
+          resolveMWARequest(mwaRequest, { signedTransactions: signatures });
+          break;
+        }
+      }
+      setMwaRequest(null);
+      setMwaStatus('Approved. Returning to the dApp…');
+    } catch (unknownError) {
+      switch (mwaRequest.__type) {
+        case MWARequestType.AuthorizeDappRequest:
+          resolveMWARequest(mwaRequest, { failReason: MWARequestFailReason.UserDeclined });
+          break;
+        case MWARequestType.ReauthorizeDappRequest:
+          resolveMWARequest(mwaRequest, { failReason: MWARequestFailReason.AuthorizationNotValid });
+          break;
+        case MWARequestType.DeauthorizeDappRequest:
+          resolveMWARequest(mwaRequest, {});
+          break;
+        case MWARequestType.SignMessagesRequest:
+          resolveMWARequest(mwaRequest, { failReason: MWARequestFailReason.InvalidSignatures, valid: mwaRequest.payloads.map(() => false) });
+          break;
+        case MWARequestType.SignTransactionsRequest:
+          resolveMWARequest(mwaRequest, { failReason: MWARequestFailReason.InvalidSignatures, valid: mwaRequest.payloads.map(() => false) });
+          break;
+        case MWARequestType.SignAndSendTransactionsRequest:
+          resolveMWARequest(mwaRequest, { failReason: MWARequestFailReason.InvalidSignatures, valid: mwaRequest.payloads.map(() => false) });
+          break;
+      }
+      setMwaRequest(null);
+      setMwaStatus(unknownError instanceof Error ? unknownError.message : 'Unable to complete the Mobile Wallet Adapter request.');
+    } finally {
+      setSubmitLoading(false);
+    }
   }
 
   async function handleApproveDiscoverRequest() {
@@ -7798,6 +7994,13 @@ function GrapeApp() {
                 })}
               </View>
             </View>
+            <View style={styles.settingsRow}>
+              <View style={styles.settingsCopy}>
+                <Text style={styles.settingsTitle}>Solana Mobile Wallet Adapter</Text>
+                <Text style={styles.sectionHint}>Native Saga, Seeker, and compatible Android dApps can open Grape for connection and signing approvals.</Text>
+              </View>
+              <Text style={styles.settingsMono}>{Platform.OS === 'android' ? 'Enabled' : 'Android only'}</Text>
+            </View>
           </>
         )}
 
@@ -8741,7 +8944,7 @@ function GrapeApp() {
         </KeyboardAvoidingView>
 
         {sendScreenVisible || swapScreenVisible || rebalanceScreenVisible || bridgeScreenVisible ? null : (
-        <View style={[styles.footerShell, { left: footerInset, right: footerInset, bottom: footerInset - 2 }]}>
+        <View style={[styles.footerShell, { left: 0, right: 0, bottom: 0, paddingBottom: footerSafeInset + 6 }]}>
           <Pressable
             style={[styles.footerButton, mainTab === 'home' ? styles.footerButtonActive : null]}
             onPress={() => setMainTab('home')}
@@ -8923,6 +9126,74 @@ function GrapeApp() {
                 );
               })}
             </ScrollView>
+          </PaperModal>
+          <PaperModal
+            visible={Boolean(mwaRequest) && unlocked}
+            onDismiss={rejectMwaRequest}
+            contentContainerStyle={[styles.sendAssetPickerModal, styles.discoverApprovalModal]}
+          >
+            {mwaRequest ? (
+              <>
+                <ScrollView
+                  style={styles.discoverApprovalScroll}
+                  contentContainerStyle={styles.discoverApprovalContent}
+                  showsVerticalScrollIndicator={false}
+                >
+                  <View style={styles.sendAssetPickerHeader}>
+                    <Text style={styles.sectionTitle}>Solana Mobile request</Text>
+                    <Text style={styles.sectionHint}>
+                      A Saga or Seeker-compatible dApp wants to {
+                        mwaRequest.__type === MWARequestType.AuthorizeDappRequest || mwaRequest.__type === MWARequestType.ReauthorizeDappRequest
+                          ? 'connect to Grape'
+                          : mwaRequest.__type === MWARequestType.SignMessagesRequest
+                            ? `sign ${mwaRequest.payloads.length} message${mwaRequest.payloads.length === 1 ? '' : 's'}`
+                            : mwaRequest.__type === MWARequestType.SignTransactionsRequest
+                              ? `sign ${mwaRequest.payloads.length} transaction${mwaRequest.payloads.length === 1 ? '' : 's'}`
+                              : mwaRequest.__type === MWARequestType.SignAndSendTransactionsRequest
+                                ? `sign and send ${mwaRequest.payloads.length} transaction${mwaRequest.payloads.length === 1 ? '' : 's'}`
+                                : 'disconnect'
+                      }.
+                    </Text>
+                  </View>
+                  <View style={styles.stack}>
+                    <View style={styles.exportSecretCard}>
+                      <Text style={styles.exportSecretLabel}>dApp</Text>
+                      <Text style={styles.settingsTitle}>{mwaRequest.appIdentity?.identityName ?? 'Unknown Solana dApp'}</Text>
+                      {mwaRequest.appIdentity?.identityUri ? <Text style={styles.settingsMono}>{mwaRequest.appIdentity.identityUri}</Text> : null}
+                    </View>
+                    <View style={styles.exportSecretCard}>
+                      <Text style={styles.exportSecretLabel}>Network</Text>
+                      <Text style={styles.settingsTitle}>{'chain' in mwaRequest ? mwaRequest.chain : 'Solana'}</Text>
+                    </View>
+                    <View style={styles.exportSecretCard}>
+                      <Text style={styles.exportSecretLabel}>Wallet</Text>
+                      <Text style={styles.settingsMono}>{discoverWallet ? `${discoverWallet.name} • ${discoverWallet.address}` : 'No Solana wallet available'}</Text>
+                    </View>
+                    {mwaRequest.__type !== MWARequestType.AuthorizeDappRequest && mwaRequest.__type !== MWARequestType.ReauthorizeDappRequest ? (
+                      <View style={styles.exportSecretCard}>
+                        <Text style={styles.exportSecretLabel}>Review carefully</Text>
+                        <Text style={styles.sectionHint}>Only approve if you initiated this request and recognize the dApp. On-chain transactions cannot be reversed.</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                </ScrollView>
+                <View style={[styles.walletToolsRow, styles.discoverApprovalActions]}>
+                  <PaperButton mode="outlined" style={[styles.paperSecondaryButton, styles.walletToolButton]} onPress={rejectMwaRequest} disabled={submitLoading}>
+                    Reject
+                  </PaperButton>
+                  <PaperButton
+                    mode="contained"
+                    style={[styles.paperPrimaryButton, styles.walletToolButton]}
+                    buttonColor={activeTheme.primaryButton}
+                    textColor={activeTheme.primaryButtonText}
+                    onPress={() => void approveMwaRequest()}
+                    disabled={submitLoading || !discoverWallet}
+                  >
+                    {submitLoading ? 'Approving…' : mwaRequest.__type === MWARequestType.AuthorizeDappRequest || mwaRequest.__type === MWARequestType.ReauthorizeDappRequest ? 'Connect' : 'Approve'}
+                  </PaperButton>
+                </View>
+              </>
+            ) : null}
           </PaperModal>
           <PaperModal
             visible={!!discoverApproval}
