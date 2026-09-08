@@ -50,13 +50,7 @@ export async function requestLedgerAccounts(input: {
 
   try {
     const solana = new Solana(transport);
-    const derivations = Array.from({ length: count }, (_value, offset) => startIndex + offset).flatMap((index) =>
-      getLedgerDerivationPaths(index).map(({ derivationPath, variant }) => ({
-        index,
-        derivationPath,
-        label: getLedgerDerivationLabel(index, variant)
-      }))
-    );
+    const derivations = getSolanaLedgerDerivationCandidates(startIndex, count);
 
     const discovered = [];
     for (const derivation of derivations) {
@@ -194,7 +188,17 @@ function getLedgerDerivationPaths(index: number): Array<{ derivationPath: string
     }));
 }
 
-const LEDGER_DERIVATION_VARIANTS: readonly LedgerDerivationVariant[] = ['root', 'bip44-change', 'bip44-legacy'];
+export function getSolanaLedgerDerivationCandidates(startIndex = 0, count = LEDGER_ACCOUNT_SCAN_BATCH_SIZE) {
+  return Array.from({ length: count }, (_value, offset) => startIndex + offset).flatMap((index) =>
+    getLedgerDerivationPaths(index).map(({ derivationPath, variant }) => ({
+      index,
+      derivationPath,
+      label: getLedgerDerivationLabel(index, variant)
+    }))
+  );
+}
+
+const LEDGER_DERIVATION_VARIANTS: readonly LedgerDerivationVariant[] = ['root', 'bip44-legacy', 'bip44-change'];
 
 function toLedgerDerivationPath(index: number, variant: LedgerDerivationVariant): string {
   switch (variant) {

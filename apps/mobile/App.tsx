@@ -62,6 +62,8 @@ import {
   addWalletSet,
   addMobileLedgerWallets,
   addPrivateKeyWallet,
+  burnMobileSolanaToken,
+  closeMobileSolanaTokenAccount,
   createBridgeActivity,
   createSwapActivity,
   createEmptyMobileWalletState,
@@ -142,6 +144,7 @@ import { entropyToWalletMnemonic, type WalletMnemonicLength } from '../../packag
 
 const GRAPE_LOGO_IMAGE = require('./assets/grape_logo_white.png');
 const APP_VERSION = Constants.expoConfig?.version ?? 'unknown';
+const LEDGER_ACCOUNT_SCAN_BATCH_SIZE = 10;
 const MWA_CONFIG: MobileWalletAdapterConfig = {
   maxTransactionsPerSigningRequest: 10,
   maxMessagesPerSigningRequest: 10,
@@ -1379,6 +1382,7 @@ function GrapeApp() {
   const [mnemonicAccountScanLoading, setMnemonicAccountScanLoading] = useState(false);
   const [ledgerDevices, setLedgerDevices] = useState<MobileLedgerDevice[]>([]);
   const [ledgerAccounts, setLedgerAccounts] = useState<MobileLedgerAccount[]>([]);
+  const [ledgerAccountScanCount, setLedgerAccountScanCount] = useState(LEDGER_ACCOUNT_SCAN_BATCH_SIZE);
   const [selectedLedgerDeviceId, setSelectedLedgerDeviceId] = useState<string | null>(null);
   const [selectedLedgerAccountPaths, setSelectedLedgerAccountPaths] = useState<string[]>([]);
   const [ledgerScanLoading, setLedgerScanLoading] = useState(false);
@@ -1401,6 +1405,11 @@ function GrapeApp() {
   const [assetPriceHistoryLoading, setAssetPriceHistoryLoading] = useState(false);
   const [assetPriceRange, setAssetPriceRange] = useState<7 | 30 | 90>(30);
   const [assetDetailsExpanded, setAssetDetailsExpanded] = useState(false);
+  const [assetCleanupMode, setAssetCleanupMode] = useState<'burn' | 'close' | null>(null);
+  const [assetBurnAmount, setAssetBurnAmount] = useState('');
+  const [assetBurnConfirmation, setAssetBurnConfirmation] = useState('');
+  const [assetCleanupLoading, setAssetCleanupLoading] = useState(false);
+  const [assetCleanupError, setAssetCleanupError] = useState<string | null>(null);
   const [selectedAssetActivity, setSelectedAssetActivity] = useState<MobileActivity | null>(null);
   const [assetTokenActivity, setAssetTokenActivity] = useState<MobileActivity[]>([]);
   const [assetTokenActivityLoading, setAssetTokenActivityLoading] = useState(false);
@@ -2518,6 +2527,7 @@ function GrapeApp() {
 
   useEffect(() => {
     let mounted = true;
+    let fullAssetsApplied = false;
 
     async function refreshWalletData() {
       if (!unlocked || !selectedWallet) {
@@ -2531,11 +2541,10 @@ function GrapeApp() {
       if (selectedWallet.chain === 'solana') {
         void loadWalletAssetsFast(selectedWallet)
           .then((nextAssets) => {
-            if (!mounted) {
+            if (!mounted || fullAssetsApplied) {
               return;
             }
             setAssets(nextAssets);
-            setAssetsLoading(false);
           })
           .catch(() => {});
       }
@@ -2547,6 +2556,7 @@ function GrapeApp() {
         if (!mounted) {
           return;
         }
+        fullAssetsApplied = true;
         setAssets(nextAssets);
         setRemoteActivity(nextActivity);
         setError(null);
@@ -2786,6 +2796,13 @@ function GrapeApp() {
   useEffect(() => {
     setSelectedAssetId(null);
   }, [selectedWallet?.id, walletState.selectedChain]);
+
+  useEffect(() => {
+    setAssetCleanupMode(null);
+    setAssetBurnAmount('');
+    setAssetBurnConfirmation('');
+    setAssetCleanupError(null);
+  }, [selectedAssetId]);
 
   useEffect(() => {
     setSendRecipient('');
@@ -3613,6 +3630,7 @@ function GrapeApp() {
     ledgerScanStopRef.current?.();
     setLedgerDevices([]);
     setLedgerAccounts([]);
+    setLedgerAccountScanCount(LEDGER_ACCOUNT_SCAN_BATCH_SIZE);
     setSelectedLedgerDeviceId(null);
     setLedgerScanLoading(true);
     setError(null);
@@ -3633,21 +3651,34 @@ function GrapeApp() {
     }
   }
 
-  async function handleSelectLedgerDevice(device: MobileLedgerDevice) {
+  async function handleSelectLedgerDevice(device: MobileLedgerDevice, scanCount = LEDGER_ACCOUNT_SCAN_BATCH_SIZE) {
     ledgerScanStopRef.current?.();
     ledgerScanStopRef.current = null;
+    const extendingCurrentScan =
+      selectedLedgerDeviceId === device.id && ledgerAccounts.length > 0 && scanCount > ledgerAccountScanCount;
+    const previouslyScannedPaths = new Set(ledgerAccounts.map((account) => account.derivationPath));
     setLedgerScanLoading(true);
     setSelectedLedgerDeviceId(device.id);
-    setLedgerAccounts([]);
+    if (!extendingCurrentScan) {
+      setLedgerAccounts([]);
+      setSelectedLedgerAccountPaths([]);
+    }
     setError(null);
     try {
       const { scanMobileLedgerAccounts } = await import('./src/ledger');
-      const accounts = await scanMobileLedgerAccounts(device.id, 10);
+      const accounts = await scanMobileLedgerAccounts(device.id, scanCount);
       setLedgerAccounts(accounts);
+      setLedgerAccountScanCount(scanCount);
       const fundedAccounts = accounts.filter((account) => account.lamports > 0);
-      setSelectedLedgerAccountPaths(
-        (fundedAccounts.length > 0 ? fundedAccounts : accounts.slice(0, 1)).map((account) => account.derivationPath)
-      );
+      setSelectedLedgerAccountPaths((current) => {
+        const availablePaths = new Set(accounts.map((account) => account.derivationPath));
+        const preserved = current.filter((path) => availablePaths.has(path));
+        const newlyFunded = fundedAccounts
+          .map((account) => account.derivationPath)
+          .filter((path) => !previouslyScannedPaths.has(path));
+        if (extendingCurrentScan) return [...preserved, ...newlyFunded];
+        return (fundedAccounts.length > 0 ? fundedAccounts : accounts.slice(0, 1)).map((account) => account.derivationPath);
+      });
     } catch (scanError) {
       setError(scanError instanceof Error ? scanError.message : 'Unable to read Ledger accounts.');
     } finally {
@@ -3681,7 +3712,7 @@ function GrapeApp() {
             </View>
           </Pressable>
         ))}
-        {ledgerAccounts.map((account, accountPosition) => {
+        {ledgerAccounts.map((account) => {
           const selected = selectedLedgerAccountPaths.includes(account.derivationPath);
           return (
             <Pressable
@@ -3693,13 +3724,36 @@ function GrapeApp() {
             >
               <Checkbox status={selected ? 'checked' : 'unchecked'} color={activeTheme.mint} />
               <View style={styles.mnemonicAccountCopy}>
-                <Text style={styles.mnemonicAccountTitle}>Ledger account {accountPosition + 1} · {account.balanceLabel}</Text>
+                <Text style={styles.mnemonicAccountTitle}>
+                  {account.index < 0 ? 'Ledger root account' : `Ledger account ${account.index + 1}`} · {account.balanceLabel}
+                </Text>
                 <Text style={styles.mnemonicAccountAddress}>{shortenAddress(account.address)}</Text>
-                <Text style={styles.mnemonicAccountPath}>{account.derivationPath}</Text>
+                <Text style={styles.mnemonicAccountPath}>
+                  {account.derivationPath.startsWith('m/') ? account.derivationPath : `m/${account.derivationPath}`}
+                </Text>
               </View>
             </Pressable>
           );
         })}
+        {ledgerAccounts.length > 0 && selectedLedgerDeviceId ? (
+          <View style={styles.ledgerScanMoreBlock}>
+            <Text style={styles.sectionHint}>
+              Scanned the root path plus account indices 0–{ledgerAccountScanCount - 1} across both common Solana Ledger derivation formats.
+            </Text>
+            <PaperButton
+              mode="outlined"
+              disabled={ledgerScanLoading}
+              loading={ledgerScanLoading}
+              textColor={activeTheme.text}
+              onPress={() => {
+                const device = ledgerDevices.find((entry) => entry.id === selectedLedgerDeviceId);
+                if (device) void handleSelectLedgerDevice(device, ledgerAccountScanCount + LEDGER_ACCOUNT_SCAN_BATCH_SIZE);
+              }}
+            >
+              Scan {LEDGER_ACCOUNT_SCAN_BATCH_SIZE} more
+            </PaperButton>
+          </View>
+        ) : null}
       </View>
     );
   }
@@ -4014,11 +4068,14 @@ function GrapeApp() {
     setAssetsLoading(true);
     setActivityLoading(true);
     setGovernanceLoading(selectedWallet.chain === 'solana');
+    let fullAssetsApplied = false;
     if (selectedWallet.chain === 'solana') {
       void loadWalletAssetsFast(selectedWallet)
         .then((nextAssets) => {
+          if (fullAssetsApplied) {
+            return;
+          }
           setAssets(nextAssets);
-          setAssetsLoading(false);
         })
         .catch(() => {});
     }
@@ -4078,6 +4135,7 @@ function GrapeApp() {
               refreshedAt: Date.now()
             })
       ]);
+      fullAssetsApplied = true;
       setAssets(nextAssets);
       setRemoteActivity(nextActivity);
       setReputation(nextReputation);
@@ -4094,6 +4152,87 @@ function GrapeApp() {
       setActivityLoading(false);
       setGovernanceLoading(false);
     }
+  }
+
+  async function refreshAssetsAfterCleanup() {
+    if (!selectedWallet) return;
+    const [nextAssets, nextActivity] = await Promise.all([
+      loadWalletAssets(selectedWallet),
+      loadWalletActivity(selectedWallet).catch(() => remoteActivity)
+    ]);
+    setAssets(nextAssets);
+    setRemoteActivity(nextActivity);
+  }
+
+  function confirmBurnSelectedAsset() {
+    if (!selectedWallet || !selectedAsset) return;
+    const amount = Number(assetBurnAmount);
+    const available = selectedAsset.amountUi ?? 0;
+    if (!Number.isFinite(amount) || amount <= 0 || amount > available) {
+      setAssetCleanupError(`Enter an amount greater than zero and no more than ${available}.`);
+      return;
+    }
+    const estimatedValue = typeof selectedAsset.priceUsd === 'number' ? amount * selectedAsset.priceUsd : null;
+    const valueWarning = estimatedValue !== null && estimatedValue > 0
+      ? `\n\nEstimated value permanently destroyed: $${estimatedValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}.`
+      : '\n\nNo reliable market value is available, so verify this token carefully.';
+    const phrase = `BURN ${selectedAsset.symbol.toUpperCase()}`;
+    if (estimatedValue !== null && estimatedValue > 0 && assetBurnConfirmation.trim().toUpperCase() !== phrase) {
+      setAssetCleanupError(`Type ${phrase} to confirm the loss of value.`);
+      return;
+    }
+
+    Alert.alert(
+      `Burn ${assetBurnAmount} ${selectedAsset.symbol}?`,
+      `Burning is permanent and cannot be undone.${valueWarning}`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Burn permanently',
+          style: 'destructive',
+          onPress: () => {
+            setAssetCleanupLoading(true);
+            setAssetCleanupError(null);
+            void burnMobileSolanaToken({ wallet: selectedWallet, asset: selectedAsset, amount: assetBurnAmount })
+              .then(async () => {
+                await refreshAssetsAfterCleanup();
+                setAssetBurnAmount('');
+                setAssetBurnConfirmation('');
+                setAssetCleanupMode(null);
+              })
+              .catch((cleanupError) => setAssetCleanupError(cleanupError instanceof Error ? cleanupError.message : 'Unable to burn this token.'))
+              .finally(() => setAssetCleanupLoading(false));
+          }
+        }
+      ]
+    );
+  }
+
+  function confirmCloseSelectedTokenAccount() {
+    if (!selectedWallet || !selectedAsset) return;
+    Alert.alert(
+      `Close ${selectedAsset.symbol} token account?`,
+      'The empty token account will be removed and its SOL rent returned to this wallet. This cannot be undone, although a new account can be created later.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Close account',
+          style: 'destructive',
+          onPress: () => {
+            setAssetCleanupLoading(true);
+            setAssetCleanupError(null);
+            void closeMobileSolanaTokenAccount({ wallet: selectedWallet, asset: selectedAsset })
+              .then(async () => {
+                await refreshAssetsAfterCleanup();
+                setSelectedAssetId(null);
+                setAssetCleanupMode(null);
+              })
+              .catch((cleanupError) => setAssetCleanupError(cleanupError instanceof Error ? cleanupError.message : 'Unable to close this token account.'))
+              .finally(() => setAssetCleanupLoading(false));
+          }
+        }
+      ]
+    );
   }
 
   async function handleSend() {
@@ -6198,6 +6337,13 @@ function GrapeApp() {
     if (selectedAsset) {
       const selectedAssetAddress = selectedAsset.address ?? '--';
       const canSwapSelectedAsset = swappableAssets.some((asset) => asset.id === selectedAsset.id);
+      const isManageableSolanaToken =
+        selectedAsset.chain === 'solana' &&
+        selectedAsset.tokenType === 'spl' &&
+        Boolean(selectedAsset.address && selectedAsset.accountAddress && selectedAsset.programId);
+      const selectedAssetHasBalance = (selectedAsset.amountUi ?? 0) > 0;
+      const selectedAssetEstimatedValue = parseMobileUsdLabel(selectedAsset.valueLabel);
+      const selectedAssetBurnPhrase = `BURN ${selectedAsset.symbol.toUpperCase()}`;
       const visiblePriceHistory = assetPriceHistory.slice(-assetPriceRange);
       const chartWidth = Math.max(260, Math.min(width - 64, 520));
       const chartHeight = 140;
@@ -6332,22 +6478,124 @@ function GrapeApp() {
             </View>
 
             <View style={styles.assetDetailActionsRow}>
-              <Pressable style={styles.assetDetailActionButton} onPress={() => openSendScreen(selectedAsset.id)}>
-                <MaterialCommunityIcons name="send-outline" size={22} color={activeTheme.text} />
+              <Pressable style={styles.assetDetailActionButton} onPress={() => openSendScreen(selectedAsset.id)} accessibilityRole="button" accessibilityLabel={`Send ${selectedAsset.symbol}`}>
+                <View style={styles.assetDetailActionIcon}>
+                  <MaterialCommunityIcons name="send-outline" size={21} color={activeTheme.grape} />
+                </View>
                 <Text style={styles.assetDetailActionLabel}>Send</Text>
               </Pressable>
               <Pressable
                 style={canSwapSelectedAsset ? styles.assetDetailActionButton : styles.assetDetailActionButtonDisabled}
                 onPress={canSwapSelectedAsset ? () => openSwapScreen(selectedAsset.id) : undefined}
+                accessibilityRole="button"
+                accessibilityLabel={`Swap ${selectedAsset.symbol}`}
               >
-                <MaterialCommunityIcons
-                  name="swap-horizontal"
-                  size={22}
-                  color={canSwapSelectedAsset ? activeTheme.text : activeTheme.muted}
-                />
+                <View style={canSwapSelectedAsset ? styles.assetDetailActionIcon : styles.assetDetailActionIconDisabled}>
+                  <MaterialCommunityIcons
+                    name="swap-horizontal"
+                    size={21}
+                    color={canSwapSelectedAsset ? activeTheme.grape : activeTheme.muted}
+                  />
+                </View>
                 <Text style={canSwapSelectedAsset ? styles.assetDetailActionLabel : styles.assetDetailActionLabelMuted}>Swap</Text>
               </Pressable>
+              {selectedAsset.tokenType === 'spl' && selectedAsset.chain === 'solana' ? (
+                <Pressable
+                  style={isManageableSolanaToken ? [styles.assetDetailActionButton, styles.assetDetailDangerActionButton] : styles.assetDetailActionButtonDisabled}
+                  disabled={!isManageableSolanaToken}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${selectedAssetHasBalance ? 'Burn' : 'Close'} ${selectedAsset.symbol}`}
+                  onPress={() => {
+                    setAssetCleanupError(null);
+                    setAssetBurnAmount('');
+                    setAssetBurnConfirmation('');
+                    setAssetCleanupMode(selectedAssetHasBalance ? 'burn' : 'close');
+                  }}
+                >
+                  <View style={isManageableSolanaToken ? [styles.assetDetailActionIcon, styles.assetDetailDangerActionIcon] : styles.assetDetailActionIconDisabled}>
+                    <MaterialCommunityIcons
+                      name={selectedAssetHasBalance ? 'fire' : 'delete-outline'}
+                      size={21}
+                      color={isManageableSolanaToken ? activeTheme.danger : activeTheme.muted}
+                    />
+                  </View>
+                  <Text style={isManageableSolanaToken ? styles.assetDetailActionLabel : styles.assetDetailActionLabelMuted}>
+                    {selectedAssetHasBalance ? 'Burn' : 'Close'}
+                  </Text>
+                </Pressable>
+              ) : null}
             </View>
+
+            {isManageableSolanaToken ? (
+              <View style={styles.assetCleanupNotice}>
+                <MaterialCommunityIcons name="alert-outline" size={20} color={activeTheme.danger} />
+                <Text style={styles.assetCleanupNoticeText}>
+                  {selectedAssetHasBalance
+                    ? `Burn permanently destroys ${selectedAsset.symbol}. Use this only when you are certain the tokens are unwanted.`
+                    : 'This token account is empty. Closing it removes the account and returns its SOL rent to your wallet.'}
+                </Text>
+              </View>
+            ) : null}
+
+            {assetCleanupMode === 'burn' && isManageableSolanaToken ? (
+              <View style={styles.assetCleanupPanel}>
+                <Text style={styles.assetCleanupTitle}>Permanently burn tokens</Text>
+                <Text style={styles.assetCleanupWarning}>
+                  This cannot be reversed. Burned tokens cannot be transferred, swapped, restored, or refunded.
+                </Text>
+                <PaperTextInput
+                  value={assetBurnAmount}
+                  onChangeText={(value) => { setAssetBurnAmount(value); setAssetCleanupError(null); }}
+                  label={`Amount (${selectedAsset.symbol})`}
+                  keyboardType="decimal-pad"
+                  mode="outlined"
+                  style={styles.paperInput}
+                  contentStyle={styles.paperInputContent}
+                  outlineStyle={styles.paperOutline}
+                  textColor={activeTheme.text}
+                  right={<PaperTextInput.Affix text={`Max ${selectedAsset.amountUi ?? 0}`} />}
+                />
+                {selectedAssetEstimatedValue > 0 ? (
+                  <>
+                    <Text style={styles.assetCleanupWarning}>
+                      This balance is worth approximately {selectedAsset.valueLabel}. Type {selectedAssetBurnPhrase} before continuing.
+                    </Text>
+                    <PaperTextInput
+                      value={assetBurnConfirmation}
+                      onChangeText={(value) => { setAssetBurnConfirmation(value); setAssetCleanupError(null); }}
+                      label={selectedAssetBurnPhrase}
+                      autoCapitalize="characters"
+                      mode="outlined"
+                      style={styles.paperInput}
+                      contentStyle={styles.paperInputContent}
+                      outlineStyle={styles.paperOutline}
+                      textColor={activeTheme.text}
+                    />
+                  </>
+                ) : null}
+                {assetCleanupError ? <Text style={styles.errorText}>{assetCleanupError}</Text> : null}
+                <View style={styles.assetCleanupButtons}>
+                  <PaperButton mode="outlined" disabled={assetCleanupLoading} onPress={() => setAssetCleanupMode(null)}>Cancel</PaperButton>
+                  <PaperButton mode="contained" buttonColor={activeTheme.danger} loading={assetCleanupLoading} disabled={assetCleanupLoading} onPress={confirmBurnSelectedAsset}>
+                    Burn permanently
+                  </PaperButton>
+                </View>
+              </View>
+            ) : null}
+
+            {assetCleanupMode === 'close' && isManageableSolanaToken ? (
+              <View style={styles.assetCleanupPanel}>
+                <Text style={styles.assetCleanupTitle}>Close empty token account</Text>
+                <Text style={styles.assetCleanupWarning}>Grape will verify the account is empty when the transaction is submitted. Closing cannot be undone.</Text>
+                {assetCleanupError ? <Text style={styles.errorText}>{assetCleanupError}</Text> : null}
+                <View style={styles.assetCleanupButtons}>
+                  <PaperButton mode="outlined" disabled={assetCleanupLoading} onPress={() => setAssetCleanupMode(null)}>Cancel</PaperButton>
+                  <PaperButton mode="contained" buttonColor={activeTheme.danger} loading={assetCleanupLoading} disabled={assetCleanupLoading} onPress={confirmCloseSelectedTokenAccount}>
+                    Close account
+                  </PaperButton>
+                </View>
+              </View>
+            ) : null}
           </View>
 
           {selectedAsset.chain === 'solana' ? (
@@ -12016,36 +12264,63 @@ function createStyles(palette: MobileThemePalette) {
   },
   assetDetailActionsRow: {
     flexDirection: 'row',
-    gap: 10
+    gap: 9
   },
   assetDetailActionButton: {
     flex: 1,
+    minHeight: 88,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
-    borderRadius: 22,
-    paddingVertical: 15,
+    gap: 8,
+    borderRadius: 20,
+    paddingHorizontal: 8,
+    paddingVertical: 12,
     backgroundColor:
       palette.id === 'apple'
-        ? 'rgba(255,255,255,0.09)'
+        ? 'rgba(255,255,255,0.07)'
         : palette.id === 'champagne'
-          ? 'rgba(255,255,255,0.68)'
-          : 'rgba(255,255,255,0.08)',
+          ? 'rgba(255,255,255,0.64)'
+          : 'rgba(255,255,255,0.055)',
     borderWidth: 1,
     borderColor:
       palette.id === 'apple'
-        ? 'rgba(255,255,255,0.14)'
+        ? 'rgba(255,255,255,0.11)'
         : palette.id === 'champagne'
           ? 'rgba(128,93,36,0.08)'
-          : 'rgba(255,255,255,0.06)'
+          : 'rgba(255,255,255,0.075)'
+  },
+  assetDetailDangerActionButton: {
+    borderColor: 'rgba(255, 94, 122, 0.2)',
+    backgroundColor: 'rgba(255, 94, 122, 0.055)'
+  },
+  assetDetailActionIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(214, 92, 202, 0.13)'
+  },
+  assetDetailDangerActionIcon: {
+    backgroundColor: 'rgba(255, 94, 122, 0.12)'
+  },
+  assetDetailActionIconDisabled: {
+    width: 38,
+    height: 38,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.035)'
   },
   assetDetailActionButtonDisabled: {
     flex: 1,
+    minHeight: 88,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
-    borderRadius: 22,
-    paddingVertical: 15,
+    gap: 8,
+    borderRadius: 20,
+    paddingHorizontal: 8,
+    paddingVertical: 12,
     backgroundColor:
       palette.id === 'apple'
         ? 'rgba(255,255,255,0.06)'
@@ -12062,6 +12337,49 @@ function createStyles(palette: MobileThemePalette) {
     color: palette.muted,
     fontSize: 14,
     fontWeight: '700'
+  },
+  assetCleanupNotice: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    padding: 13,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 94, 122, 0.22)',
+    backgroundColor: 'rgba(255, 94, 122, 0.07)'
+  },
+  assetCleanupNoticeText: {
+    flex: 1,
+    color: palette.muted,
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: '600'
+  },
+  assetCleanupPanel: {
+    gap: 12,
+    padding: 15,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 94, 122, 0.3)',
+    backgroundColor: 'rgba(255, 94, 122, 0.08)'
+  },
+  assetCleanupTitle: {
+    color: palette.text,
+    fontSize: 17,
+    fontWeight: '800'
+  },
+  assetCleanupWarning: {
+    color: palette.muted,
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: '600'
+  },
+  assetCleanupButtons: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    gap: 10,
+    flexWrap: 'wrap'
   },
   assetPriceCard: {
     gap: 14,
@@ -12246,6 +12564,10 @@ function createStyles(palette: MobileThemePalette) {
     color: palette.muted,
     fontSize: 11,
     fontFamily: 'Courier'
+  },
+  ledgerScanMoreBlock: {
+    gap: 10,
+    paddingTop: 4
   },
   assetDetailStat: {
     gap: 4

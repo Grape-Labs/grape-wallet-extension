@@ -9756,6 +9756,20 @@ body[data-surface='popup'] .token-burn-card {
   border-color: rgba(255, 93, 119, 0.24);
 }
 
+body[data-surface='popup'] .token-cleanup-entry-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin: 0;
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
+body[data-surface='popup'] .token-cleanup-entry-warning svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
 body[data-surface='popup'] .token-burn-warning {
   display: grid;
   gap: 5px;

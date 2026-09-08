@@ -7133,7 +7133,7 @@ function PopupPage() {
                 disabled={isWatchOnlyWallet || (canBurn ? !canBurn : !canCloseAccount)}
               >
                 <span className="quick-action-icon">{detailActionIcon}</span>
-                <span>Manage</span>
+                <span>{canBurn ? 'Burn' : 'Close'}</span>
               </button>
             </div>
           ) : (
@@ -7151,6 +7151,18 @@ function PopupPage() {
               </button>
             </div>
           )}
+          {!isCollectibleView ? (
+            <div className="danger-box token-cleanup-entry-warning">
+              <AlertTriangle size={17} />
+              <span>
+                {canBurn
+                  ? `Burn permanently destroys ${assetDetails.symbol ?? 'this token'}. Any market value will be lost and cannot be recovered.`
+                  : canCloseAccount
+                    ? 'This token account is empty. Closing it removes the account and returns its SOL rent to your wallet.'
+                    : 'A token account can only be closed after its balance is zero and any delegate is removed.'}
+              </span>
+            </div>
+          ) : null}
         </Card>
 
         {!isCollectibleView ? (
@@ -9657,4 +9669,14 @@ function PopupPage() {
   );
 }
 
-mountPage(<PopupPage />);
+function mountWalletSurface() {
+  const isWidePopupDocument = document.body.dataset.page === 'popup' && window.innerWidth > 600;
+  if (isWidePopupDocument) {
+    window.location.replace(chrome.runtime.getURL(`wallet.html${window.location.search}`));
+    return;
+  }
+
+  mountPage(<PopupPage />);
+}
+
+mountWalletSurface();

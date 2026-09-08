@@ -62,10 +62,13 @@ export async function scanMobileLedgerAccounts(deviceId: string, count = 10): Pr
     const ledger = new Solana(transport);
     const web3 = await import('@solana/web3.js');
     const connection = new web3.Connection(getMobileSolanaRpcUrl('mainnet-beta'), 'confirmed');
-    const pathCandidates = Array.from({ length: count }, (_value, index) => [
-      { index, derivationPath: `44'/501'/${index}'` },
-      { index, derivationPath: `44'/501'/${index}'/0'` }
-    ]).flat();
+    const pathCandidates = [
+      { index: -1, derivationPath: `44'/501'` },
+      ...Array.from({ length: count }, (_value, index) => [
+        { index, derivationPath: `44'/501'/${index}'` },
+        { index, derivationPath: `44'/501'/${index}'/0'` }
+      ]).flat()
+    ];
     const accounts: Array<Omit<MobileLedgerAccount, 'lamports' | 'balanceLabel'>> = [];
     const seenAddresses = new Set<string>();
     for (const candidate of pathCandidates) {
@@ -88,7 +91,7 @@ export async function scanMobileLedgerAccounts(deviceId: string, count = 10): Pr
         lamports,
         balanceLabel: `${(lamports / 1_000_000_000).toLocaleString(undefined, { maximumFractionDigits: 6 })} SOL`
       };
-    }).sort((left, right) => right.lamports - left.lamports || left.index - right.index || left.derivationPath.localeCompare(right.derivationPath));
+    });
   } finally {
     await transport.close().catch(() => undefined);
   }

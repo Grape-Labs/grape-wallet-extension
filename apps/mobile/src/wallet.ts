@@ -1696,6 +1696,89 @@ export async function sendWalletAsset(input: {
   }
 }
 
+export async function burnMobileSolanaToken(input: {
+  wallet: MobileWallet;
+  asset: MobileAsset;
+  amount: string;
+}): Promise<string> {
+  if (input.wallet.chain !== 'solana' || input.asset.tokenType !== 'spl') {
+    throw new Error('Only Solana SPL tokens can be burned.');
+  }
+  if (!input.asset.address || !input.asset.accountAddress || typeof input.asset.decimals !== 'number' || !input.asset.programId) {
+    throw new Error('This token is missing the account information required to burn it safely.');
+  }
+
+  const { Connection, PublicKey } = loadSolanaWeb3Module();
+  const { buildBurnSplTokenTransaction } = loadSolanaTransfersModule();
+  const connection = new Connection(getMobileSolanaRpcUrl(DEFAULT_SOLANA_NETWORK), 'confirmed');
+  const owner = new PublicKey(input.wallet.address);
+  const transaction = await buildBurnSplTokenTransaction(connection, owner, {
+    mint: input.asset.address,
+    accountAddress: input.asset.accountAddress,
+    amount: input.amount,
+    decimals: input.asset.decimals,
+    programId: input.asset.programId
+  });
+
+  const signature = await signMobileSolanaTransaction(input.wallet, transaction, connection);
+  mobileSolanaAssetCache.delete(input.wallet.address);
+  return signature;
+}
+
+export async function closeMobileSolanaTokenAccount(input: {
+  wallet: MobileWallet;
+  asset: MobileAsset;
+}): Promise<string> {
+  if (input.wallet.chain !== 'solana' || input.asset.tokenType !== 'spl') {
+    throw new Error('Only Solana SPL token accounts can be closed.');
+  }
+  if ((input.asset.amountUi ?? 0) !== 0) {
+    throw new Error('Burn or transfer the remaining token balance before closing this account.');
+  }
+  if (!input.asset.address || !input.asset.accountAddress || !input.asset.programId) {
+    throw new Error('This token is missing the account information required to close it safely.');
+  }
+
+  const { Connection, PublicKey } = loadSolanaWeb3Module();
+  const { buildCloseTokenAccountTransaction } = loadSolanaTransfersModule();
+  const connection = new Connection(getMobileSolanaRpcUrl(DEFAULT_SOLANA_NETWORK), 'confirmed');
+  const owner = new PublicKey(input.wallet.address);
+  const transaction = await buildCloseTokenAccountTransaction(connection, owner, {
+    mint: input.asset.address,
+    accountAddress: input.asset.accountAddress,
+    programId: input.asset.programId
+  });
+
+  const signature = await signMobileSolanaTransaction(input.wallet, transaction, connection);
+  mobileSolanaAssetCache.delete(input.wallet.address);
+  return signature;
+}
+
+async function signMobileSolanaTransaction(
+  wallet: MobileWallet,
+  transaction: import('@solana/web3.js').Transaction,
+  connection: import('@solana/web3.js').Connection
+): Promise<string> {
+  if (wallet.source === 'ledger') {
+    if (!wallet.ledgerDeviceId) throw new Error('This Ledger wallet is missing its paired device identifier.');
+    const { signAndSendMobileLedgerTransaction } = await import('./ledger');
+    return signAndSendMobileLedgerTransaction({
+      deviceId: wallet.ledgerDeviceId,
+      derivationPath: wallet.derivationPath,
+      publicKey: wallet.address,
+      transaction
+    });
+  }
+
+  const secret = await loadWalletSecret(wallet.secretRef);
+  const { resolveSolanaVaultSecret } = loadSolanaDeriveModule();
+  const keypair = secret.kind === 'mnemonic'
+    ? resolveSolanaVaultSecret({ kind: 'mnemonic', mnemonic: secret.mnemonic })
+    : resolveSolanaVaultSecret({ kind: 'private-key', secretKey: secret.secretKey });
+  transaction.sign(keypair);
+  return connection.sendRawTransaction(transaction.serialize());
+}
+
 export async function exportMobileWalletPrivateKey(input: {
   state: MobileWalletState;
   wallet: MobileWallet;

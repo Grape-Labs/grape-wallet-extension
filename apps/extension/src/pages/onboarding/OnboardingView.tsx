@@ -67,6 +67,10 @@ function formatAddress(address: string) {
   return `${address.slice(0, 4)}...${address.slice(-4)}`;
 }
 
+function formatLedgerDerivationPath(path: string) {
+  return path.startsWith('m/') ? path : `m/${path}`;
+}
+
 function validatePublicKey(value: string) {
   try {
     new PublicKey(value.trim());
@@ -693,7 +697,7 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
       if (props.onComplete) {
         await props.onComplete();
       } else {
-        window.location.href = chrome.runtime.getURL('popup.html');
+        window.location.replace(chrome.runtime.getURL('wallet.html'));
       }
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'Unable to set up wallet.');
@@ -1136,12 +1140,17 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
                         onClick={() => handleLedgerScanClick(ledgerScanCount + LEDGER_ACCOUNT_SCAN_BATCH_SIZE)}
                         disabled={scanningLedger}
                       >
-                        Scan more
+                        Scan {LEDGER_ACCOUNT_SCAN_BATCH_SIZE} more
                       </Button>
                     ) : null}
                   </div>
                   {ledgerAccounts.length > 0 ? (
                     <div className="stack">
+                      {ledgerChain === 'solana' ? (
+                        <p className="muted">
+                          Includes <span className="mono">m/44&apos;/501&apos;</span> plus both indexed Solana Ledger path formats through account {ledgerScanCount - 1}.
+                        </p>
+                      ) : null}
                       <div className="space-between">
                         <span className="muted">Detected accounts</span>
                         <span className="muted">Select one or more, sorted by balance</span>
@@ -1172,7 +1181,7 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
                                 </div>
                               </div>
                               <span className="muted mono">{formatAddress(account.publicKey)}</span>
-                              <span className="muted mono">{account.derivationPath}</span>
+                              <span className="muted mono">{formatLedgerDerivationPath(account.derivationPath)}</span>
                             </button>
                           );
                         })}

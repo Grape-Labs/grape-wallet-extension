@@ -19,6 +19,17 @@ configuration is handled in extension and mobile builds.
 
 ## Browser extension
 
+### Wallet creation
+
+- Completing wallet creation in a browser tab now opens the responsive full-page wallet instead of stretching the compact extension popup across the tab.
+- Wide-tab launches of `popup.html` automatically redirect to the correct wallet surface while the toolbar popup remains compact.
+
+### Token cleanup
+
+- Token detail pages now expose **Burn** or **Close** directly instead of hiding both actions behind a generic Manage label.
+- Added an always-visible warning explaining whether the action destroys tokens or closes an empty account to recover SOL rent.
+- Tokens with known value continue to require an explicit typed confirmation before burning.
+
 ### Help and FAQ
 
 - Added an expandable FAQ inside compact Settings with direct Help docs and Discord links.
@@ -41,8 +52,17 @@ configuration is handled in extension and mobile builds.
 
 ## Mobile wallet
 
+### Token cleanup
+
+- Added Burn and Close actions directly to eligible Solana token detail pages.
+- Burn screens show the irreversible loss warning, estimated portfolio value, and require typed confirmation for tokens with known value.
+- Empty SPL Token and Token-2022 accounts can be closed from their token page to reclaim SOL rent.
+- Software and paired Ledger wallets use the same confirmation flow, and holdings refresh after completion.
+
 ### Solana Mobile
 
+- Ledger account discovery can now scan deeper in batches of 10 indices while preserving previously selected wallets.
+- Ledger discovery now includes the root `m/44'/501'` account, then checks both common indexed Solana derivation-path formats and clearly shows the scanned range.
 - Grape can now appear as a wallet in native Android dApps using the Solana Mobile Wallet Adapter protocol.
 - Added native association handling for `solana-wallet://` requests in a dedicated Android task, allowing control to return to the requesting dApp when the session finishes.
 - Supports authorization, reauthorization, message signing, legacy and versioned transaction signing, and sign-and-send requests for the selected Solana wallet.
@@ -69,6 +89,8 @@ configuration is handled in extension and mobile builds.
 
 ### Token prices and market changes
 
+- Fixed an iOS portfolio refresh race that could briefly load all SPL tokens and then replace them with a SOL-only result.
+- Fast Solana balance previews can no longer overwrite the completed RPC-backed token portfolio, including during a manual refresh.
 - Mobile asset rows now preserve the token unit price and 24-hour market change
   returned by the pricing service.
 - The left side of each supported token row shows its per-token USD rate, such as
