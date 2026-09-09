@@ -1927,7 +1927,7 @@ function GrapeApp() {
       : headlineAsset ? formatMobileTokenQuantity(headlineAsset) : '--';
   const visibleSortedAssets = useMemo(() => {
     return assets
-      .filter((asset) => asset.tokenType === 'nft' || !walletState.hideZeroBalances || (asset.amountUi ?? 0) > 0)
+      .filter((asset) => asset.tokenType === 'native' || asset.tokenType === 'nft' || !walletState.hideZeroBalances || (asset.amountUi ?? 0) > 0)
       .filter((asset) => {
         if (!walletState.hideLowValueTokens || asset.tokenType === 'native' || asset.tokenType === 'nft') return true;
         if (!/^\s*\$/.test(asset.valueLabel)) return false;

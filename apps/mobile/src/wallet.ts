@@ -50,6 +50,7 @@ import {
   getMobileMonadRpcUrl,
   getMobileSuiRpcUrl,
   getMobileSolanaRpcUrl,
+  MOBILE_SOLANA_DEFAULT_RPC_URL,
   MOBILE_LIFI_NATIVE_TOKEN_ADDRESS,
   type MobileBridgeQuoteSummary,
   type MobileJupiterQuoteResponse
@@ -2462,6 +2463,28 @@ async function createPasswordHash(password: string, salt: string) {
   return Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, `${salt}:${password}`);
 }
 
+async function loadMobileSolanaBalanceLamports(address: string): Promise<number | null> {
+  const { Connection, PublicKey } = loadSolanaWeb3Module();
+  const owner = new PublicKey(address);
+  const configuredRpc = getMobileSolanaRpcUrl(DEFAULT_SOLANA_NETWORK);
+  const rpcUrls = [...new Set([configuredRpc, MOBILE_SOLANA_DEFAULT_RPC_URL])];
+
+  for (const rpcUrl of rpcUrls) {
+    const connection = new Connection(rpcUrl, 'confirmed');
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        return await connection.getBalance(owner, 'confirmed');
+      } catch {
+        if (attempt === 0) {
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
 async function loadSolanaAssets(address: string): Promise<MobileAsset[]> {
   const web3 = loadSolanaWeb3Module();
   const { Connection, PublicKey } = web3;
@@ -2486,7 +2509,7 @@ async function loadSolanaAssets(address: string): Promise<MobileAsset[]> {
     decimals?: number;
   };
   const [lamports, shyftTokens, rpcTokenEntries] = await Promise.all([
-    connection.getBalance(owner, 'confirmed').catch(() => 0),
+    loadMobileSolanaBalanceLamports(address),
     fetchMobileShyftWalletTokens(address, DEFAULT_SOLANA_NETWORK).catch(() => []),
     Promise.all([
       connection.getParsedTokenAccountsByOwner(owner, {
@@ -2598,15 +2621,15 @@ async function loadSolanaAssets(address: string): Promise<MobileAsset[]> {
       () => ({})
     );
   const solUsdPrice = jupiterPrices[JUPITER_SOL_MINT]?.usdPrice ?? null;
-  const solAmount = lamports / 1_000_000_000;
+  const solAmount = lamports == null ? null : lamports / 1_000_000_000;
   const assets: MobileAsset[] = [
     {
       id: 'sol',
       name: 'Solana',
       symbol: 'SOL',
-      amountLabel: `${solAmount.toFixed(4).replace(/\.?0+$/, '')} SOL`,
-      amountUi: solAmount,
-      valueLabel: formatUsdValue(solUsdPrice ? solAmount * solUsdPrice : null),
+      amountLabel: solAmount == null ? 'Balance unavailable' : `${solAmount.toFixed(9).replace(/\.?0+$/, '')} SOL`,
+      amountUi: solAmount ?? undefined,
+      valueLabel: formatUsdValue(solUsdPrice && solAmount != null ? solAmount * solUsdPrice : null),
       priceUsd: solUsdPrice,
       priceChange24h: jupiterPrices[JUPITER_SOL_MINT]?.priceChange24h ?? null,
       logoUri: 'https://media.solana-cdn.com/image/width=100/https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/solana/info/logo.png',
@@ -2644,7 +2667,7 @@ async function loadSolanaAssets(address: string): Promise<MobileAsset[]> {
   });
 
   mobileSolanaAssetCache.set(address, {
-    expiresAt: Date.now() + (assets.length > 1 ? MOBILE_SOLANA_ASSET_CACHE_TTL_MS : 5_000),
+    expiresAt: Date.now() + (lamports != null && assets.length > 1 ? MOBILE_SOLANA_ASSET_CACHE_TTL_MS : 5_000),
     assets
   });
 
@@ -2657,22 +2680,19 @@ async function loadSolanaAssetsFast(address: string): Promise<MobileAsset[]> {
     return [];
   }
 
-  const { Connection, PublicKey } = loadSolanaWeb3Module();
-  const connection = new Connection(getMobileSolanaRpcUrl(DEFAULT_SOLANA_NETWORK), 'confirmed');
-  const owner = new PublicKey(address);
   const [lamports, shyftTokens] = await Promise.all([
-    connection.getBalance(owner, 'confirmed').catch(() => 0),
+    loadMobileSolanaBalanceLamports(address),
     fetchMobileShyftWalletTokens(address, DEFAULT_SOLANA_NETWORK).catch(() => [])
   ]);
 
-  const solAmount = lamports / 1_000_000_000;
+  const solAmount = lamports == null ? null : lamports / 1_000_000_000;
   const assets: MobileAsset[] = [
     {
       id: 'sol',
       name: 'Solana',
       symbol: 'SOL',
-      amountLabel: `${solAmount.toFixed(4).replace(/\.?0+$/, '')} SOL`,
-      amountUi: solAmount,
+      amountLabel: solAmount == null ? 'Balance unavailable' : `${solAmount.toFixed(9).replace(/\.?0+$/, '')} SOL`,
+      amountUi: solAmount ?? undefined,
       valueLabel: formatUsdValue(null),
       logoUri: 'https://media.solana-cdn.com/image/width=100/https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/solana/info/logo.png',
       chain: 'solana',
