@@ -1,122 +1,43 @@
-# Grape Wallet 0.5.171
+# Grape Wallet 0.5.175
 
-**Version 0.5.171** expands the Discover experience across every supported chain,
-brings richer token market information to mobile, and improves how private RPC
-configuration is handled in extension and mobile builds.
+**Version 0.5.175** makes transaction approvals easier to verify across the browser extension and mobile wallet, with clearer balance changes, more precise fee estimates, and a consistent review experience. It also brings Roundtrip AI to the extension’s Solana Discover directory.
 
 ## Highlights
 
-- Added Android Mobile Wallet Adapter support for native Solana dApps on Saga, Seeker, and other compatible devices.
-- Added an expanded in-app FAQ to mobile and the browser extension, covering supported networks, swaps, bridges, Discover, approvals, asset pricing, token management, governance, security, and custom RPCs.
-- Discover recommendations now follow the selected Solana, Sui, Monad, or
-  Ethereum wallet.
-- Added dedicated popular-app directories for every supported chain on both the
-  browser extension and mobile wallet.
-- Mobile token rows now show the unit USD price and color-coded 24-hour change,
-  matching the extension.
-- Private Solana RPC endpoints are now supplied through local build environment
-  variables instead of being committed to the repository.
+- Transaction approvals now present estimated wallet balance changes as clear **You send** and **You receive** rows.
+- Network fees in the browser extension now show both the precise SOL amount and its estimated USD value.
+- Small fees and token values retain useful decimal precision instead of rounding down to **$0.00**.
+- Mobile Discover and Solana Mobile Wallet Adapter requests now include native transaction simulation and balance-change previews before approval.
+- Added Roundtrip AI as a featured community app in the extension’s Solana Discover directory.
 
 ## Browser extension
 
-### Wallet creation
+### Clearer transaction reviews
 
-- Completing wallet creation in a browser tab now opens the responsive full-page wallet instead of stretching the compact extension popup across the tab.
-- Wide-tab launches of `popup.html` automatically redirect to the correct wallet surface while the toolbar popup remains compact.
+- Improved the approval summary to make outgoing and incoming assets easier to distinguish at a glance.
+- Token quantities preserve their decoded on-chain precision, with USD estimates displayed separately when pricing is available.
+- Network fees now show SOL as the primary value with the USD estimate directly underneath.
+- Very small USD values use adaptive precision so low-cost transactions no longer appear to have a **$0.00** fee.
+- Detailed account, instruction, warning, and simulation information remains available for deeper inspection.
 
-### Token cleanup
+### Discover
 
-- Token detail pages now expose **Burn** or **Close** directly instead of hiding both actions behind a generic Manage label.
-- Added an always-visible warning explaining whether the action destroys tokens or closes an empty account to recover SOL rent.
-- Tokens with known value continue to require an explicit typed confirmation before burning.
-
-### Help and FAQ
-
-- Added an expandable FAQ inside compact Settings with direct Help docs and Discord links.
-- Covers Grape wallet tools, third-party routing, transaction review, asset pricing, token cleanup, governance, recovery, Ledger, biometrics, and custom RPC privacy.
-
-### Chain-aware Discover
-
-- Switching chains now updates the Discover heading, recommendations, featured
-  apps, category filters, recent connections, and empty-state messaging.
-- Solana Discover continues to feature Grape tools and popular Solana apps.
-- Sui Discover includes apps such as Cetus, NAVI Protocol, Suilend, Bluefin,
-  Scallop, Aftermath, and Turbos.
-- Monad Discover includes the official Monad App Hub, Kuru, Uniswap,
-  PancakeSwap, LFJ, aPriori, Magma, and Monad explorers.
-- Ethereum Discover includes Uniswap, Aave, Lido, Safe, Curve, CoW Swap,
-  OpenSea, ENS, and Etherscan.
-- Category filters only show categories that contain apps for the active chain.
-- Recently connected apps are filtered to the selected ecosystem so Solana-only
-  sites do not appear while browsing Sui, Monad, or Ethereum.
+- Added **Roundtrip AI**, a community-built travel app, to the Solana Discover directory.
+- Roundtrip AI is marked as featured and can be found through Discover search or the Community category.
 
 ## Mobile wallet
 
-### Token cleanup
+### Transaction previews
 
-- Added Burn and Close actions directly to eligible Solana token detail pages.
-- Burn screens show the irreversible loss warning, estimated portfolio value, and require typed confirmation for tokens with known value.
-- Empty SPL Token and Token-2022 accounts can be closed from their token page to reclaim SOL rent.
-- Software and paired Ledger wallets use the same confirmation flow, and holdings refresh after completion.
-
-### Solana Mobile
-
-- Ledger account discovery can now scan deeper in batches of 10 indices while preserving previously selected wallets.
-- Ledger discovery now includes the root `m/44'/501'` account, then checks both common indexed Solana derivation-path formats and clearly shows the scanned range.
-- Grape can now appear as a wallet in native Android dApps using the Solana Mobile Wallet Adapter protocol.
-- Added native association handling for `solana-wallet://` requests in a dedicated Android task, allowing control to return to the requesting dApp when the session finishes.
-- Supports authorization, reauthorization, message signing, legacy and versioned transaction signing, and sign-and-send requests for the selected Solana wallet.
-- Every connection and signing request is shown in a Grape approval sheet with the requesting dApp identity, network, selected wallet, payload count, and safety guidance.
-- Added explicit rejection, invalid-authorization, low-power connection, and session-error handling.
-- Mobile Wallet Adapter is Android-only; the existing in-app Discover browser remains available on both Android and iOS.
-
-### Help and FAQ
-
-- Added wallet guidance directly inside Settings so common questions can be answered without leaving the app.
-- Expanded coverage for Grape tools and third-party integrations, including Jupiter swaps, LI.FI bridge routes, the portfolio rebalancer, chain-aware Discover, transaction approvals, Burn, Reclaim rent, governance, Verification, OG Reputation, biometrics, Ledger, and custom RPCs.
-- Clearly distinguishes browsing a recommended dApp from native wallet-provider support on mobile.
-- Corrected mobile release metadata so Settings and native Android/iOS App Info report version **0.5.171** instead of the old **0.4.0** value.
-- Made the mobile navigation background span the full screen width and physical bottom edge, while keeping its controls above Android and iOS system navigation areas.
-
-### Recommendations for every chain
-
-- Mobile browser recommendations now change with the selected wallet chain.
-- Added separate popular-app collections for Solana, Sui, Monad, and Ethereum.
-- Grape-specific tools remain available when Solana is selected and are hidden
-  on unrelated chains.
-- Site icons for every chain directory are prefetched for a cleaner browsing
-  experience.
-
-### Token prices and market changes
-
-- Fixed an iOS portfolio refresh race that could briefly load all SPL tokens and then replace them with a SOL-only result.
-- Fast Solana balance previews can no longer overwrite the completed RPC-backed token portfolio, including during a manual refresh.
-- Mobile asset rows now preserve the token unit price and 24-hour market change
-  returned by the pricing service.
-- The left side of each supported token row shows its per-token USD rate, such as
-  **$0.9999**.
-- Positive and neutral 24-hour changes appear in green; negative changes appear
-  in red.
-- Total wallet value and token quantity remain visible on the right side.
-- Assets without market data continue to use the existing symbol and address
-  fallback instead of displaying misleading values.
-
-## RPC configuration
-
-- Updated extension and mobile builds to read the preferred Solana RPC from
-  environment configuration.
-- Extension builds use `VITE_GRAPE_MAINNET_RPC_URL`.
-- Mobile builds use `EXPO_PUBLIC_SOLANA_RPC_URL`.
-- RPC credentials are no longer present in tracked source files.
-- The public Solana mainnet endpoint remains available as a non-secret fallback
-  when no private RPC is configured.
-- Ledger account discovery now uses the configured extension RPC first and falls
-  back to the public endpoint if required.
+- Added estimated balance-change cards to Grape Discover signing requests and native Solana Mobile Wallet Adapter approvals.
+- Approval sheets now identify assets being sent and received, preserve token decimal precision, and show available USD estimates.
+- Network fees are displayed in SOL with their estimated USD value underneath.
+- Transactions are simulated before approval, with a loading state and visible warnings when decoding or simulation identifies a risk.
+- Balance changes are filtered to the active wallet and its associated Solana token accounts.
+- Multi-transaction requests continue to show their full payload count while previewing the first transaction in the batch.
 
 ## Notes
 
-- Non-Solana recommendations can be browsed in the mobile dApp browser. Native
-  Sui, Monad, and Ethereum provider injection is separate from this directory
-  update and is not included in this release.
-- Client-side RPC endpoints are embedded in distributed extension, APK, and IPA
-  builds and can be observed at runtime even when they are not stored on GitHub.
+- Balance changes, token prices, and network fees are estimates produced before signing and may change before confirmation.
+- Pricing is shown only when a supported market-data source can identify the asset.
+- Users should continue to verify the requesting site, assets, amounts, and warnings before approving any transaction.

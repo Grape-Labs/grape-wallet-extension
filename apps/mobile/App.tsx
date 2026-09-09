@@ -2,7 +2,7 @@ import { StatusBar } from 'expo-status-bar';
 import Constants from 'expo-constants';
 import bs58 from 'bs58';
 import { Buffer } from 'buffer';
-import { PublicKey } from '@solana/web3.js';
+import { Connection, PublicKey } from '@solana/web3.js';
 import {
   initializeMWAEventListener,
   initializeMobileWalletAdapterSession,
@@ -119,6 +119,7 @@ import {
   fetchMobileJupiterPrices,
   fetchMobileSolanaTokenMarket,
   fetchMobileJupiterStocks,
+  getMobileSolanaRpcUrl,
   getMobileSupportedBridgeDestinations,
   MOBILE_JUPITER_SOL_MINT,
   searchMobileLifiTokens,
@@ -141,10 +142,14 @@ import {
   getMobileDeterministicPasskeyWalletPassword
 } from './src/passkeys';
 import { entropyToWalletMnemonic, type WalletMnemonicLength } from '../../packages/solana/src/mnemonic';
+import { inspectTransaction, type TransactionSummary } from '../../packages/solana/src/transactions';
 
 const GRAPE_LOGO_IMAGE = require('./assets/grape_logo_white.png');
 const APP_VERSION = Constants.expoConfig?.version ?? 'unknown';
 const LEDGER_ACCOUNT_SCAN_BATCH_SIZE = 10;
+const SOLANA_TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+const SOLANA_TOKEN_2022_PROGRAM_ID = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
+const SOLANA_ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
 const MWA_CONFIG: MobileWalletAdapterConfig = {
   maxTransactionsPerSigningRequest: 10,
   maxMessagesPerSigningRequest: 10,
@@ -308,6 +313,39 @@ function formatMobileCompactUsd(value: number | null | undefined) {
   if (!unit) return `$${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
   const compactValue = value / unit.threshold;
   return `$${compactValue.toFixed(1).replace(/\.0$/, '')}${unit.suffix}`;
+}
+
+function formatApprovalUsd(value: number | null | undefined) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: value >= 100 ? 0 : 2,
+    maximumFractionDigits: value >= 100 ? 0 : value >= 0.01 ? 2 : 8
+  }).format(value);
+}
+
+function formatApprovalFeeSol(lamports: number) {
+  return `${(lamports / 1_000_000_000).toLocaleString(undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 9
+  })} SOL`;
+}
+
+function deriveMobileAssociatedTokenAddresses(owner: string, mint?: string) {
+  if (!mint) return [];
+  try {
+    const ownerKey = new PublicKey(owner);
+    const mintKey = new PublicKey(mint);
+    return [SOLANA_TOKEN_PROGRAM_ID, SOLANA_TOKEN_2022_PROGRAM_ID].map((tokenProgramId) =>
+      PublicKey.findProgramAddressSync(
+        [ownerKey.toBuffer(), tokenProgramId.toBuffer(), mintKey.toBuffer()],
+        SOLANA_ASSOCIATED_TOKEN_PROGRAM_ID
+      )[0].toBase58()
+    );
+  } catch {
+    return [];
+  }
 }
 const GRAPE_DISCOVER_WALLET_ICON =
   "data:image/png;base64,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";
@@ -1552,6 +1590,8 @@ function GrapeApp() {
   const [discoverApprovalPassword, setDiscoverApprovalPassword] = useState('');
   const [mwaRequest, setMwaRequest] = useState<MWARequest | null>(null);
   const [mwaStatus, setMwaStatus] = useState<string | null>(null);
+  const [approvalTransactionSummary, setApprovalTransactionSummary] = useState<TransactionSummary | null>(null);
+  const [approvalTransactionLoading, setApprovalTransactionLoading] = useState(false);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const discoverWebViewRef = useRef<WebView>(null);
   const activeDiscoverTab = useMemo(
@@ -1562,6 +1602,73 @@ function GrapeApp() {
     () => discoverBookmarks.some((bookmark) => bookmark.url === (discoverCurrentUrl || discoverUrl)),
     [discoverBookmarks, discoverCurrentUrl, discoverUrl]
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    const discoverTransactions = discoverApproval
+      ? discoverApproval.request.method === 'signAllTransactions'
+        ? Array.isArray(discoverApproval.request.params?.transactions)
+          ? discoverApproval.request.params.transactions.filter((entry): entry is string => typeof entry === 'string')
+          : []
+        : typeof discoverApproval.request.params?.transaction === 'string'
+          ? [discoverApproval.request.params.transaction]
+          : []
+      : [];
+    const mwaTransactions = mwaRequest && (
+      mwaRequest.__type === MWARequestType.SignTransactionsRequest ||
+      mwaRequest.__type === MWARequestType.SignAndSendTransactionsRequest
+    )
+      ? mwaRequest.payloads.map((payload) => Buffer.from(payload).toString('base64'))
+      : [];
+    const transaction = discoverTransactions[0] ?? mwaTransactions[0];
+
+    if (!transaction) {
+      setApprovalTransactionSummary(null);
+      setApprovalTransactionLoading(false);
+      return () => { cancelled = true; };
+    }
+
+    setApprovalTransactionLoading(true);
+    void inspectTransaction(transaction, new Connection(getMobileSolanaRpcUrl(), 'confirmed'))
+      .then(async (summary) => {
+        const pricingMints = [...new Set([
+          MOBILE_JUPITER_SOL_MINT,
+          ...summary.balanceChanges.map((change) =>
+            change.assetAddress?.trim() || (change.assetLabel === 'SOL' ? MOBILE_JUPITER_SOL_MINT : '')
+          )
+        ].filter(Boolean))];
+        const pricing: Record<string, { usdPrice: number | null; priceChange24h: number | null }> =
+          await fetchMobileJupiterPrices(pricingMints).catch(() => ({}));
+        const solPrice = pricing[MOBILE_JUPITER_SOL_MINT]?.usdPrice ?? null;
+        return {
+          ...summary,
+          feeUsd: summary.estimatedFeeLamports != null && solPrice != null
+            ? (summary.estimatedFeeLamports / 1_000_000_000) * solPrice
+            : null,
+          balanceChanges: summary.balanceChanges.map((change) => {
+            const mint = change.assetAddress?.trim() || (change.assetLabel === 'SOL' ? MOBILE_JUPITER_SOL_MINT : '');
+            const price = mint ? pricing[mint]?.usdPrice ?? null : null;
+            const rawAmount = Number(change.rawAmount);
+            return {
+              ...change,
+              priceUsd: price,
+              valueUsd: price != null && Number.isFinite(rawAmount) ? (rawAmount / 10 ** change.decimals) * price : null
+            };
+          })
+        } satisfies TransactionSummary;
+      })
+      .then((summary) => {
+        if (!cancelled) setApprovalTransactionSummary(summary);
+      })
+      .catch(() => {
+        if (!cancelled) setApprovalTransactionSummary(null);
+      })
+      .finally(() => {
+        if (!cancelled) setApprovalTransactionLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [discoverApproval, mwaRequest]);
 
   useEffect(() => {
     let mounted = true;
@@ -3201,6 +3308,70 @@ function GrapeApp() {
     }
 
     rejectDiscoverProviderRequest(request, 'UNSUPPORTED', `Unsupported request method: ${request.method}`);
+  }
+
+  function renderApprovalTransactionReview() {
+    if (approvalTransactionLoading) {
+      return (
+        <View style={styles.approvalReviewLoading}>
+          <ActivityIndicator size="small" color={activeTheme.grape} />
+          <Text style={styles.sectionHint}>Simulating transaction and estimating fees…</Text>
+        </View>
+      );
+    }
+    if (!approvalTransactionSummary || !discoverWallet) return null;
+
+    const walletAddress = discoverWallet.address.trim().toLowerCase();
+    const changes = approvalTransactionSummary.balanceChanges.filter((change) => {
+      if (change.account.trim().toLowerCase() === walletAddress || change.ownerAddress?.trim().toLowerCase() === walletAddress) {
+        return true;
+      }
+      return deriveMobileAssociatedTokenAddresses(discoverWallet.address, change.assetAddress)
+        .some((address) => address === change.account);
+    });
+
+    return (
+      <View style={styles.approvalReviewCard}>
+        <Text style={styles.approvalReviewKicker}>Estimated balance changes</Text>
+        {changes.length ? (
+          <View style={styles.approvalReviewList}>
+            {changes.map((change, index) => (
+              <View key={`${change.account}-${change.assetAddress ?? change.assetLabel}-${index}`} style={styles.approvalReviewRow}>
+                <View style={styles.approvalReviewCopy}>
+                  <Text style={styles.approvalReviewAsset}>{change.assetLabel}</Text>
+                  <Text style={styles.approvalReviewCaption}>{change.direction === 'in' ? 'You receive' : 'You send'}</Text>
+                </View>
+                <View style={styles.approvalReviewValues}>
+                  <Text style={change.direction === 'in' ? styles.approvalReviewIncoming : styles.approvalReviewOutgoing}>
+                    {change.direction === 'in' ? '+' : '-'}{change.amount} {change.assetLabel}
+                  </Text>
+                  {change.valueUsd != null ? <Text style={styles.approvalReviewFiat}>{formatApprovalUsd(change.valueUsd)}</Text> : null}
+                </View>
+              </View>
+            ))}
+          </View>
+        ) : (
+          <Text style={styles.sectionHint}>No wallet balance changes could be decoded. Review this request carefully.</Text>
+        )}
+        {approvalTransactionSummary.estimatedFeeLamports != null ? (
+          <View style={styles.approvalReviewFeeRow}>
+            <Text style={styles.approvalReviewCaption}>Network fee</Text>
+            <View style={styles.approvalReviewValues}>
+              <Text style={styles.approvalReviewFeeSol}>{formatApprovalFeeSol(approvalTransactionSummary.estimatedFeeLamports)}</Text>
+              {approvalTransactionSummary.feeUsd != null ? (
+                <Text style={styles.approvalReviewFiat}>{formatApprovalUsd(approvalTransactionSummary.feeUsd)}</Text>
+              ) : null}
+            </View>
+          </View>
+        ) : null}
+        {approvalTransactionSummary.warnings.slice(0, 2).map((warning) => (
+          <View key={warning} style={styles.approvalReviewWarning}>
+            <MaterialCommunityIcons name="alert-outline" size={17} color={activeTheme.warning} />
+            <Text style={styles.approvalReviewWarningText}>{warning}</Text>
+          </View>
+        ))}
+      </View>
+    );
   }
 
   function rejectMwaRequest() {
@@ -9417,6 +9588,7 @@ function GrapeApp() {
                       <Text style={styles.exportSecretLabel}>Wallet</Text>
                       <Text style={styles.settingsMono}>{discoverWallet ? `${discoverWallet.name} • ${discoverWallet.address}` : 'No Solana wallet available'}</Text>
                     </View>
+                    {renderApprovalTransactionReview()}
                     {mwaRequest.__type !== MWARequestType.AuthorizeDappRequest && mwaRequest.__type !== MWARequestType.ReauthorizeDappRequest ? (
                       <View style={styles.exportSecretCard}>
                         <Text style={styles.exportSecretLabel}>Review carefully</Text>
@@ -9477,6 +9649,7 @@ function GrapeApp() {
                       <Text style={styles.exportSecretLabel}>Wallet</Text>
                       <Text style={styles.settingsMono}>{discoverWallet ? `${discoverWallet.name} • ${discoverWallet.address}` : 'No Solana wallet selected'}</Text>
                     </View>
+                    {renderApprovalTransactionReview()}
                     {discoverApprovalRequiresReauth ? (
                   <View style={styles.exportSecretCard}>
                     <Text style={styles.exportSecretLabel}>Signing mode</Text>
@@ -11527,6 +11700,109 @@ function createStyles(palette: MobileThemePalette) {
   },
   discoverApprovalContent: {
     paddingBottom: 14
+  },
+  approvalReviewLoading: {
+    minHeight: 72,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    padding: 14,
+    borderRadius: 16,
+    backgroundColor: palette.softPanel
+  },
+  approvalReviewCard: {
+    gap: 12,
+    padding: 14,
+    borderRadius: 18,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: palette.panelBorder,
+    backgroundColor: palette.softPanel
+  },
+  approvalReviewKicker: {
+    color: palette.subtle,
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 1,
+    textTransform: 'uppercase'
+  },
+  approvalReviewList: {
+    gap: 8
+  },
+  approvalReviewRow: {
+    minHeight: 64,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    padding: 12,
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: palette.panelBorder,
+    backgroundColor: palette.panel
+  },
+  approvalReviewCopy: {
+    flex: 1,
+    gap: 3
+  },
+  approvalReviewAsset: {
+    color: palette.text,
+    fontSize: 15,
+    fontWeight: '800'
+  },
+  approvalReviewCaption: {
+    color: palette.muted,
+    fontSize: 12
+  },
+  approvalReviewValues: {
+    flexShrink: 1,
+    alignItems: 'flex-end',
+    gap: 3
+  },
+  approvalReviewIncoming: {
+    color: palette.mint,
+    fontSize: 15,
+    fontWeight: '800',
+    textAlign: 'right'
+  },
+  approvalReviewOutgoing: {
+    color: palette.warning,
+    fontSize: 15,
+    fontWeight: '800',
+    textAlign: 'right'
+  },
+  approvalReviewFiat: {
+    color: palette.muted,
+    fontSize: 12,
+    textAlign: 'right'
+  },
+  approvalReviewFeeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    paddingTop: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: palette.panelBorder
+  },
+  approvalReviewFeeSol: {
+    color: palette.text,
+    fontSize: 14,
+    fontWeight: '800'
+  },
+  approvalReviewWarning: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    padding: 10,
+    borderRadius: 12,
+    backgroundColor: palette.frost
+  },
+  approvalReviewWarningText: {
+    flex: 1,
+    color: palette.warning,
+    fontSize: 12,
+    lineHeight: 17
   },
   discoverApprovalActions: {
     flexShrink: 0,

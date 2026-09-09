@@ -6565,7 +6565,16 @@ body .unlock-password-shell .unlock-password-input:focus {
 }
 
 .approval-fee-value {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+  text-align: right;
   font-weight: 700;
+}
+
+.approval-fee-fiat {
+  font-size: 0.78rem;
+  font-weight: 500;
 }
 
 .approval-disclosure {

@@ -96,7 +96,9 @@ function formatUsd(value: number | null | undefined): string | null {
     style: 'currency',
     currency: 'USD',
     minimumFractionDigits: value >= 100 ? 0 : 2,
-    maximumFractionDigits: value >= 100 ? 0 : 2
+    // Small network fees and low-value token changes should remain useful
+    // instead of being rounded down to "$0.00".
+    maximumFractionDigits: value >= 100 ? 0 : value >= 0.01 ? 2 : 8
   }).format(value);
 }
 
@@ -509,9 +511,10 @@ export function ApprovalView(props: {
               <div className="approval-fee-row">
                 <span className="muted">Network fee</span>
                 <span className="approval-fee-value">
-                  {approval.transactionSummary.feeUsd != null
-                    ? formatUsd(approval.transactionSummary.feeUsd)
-                    : formatLamports(approval.transactionSummary.estimatedFeeLamports)}
+                  <span>{formatLamports(approval.transactionSummary.estimatedFeeLamports)}</span>
+                  {approval.transactionSummary.feeUsd != null ? (
+                    <span className="muted approval-fee-fiat">{formatUsd(approval.transactionSummary.feeUsd)}</span>
+                  ) : null}
                 </span>
               </div>
             ) : null}

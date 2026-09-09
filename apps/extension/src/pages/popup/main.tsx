@@ -220,6 +220,7 @@ type DiscoverDapp = {
 };
 const SOLANA_DISCOVER_DAPPS: DiscoverDapp[] = [
   { name: 'Grape Governance', description: 'Open the Grape DAO directly', category: 'Governance', url: 'https://www.governance.so/dao/By2sVGZXwfQq6rAiAM3rNPJ9iQfb5e2QhnF4YjJ4Bip', featured: true },
+  { name: 'Roundtrip AI', description: 'Community-built travel app', category: 'Community', url: 'https://round-trip.ai.studio/', featured: true },
   { name: 'Jupiter', description: 'Swap, trade, and earn', category: 'DeFi', url: 'https://jup.ag', featured: true },
   { name: 'Kamino', description: 'Borrow, lend, and provide liquidity', category: 'DeFi', url: 'https://app.kamino.finance', featured: true },
   { name: 'Sanctum', description: 'Explore Solana liquid staking', category: 'Staking', url: 'https://app.sanctum.so', featured: true },
