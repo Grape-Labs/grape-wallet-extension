@@ -1,43 +1,50 @@
-# Grape Wallet 0.5.175
+# Grape Wallet 0.5.179
 
-**Version 0.5.175** makes transaction approvals easier to verify across the browser extension and mobile wallet, with clearer balance changes, more precise fee estimates, and a consistent review experience. It also brings Roundtrip AI to the extension’s Solana Discover directory.
+**Version 0.5.179** refreshes the wallet experience across the browser extension and mobile app with a clearer portfolio hierarchy, more useful screen space, and faster access to essential wallet actions. This release also improves mobile SOL balance reliability and makes wallet addresses and private keys easier to copy when needed.
 
 ## Highlights
 
-- Transaction approvals now present estimated wallet balance changes as clear **You send** and **You receive** rows.
-- Network fees in the browser extension now show both the precise SOL amount and its estimated USD value.
-- Small fees and token values retain useful decimal precision instead of rounding down to **$0.00**.
-- Mobile Discover and Solana Mobile Wallet Adapter requests now include native transaction simulation and balance-change previews before approval.
-- Added Roundtrip AI as a featured community app in the extension’s Solana Discover directory.
+- Redesigned the wallet home screen across extension and mobile with a stronger balance hero and clearer visual hierarchy.
+- Expanded the browser extension to a balanced `402px` width, giving balances, tabs, and token values more room without feeling oversized.
+- Theme artwork is now contained within the wallet hero, keeping the asset area cleaner and easier to read.
+- Updated home navigation to a streamlined underline-tab layout.
+- Improved action buttons and increased asset-row typography and numerical space.
+- Added **Copy address** alongside Share on the Receive screen in both extension and mobile.
+- Added a dedicated copy button when revealing a private key.
+- Improved mobile SOL balance loading with retries and a fallback RPC endpoint.
 
 ## Browser extension
 
-### Clearer transaction reviews
+### Refreshed wallet home
 
-- Improved the approval summary to make outgoing and incoming assets easier to distinguish at a glance.
-- Token quantities preserve their decoded on-chain precision, with USD estimates displayed separately when pricing is available.
-- Network fees now show SOL as the primary value with the USD estimate directly underneath.
-- Very small USD values use adaptive precision so low-cost transactions no longer appear to have a **$0.00** fee.
-- Detailed account, instruction, warning, and simulation information remains available for deeper inspection.
+- Widened the extension layout and ensured the lock screen and wallet content use the full available width.
+- Redesigned the balance hero and primary action row for better focus and easier interaction.
+- Moved theme artwork into the hero so it no longer competes with portfolio content.
+- Replaced segmented home tabs with a cleaner underline treatment.
+- Increased token-name, balance, and value readability while reserving more space for larger numbers.
+- Updated the bottom navigation to align with the wider layout.
 
-### Discover
+### Easier copying
 
-- Added **Roundtrip AI**, a community-built travel app, to the Solana Discover directory.
-- Roundtrip AI is marked as featured and can be found through Discover search or the Community category.
+- Added a one-tap wallet-address copy action to the Receive QR screen.
+- Added a copy helper beside revealed private keys, while preserving the existing verification and reveal safeguards.
 
 ## Mobile wallet
 
-### Transaction previews
+### Consistent portfolio design
 
-- Added estimated balance-change cards to Grape Discover signing requests and native Solana Mobile Wallet Adapter approvals.
-- Approval sheets now identify assets being sent and received, preserve token decimal precision, and show available USD estimates.
-- Network fees are displayed in SOL with their estimated USD value underneath.
-- Transactions are simulated before approval, with a loading state and visible warnings when decoding or simulation identifies a risk.
-- Balance changes are filtered to the active wallet and its associated Solana token accounts.
-- Multi-transaction requests continue to show their full payload count while previewing the first transaction in the batch.
+- Applied the same hero-first hierarchy used by the extension.
+- Refined the balance card, action row, tabs, asset rows, and token-value spacing for improved readability.
+- Limited theme artwork to the hero on the ready wallet screen for a calmer portfolio view.
+
+### Reliability and wallet tools
+
+- Native SOL remains visible even when zero-balance assets are hidden.
+- SOL balance requests now retry and fall back to the default Solana RPC when the configured endpoint is temporarily unavailable.
+- Unavailable balances are identified clearly instead of incorrectly appearing as zero.
+- Added one-tap copy controls for Receive addresses and revealed private keys.
 
 ## Notes
 
-- Balance changes, token prices, and network fees are estimates produced before signing and may change before confirmation.
-- Pricing is shown only when a supported market-data source can identify the asset.
-- Users should continue to verify the requesting site, assets, amounts, and warnings before approving any transaction.
+- Private keys remain hidden until the wallet’s existing verification and reveal flow is completed.
+- RPC fallback is used only when the configured Solana endpoint cannot return the native balance.
