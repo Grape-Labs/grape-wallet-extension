@@ -6990,8 +6990,13 @@ function GrapeApp() {
               source={backgroundAsset}
               style={[styles.homeHeroArtwork, { opacity: Math.min(activeTheme.backgroundImageOpacity, 0.72) }]}
               blurRadius={activeTheme.backgroundImageBlur}
+              resizeMode="cover"
             />
           ) : null}
+          <View
+            style={[styles.homeHeroThemeGlow, { backgroundColor: activeTheme.brandGradient[1] }]}
+            pointerEvents="none"
+          />
           <View style={styles.homeHeroScrim} pointerEvents="none" />
           <View style={styles.cardTopRow}>
             <View style={styles.walletIdentity}>
@@ -10078,8 +10083,8 @@ function GrapeApp() {
       {backgroundAsset && screen !== 'ready' ? (
         <Image
           source={backgroundAsset}
-          style={[styles.backgroundImage, { opacity: activeTheme.backgroundImageOpacity }]}
-          blurRadius={activeTheme.backgroundImageBlur}
+          style={[styles.backgroundImage, { opacity: Math.min(activeTheme.backgroundImageOpacity, 0.12) }]}
+          blurRadius={Math.max(activeTheme.backgroundImageBlur, 2)}
         />
       ) : null}
       {activeTheme.backgroundTint && screen !== 'ready' ? <View style={[styles.backgroundTint, { backgroundColor: activeTheme.backgroundTint }]} pointerEvents="none" /> : null}
@@ -10705,9 +10710,18 @@ function createStyles(palette: MobileThemePalette) {
     width: undefined,
     height: undefined
   },
+  homeHeroThemeGlow: {
+    position: 'absolute',
+    top: -110,
+    right: -70,
+    width: 250,
+    height: 250,
+    borderRadius: 125,
+    opacity: 0.2
+  },
   homeHeroScrim: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(5, 6, 10, 0.48)'
+    backgroundColor: 'rgba(5, 6, 10, 0.4)'
   },
   walletIdentity: {
     flexDirection: 'row',
@@ -10884,7 +10898,9 @@ function createStyles(palette: MobileThemePalette) {
     borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.06)'
+    backgroundColor: palette.frost,
+    borderWidth: 1,
+    borderColor: palette.primaryButton
   },
   quickActionGlyph: {
     color: palette.text,

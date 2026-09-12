@@ -465,8 +465,6 @@ export function getMobileTheme(theme: GrapeTheme | undefined, customTheme?: Cust
     subtle: '#c4c5ca',
     frost: 'rgba(255,255,255,0.05)',
     shadow: 'rgba(0,0,0,0.42)',
-    backgroundImageOpacity: Math.min(themedPalette.backgroundImageOpacity, 0.12),
-    backgroundImageBlur: Math.max(themedPalette.backgroundImageBlur, 2),
     bgGlowTop: 'rgba(255,255,255,0.015)',
     bgGlowBottom: 'rgba(255,255,255,0.01)',
     footerBg: 'rgba(8, 9, 13, 0.97)'
