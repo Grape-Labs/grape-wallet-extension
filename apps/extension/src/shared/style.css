@@ -1538,8 +1538,8 @@ body[data-theme='tron']::after {
 }
 
 body[data-surface='popup'] {
-  width: 344px;
-  min-width: 344px;
+  width: 402px;
+  min-width: 402px;
   min-height: 720px;
   isolation: isolate;
 }
@@ -9824,4 +9824,201 @@ body[data-surface='popup'] .token-burn-impact {
 body[data-surface='popup'] .token-burn-confirmation .warning-box {
   margin: 0;
   line-height: 1.5;
+}
+
+/* Wide portfolio hierarchy: theme lives in the hero, content stays calm. */
+body[data-surface='popup'] {
+  --popup-content-bg: #090a0e;
+  background: var(--popup-content-bg);
+}
+
+body[data-surface='popup']::before,
+body[data-surface='popup']::after {
+  display: none;
+}
+
+body[data-surface='popup'] .page-shell {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  padding: 12px 14px 90px;
+  background: var(--popup-content-bg);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+body[data-surface='popup'] .page-content,
+body[data-surface='popup'] .unlock-welcome-shell,
+body[data-surface='popup'] .unlock-welcome-card,
+body[data-surface='popup'] .wallet-home-card {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+}
+
+body[data-surface='popup'] .wallet-home-card {
+  min-height: 350px;
+  margin-bottom: 18px;
+  padding: 18px;
+  border-radius: 26px;
+  background:
+    linear-gradient(145deg, rgba(7, 8, 12, 0.42), rgba(7, 8, 12, 0.82)),
+    radial-gradient(circle at 80% 10%, color-mix(in srgb, var(--theme-accent) 30%, transparent), transparent 42%),
+    var(--theme-surface-strong);
+  background-position: center;
+  background-size: cover;
+}
+
+body[data-theme='grape'][data-surface='popup'] .wallet-home-card {
+  background-image: linear-gradient(145deg, rgba(7, 5, 13, 0.38), rgba(7, 5, 13, 0.84)), url('/icons/bg_grape_dark.png');
+}
+
+body[data-theme='comic'][data-surface='popup'] .wallet-home-card {
+  background-image: linear-gradient(145deg, rgba(15, 7, 25, 0.44), rgba(15, 7, 25, 0.84)), url('/icons/bg_comic.png');
+}
+
+body[data-theme='matrix'][data-surface='popup'] .wallet-home-card {
+  background-image: linear-gradient(145deg, rgba(2, 10, 7, 0.38), rgba(2, 8, 6, 0.86)), url('/icons/bg_matrix.png');
+}
+
+body[data-theme='tron'][data-surface='popup'] .wallet-home-card {
+  background-image: linear-gradient(145deg, rgba(4, 8, 18, 0.4), rgba(4, 7, 16, 0.86)), url('/icons/bg_tron.png');
+}
+
+body[data-theme='apple'][data-surface='popup'] .wallet-home-card,
+body[data-theme='mist'][data-surface='popup'] .wallet-home-card {
+  background-image: linear-gradient(145deg, rgba(15, 20, 29, 0.38), rgba(12, 17, 25, 0.78)), url('/icons/bg_glass.png');
+}
+
+body[data-theme='liquid-chrome'][data-surface='popup'] .wallet-home-card {
+  background-image: linear-gradient(145deg, rgba(6, 7, 10, 0.42), rgba(6, 7, 10, 0.82)), url('/icons/bg_chrome.png');
+}
+
+body[data-surface='popup'] .wallet-home-card::before {
+  width: 280px;
+  height: 280px;
+  top: -190px;
+  right: -100px;
+  opacity: 0.46;
+}
+
+body[data-surface='popup'] .wallet-home-card .card-body {
+  gap: 16px;
+}
+
+body[data-surface='popup'] .portfolio-copy {
+  min-height: 112px;
+  justify-content: center;
+  padding: 18px 4px 4px;
+}
+
+body[data-surface='popup'] .portfolio-copy .hero-balance {
+  font-size: 3.45rem;
+}
+
+body[data-surface='popup'] .home-quick-actions {
+  gap: 10px;
+  margin-top: 2px;
+  padding-top: 16px;
+}
+
+body[data-surface='popup'] .home-quick-actions.quick-actions.compact .quick-action-card {
+  min-height: 82px;
+  gap: 7px;
+  padding: 8px 4px;
+  border-radius: 20px;
+  background: rgba(22, 24, 30, 0.78);
+  color: var(--theme-text);
+  backdrop-filter: blur(16px);
+}
+
+body[data-surface='popup'] .home-quick-actions .quick-action-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 999px;
+  color: var(--theme-accent);
+  background: color-mix(in srgb, var(--theme-accent) 13%, rgba(20, 22, 28, 0.92));
+}
+
+body[data-surface='popup'] .wallet-home-tabs {
+  gap: 22px;
+  margin: 0;
+  padding: 0 4px;
+  border: 0;
+  border-bottom: 1px solid var(--theme-divider);
+  border-radius: 0;
+  background: transparent;
+  overflow-x: auto;
+}
+
+body[data-surface='popup'] .wallet-home-tabs .content-tab {
+  position: relative;
+  min-width: max-content;
+  min-height: 50px;
+  padding: 0 2px;
+  border-radius: 0;
+  font-size: 0.86rem;
+  color: var(--theme-subtle);
+}
+
+body[data-surface='popup'] .wallet-home-tabs .content-tab[data-state='active'] {
+  background: transparent;
+  box-shadow: none;
+  color: var(--theme-text);
+}
+
+body[data-surface='popup'] .wallet-home-tabs .content-tab[data-state='active']::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 3px;
+  border-radius: 3px 3px 0 0;
+  background: var(--theme-accent);
+}
+
+body[data-surface='popup'] .asset-panel-card {
+  padding: 8px 0 14px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+body[data-surface='popup'] .asset-panel-card .token-item {
+  min-height: 78px;
+  padding: 12px 4px;
+}
+
+body[data-surface='popup'] .asset-panel-card .token-avatar {
+  width: 48px;
+  height: 48px;
+  flex-basis: 48px;
+}
+
+body[data-surface='popup'] .asset-panel-card .token-name,
+body[data-surface='popup'] .asset-panel-card .token-amount {
+  font-size: 1rem;
+}
+
+body[data-surface='popup'] .asset-panel-card .token-amount-group {
+  min-width: 132px;
+  max-width: 48%;
+}
+
+body[data-surface='popup'] .asset-panel-card .token-amount,
+body[data-surface='popup'] .asset-panel-card .token-amount-subtitle {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+body[data-surface='popup'] .bottom-nav {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  min-height: 68px;
+  border-width: 1px 0 0;
+  border-radius: 0;
+  background: rgba(11, 12, 16, 0.96);
 }

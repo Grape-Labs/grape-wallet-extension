@@ -15,6 +15,7 @@ import {
   type MobileWalletAdapterConfig
 } from '@solana-mobile/mobile-wallet-adapter-walletlib';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as Clipboard from 'expo-clipboard';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
 import WebView from 'react-native-webview';
@@ -1566,6 +1567,8 @@ function GrapeApp() {
   const [exportLoading, setExportLoading] = useState(false);
   const [exportReveal, setExportReveal] = useState(false);
   const [exportedPrivateKey, setExportedPrivateKey] = useState<string | null>(null);
+  const [copiedReceiveAddress, setCopiedReceiveAddress] = useState(false);
+  const [copiedPrivateKey, setCopiedPrivateKey] = useState(false);
   const [exportVerifiedWalletId, setExportVerifiedWalletId] = useState<string | null>(null);
   const [deviceLinkSession, setDeviceLinkSession] = useState<MobileDeviceLinkSession | null>(null);
   const [deviceLinkLoading, setDeviceLinkLoading] = useState(false);
@@ -2955,6 +2958,7 @@ function GrapeApp() {
     setExportLoading(false);
     setExportReveal(false);
     setExportedPrivateKey(null);
+    setCopiedPrivateKey(false);
     setExportVerifiedWalletId(null);
     setDeviceLinkSession(null);
     setDiscoverConnectedOrigins([]);
@@ -4629,6 +4633,28 @@ function GrapeApp() {
       title: `${selectedWallet.name} address`,
       message: `${selectedWallet.name}\n${selectedWallet.address}`
     });
+  }
+
+  async function handleCopyAddress() {
+    if (!selectedWallet?.address) return;
+    try {
+      await Clipboard.setStringAsync(selectedWallet.address);
+      setCopiedReceiveAddress(true);
+      setTimeout(() => setCopiedReceiveAddress(false), 1600);
+    } catch {
+      setError('Unable to copy the wallet address.');
+    }
+  }
+
+  async function handleCopyPrivateKey() {
+    if (!exportedPrivateKey || !exportReveal || exportVerifiedWalletId !== selectedWallet?.id) return;
+    try {
+      await Clipboard.setStringAsync(exportedPrivateKey);
+      setCopiedPrivateKey(true);
+      setTimeout(() => setCopiedPrivateKey(false), 1600);
+    } catch {
+      setError('Unable to copy the private key.');
+    }
   }
 
   async function handleSetPrivacyMode(value: boolean) {
@@ -6959,6 +6985,14 @@ function GrapeApp() {
     return (
       <>
         <View style={[styles.heroCard, styles.homeHeroCard]}>
+          {backgroundAsset ? (
+            <Image
+              source={backgroundAsset}
+              style={[styles.homeHeroArtwork, { opacity: Math.min(activeTheme.backgroundImageOpacity, 0.72) }]}
+              blurRadius={activeTheme.backgroundImageBlur}
+            />
+          ) : null}
+          <View style={styles.homeHeroScrim} pointerEvents="none" />
           <View style={styles.cardTopRow}>
             <View style={styles.walletIdentity}>
               <Pressable
@@ -7163,10 +7197,16 @@ function GrapeApp() {
           <Text style={styles.receiveAddressLabel}>{selectedWallet?.name ?? 'Wallet'}</Text>
           <Text style={styles.receiveAddressValue}>{selectedWallet?.address ?? '--'}</Text>
         </View>
-        <Pressable style={styles.receiveActionButton} onPress={() => void handleShareAddress()}>
-          <Feather name="share-2" size={16} color={activeTheme.text} />
-          <Text style={styles.receiveActionText}>Share address</Text>
-        </Pressable>
+        <View style={styles.receiveActionsRow}>
+          <Pressable style={styles.receiveActionButton} onPress={() => void handleCopyAddress()} disabled={!selectedWallet?.address}>
+            <Feather name={copiedReceiveAddress ? 'check' : 'copy'} size={16} color={activeTheme.text} />
+            <Text style={styles.receiveActionText}>{copiedReceiveAddress ? 'Copied' : 'Copy address'}</Text>
+          </Pressable>
+          <Pressable style={styles.receiveActionButton} onPress={() => void handleShareAddress()} disabled={!selectedWallet?.address}>
+            <Feather name="share-2" size={16} color={activeTheme.text} />
+            <Text style={styles.receiveActionText}>Share address</Text>
+          </Pressable>
+        </View>
       </View>
     );
   }
@@ -8492,9 +8532,21 @@ function GrapeApp() {
               mode="outlined"
               style={[styles.paperSecondaryButton, styles.walletToolButton]}
               disabled={!exportedPrivateKey || exportVerifiedWalletId !== selectedWallet?.id}
-              onPress={() => setExportReveal((value) => !value)}
+              onPress={() => {
+                setExportReveal((value) => !value);
+                setCopiedPrivateKey(false);
+              }}
             >
               {exportReveal ? 'Hide key' : 'Show key'}
+            </PaperButton>
+            <PaperButton
+              mode="outlined"
+              style={[styles.paperSecondaryButton, styles.walletToolButton]}
+              disabled={!exportedPrivateKey || !exportReveal || exportVerifiedWalletId !== selectedWallet?.id}
+              icon={copiedPrivateKey ? 'check' : 'content-copy'}
+              onPress={() => void handleCopyPrivateKey()}
+            >
+              {copiedPrivateKey ? 'Copied' : 'Copy key'}
             </PaperButton>
           </View>
           <View style={styles.exportSecretCard}>
@@ -10023,16 +10075,16 @@ function GrapeApp() {
     <PaperProvider theme={paperTheme}>
     <SafeAreaView style={styles.safe} edges={['top', 'right', 'bottom', 'left']}>
       <StatusBar style={activeTheme.id === 'champagne' ? 'dark' : 'light'} />
-      {backgroundAsset ? (
+      {backgroundAsset && screen !== 'ready' ? (
         <Image
           source={backgroundAsset}
           style={[styles.backgroundImage, { opacity: activeTheme.backgroundImageOpacity }]}
           blurRadius={activeTheme.backgroundImageBlur}
         />
       ) : null}
-      {activeTheme.backgroundTint ? <View style={[styles.backgroundTint, { backgroundColor: activeTheme.backgroundTint }]} pointerEvents="none" /> : null}
-      <View style={styles.bgGlowTop} pointerEvents="none" />
-      <View style={styles.bgGlowBottom} pointerEvents="none" />
+      {activeTheme.backgroundTint && screen !== 'ready' ? <View style={[styles.backgroundTint, { backgroundColor: activeTheme.backgroundTint }]} pointerEvents="none" /> : null}
+      {screen !== 'ready' ? <View style={styles.bgGlowTop} pointerEvents="none" /> : null}
+      {screen !== 'ready' ? <View style={styles.bgGlowBottom} pointerEvents="none" /> : null}
 
       {screen === 'loading' ? (
         <View style={styles.centered}>
@@ -10637,14 +10689,25 @@ function createStyles(palette: MobileThemePalette) {
     elevation: 0
   },
   homeHeroCard: {
-    paddingHorizontal: 4,
-    paddingTop: Platform.OS === 'android' ? 14 : 6,
+    position: 'relative',
+    overflow: 'hidden',
+    paddingHorizontal: 18,
+    paddingTop: Platform.OS === 'android' ? 18 : 16,
     paddingBottom: 18,
-    gap: 16,
-    borderWidth: 0,
-    borderBottomWidth: 0,
-    borderRadius: 0,
-    backgroundColor: 'transparent'
+    gap: 18,
+    borderWidth: 1,
+    borderRadius: 24,
+    borderColor: palette.panelBorder,
+    backgroundColor: '#0b0c10'
+  },
+  homeHeroArtwork: {
+    ...StyleSheet.absoluteFillObject,
+    width: undefined,
+    height: undefined
+  },
+  homeHeroScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(5, 6, 10, 0.48)'
   },
   walletIdentity: {
     flexDirection: 'row',
@@ -10743,8 +10806,10 @@ function createStyles(palette: MobileThemePalette) {
   },
   balanceBlock: {
     gap: 5,
-    paddingTop: 18,
-    paddingBottom: 8,
+    minHeight: 126,
+    paddingTop: 22,
+    paddingBottom: 10,
+    justifyContent: 'center',
     alignItems: 'flex-start'
   },
   balanceHeaderRow: {
@@ -10755,10 +10820,10 @@ function createStyles(palette: MobileThemePalette) {
   },
   cardBalance: {
     color: palette.text,
-    fontSize: 48,
+    fontSize: 52,
     fontWeight: '800',
     letterSpacing: -1.8,
-    lineHeight: 52,
+    lineHeight: 57,
     textAlign: 'left'
   },
   cardSubtle: {
@@ -10787,7 +10852,7 @@ function createStyles(palette: MobileThemePalette) {
   },
   quickActionsRow: {
     flexDirection: 'row',
-    gap: 8,
+    gap: 10,
     flexWrap: 'nowrap'
   },
   quickActionButton: {
@@ -10795,10 +10860,10 @@ function createStyles(palette: MobileThemePalette) {
     alignItems: 'center',
     justifyContent: 'center',
     gap: 7,
-    minHeight: 74,
-    borderRadius: 18,
-    paddingVertical: 9,
-    backgroundColor: palette.softPanel,
+    minHeight: 88,
+    borderRadius: 20,
+    paddingVertical: 10,
+    backgroundColor: 'rgba(22,24,30,0.82)',
     borderWidth: 0
   },
   quickActionButtonDisabled: {
@@ -10806,20 +10871,20 @@ function createStyles(palette: MobileThemePalette) {
     alignItems: 'center',
     justifyContent: 'center',
     gap: 7,
-    minHeight: 72,
-    borderRadius: 18,
-    paddingVertical: 9,
-    backgroundColor: palette.softPanel,
+    minHeight: 88,
+    borderRadius: 20,
+    paddingVertical: 10,
+    backgroundColor: 'rgba(22,24,30,0.72)',
     borderWidth: 0,
     opacity: 0.5
   },
   quickActionIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'transparent'
+    backgroundColor: 'rgba(255,255,255,0.06)'
   },
   quickActionGlyph: {
     color: palette.text,
@@ -10828,12 +10893,12 @@ function createStyles(palette: MobileThemePalette) {
   },
   quickActionLabel: {
     color: palette.text,
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '800'
   },
   quickActionLabelMuted: {
     color: palette.muted,
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '700'
   },
   rebalanceShortcut: {
@@ -11457,10 +11522,10 @@ function createStyles(palette: MobileThemePalette) {
     gap: 0
   },
   homeAssetRow: {
-    minHeight: 70,
-    gap: 13,
+    minHeight: 78,
+    gap: 14,
     paddingHorizontal: 0,
-    paddingVertical: 11,
+    paddingVertical: 13,
     borderRadius: 16,
     borderBottomWidth: 0
   },
@@ -11474,9 +11539,9 @@ function createStyles(palette: MobileThemePalette) {
     borderColor: palette.primaryButton
   },
   assetGlyph: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     backgroundColor: '#090b14',
     alignItems: 'center',
     justifyContent: 'center',
@@ -11486,7 +11551,7 @@ function createStyles(palette: MobileThemePalette) {
   assetGlyphImage: {
     width: '100%',
     height: '100%',
-    borderRadius: 22
+    borderRadius: 24
   },
   assetGlyphText: {
     color: palette.text,
@@ -11499,7 +11564,7 @@ function createStyles(palette: MobileThemePalette) {
   },
   assetName: {
     color: palette.text,
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: '800'
   },
   assetMeta: {
@@ -11527,16 +11592,17 @@ function createStyles(palette: MobileThemePalette) {
     alignItems: 'flex-end',
     justifyContent: 'center',
     gap: 3,
-    maxWidth: '43%'
+    minWidth: 118,
+    maxWidth: '48%'
   },
   assetValue: {
     color: palette.text,
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: '800'
   },
   assetValueMeta: {
     color: palette.muted,
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '600'
   },
   rowCheckIcon: {
@@ -12337,6 +12403,11 @@ function createStyles(palette: MobileThemePalette) {
         : palette.id === 'champagne'
           ? 'rgba(255,255,255,0.7)'
           : 'rgba(255,255,255,0.05)'
+  },
+  receiveActionsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10
   },
   receiveActionText: {
     color: palette.text,
