@@ -17,6 +17,7 @@ import {
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Clipboard from 'expo-clipboard';
 import * as LocalAuthentication from 'expo-local-authentication';
+import { deleteItemAsync as deleteSecureItem, getItemAsync as getSecureItem, setItemAsync as setSecureItem } from 'expo-secure-store';
 import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
 import WebView from 'react-native-webview';
 import type { WebViewMessageEvent, WebViewNavigation } from 'react-native-webview';
@@ -122,7 +123,9 @@ import {
   fetchMobileJupiterStocks,
   getMobileSolanaRpcUrl,
   getMobileSupportedBridgeDestinations,
+  MOBILE_SOLANA_DEFAULT_RPC_URL,
   MOBILE_JUPITER_SOL_MINT,
+  setMobileSolanaCustomRpcUrl,
   searchMobileLifiTokens,
   searchMobileJupiterTokens
 } from './src/config';
@@ -244,6 +247,7 @@ const MOBILE_WALLET_VALUE_CACHE_KEY = 'grape:wallet-value-cache:v1';
 const MOBILE_WALLET_VALUE_CACHE_TTL_MS = 5 * 60 * 1000;
 const MOBILE_DISCOVER_BOOKMARKS_KEY = 'grape:discover-bookmarks:v1';
 const MOBILE_DISCOVER_TABS_KEY = 'grape:discover-tabs:v1';
+const MOBILE_SOLANA_RPC_STORAGE_KEY = 'grape.solana-rpc.v1';
 
 function mobileJupiterTokenToAsset(
   token: MobileJupiterToken,
@@ -1573,6 +1577,9 @@ function GrapeApp() {
   const [deviceLinkSession, setDeviceLinkSession] = useState<MobileDeviceLinkSession | null>(null);
   const [deviceLinkLoading, setDeviceLinkLoading] = useState(false);
   const [expandedSettingsSections, setExpandedSettingsSections] = useState<Set<string>>(() => new Set(['current-wallet', 'backup']));
+  const [solanaRpcInput, setSolanaRpcInput] = useState('');
+  const [solanaRpcStatus, setSolanaRpcStatus] = useState<string | null>(null);
+  const [solanaRpcSaving, setSolanaRpcSaving] = useState(false);
   const [qrScannerVisible, setQrScannerVisible] = useState(false);
   const [qrScannerTarget, setQrScannerTarget] = useState<'restore' | 'send' | null>(null);
   const [discoverUrlInput, setDiscoverUrlInput] = useState(GRAPE_DISCOVER_DEFAULT_URL);
@@ -2387,10 +2394,15 @@ function GrapeApp() {
         if (mounted) {
           setLaunchStatus('Loading your encrypted wallet');
         }
-        const state = await loadMobileWalletState();
+        const [state, savedSolanaRpc] = await Promise.all([
+          loadMobileWalletState(),
+          getSecureItem(MOBILE_SOLANA_RPC_STORAGE_KEY)
+        ]);
         if (!mounted) {
           return;
         }
+        setMobileSolanaCustomRpcUrl(savedSolanaRpc);
+        setSolanaRpcInput(savedSolanaRpc ?? '');
         setLaunchStatus('Preparing Grape');
         setWalletState(state);
         setScreen(state.setup === 'ready' ? 'locked' : 'setup');
@@ -2980,6 +2992,43 @@ function GrapeApp() {
   async function saveState(nextState: MobileWalletState) {
     setWalletState(nextState);
     await persistMobileWalletState(nextState);
+  }
+
+  async function handleSaveSolanaRpc() {
+    const candidate = solanaRpcInput.trim();
+    if (!candidate) {
+      setSolanaRpcStatus('Enter an HTTPS RPC endpoint or reset to the default.');
+      return;
+    }
+
+    try {
+      const parsed = new URL(candidate);
+      if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+        throw new Error('RPC endpoints must use HTTPS or HTTP.');
+      }
+      setSolanaRpcSaving(true);
+      setSolanaRpcStatus('Testing endpoint…');
+      const connection = new Connection(parsed.toString(), 'confirmed');
+      await connection.getLatestBlockhash('confirmed');
+      const normalized = parsed.toString();
+      setMobileSolanaCustomRpcUrl(normalized);
+      await setSecureItem(MOBILE_SOLANA_RPC_STORAGE_KEY, normalized);
+      setSolanaRpcInput(normalized);
+      setSolanaRpcStatus('Custom Solana RPC saved and active.');
+      await handleRefreshAssets();
+    } catch (unknownError) {
+      setSolanaRpcStatus(unknownError instanceof Error ? unknownError.message : 'Unable to connect to this RPC endpoint.');
+    } finally {
+      setSolanaRpcSaving(false);
+    }
+  }
+
+  async function handleResetSolanaRpc() {
+    setMobileSolanaCustomRpcUrl(undefined);
+    await deleteSecureItem(MOBILE_SOLANA_RPC_STORAGE_KEY);
+    setSolanaRpcInput('');
+    setSolanaRpcStatus('Using the default Solana RPC.');
+    await handleRefreshAssets();
   }
 
   function sendDiscoverProviderResponse(response: {
@@ -8289,6 +8338,59 @@ function GrapeApp() {
               </View>
             ) : null}
           </>
+        )}
+
+        {renderSettingsSection(
+          'network',
+          'Network & RPC',
+          solanaRpcInput.trim() ? 'Custom Solana RPC' : 'Default Solana RPC',
+          <View style={styles.stack}>
+            <Text style={styles.sectionHint}>
+              Set the Solana mainnet endpoint used for balances, activity, transaction simulation, and submissions. Only use an RPC provider you trust.
+            </Text>
+            <PaperTextInput
+              value={solanaRpcInput}
+              onChangeText={(value) => {
+                setSolanaRpcInput(value);
+                setSolanaRpcStatus(null);
+              }}
+              label="Solana mainnet RPC URL"
+              placeholder={MOBILE_SOLANA_DEFAULT_RPC_URL}
+              mode="outlined"
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+              style={styles.paperInput}
+              contentStyle={styles.paperInputContent}
+              outlineStyle={styles.paperOutline}
+              textColor={activeTheme.text}
+            />
+            <Text style={styles.settingsMono} numberOfLines={1} ellipsizeMode="middle">
+              Active: {getMobileSolanaRpcUrl('mainnet-beta')}
+            </Text>
+            {solanaRpcStatus ? <Text style={styles.sectionHint}>{solanaRpcStatus}</Text> : null}
+            <View style={styles.walletToolsRow}>
+              <PaperButton
+                mode="contained"
+                style={[styles.paperPrimaryButton, styles.walletToolButton]}
+                buttonColor={activeTheme.primaryButton}
+                textColor={activeTheme.primaryButtonText}
+                loading={solanaRpcSaving}
+                disabled={solanaRpcSaving || !solanaRpcInput.trim()}
+                onPress={() => void handleSaveSolanaRpc()}
+              >
+                Test & save
+              </PaperButton>
+              <PaperButton
+                mode="outlined"
+                style={[styles.paperSecondaryButton, styles.walletToolButton]}
+                disabled={solanaRpcSaving || !solanaRpcInput.trim()}
+                onPress={() => void handleResetSolanaRpc()}
+              >
+                Use default
+              </PaperButton>
+            </View>
+          </View>
         )}
 
         {renderSettingsSection(

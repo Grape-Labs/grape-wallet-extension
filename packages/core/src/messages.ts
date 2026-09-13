@@ -686,6 +686,33 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     password: z.string().min(1).optional()
   }),
   z.object({
+    type: z.literal('wallet_confidential_token_action'),
+    action: z.enum(['balance', 'configure', 'deposit', 'apply', 'withdraw', 'transfer']),
+    mint: z.string().min(32),
+    accountAddress: z.string().min(32),
+    decimals: z.number().int().min(0).max(255),
+    amount: decimalAmountSchema.optional(),
+    destinationTokenAccount: z.string().min(32).optional(),
+    password: z.string().min(1).optional()
+  }),
+  z.object({
+    type: z.literal('wallet_make_token_confidential'),
+    mint: z.string().min(32),
+    accountAddress: z.string().min(32),
+    programId: z.string().min(32),
+    decimals: z.number().int().min(0).max(255),
+    amount: decimalAmountSchema,
+    password: z.string().min(1).optional()
+  }),
+  z.object({
+    type: z.literal('wallet_unwrap_confidential_token'),
+    wrappedMint: z.string().min(32),
+    wrappedTokenAccount: z.string().min(32),
+    decimals: z.number().int().min(0).max(255),
+    amount: decimalAmountSchema,
+    password: z.string().min(1).optional()
+  }),
+  z.object({
     type: z.literal('wallet_close_token_account'),
     mint: z.string().min(32),
     accountAddress: z.string().min(32),

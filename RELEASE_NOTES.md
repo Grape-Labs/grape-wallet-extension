@@ -12,6 +12,7 @@
 - Added **Copy address** alongside Share on the Receive screen in both extension and mobile.
 - Added a dedicated copy button when revealing a private key.
 - Improved mobile SOL balance loading with retries and a fallback RPC endpoint.
+- Added a mobile setting to test, save, and reset a custom Solana RPC endpoint.
 
 ## Browser extension
 
@@ -42,6 +43,7 @@
 - Native SOL remains visible even when zero-balance assets are hidden.
 - SOL balance requests now retry and fall back to the default Solana RPC when the configured endpoint is temporarily unavailable.
 - Unavailable balances are identified clearly instead of incorrectly appearing as zero.
+- Custom Solana RPC endpoints can now be tested and managed from **Settings → Network & RPC** and are kept in secure device storage.
 - Added one-tap copy controls for Receive addresses and revealed private keys.
 
 ## Notes

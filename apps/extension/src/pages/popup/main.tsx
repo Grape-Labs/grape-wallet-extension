@@ -48,7 +48,9 @@ import type {
   WalletActivityResponse,
   CollectibleItem,
   CollectionHolding,
+  ConfidentialTokenActionResponse,
   IncidentResponseResponse,
+  MakeTokenConfidentialResponse,
   ReclaimableTokenAccount,
   ReclaimableTokenAccountsResponse,
   ReclaimTokenAccountsResponse,
@@ -1658,6 +1660,19 @@ function PopupPage() {
   const [burnConfirmation, setBurnConfirmation] = useState('');
   const [burnPassword, setBurnPassword] = useState('');
   const [tokenActionSubmitting, setTokenActionSubmitting] = useState<'burn' | 'close' | null>(null);
+  const [confidentialAction, setConfidentialAction] = useState<'configure' | 'deposit' | 'apply' | 'withdraw' | 'transfer' | 'unwrap' | null>(null);
+  const [confidentialAmount, setConfidentialAmount] = useState('');
+  const [confidentialDestination, setConfidentialDestination] = useState('');
+  const [confidentialPassword, setConfidentialPassword] = useState('');
+  const [confidentialSubmitting, setConfidentialSubmitting] = useState(false);
+  const [confidentialError, setConfidentialError] = useState<string | null>(null);
+  const [confidentialResult, setConfidentialResult] = useState<ConfidentialTokenActionResponse | null>(null);
+  const [makeConfidentialOpen, setMakeConfidentialOpen] = useState(false);
+  const [makeConfidentialAmount, setMakeConfidentialAmount] = useState('');
+  const [makeConfidentialPassword, setMakeConfidentialPassword] = useState('');
+  const [makeConfidentialSubmitting, setMakeConfidentialSubmitting] = useState(false);
+  const [makeConfidentialError, setMakeConfidentialError] = useState<string | null>(null);
+  const [makeConfidentialResult, setMakeConfidentialResult] = useState<MakeTokenConfidentialResponse | null>(null);
   const [securityReport, setSecurityReport] = useState<WalletSecurityReportResponse | null>(null);
   const [securityLoading, setSecurityLoading] = useState(false);
   const [securityError, setSecurityError] = useState<string | null>(null);
@@ -3802,6 +3817,103 @@ function PopupPage() {
       setTokenActionError(error instanceof Error ? error.message : 'Unable to burn the token.');
     } finally {
       setTokenActionSubmitting(null);
+    }
+  }
+
+  async function handleConfidentialTokenAction(
+    action: 'balance' | 'configure' | 'deposit' | 'apply' | 'withdraw' | 'transfer'
+  ) {
+    if (!assetDetails) return;
+    if ((action === 'deposit' || action === 'withdraw' || action === 'transfer') && !confidentialAmount.trim()) {
+      setConfidentialError('Enter an amount.');
+      return;
+    }
+    if (action === 'transfer' && !confidentialDestination.trim()) {
+      setConfidentialError('Enter the recipient Token-2022 account address.');
+      return;
+    }
+    if (action === 'apply' && !window.confirm('Apply all pending confidential funds to the private available balance?')) return;
+    try {
+      setConfidentialSubmitting(true);
+      setConfidentialError(null);
+      setConfidentialResult(null);
+      const result = await sendRuntimeMessage<ConfidentialTokenActionResponse>({
+        type: 'wallet_confidential_token_action',
+        action,
+        mint: assetDetails.mint,
+        accountAddress: assetDetails.accountAddress,
+        decimals: assetDetails.decimals,
+        amount: action === 'deposit' || action === 'withdraw' || action === 'transfer' ? confidentialAmount.trim() : undefined,
+        destinationTokenAccount: action === 'transfer' ? confidentialDestination.trim() : undefined,
+        password: state?.activeWallet?.signerKind === 'ledger' || canUseUnlockedSigner ? undefined : confidentialPassword || undefined
+      });
+      setConfidentialResult(result);
+      setConfidentialAmount('');
+      setConfidentialDestination('');
+      setConfidentialPassword('');
+      setConfidentialAction(null);
+      await refresh();
+      await refreshAssetDetails(assetDetails);
+    } catch (error) {
+      setConfidentialError(error instanceof Error ? error.message : 'Unable to complete the confidential action.');
+    } finally {
+      setConfidentialSubmitting(false);
+    }
+  }
+
+  async function handleMakeTokenConfidential() {
+    if (!assetDetails || !makeConfidentialAmount.trim()) {
+      setMakeConfidentialError('Enter an amount to make confidential.');
+      return;
+    }
+    if (!window.confirm(`Convert ${makeConfidentialAmount} ${assetDetails.symbol ?? 'tokens'} into its canonical confidential Token-2022 representation? The wrapped asset remains redeemable 1:1.`)) return;
+    try {
+      setMakeConfidentialSubmitting(true);
+      setMakeConfidentialError(null);
+      const result = await sendRuntimeMessage<MakeTokenConfidentialResponse>({
+        type: 'wallet_make_token_confidential',
+        mint: assetDetails.mint,
+        accountAddress: assetDetails.accountAddress,
+        programId: assetDetails.programId,
+        decimals: assetDetails.decimals,
+        amount: makeConfidentialAmount.trim(),
+        password: canUseUnlockedSigner ? undefined : makeConfidentialPassword || undefined
+      });
+      setMakeConfidentialResult(result);
+      setMakeConfidentialAmount('');
+      setMakeConfidentialPassword('');
+      setMakeConfidentialOpen(false);
+      await refresh();
+    } catch (error) {
+      setMakeConfidentialError(error instanceof Error ? error.message : 'Unable to make this token confidential.');
+    } finally {
+      setMakeConfidentialSubmitting(false);
+    }
+  }
+
+  async function handleUnwrapConfidentialToken() {
+    if (!assetDetails?.tokenWrap || !confidentialAmount.trim()) return;
+    if (!window.confirm(`Convert ${confidentialAmount} ${assetDetails.symbol ?? 'wrapped tokens'} back to the original token? Only the public wrapped balance can be converted.`)) return;
+    try {
+      setConfidentialSubmitting(true);
+      setConfidentialError(null);
+      await sendRuntimeMessage({
+        type: 'wallet_unwrap_confidential_token',
+        wrappedMint: assetDetails.mint,
+        wrappedTokenAccount: assetDetails.accountAddress,
+        decimals: assetDetails.decimals,
+        amount: confidentialAmount.trim(),
+        password: canUseUnlockedSigner ? undefined : confidentialPassword || undefined
+      });
+      setConfidentialAmount('');
+      setConfidentialPassword('');
+      setConfidentialAction(null);
+      await refresh();
+      setView('home');
+    } catch (error) {
+      setConfidentialError(error instanceof Error ? error.message : 'Unable to convert back to the original token.');
+    } finally {
+      setConfidentialSubmitting(false);
     }
   }
 
@@ -6999,6 +7111,63 @@ function PopupPage() {
   function renderAsset() {
     const isCollectibleView = !!selectedCollectible;
     const showMetadataCards = isCollectibleView || !assetActionMode;
+    const preliminaryToken = !isCollectibleView ? selectedTokenHolding : null;
+
+    const renderPreliminaryTokenDetails = (status: 'loading' | 'error') => {
+      if (!preliminaryToken) return null;
+      const preliminaryValue = typeof preliminaryToken.valueUsd === 'number' ? formatUsd(preliminaryToken.valueUsd) : null;
+
+      return (
+        <Card className="asset-detail-card asset-detail-preliminary">
+          <div className="send-flow-header asset-detail-topbar">
+            <button type="button" className="send-back-button" onClick={() => setView('home')} aria-label="Back to wallet">
+              <ArrowLeft size={20} />
+            </button>
+            <TokenAvatar
+              token={preliminaryToken}
+              fallbackLabel={preliminaryToken.symbol?.slice(0, 1) ?? 'T'}
+            />
+            <div className="asset-detail-title">
+              <h2>{preliminaryToken.name ?? preliminaryToken.symbol ?? 'Token'}</h2>
+              <span>{preliminaryToken.symbol ?? formatAddress(preliminaryToken.mint)}</span>
+            </div>
+          </div>
+
+          <div className="asset-detail-hero">
+            <div className="asset-detail-copy">
+              <span className="asset-detail-kicker">Your balance</span>
+              <div className="hero-balance asset-detail-balance">
+                {maskSensitiveValue(preliminaryToken.amount, privacyMode)}
+              </div>
+              <div className="muted">
+                {preliminaryToken.symbol ?? formatAddress(preliminaryToken.mint)}
+                {preliminaryValue ? ` · ${maskSensitiveValue(preliminaryValue, privacyMode)}` : ''}
+              </div>
+            </div>
+          </div>
+
+          <div className="quick-actions compact asset-detail-actions asset-detail-preliminary-actions">
+            <button type="button" className="quick-action-card" onClick={() => openSend(assetId)} disabled={isWatchOnlyWallet}>
+              <span className="quick-action-icon"><SendHorizontal size={18} /></span>
+              <span>Send</span>
+            </button>
+            <button type="button" className="quick-action-card" onClick={() => openSwapForAsset(assetId)} disabled={isWatchOnlyWallet}>
+              <span className="quick-action-icon"><ArrowLeftRight size={18} /></span>
+              <span>Swap</span>
+            </button>
+          </div>
+
+          {status === 'loading' ? (
+            <div className="asset-detail-enrichment-status" role="status">
+              <span className="asset-detail-loading-dot" aria-hidden="true" />
+              <span>Loading market data, activity, and on-chain details…</span>
+            </div>
+          ) : (
+            <p className="danger-box">{assetDetailsError}</p>
+          )}
+        </Card>
+      );
+    };
 
     if (isCollectibleView && !isSolanaChain) {
       const item = selectedCollectible;
@@ -7020,6 +7189,8 @@ function PopupPage() {
     }
 
     if (assetDetailsLoading) {
+      const preliminaryDetails = renderPreliminaryTokenDetails('loading');
+      if (preliminaryDetails) return preliminaryDetails;
       return (
         <Card title={isCollectibleView ? 'NFT Details' : 'Token'}>
           <p className="muted">Loading {isCollectibleView ? 'NFT' : 'token'} details...</p>
@@ -7028,6 +7199,8 @@ function PopupPage() {
     }
 
     if (assetDetailsError) {
+      const preliminaryDetails = renderPreliminaryTokenDetails('error');
+      if (preliminaryDetails) return preliminaryDetails;
       return (
         <Card title={isCollectibleView ? 'NFT Details' : 'Token'}>
           <p className="danger-box">{assetDetailsError}</p>
@@ -7152,6 +7325,137 @@ function PopupPage() {
               </button>
             </div>
           )}
+          {!isCollectibleView && assetDetails.confidentialTransfer?.mintEnabled ? (
+            <div className="confidential-transfer-card">
+              <div className="confidential-transfer-heading">
+                <span className="confidential-transfer-icon"><ShieldAlert size={17} /></span>
+                <div>
+                  <strong>Confidential transfers</strong>
+                  <span>Token-2022 confidential balances supported</span>
+                </div>
+                <StatusPill tone={assetDetails.confidentialTransfer.accountApproved ? 'success' : 'neutral'}>
+                  {assetDetails.confidentialTransfer.accountConfigured
+                    ? assetDetails.confidentialTransfer.accountApproved
+                      ? 'Ready'
+                      : 'Approval needed'
+                    : 'Setup needed'}
+                </StatusPill>
+              </div>
+              <div className="confidential-transfer-facts">
+                <span>Account {assetDetails.confidentialTransfer.accountConfigured ? 'configured' : 'not configured'}</span>
+                <span>{assetDetails.confidentialTransfer.autoApproveNewAccounts ? 'Automatic approval' : 'Issuer approval'}</span>
+                <span>{assetDetails.confidentialTransfer.auditorConfigured ? 'Auditor enabled' : 'No auditor'}</span>
+              </div>
+              {assetDetails.confidentialTransfer.auditorConfigured ? (
+                <p>The mint auditor can decrypt confidential transfer amounts.</p>
+              ) : null}
+              <div className="confidential-transfer-actions">
+                {!assetDetails.confidentialTransfer.accountConfigured ? (
+                  confidentialAction !== 'configure' ? (
+                    <Button disabled={confidentialSubmitting || isWatchOnlyWallet} onClick={() => setConfidentialAction('configure')}>
+                      Set up confidential account
+                    </Button>
+                  ) : null
+                ) : assetDetails.confidentialTransfer.accountApproved ? (
+                  <>
+                    <button type="button" disabled={!assetDetails.confidentialTransfer.accountApproved} onClick={() => setConfidentialAction('deposit')}>Move to private</button>
+                    <button type="button" onClick={() => void handleConfidentialTokenAction('balance')}>Reveal balance</button>
+                    <button type="button" disabled={!assetDetails.confidentialTransfer.accountApproved} onClick={() => void handleConfidentialTokenAction('apply')}>Make spendable</button>
+                    <button type="button" disabled={!assetDetails.confidentialTransfer.accountApproved} onClick={() => setConfidentialAction('withdraw')}>Withdraw</button>
+                    <button type="button" disabled={!assetDetails.confidentialTransfer.accountApproved} onClick={() => setConfidentialAction('transfer')}>Send privately</button>
+                    {assetDetails.tokenWrap ? <button type="button" onClick={() => setConfidentialAction('unwrap')}>Convert back</button> : null}
+                  </>
+                ) : (
+                  <button type="button" onClick={() => void handleConfidentialTokenAction('balance')}>Reveal balance</button>
+                )}
+              </div>
+              {confidentialAction ? (
+                <div className="confidential-transfer-form">
+                  <div className="confidential-transfer-form-copy">
+                    <strong>{confidentialAction === 'configure' ? 'Set up confidential account' : confidentialAction === 'deposit' ? 'Move into privacy' : confidentialAction === 'withdraw' ? 'Return to public balance' : confidentialAction === 'transfer' ? 'Send privately' : confidentialAction === 'unwrap' ? 'Convert to original token' : 'Apply pending balance'}</strong>
+                    <span>{confidentialAction === 'configure' ? 'Grape derives encryption keys from your wallet signature and configures this token account. Your private keys are never stored.' : confidentialAction === 'deposit' ? 'This moves tokens from your visible public balance into the encrypted pending balance. Apply them next to make them spendable.' : confidentialAction === 'withdraw' ? 'This decrypts the selected amount and returns it to your visible public token balance.' : confidentialAction === 'transfer' ? 'The amount and resulting balances are encrypted. Wallet addresses and participation remain public.' : confidentialAction === 'unwrap' ? 'First withdraw confidential funds to the public wrapped balance, then convert that amount back 1:1.' : 'This combines incoming pending funds with your private available balance so they can be sent or withdrawn.'}</span>
+                  </div>
+                  {confidentialAction === 'deposit' || confidentialAction === 'withdraw' || confidentialAction === 'transfer' || confidentialAction === 'unwrap' ? (
+                    <Input
+                      value={confidentialAmount}
+                      onChange={(event) => setConfidentialAmount(event.target.value)}
+                      inputMode="decimal"
+                      placeholder={`Amount in ${assetDetails.symbol ?? 'tokens'}`}
+                    />
+                  ) : null}
+                  {confidentialAction === 'transfer' ? (
+                    <Input
+                      value={confidentialDestination}
+                      onChange={(event) => setConfidentialDestination(event.target.value)}
+                      placeholder="Recipient wallet or token account"
+                    />
+                  ) : null}
+                  {!canUseUnlockedSigner ? (
+                    <Input
+                      type="password"
+                      value={confidentialPassword}
+                      onChange={(event) => setConfidentialPassword(event.target.value)}
+                      placeholder="Wallet password"
+                    />
+                  ) : null}
+                  <div className="confidential-transfer-form-actions">
+                    <Button tone="secondary" onClick={() => setConfidentialAction(null)}>Cancel</Button>
+                    <Button disabled={confidentialSubmitting} onClick={() => void (confidentialAction === 'unwrap' ? handleUnwrapConfidentialToken() : handleConfidentialTokenAction(confidentialAction))}>
+                      {confidentialSubmitting ? 'Preparing proofs…' : 'Continue'}
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
+              {!assetDetails.confidentialTransfer.accountConfigured ? (
+                confidentialAction !== 'configure' ? <p>Setup creates the encrypted account state required for private balances. It does not move any tokens.</p> : null
+              ) : !assetDetails.confidentialTransfer.accountApproved ? (
+                <p>This mint requires issuer approval. Private deposits and transfers become available after the issuer approves this account.</p>
+              ) : !confidentialAction ? (
+                <div className="confidential-transfer-flow" aria-label="Confidential transfer steps">
+                  <span><b>1</b><small>Move in</small></span>
+                  <i>→</i>
+                  <span><b>2</b><small>Activate</small></span>
+                  <i>→</i>
+                  <span><b>3</b><small>Send</small></span>
+                </div>
+              ) : null}
+              {confidentialError ? <p className="error-text">{confidentialError}</p> : null}
+              {confidentialResult?.action === 'balance' ? (
+                <div className="confidential-transfer-balances">
+                  <span><small>Available</small>{confidentialResult.availableBalance} {assetDetails.symbol}</span>
+                  <span><small>Pending</small>{confidentialResult.pendingBalance} {assetDetails.symbol}</span>
+                </div>
+              ) : confidentialResult ? (
+                <p>Completed in {confidentialResult.signatures.length} transaction{confidentialResult.signatures.length === 1 ? '' : 's'}.</p>
+              ) : null}
+            </div>
+          ) : null}
+          {!isCollectibleView && !assetDetails.confidentialTransfer?.mintEnabled && assetDetails.tokenWrapProgramAvailable ? (
+            <div className="confidential-transfer-card token-wrap-card">
+              <div className="confidential-transfer-heading">
+                <span className="confidential-transfer-icon"><ShieldAlert size={17} /></span>
+                <div>
+                  <strong>Make this token confidential</strong>
+                  <span>Wrap 1:1 and encrypt the resulting balance</span>
+                </div>
+              </div>
+              <p>{assetDetails.tokenWrapProgramAvailable ? 'Grape creates or reuses the canonical wrapped mint, configures privacy, deposits, and applies the balance for you. The original token remains redeemable through Solana’s Token Wrap program.' : 'The canonical Token Wrap program is not deployed on this Solana network yet. Grape will enable this conversion after deployment.'}</p>
+              {!makeConfidentialOpen ? (
+                <Button disabled={!assetDetails.tokenWrapProgramAvailable || isWatchOnlyWallet || Number(assetDetails.amount) <= 0} onClick={() => setMakeConfidentialOpen(true)}>{assetDetails.tokenWrapProgramAvailable ? 'Make confidential' : 'Not available yet'}</Button>
+              ) : (
+                <div className="confidential-transfer-form">
+                  <Input value={makeConfidentialAmount} onChange={(event) => setMakeConfidentialAmount(event.target.value)} inputMode="decimal" placeholder={`Amount in ${assetDetails.symbol ?? 'tokens'}`} />
+                  {!canUseUnlockedSigner ? <Input type="password" value={makeConfidentialPassword} onChange={(event) => setMakeConfidentialPassword(event.target.value)} placeholder="Wallet password" /> : null}
+                  <div className="confidential-transfer-form-actions">
+                    <Button tone="secondary" onClick={() => setMakeConfidentialOpen(false)}>Cancel</Button>
+                    <Button disabled={makeConfidentialSubmitting} onClick={() => void handleMakeTokenConfidential()}>{makeConfidentialSubmitting ? 'Converting…' : 'Continue'}</Button>
+                  </div>
+                </div>
+              )}
+              {makeConfidentialError ? <p className="error-text">{makeConfidentialError}</p> : null}
+              {makeConfidentialResult ? <p>Created confidential mint {makeConfidentialResult.wrappedMint.slice(0, 4)}…{makeConfidentialResult.wrappedMint.slice(-4)}. It is now available in Assets.</p> : null}
+            </div>
+          ) : null}
           {!isCollectibleView ? (
             <div className="danger-box token-cleanup-entry-warning">
               <AlertTriangle size={17} />
@@ -7478,7 +7782,7 @@ function PopupPage() {
     };
 
     return (
-      <>
+      <div className="settings-sections">
         {renderSettingsSection({
           section: 'wallet',
           title: 'Wallet',
@@ -8256,7 +8560,7 @@ function PopupPage() {
             </div>
           )
         })}
-      </>
+      </div>
     );
   }
 

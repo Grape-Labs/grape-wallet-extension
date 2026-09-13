@@ -329,6 +329,30 @@ export type TokenDetailsResponse = {
     volume24hUsd: number | null;
     liquidityUsd: number | null;
   } | null;
+  confidentialTransfer: {
+    mintEnabled: boolean;
+    autoApproveNewAccounts: boolean | null;
+    auditorConfigured: boolean | null;
+    accountConfigured: boolean;
+    accountApproved: boolean | null;
+    allowConfidentialCredits: boolean | null;
+    allowNonConfidentialCredits: boolean | null;
+    pendingBalanceCreditCounter: string | null;
+  } | null;
+  tokenWrap: {
+    originalMint: string;
+  } | null;
+  tokenWrapProgramAvailable: boolean;
+};
+
+export type MakeTokenConfidentialResponse = {
+  signature: string;
+  signatures: string[];
+  originalMint: string;
+  wrappedMint: string;
+  wrappedTokenAccount: string;
+  amount: string;
+  network: WalletState['selectedNetwork'];
 };
 
 export type TokenPriceHistoryPoint = {
@@ -361,6 +385,19 @@ export type TokenActionResponse = {
   accountAddress: string;
   action: 'burn' | 'close';
   amount?: string;
+  network: WalletState['selectedNetwork'];
+};
+
+export type ConfidentialTokenActionResponse = {
+  signature: string;
+  signatures: string[];
+  mint: string;
+  accountAddress: string;
+  action: 'balance' | 'configure' | 'deposit' | 'apply' | 'withdraw' | 'transfer';
+  amount: string | null;
+  destinationTokenAccount: string | null;
+  availableBalance?: string;
+  pendingBalance?: string;
   network: WalletState['selectedNetwork'];
 };
 

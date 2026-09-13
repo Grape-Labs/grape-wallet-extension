@@ -9,6 +9,12 @@ export const MOBILE_ETHEREUM_SEPOLIA_RPC_URL = 'https://ethereum-sepolia-rpc.pub
 export const MOBILE_MONAD_MAINNET_RPC_URL = 'https://rpc.monad.xyz';
 export const MOBILE_MONAD_TESTNET_RPC_URL = 'https://testnet-rpc.monad.xyz';
 
+let mobileSolanaCustomRpcUrl: string | undefined;
+
+export function setMobileSolanaCustomRpcUrl(rpcUrl?: string | null) {
+  mobileSolanaCustomRpcUrl = rpcUrl?.trim() || undefined;
+}
+
 export const MOBILE_JUPITER_SOL_MINT = 'So11111111111111111111111111111111111111112';
 
 export type MobileShyftWalletToken = {
@@ -161,6 +167,9 @@ export function getMobileLifiApiKey() {
 }
 
 export function getMobileSolanaRpcUrl(network: 'mainnet-beta' | 'devnet' = 'mainnet-beta') {
+  if (network === 'mainnet-beta' && mobileSolanaCustomRpcUrl) {
+    return mobileSolanaCustomRpcUrl;
+  }
   const custom = readPublicEnv('EXPO_PUBLIC_SOLANA_RPC_URL');
   if (custom) {
     return custom;

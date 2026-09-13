@@ -57,6 +57,7 @@ import {
   importSolanaPrivateKey,
   resolveSolanaVaultSecret,
   parseDecimalAmount,
+  TOKEN_2022_PROGRAM_ID,
   TOKEN_AUTHORITY_TYPES,
   signAndSendSerializedTransaction,
   signAndSendTransaction,
@@ -81,6 +82,54 @@ import {
   ValidatorInfo
 } from '@solana/web3.js';
 import { resolve as resolveSolanaDomain } from '@bonfida/spl-name-service';
+import {
+  fetchMint,
+  fetchToken,
+  fetchMaybeToken,
+  findAssociatedTokenPda,
+  getCreateAssociatedTokenInstruction,
+  getConfidentialDepositInstruction,
+  getMintDecoder,
+  getTokenDecoder,
+  type Extension
+} from '@solana-program/token-2022';
+import {
+  deriveAeKeyForOwnerMint,
+  deriveElGamalKeypairForOwnerMint,
+  getApplyConfidentialPendingBalanceInstructionFromToken,
+  getConfidentialTransferInstructionPlan,
+  getConfidentialWithdrawInstructionPlan,
+  getCreateConfidentialTransferAccountInstructionPlan
+} from '@solana-program/token-2022/confidential';
+import { AeCiphertext, AeKey, ElGamalCiphertext, ElGamalKeypair, ElGamalSecretKey } from '@solana/zk-sdk/bundler';
+import {
+  address,
+  appendTransactionMessageInstruction,
+  createKeyPairSignerFromBytes,
+  createSolanaRpc,
+  createTransactionMessage,
+  createTransactionPlanExecutor,
+  createTransactionPlanner,
+  getBase64EncodedWireTransaction,
+  setTransactionMessageFeePayerSigner,
+  setTransactionMessageLifetimeUsingBlockhash,
+  signTransactionMessageWithSigners,
+  singleInstructionPlan,
+  sequentialInstructionPlan,
+  summarizeTransactionPlanResult,
+  unwrapOption,
+  type InstructionPlan,
+  type TransactionSigner
+} from '@solana/kit';
+import {
+  createEscrowAccount,
+  createMint as createWrappedMint,
+  fetchMaybeBackpointerFromSeeds,
+  findWrappedMintPda,
+  singleSignerUnwrap,
+  singleSignerWrap,
+  TOKEN_WRAP_PROGRAM_ADDRESS
+} from '@solana-program/token-wrap';
 import { Record as AlternativeDomainRecord, TldParser } from '@onsol/tldparser';
 import {
   getMaxVoterWeightRecordAddress,
@@ -163,6 +212,7 @@ import type {
   CollectibleItem,
   StakeAccountRow,
   StakeValidatorRow,
+  TokenDetailsResponse,
   TokenHolding,
   WalletAssetsResponse,
   WalletBridgeQuoteResponse,
@@ -228,6 +278,11 @@ const assetCacheStorage = new ChromeStorageArea<Record<string, { cachedAt: numbe
   'grape:asset-cache',
   {}
 );
+const confidentialWrappedTokenStorage = new ChromeStorageArea<Record<string, {
+  originalMint: string;
+  wrappedMint: string;
+  wrappedTokenAccount: string;
+}>>(chrome.storage.local, 'grape:confidential-wrapped-tokens', {});
 type ActiveWalletSurface = {
   port: chrome.runtime.Port;
   surfaceId: string;
@@ -1286,10 +1341,25 @@ class WalletController {
     ]);
 
     const shyftMetadata = shyftMetadataResult as Record<string, { name?: string; symbol?: string; logoUri?: string }>;
-    const tokens = (await this.scanWalletTokenAccounts(connection, owner, shyftMetadata))
-      .filter((token) => Number(token.amount) > 0)
+    const [scannedTokens, confidentialWrappedTokens] = await Promise.all([
+      this.scanWalletTokenAccounts(connection, owner, shyftMetadata),
+      confidentialWrappedTokenStorage.get()
+    ]);
+    const wrappedRecords = new Map(
+      Object.values(confidentialWrappedTokens).map((record) => [record.wrappedMint, record])
+    );
+    const originalTokens = new Map(scannedTokens.map((token) => [token.mint, token]));
+    const tokens = scannedTokens
+      .filter((token) => Number(token.amount) > 0 || wrappedRecords.has(token.mint))
       .map((token) => ({
         ...token,
+        ...(wrappedRecords.get(token.mint) && originalTokens.get(wrappedRecords.get(token.mint)!.originalMint)
+          ? {
+              name: `Confidential ${originalTokens.get(wrappedRecords.get(token.mint)!.originalMint)!.name ?? 'token'}`,
+              symbol: `c${originalTokens.get(wrappedRecords.get(token.mint)!.originalMint)!.symbol ?? 'TOKEN'}`,
+              logoUri: originalTokens.get(wrappedRecords.get(token.mint)!.originalMint)!.logoUri
+            }
+          : {}),
         priceUsd: null,
         valueUsd: null,
         priceChange24h: null
@@ -1381,7 +1451,19 @@ class WalletController {
 
       const shyftMetadata = shyftMetadataResult as Record<string, { name?: string; symbol?: string; logoUri?: string }>;
       const collections = shyftCollectionsResult as CollectionHolding[];
-      const tokens = (await this.scanWalletTokenAccounts(connection, owner, shyftMetadata)).filter((token) => Number(token.amount) > 0);
+      const [scannedTokens, confidentialWrappedTokens] = await Promise.all([
+        this.scanWalletTokenAccounts(connection, owner, shyftMetadata),
+        confidentialWrappedTokenStorage.get()
+      ]);
+      const wrappedRecords = new Map(Object.values(confidentialWrappedTokens).map((record) => [record.wrappedMint, record]));
+      const originalTokens = new Map(scannedTokens.map((token) => [token.mint, token]));
+      const tokens = scannedTokens
+        .filter((token) => Number(token.amount) > 0 || wrappedRecords.has(token.mint))
+        .map((token) => {
+          const record = wrappedRecords.get(token.mint);
+          const original = record ? originalTokens.get(record.originalMint) : null;
+          return original ? { ...token, name: `Confidential ${original.name ?? 'token'}`, symbol: `c${original.symbol ?? 'TOKEN'}`, logoUri: original.logoUri } : token;
+        });
       const zeroDecimalTokens = tokens.filter((token) => token.decimals === 0 && !!tryParseSolanaPublicKey(token.mint));
       const mintSupplyEntries = await Promise.all(
         zeroDecimalTokens.map(async (token) => {
@@ -3613,7 +3695,7 @@ class WalletController {
     if (!accountAddress || !mintAddress) {
       throw new RpcError('TOKEN_NOT_FOUND', 'Token details could not be loaded for an invalid Solana address.');
     }
-    const [shyftMetadataResult, tokenAccountInfo, mintAccountInfo, tokenMarket] = await Promise.all([
+    const [shyftMetadataResult, tokenAccountInfo, mintAccountInfo, tokenMarket, rawToken2022Accounts] = await Promise.all([
       hasShyftApiKey()
         ? fetchShyftWalletTokens(walletState.selectedNetwork, activeAccount.publicKey).catch(() => ({}))
         : Promise.resolve({}),
@@ -3621,6 +3703,9 @@ class WalletController {
       connection.getParsedAccountInfo(mintAddress, 'confirmed'),
       walletState.selectedNetwork === 'mainnet-beta'
         ? fetchSolanaTokenMarket(input.mint).catch(() => null)
+        : Promise.resolve(null),
+      input.programId === TOKEN_2022_PROGRAM_ID.toBase58()
+        ? connection.getMultipleAccountsInfo([mintAddress, accountAddress], 'confirmed').catch(() => null)
         : Promise.resolve(null)
     ]);
 
@@ -3668,6 +3753,47 @@ class WalletController {
     )[0].toBase58();
     const metadataAccountInfo = await connection.getAccountInfo(new PublicKey(metadataPda), 'confirmed');
     const parsedMetadata = metadataAccountInfo?.data ? parseMetaplexMetadataAccount(metadataAccountInfo.data) : null;
+    let confidentialTransfer: TokenDetailsResponse['confidentialTransfer'] = null;
+    let tokenWrap: TokenDetailsResponse['tokenWrap'] = null;
+    const tokenWrapProgramInfo = await connection.getAccountInfo(new PublicKey(TOKEN_WRAP_PROGRAM_ADDRESS), 'confirmed').catch(() => null);
+    if (rawToken2022Accounts?.[0]?.data && rawToken2022Accounts[1]?.data) {
+      try {
+        const mintExtensions = unwrapOption(getMintDecoder().decode(rawToken2022Accounts[0].data).extensions) ?? [];
+        const tokenExtensions = unwrapOption(getTokenDecoder().decode(rawToken2022Accounts[1].data).extensions) ?? [];
+        const confidentialMint = mintExtensions.find(
+          (extension): extension is Extract<Extension, { __kind: 'ConfidentialTransferMint' }> =>
+            extension.__kind === 'ConfidentialTransferMint'
+        );
+        const confidentialAccount = tokenExtensions.find(
+          (extension): extension is Extract<Extension, { __kind: 'ConfidentialTransferAccount' }> =>
+            extension.__kind === 'ConfidentialTransferAccount'
+        );
+
+        confidentialTransfer = {
+          mintEnabled: !!confidentialMint,
+          autoApproveNewAccounts: confidentialMint?.autoApproveNewAccounts ?? null,
+          auditorConfigured: confidentialMint ? unwrapOption(confidentialMint.auditorElgamalPubkey) !== null : null,
+          accountConfigured: !!confidentialAccount,
+          accountApproved: confidentialAccount?.approved ?? null,
+          allowConfidentialCredits: confidentialAccount?.allowConfidentialCredits ?? null,
+          allowNonConfidentialCredits: confidentialAccount?.allowNonConfidentialCredits ?? null,
+          pendingBalanceCreditCounter: confidentialAccount?.pendingBalanceCreditCounter.toString() ?? null
+        };
+      } catch {
+        confidentialTransfer = null;
+      }
+    }
+    if (input.programId === TOKEN_2022_PROGRAM_ID.toBase58()) {
+      try {
+        const rpc = createSolanaRpc(connection.rpcEndpoint as Parameters<typeof createSolanaRpc>[0]);
+        const backpointer = await fetchMaybeBackpointerFromSeeds(rpc, { wrappedMint: address(input.mint) });
+        if (backpointer.exists) {
+          tokenWrap = { originalMint: backpointer.data.unwrappedMint };
+        }
+      } catch {
+        tokenWrap = null;
+      }
+    }
 
     return {
       mint: input.mint,
@@ -3696,7 +3822,10 @@ class WalletController {
       sellerFeeBasisPoints: parsedMetadata?.sellerFeeBasisPoints ?? null,
       updateAuthority: parsedMetadata?.updateAuthority ?? null,
       priceHistory: tokenMarket?.history ?? [],
-      marketData: tokenMarket?.marketData ?? null
+      marketData: tokenMarket?.marketData ?? null,
+      confidentialTransfer,
+      tokenWrap,
+      tokenWrapProgramAvailable: !!tokenWrapProgramInfo?.executable
     };
   }
 
@@ -4376,6 +4505,419 @@ class WalletController {
       recipientDomain: resolvedRecipient.recipientDomain,
       amount: input.amount,
       asset: input.asset,
+      network: walletState.selectedNetwork
+    };
+  }
+
+  private async executeSolanaInstructionPlan(
+    connection: Connection,
+    signer: TransactionSigner,
+    instructionPlan: InstructionPlan
+  ): Promise<string[]> {
+    const rpc = createSolanaRpc(connection.rpcEndpoint as Parameters<typeof createSolanaRpc>[0]);
+    const planner = createTransactionPlanner({
+      createTransactionMessage: () => setTransactionMessageFeePayerSigner(
+        signer,
+        createTransactionMessage({ version: 0 })
+      )
+    });
+    const executor = createTransactionPlanExecutor({
+      executeTransactionMessage: async (_context, message) => {
+        const { value: latestBlockhash } = await rpc.getLatestBlockhash({ commitment: 'confirmed' }).send();
+        const transaction = await signTransactionMessageWithSigners(
+          setTransactionMessageLifetimeUsingBlockhash(latestBlockhash, message)
+        );
+        const encoded = getBase64EncodedWireTransaction(transaction);
+        const signature = await rpc.sendTransaction(encoded, {
+          encoding: 'base64',
+          preflightCommitment: 'confirmed'
+        }).send();
+        await connection.confirmTransaction(signature, 'confirmed');
+        return signature;
+      }
+    });
+    const result = await executor(await planner(instructionPlan));
+    const summary = summarizeTransactionPlanResult(result);
+    if (!summary.successful || summary.successfulTransactions.length === 0) {
+      throw new RpcError('CONFIDENTIAL_TRANSACTION_FAILED', 'The confidential transaction plan did not complete.');
+    }
+    return summary.successfulTransactions.map((transaction) => String(transaction.context.signature));
+  }
+
+  async makeTokenConfidential(input: {
+    mint: string;
+    accountAddress: string;
+    programId: string;
+    decimals: number;
+    amount: string;
+    password?: string;
+  }) {
+    const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    this.assertInteractiveWallet(selectedWallet);
+    if (selectedWallet.chain !== 'solana' || selectedWallet.signer.kind !== 'software') {
+      throw new RpcError('UNSUPPORTED_SIGNER', 'Making a token confidential currently requires a Solana software wallet.');
+    }
+    const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
+    if (!activeAccount) throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
+    const rawAmount = parseDecimalAmount(input.amount, input.decimals);
+    if (rawAmount <= 0n) throw new RpcError('INVALID_AMOUNT', 'Enter an amount greater than zero.');
+
+    const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
+    const web3Signer = this.resolveSolanaSignerForWallet(secret, selectedWallet, activeAccount.publicKey);
+    const signer = await createKeyPairSignerFromBytes(web3Signer.secretKey);
+    const connection = this.createConnection(walletState.selectedNetwork, walletState);
+    const tokenWrapProgramInfo = await connection.getAccountInfo(new PublicKey(TOKEN_WRAP_PROGRAM_ADDRESS), 'confirmed');
+    if (!tokenWrapProgramInfo?.executable) {
+      throw new RpcError('TOKEN_WRAP_UNAVAILABLE', 'Canonical confidential wrapping is not deployed on the selected Solana network yet.');
+    }
+    const rpc = createSolanaRpc(connection.rpcEndpoint as Parameters<typeof createSolanaRpc>[0]);
+    const unwrappedMint = address(input.mint);
+    const unwrappedTokenAccount = address(input.accountAddress);
+    const unwrappedTokenProgram = address(input.programId);
+    const sourceAccount = await fetchToken(rpc, unwrappedTokenAccount);
+    if (sourceAccount.data.owner !== signer.address || sourceAccount.data.mint !== unwrappedMint) {
+      throw new RpcError('TOKEN_ACCOUNT_MISMATCH', 'The selected token account does not belong to this wallet and mint.');
+    }
+    if (sourceAccount.data.amount < rawAmount) {
+      throw new RpcError('INSUFFICIENT_FUNDS', 'The selected token account does not have enough tokens.');
+    }
+
+    const wrappedTokenProgram = address(TOKEN_2022_PROGRAM_ID.toBase58());
+    const mintResult = await createWrappedMint({
+      rpc,
+      payer: signer,
+      unwrappedMint,
+      wrappedTokenProgram,
+      idempotent: true
+    });
+    const escrowResult = await createEscrowAccount({ rpc, payer: signer, unwrappedMint, wrappedTokenProgram });
+    const [wrappedTokenAccount] = await findAssociatedTokenPda({
+      owner: signer.address,
+      mint: mintResult.wrappedMint,
+      tokenProgram: wrappedTokenProgram
+    });
+    const wrappedAccount = await fetchMaybeToken(rpc, wrappedTokenAccount);
+    const setupInstructions = [...mintResult.ixs];
+    if (escrowResult.kind === 'instructions_to_create') setupInstructions.push(...escrowResult.ixs);
+    if (!wrappedAccount.exists) {
+      setupInstructions.push(getCreateAssociatedTokenInstruction({
+        payer: signer,
+        owner: signer.address,
+        mint: mintResult.wrappedMint,
+        ata: wrappedTokenAccount,
+        tokenProgram: wrappedTokenProgram
+      }));
+    }
+    const wrapResult = await singleSignerWrap({
+      rpc,
+      payer: signer,
+      unwrappedMint,
+      unwrappedTokenProgram,
+      unwrappedTokenAccount,
+      wrappedTokenProgram,
+      recipientWrappedTokenAccount: wrappedTokenAccount,
+      amount: rawAmount
+    });
+    setupInstructions.push(...wrapResult.ixs);
+    const wrapSignatures = await this.executeSolanaInstructionPlan(
+      connection,
+      signer,
+      sequentialInstructionPlan(setupInstructions.map((instruction) => singleInstructionPlan(instruction)))
+    );
+    const wrappedTokens = await confidentialWrappedTokenStorage.get();
+    wrappedTokens[`${walletState.selectedNetwork}:${activeAccount.publicKey}:${mintResult.wrappedMint}`] = {
+      originalMint: input.mint,
+      wrappedMint: mintResult.wrappedMint,
+      wrappedTokenAccount
+    };
+    await confidentialWrappedTokenStorage.set(wrappedTokens);
+    const refreshedWrappedAccount = await fetchToken(rpc, wrappedTokenAccount);
+    const alreadyConfigured = (unwrapOption(refreshedWrappedAccount.data.extensions) ?? []).some(
+      (extension) => extension.__kind === 'ConfidentialTransferAccount'
+    );
+    const configureSignatures = alreadyConfigured
+      ? []
+      : (await this.confidentialTokenAction({
+          action: 'configure',
+          mint: mintResult.wrappedMint,
+          accountAddress: wrappedTokenAccount,
+          decimals: input.decimals,
+          password: input.password
+        })).signatures;
+    const depositResult = await this.confidentialTokenAction({
+      action: 'deposit',
+      mint: mintResult.wrappedMint,
+      accountAddress: wrappedTokenAccount,
+      decimals: input.decimals,
+      amount: input.amount,
+      password: input.password
+    });
+    const applyResult = await this.confidentialTokenAction({
+      action: 'apply',
+      mint: mintResult.wrappedMint,
+      accountAddress: wrappedTokenAccount,
+      decimals: input.decimals,
+      password: input.password
+    });
+    await this.invalidateAssetCache(this.getAssetCacheKey(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey));
+    return {
+      signature: applyResult.signature,
+      signatures: [...wrapSignatures, ...configureSignatures, ...depositResult.signatures, ...applyResult.signatures],
+      originalMint: input.mint,
+      wrappedMint: mintResult.wrappedMint,
+      wrappedTokenAccount,
+      amount: input.amount,
+      network: walletState.selectedNetwork
+    };
+  }
+
+  async unwrapConfidentialToken(input: {
+    wrappedMint: string;
+    wrappedTokenAccount: string;
+    decimals: number;
+    amount: string;
+    password?: string;
+  }) {
+    const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    this.assertInteractiveWallet(selectedWallet);
+    if (selectedWallet.chain !== 'solana' || selectedWallet.signer.kind !== 'software') {
+      throw new RpcError('UNSUPPORTED_SIGNER', 'Unwrapping confidential tokens currently requires a Solana software wallet.');
+    }
+    const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
+    if (!activeAccount) throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
+    const rawAmount = parseDecimalAmount(input.amount, input.decimals);
+    const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
+    const signer = await createKeyPairSignerFromBytes(
+      this.resolveSolanaSignerForWallet(secret, selectedWallet, activeAccount.publicKey).secretKey
+    );
+    const connection = this.createConnection(walletState.selectedNetwork, walletState);
+    const tokenWrapProgramInfo = await connection.getAccountInfo(new PublicKey(TOKEN_WRAP_PROGRAM_ADDRESS), 'confirmed');
+    if (!tokenWrapProgramInfo?.executable) {
+      throw new RpcError('TOKEN_WRAP_UNAVAILABLE', 'Canonical confidential wrapping is not deployed on the selected Solana network yet.');
+    }
+    const rpc = createSolanaRpc(connection.rpcEndpoint as Parameters<typeof createSolanaRpc>[0]);
+    const wrappedMint = address(input.wrappedMint);
+    const backpointer = await fetchMaybeBackpointerFromSeeds(rpc, { wrappedMint });
+    if (!backpointer.exists) throw new RpcError('NOT_WRAPPED_TOKEN', 'This mint was not created by the canonical Token Wrap program.');
+    const originalMint = backpointer.data.unwrappedMint;
+    const originalMintInfo = await rpc.getAccountInfo(originalMint, { encoding: 'base64' }).send();
+    if (!originalMintInfo.value) throw new RpcError('MINT_MISSING', 'The original token mint could not be found.');
+    const originalTokenProgram = originalMintInfo.value.owner;
+    const [recipientOriginalAccount] = await findAssociatedTokenPda({
+      owner: signer.address,
+      mint: originalMint,
+      tokenProgram: originalTokenProgram
+    });
+    const recipient = await fetchMaybeToken(rpc, recipientOriginalAccount);
+    const instructions = [];
+    if (!recipient.exists) {
+      instructions.push(getCreateAssociatedTokenInstruction({
+        payer: signer,
+        owner: signer.address,
+        mint: originalMint,
+        ata: recipientOriginalAccount,
+        tokenProgram: originalTokenProgram
+      }));
+    }
+    const unwrapResult = await singleSignerUnwrap({
+      rpc,
+      payer: signer,
+      wrappedTokenAccount: address(input.wrappedTokenAccount),
+      wrappedTokenProgram: address(TOKEN_2022_PROGRAM_ID.toBase58()),
+      unwrappedMint: originalMint,
+      unwrappedTokenProgram: originalTokenProgram,
+      recipientUnwrappedToken: recipientOriginalAccount,
+      amount: rawAmount
+    });
+    instructions.push(...unwrapResult.ixs);
+    const signatures = await this.executeSolanaInstructionPlan(
+      connection,
+      signer,
+      sequentialInstructionPlan(instructions.map((instruction) => singleInstructionPlan(instruction)))
+    );
+    await this.invalidateAssetCache(this.getAssetCacheKey(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey));
+    return { signature: signatures.at(-1), signatures, originalMint, wrappedMint: input.wrappedMint, amount: input.amount };
+  }
+
+  async confidentialTokenAction(input: {
+    action: 'balance' | 'configure' | 'deposit' | 'apply' | 'withdraw' | 'transfer';
+    mint: string;
+    accountAddress: string;
+    decimals: number;
+    amount?: string;
+    destinationTokenAccount?: string;
+    password?: string;
+  }) {
+    const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    this.assertInteractiveWallet(selectedWallet);
+    if (selectedWallet.chain !== 'solana') {
+      throw new RpcError('UNSUPPORTED_CHAIN', 'Confidential transfers are available for Solana wallets only.');
+    }
+    if (selectedWallet.signer.kind !== 'software') {
+      throw new RpcError('UNSUPPORTED_SIGNER', 'Confidential transfers currently require a software wallet.');
+    }
+    const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
+    if (!activeAccount) throw new RpcError('ACCOUNT_MISSING', 'No active account is available.');
+
+    const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
+    const web3Signer = this.resolveSolanaSignerForWallet(secret, selectedWallet, activeAccount.publicKey);
+    const signer = await createKeyPairSignerFromBytes(web3Signer.secretKey);
+    const connection = this.createConnection(walletState.selectedNetwork, walletState);
+    const rpc = createSolanaRpc(connection.rpcEndpoint as Parameters<typeof createSolanaRpc>[0]);
+    const owner = address(activeAccount.publicKey);
+    const mintAddress = address(input.mint);
+    const tokenAddress = address(input.accountAddress);
+    const [mint, tokenAccount] = await Promise.all([
+      fetchMint(rpc, mintAddress),
+      fetchToken(rpc, tokenAddress)
+    ]);
+    if (tokenAccount.data.owner !== owner || tokenAccount.data.mint !== mintAddress) {
+      throw new RpcError('TOKEN_ACCOUNT_MISMATCH', 'The selected token account does not belong to this wallet and mint.');
+    }
+    const mintConfidential = (unwrapOption(mint.data.extensions) ?? []).find(
+      (extension) => extension.__kind === 'ConfidentialTransferMint'
+    );
+    if (!mintConfidential || mintConfidential.__kind !== 'ConfidentialTransferMint') {
+      throw new RpcError('CONFIDENTIAL_NOT_SUPPORTED', 'This mint does not support confidential transfers.');
+    }
+
+    const [derivedElGamal, derivedAeKey] = await Promise.all([
+      deriveElGamalKeypairForOwnerMint({ signer, owner, mint: mintAddress }),
+      deriveAeKeyForOwnerMint({ signer, owner, mint: mintAddress })
+    ]);
+    const elgamalKeypair = ElGamalKeypair.fromSecretKey(ElGamalSecretKey.fromBytes(derivedElGamal.secretKey));
+    const aesKey = AeKey.fromBytes(derivedAeKey);
+    if (input.action === 'balance') {
+      const confidential = (unwrapOption(tokenAccount.data.extensions) ?? []).find(
+        (extension) => extension.__kind === 'ConfidentialTransferAccount'
+      );
+      if (!confidential || confidential.__kind !== 'ConfidentialTransferAccount') {
+        throw new RpcError('CONFIDENTIAL_NOT_CONFIGURED', 'Set up privacy for this token account first.');
+      }
+      const availableCiphertext = AeCiphertext.fromBytes(new Uint8Array(confidential.decryptableAvailableBalance));
+      const pendingLowCiphertext = ElGamalCiphertext.fromBytes(new Uint8Array(confidential.pendingBalanceLow));
+      const pendingHighCiphertext = ElGamalCiphertext.fromBytes(new Uint8Array(confidential.pendingBalanceHigh));
+      if (!availableCiphertext || !pendingLowCiphertext || !pendingHighCiphertext) {
+        throw new RpcError('CONFIDENTIAL_BALANCE_INVALID', 'The encrypted balance data could not be decoded.');
+      }
+      const elgamalSecretKey = ElGamalSecretKey.fromBytes(derivedElGamal.secretKey);
+      const availableRaw = aesKey.decrypt(availableCiphertext);
+      const pendingRaw = elgamalSecretKey.decrypt(pendingLowCiphertext) + (elgamalSecretKey.decrypt(pendingHighCiphertext) << 16n);
+      await this.setSessionState({ locked: false, lastActivityAt: Date.now() });
+      return {
+        action: input.action,
+        mint: input.mint,
+        accountAddress: input.accountAddress,
+        amount: null,
+        destinationTokenAccount: null,
+        availableBalance: formatUiAmountExact(availableRaw.toString(), input.decimals),
+        pendingBalance: formatUiAmountExact(pendingRaw.toString(), input.decimals),
+        signatures: [],
+        signature: '',
+        network: walletState.selectedNetwork
+      };
+    }
+    let plan: InstructionPlan;
+    if (input.action === 'configure') {
+      plan = await getCreateConfidentialTransferAccountInstructionPlan({
+        payer: signer,
+        owner: signer,
+        authority: signer,
+        mint: mintAddress,
+        token: tokenAddress,
+        rpc,
+        elgamalKeypair,
+        aesKey
+      });
+    } else if (input.action === 'deposit') {
+      if (!input.amount) throw new RpcError('INVALID_AMOUNT', 'Enter an amount to deposit.');
+      plan = singleInstructionPlan(getConfidentialDepositInstruction({
+        token: tokenAddress,
+        mint: mintAddress,
+        authority: signer,
+        amount: parseDecimalAmount(input.amount, input.decimals),
+        decimals: input.decimals
+      }));
+    } else if (input.action === 'apply') {
+      plan = singleInstructionPlan(getApplyConfidentialPendingBalanceInstructionFromToken({
+        token: tokenAddress,
+        tokenAccount: tokenAccount.data,
+        authority: signer,
+        elgamalSecretKey: ElGamalSecretKey.fromBytes(derivedElGamal.secretKey),
+        aesKey
+      }));
+    } else if (input.action === 'withdraw') {
+      if (!input.amount) throw new RpcError('INVALID_AMOUNT', 'Enter an amount to withdraw.');
+      plan = await getConfidentialWithdrawInstructionPlan({
+        payer: signer,
+        token: tokenAddress,
+        mint: mintAddress,
+        tokenAccount: tokenAccount.data,
+        authority: signer,
+        amount: parseDecimalAmount(input.amount, input.decimals),
+        decimals: input.decimals,
+        elgamalKeypair,
+        aesKey,
+        rpc
+      });
+    } else {
+      if (!input.amount) throw new RpcError('INVALID_AMOUNT', 'Enter an amount to send.');
+      if (!input.destinationTokenAccount) {
+        throw new RpcError('INVALID_RECIPIENT', 'Enter the recipient Token-2022 account address.');
+      }
+      const requestedDestination = new PublicKey(input.destinationTokenAccount);
+      let destinationToken = address(requestedDestination.toBase58());
+      let destinationTokenAccount;
+      try {
+        destinationTokenAccount = await fetchToken(rpc, destinationToken);
+      } catch {
+        destinationToken = address(
+          getAssociatedTokenAddress(requestedDestination, new PublicKey(input.mint), TOKEN_2022_PROGRAM_ID).toBase58()
+        );
+        try {
+          destinationTokenAccount = await fetchToken(rpc, destinationToken);
+        } catch {
+          throw new RpcError('RECIPIENT_NOT_READY', 'The recipient does not have a Token-2022 account for this mint.');
+        }
+      }
+      if (destinationTokenAccount.data.mint !== mintAddress) {
+        throw new RpcError('TOKEN_ACCOUNT_MISMATCH', 'The recipient token account uses a different mint.');
+      }
+      const destinationConfidential = (unwrapOption(destinationTokenAccount.data.extensions) ?? []).find(
+        (extension) => extension.__kind === 'ConfidentialTransferAccount'
+      );
+      if (!destinationConfidential || destinationConfidential.__kind !== 'ConfidentialTransferAccount' || !destinationConfidential.approved) {
+        throw new RpcError('RECIPIENT_NOT_READY', 'The recipient token account is not configured and approved for confidential transfers.');
+      }
+      const configuredAuditor = unwrapOption(mintConfidential.auditorElgamalPubkey);
+      const auditorElgamalPubkey = configuredAuditor ? address(String(configuredAuditor)) : undefined;
+      plan = await getConfidentialTransferInstructionPlan({
+        payer: signer,
+        sourceToken: tokenAddress,
+        mint: mintAddress,
+        destinationToken,
+        sourceTokenAccount: tokenAccount.data,
+        destinationTokenAccount: destinationTokenAccount.data,
+        auditorElgamalPubkey,
+        authority: signer,
+        amount: parseDecimalAmount(input.amount, input.decimals),
+        sourceElgamalKeypair: elgamalKeypair,
+        aesKey,
+        rpc
+      });
+    }
+
+    const signatures = await this.executeSolanaInstructionPlan(connection, signer, plan);
+    await this.invalidateAssetCache(this.getAssetCacheKey(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey));
+    await this.setSessionState({ locked: false, lastActivityAt: Date.now() });
+    return {
+      action: input.action,
+      mint: input.mint,
+      accountAddress: input.accountAddress,
+      amount: input.amount ?? null,
+      destinationTokenAccount: input.destinationTokenAccount ?? null,
+      signatures,
+      signature: signatures[signatures.length - 1],
       network: walletState.selectedNetwork
     };
   }
@@ -9976,6 +10518,36 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
               password: message.password
             })
           );
+          break;
+        case 'wallet_confidential_token_action':
+          sendResponse(await controller.confidentialTokenAction({
+            action: message.action,
+            mint: message.mint,
+            accountAddress: message.accountAddress,
+            decimals: message.decimals,
+            amount: message.amount,
+            destinationTokenAccount: message.destinationTokenAccount,
+            password: message.password
+          }));
+          break;
+        case 'wallet_make_token_confidential':
+          sendResponse(await controller.makeTokenConfidential({
+            mint: message.mint,
+            accountAddress: message.accountAddress,
+            programId: message.programId,
+            decimals: message.decimals,
+            amount: message.amount,
+            password: message.password
+          }));
+          break;
+        case 'wallet_unwrap_confidential_token':
+          sendResponse(await controller.unwrapConfidentialToken({
+            wrappedMint: message.wrappedMint,
+            wrappedTokenAccount: message.wrappedTokenAccount,
+            decimals: message.decimals,
+            amount: message.amount,
+            password: message.password
+          }));
           break;
         case 'wallet_close_token_account':
           sendResponse(

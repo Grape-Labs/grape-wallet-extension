@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 
 import react from '@vitejs/plugin-react';
 import { defineConfig, loadEnv, type Plugin } from 'vite';
+import wasm from 'vite-plugin-wasm';
 
 const extensionRoot = __dirname;
 const workspaceRoot = resolve(extensionRoot, '../..');
@@ -164,7 +165,7 @@ function createManifestPlugin(mainnetRpcUrl: string, extensionKey?: string): Plu
           }
         ],
         content_security_policy: {
-          extension_pages: "script-src 'self'; object-src 'self'; base-uri 'self';"
+          extension_pages: "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; base-uri 'self';"
         }
       };
 
@@ -194,7 +195,7 @@ export default defineConfig(({ mode }) => {
   return {
     root: extensionRoot,
     envDir: workspaceRoot,
-    plugins: [react(), createManifestPlugin(mainnetRpcUrl, extensionKey)],
+    plugins: [wasm(), react(), createManifestPlugin(mainnetRpcUrl, extensionKey)],
     publicDir: resolve(extensionRoot, 'public'),
     resolve: {
       alias: {
