@@ -94,15 +94,6 @@ import {
   type Extension
 } from '@solana-program/token-2022';
 import {
-  deriveAeKeyForOwnerMint,
-  deriveElGamalKeypairForOwnerMint,
-  getApplyConfidentialPendingBalanceInstructionFromToken,
-  getConfidentialTransferInstructionPlan,
-  getConfidentialWithdrawInstructionPlan,
-  getCreateConfidentialTransferAccountInstructionPlan
-} from '@solana-program/token-2022/confidential';
-import { AeCiphertext, AeKey, ElGamalCiphertext, ElGamalKeypair, ElGamalSecretKey } from '@solana/zk-sdk/bundler';
-import {
   address,
   appendTransactionMessageInstruction,
   createKeyPairSignerFromBytes,
@@ -278,6 +269,18 @@ const assetCacheStorage = new ChromeStorageArea<Record<string, { cachedAt: numbe
   'grape:asset-cache',
   {}
 );
+type CachedTokenMetadata = {
+  name?: string;
+  symbol?: string;
+  logoUri?: string;
+  decimals?: number;
+  refreshedAt: number;
+};
+const tokenMetadataCacheStorage = new ChromeStorageArea<Record<string, CachedTokenMetadata>>(
+  chrome.storage.local,
+  'grape:token-metadata-cache',
+  {}
+);
 const confidentialWrappedTokenStorage = new ChromeStorageArea<Record<string, {
   originalMint: string;
   wrappedMint: string;
@@ -320,6 +323,7 @@ const KNOWN_TOKEN_SYMBOLS: Record<string, string> = {
 };
 const INCIDENT_BATCH_SIZE = 6;
 const ASSET_CACHE_TTL_MS = 45_000;
+const TOKEN_METADATA_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const REPUTATION_CACHE_TTL_MS = 120_000;
 const STAKE_RETRY_ATTEMPTS = 3;
 const DEVICE_LINK_TTL_MS = 10 * 60 * 1000;
@@ -1335,14 +1339,13 @@ class WalletController {
     }
 
     const connection = this.createConnection(network, walletState);
-    const [lamports, shyftMetadataResult] = await Promise.all([
+    const [lamports, cachedMetadata] = await Promise.all([
       connection.getBalance(owner),
-      hasShyftApiKey() ? fetchShyftWalletTokens(network, publicKey).catch(() => ({})) : Promise.resolve({})
+      this.getCachedTokenMetadata(network)
     ]);
 
-    const shyftMetadata = shyftMetadataResult as Record<string, { name?: string; symbol?: string; logoUri?: string }>;
     const [scannedTokens, confidentialWrappedTokens] = await Promise.all([
-      this.scanWalletTokenAccounts(connection, owner, shyftMetadata),
+      this.scanWalletTokenAccounts(connection, owner, cachedMetadata),
       confidentialWrappedTokenStorage.get()
     ]);
     const wrappedRecords = new Map(
@@ -1443,18 +1446,28 @@ class WalletController {
       }
 
       const connection = this.createConnection(network, walletState);
-      const [lamports, shyftMetadataResult, shyftCollectionsResult] = await Promise.all([
+      const [lamports, cachedMetadata, shyftCollectionsResult] = await Promise.all([
         connection.getBalance(owner),
-        hasShyftApiKey() ? fetchShyftWalletTokens(network, publicKey).catch(() => ({})) : Promise.resolve({}),
+        this.getCachedTokenMetadata(network),
         hasShyftApiKey() ? fetchShyftCollections(network, publicKey).catch(() => []) : Promise.resolve([])
       ]);
 
-      const shyftMetadata = shyftMetadataResult as Record<string, { name?: string; symbol?: string; logoUri?: string }>;
       const collections = shyftCollectionsResult as CollectionHolding[];
-      const [scannedTokens, confidentialWrappedTokens] = await Promise.all([
-        this.scanWalletTokenAccounts(connection, owner, shyftMetadata),
+      const [initialTokens, confidentialWrappedTokens] = await Promise.all([
+        this.scanWalletTokenAccounts(connection, owner, cachedMetadata),
         confidentialWrappedTokenStorage.get()
       ]);
+      let shyftMetadata: Record<string, { name?: string; symbol?: string; logoUri?: string; decimals?: number }> = cachedMetadata;
+      if (hasShyftApiKey() && this.tokenMetadataNeedsRefresh(initialTokens, cachedMetadata)) {
+        const refreshedMetadata = await fetchShyftWalletTokens(network, publicKey).catch(() => null);
+        if (refreshedMetadata) {
+          shyftMetadata = { ...cachedMetadata, ...refreshedMetadata };
+          await this.storeTokenMetadata(network, Object.fromEntries(
+            initialTokens.map((token) => [token.mint, refreshedMetadata[token.mint] ?? {}])
+          ));
+        }
+      }
+      const scannedTokens = this.applyTokenMetadata(initialTokens, shyftMetadata);
       const wrappedRecords = new Map(Object.values(confidentialWrappedTokens).map((record) => [record.wrappedMint, record]));
       const originalTokens = new Map(scannedTokens.map((token) => [token.mint, token]));
       const tokens = scannedTokens
@@ -2597,6 +2610,58 @@ class WalletController {
     if (selectedWallet.signer.kind === 'watch-only') {
       throw new RpcError('WATCH_ONLY_WALLET', 'This wallet is watch-only and cannot sign messages or transactions.');
     }
+  }
+
+  private async getCachedTokenMetadata(network: 'mainnet-beta' | 'devnet') {
+    const cache = await tokenMetadataCacheStorage.get();
+    const prefix = `${network}:`;
+    return Object.fromEntries(
+      Object.entries(cache)
+        .filter(([key]) => key.startsWith(prefix))
+        .map(([key, metadata]) => [key.slice(prefix.length), metadata])
+    ) as Record<string, CachedTokenMetadata>;
+  }
+
+  private async storeTokenMetadata(
+    network: 'mainnet-beta' | 'devnet',
+    metadataByMint: Record<string, { name?: string; symbol?: string; logoUri?: string; decimals?: number }>
+  ) {
+    const entries = Object.entries(metadataByMint);
+    if (entries.length === 0) return;
+    const cache = await tokenMetadataCacheStorage.get();
+    const refreshedAt = Date.now();
+    for (const [mint, metadata] of entries) {
+      cache[`${network}:${mint}`] = { ...cache[`${network}:${mint}`], ...metadata, refreshedAt };
+    }
+    const retainedKeys = Object.entries(cache)
+      .sort(([, left], [, right]) => right.refreshedAt - left.refreshedAt)
+      .slice(0, 2_000)
+      .map(([key]) => key);
+    const retained = new Set(retainedKeys);
+    for (const key of Object.keys(cache)) {
+      if (!retained.has(key)) delete cache[key];
+    }
+    await tokenMetadataCacheStorage.set(cache);
+  }
+
+  private tokenMetadataNeedsRefresh(tokens: ParsedWalletTokenAccount[], metadata: Record<string, CachedTokenMetadata>) {
+    const now = Date.now();
+    return tokens.some((token) => {
+      const cached = metadata[token.mint];
+      return !cached || now - cached.refreshedAt >= TOKEN_METADATA_CACHE_TTL_MS;
+    });
+  }
+
+  private applyTokenMetadata(
+    tokens: ParsedWalletTokenAccount[],
+    metadata: Record<string, { name?: string; symbol?: string; logoUri?: string }>
+  ) {
+    return tokens.map((token) => ({
+      ...token,
+      name: metadata[token.mint]?.name ?? token.name,
+      symbol: metadata[token.mint]?.symbol ?? token.symbol,
+      logoUri: metadata[token.mint]?.logoUri ?? token.logoUri
+    }));
   }
 
   private async scanWalletTokenAccounts(
@@ -4748,6 +4813,19 @@ class WalletController {
     destinationTokenAccount?: string;
     password?: string;
   }) {
+    const [confidentialToken, zkSdk] = await Promise.all([
+      import('@solana-program/token-2022/confidential'),
+      import('@solana/zk-sdk/bundler')
+    ]);
+    const {
+      deriveAeKeyForOwnerMint,
+      deriveElGamalKeypairForOwnerMint,
+      getApplyConfidentialPendingBalanceInstructionFromToken,
+      getConfidentialTransferInstructionPlan,
+      getConfidentialWithdrawInstructionPlan,
+      getCreateConfidentialTransferAccountInstructionPlan
+    } = confidentialToken;
+    const { AeCiphertext, AeKey, ElGamalCiphertext, ElGamalKeypair, ElGamalSecretKey } = zkSdk;
     const { walletState, selectedWallet } = await this.ensureReadyWallet();
     this.assertInteractiveWallet(selectedWallet);
     if (selectedWallet.chain !== 'solana') {

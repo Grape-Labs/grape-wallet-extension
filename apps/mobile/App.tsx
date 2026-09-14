@@ -46,7 +46,7 @@ import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-
 import QRCode from 'react-native-qrcode-svg';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
-import Svg, { Defs, LinearGradient as SvgLinearGradient, Polygon, Polyline, Stop, SvgUri, Text as SvgText } from 'react-native-svg';
+import Svg, { Circle, Defs, LinearGradient as SvgLinearGradient, Polygon, Polyline, RadialGradient as SvgRadialGradient, Stop, SvgUri, Text as SvgText } from 'react-native-svg';
 import {
   Button as PaperButton,
   Checkbox,
@@ -422,6 +422,18 @@ function getDiscoverSiteIcon(url: string) {
   }
 }
 
+function DiscoverSiteIcon(props: { uri?: string; fallbackColor: string; style: object }) {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [props.uri]);
+  if (!props.uri || failed) {
+    return <Feather name="globe" size={24} color={props.fallbackColor} />;
+  }
+  if (isSvgUri(props.uri)) {
+    return <SvgUri uri={props.uri} width={24} height={24} style={props.style} onError={() => setFailed(true)} />;
+  }
+  return <Image source={{ uri: props.uri }} style={props.style} onError={() => setFailed(true)} />;
+}
+
 function createDiscoverTab(url = GRAPE_DISCOVER_DEFAULT_URL, title = 'Governance'):
   DiscoverTab {
   return {
@@ -611,6 +623,17 @@ const GRAPE_DISCOVER_INJECTED_JS = `
   function post(message) {
     window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify(message));
   }
+  function postSiteMetadata() {
+    const icon = document.querySelector('link[rel~="icon"], link[rel="shortcut icon"], link[rel="apple-touch-icon"]');
+    post({
+      type: 'grape-site-metadata',
+      iconUrl: icon && icon.href ? icon.href : '',
+      title: document.title || '',
+      href: window.location.href
+    });
+  }
+  setTimeout(postSiteMetadata, 0);
+  window.addEventListener('load', postSiteMetadata);
   function originPayload() {
     return {
       origin: window.location.origin,
@@ -1238,7 +1261,7 @@ function formatMobileTokenQuantity(asset: MobileAsset): string {
 }
 
 function isSvgUri(uri?: string) {
-  return typeof uri === 'string' && uri.trim().toLowerCase().includes('.svg');
+  return typeof uri === 'string' && (uri.trim().toLowerCase().includes('.svg') || uri.trim().toLowerCase().startsWith('data:image/svg+xml'));
 }
 
 function dedupeVisibleWallets(wallets: MobileWallet[]) {
@@ -1586,6 +1609,7 @@ function GrapeApp() {
   const [discoverUrl, setDiscoverUrl] = useState(GRAPE_DISCOVER_DEFAULT_URL);
   const [discoverCurrentUrl, setDiscoverCurrentUrl] = useState(GRAPE_DISCOVER_DEFAULT_URL);
   const [discoverTitle, setDiscoverTitle] = useState('Grape Discover');
+  const [discoverSiteIconUrl, setDiscoverSiteIconUrl] = useState('');
   const [discoverCanGoBack, setDiscoverCanGoBack] = useState(false);
   const [discoverCanGoForward, setDiscoverCanGoForward] = useState(false);
   const [discoverLoading, setDiscoverLoading] = useState(false);
@@ -1796,7 +1820,7 @@ function GrapeApp() {
   useEffect(() => {
     const iconUrls = [...GRAPE_DISCOVER_FAVORITES, ...Object.values(DISCOVER_FAVORITES_BY_CHAIN).flat()]
       .map((favorite) => getDiscoverSiteIcon(favorite.url));
-    void Promise.all(iconUrls.map((iconUrl) => Image.prefetch(iconUrl).catch(() => false)));
+    void Promise.all(iconUrls.filter((iconUrl) => !isSvgUri(iconUrl)).map((iconUrl) => Image.prefetch(iconUrl).catch(() => false)));
   }, []);
   useEffect(() => {
     if (mainTab === 'discover') {
@@ -3119,6 +3143,7 @@ function GrapeApp() {
   function handleDiscoverNavigationStateChange(nextState: WebViewNavigation) {
     if (typeof nextState.url === 'string' && nextState.url.trim()) {
       setDiscoverCurrentUrl(nextState.url);
+      setDiscoverSiteIconUrl('');
       setDiscoverUrlInput(nextState.url);
       setDiscoverLoadError(null);
       setDiscoverTabs((tabs) => tabs.map((tab) => tab.id === activeDiscoverTabId
@@ -3165,8 +3190,8 @@ function GrapeApp() {
 
   function handleToggleDiscoverBookmark() {
     const url = discoverCurrentUrl || discoverUrl;
-    const iconUrl = getDiscoverSiteIcon(url);
-    if (iconUrl) void Image.prefetch(iconUrl).catch(() => false);
+    const iconUrl = discoverSiteIconUrl || getDiscoverSiteIcon(url);
+    if (iconUrl && !isSvgUri(iconUrl)) void Image.prefetch(iconUrl).catch(() => false);
     setDiscoverBookmarks((bookmarks) => {
       if (bookmarks.some((bookmark) => bookmark.url === url)) {
         return bookmarks.filter((bookmark) => bookmark.url !== url);
@@ -3216,7 +3241,20 @@ function GrapeApp() {
         method?: DiscoverProviderRequest['method'];
         params?: Record<string, unknown>;
         origin?: DiscoverProviderRequest['origin'];
+        iconUrl?: string;
+        title?: string;
+        href?: string;
       };
+
+      if (payload.type === 'grape-site-metadata') {
+        if (typeof payload.iconUrl === 'string' && /^https?:\/\//i.test(payload.iconUrl)) {
+          setDiscoverSiteIconUrl(payload.iconUrl);
+        }
+        if (typeof payload.title === 'string' && payload.title.trim()) {
+          setDiscoverTitle(payload.title.trim());
+        }
+        return;
+      }
 
       if (payload.type !== 'grape-provider-request' || !payload.id || !payload.method) {
         return;
@@ -6472,7 +6510,7 @@ function GrapeApp() {
                     {discoverBookmarks.map((bookmark) => (
                       <Pressable key={bookmark.url} style={styles.discoverFavoriteCard} onPress={() => handleDiscoverNavigate(bookmark.url)}>
                         <View style={styles.discoverFavoriteHeader}>
-                          {bookmark.iconUrl ? <Image source={{ uri: bookmark.iconUrl }} style={styles.discoverFavoriteIcon} /> : <Feather name="globe" size={24} color={activeTheme.grape} />}
+                          <DiscoverSiteIcon uri={bookmark.iconUrl} style={styles.discoverFavoriteIcon} fallbackColor={activeTheme.grape} />
                           <Text style={styles.discoverFavoriteTitle} numberOfLines={1}>{bookmark.title}</Text>
                         </View>
                         <Text style={styles.discoverFavoriteSubtitle} numberOfLines={1}>{formatDiscoverUrlDisplay(bookmark.url)}</Text>
@@ -6492,7 +6530,7 @@ function GrapeApp() {
                         onPress={() => handleDiscoverNavigate(favorite.url)}
                       >
                         <View style={styles.discoverFavoriteHeader}>
-                          <Image source={{ uri: getDiscoverSiteIcon(favorite.url) }} style={styles.discoverFavoriteIcon} />
+                          <DiscoverSiteIcon uri={getDiscoverSiteIcon(favorite.url)} style={styles.discoverFavoriteIcon} fallbackColor={activeTheme.grape} />
                           <Text style={styles.discoverFavoriteTitle}>{favorite.label}</Text>
                         </View>
                         <Text style={styles.discoverFavoriteSubtitle}>{favorite.subtitle}</Text>
@@ -6510,7 +6548,7 @@ function GrapeApp() {
                     onPress={() => handleDiscoverNavigate(favorite.url)}
                   >
                     <View style={styles.discoverFavoriteHeader}>
-                      <Image source={{ uri: getDiscoverSiteIcon(favorite.url) }} style={styles.discoverFavoriteIcon} />
+                      <DiscoverSiteIcon uri={getDiscoverSiteIcon(favorite.url)} style={styles.discoverFavoriteIcon} fallbackColor={activeTheme.grape} />
                       <Text style={styles.discoverFavoriteTitle}>{favorite.label}</Text>
                     </View>
                     <Text style={styles.discoverFavoriteSubtitle}>{favorite.subtitle}</Text>
@@ -7047,6 +7085,35 @@ function GrapeApp() {
             pointerEvents="none"
           />
           <View style={styles.homeHeroScrim} pointerEvents="none" />
+          <Svg
+            style={styles.homeHeroFlare}
+            width="100%"
+            height="100%"
+            viewBox="0 0 400 320"
+            preserveAspectRatio="none"
+            pointerEvents="none"
+          >
+            <Defs>
+              <SvgLinearGradient id="homeFlareBeam" x1="0" y1="0" x2="1" y2="0">
+                <Stop offset="0" stopColor={activeTheme.brandGradient[0]} stopOpacity="0" />
+                <Stop offset="0.62" stopColor={activeTheme.brandGradient[1]} stopOpacity="0.1" />
+                <Stop offset="0.78" stopColor="#ffffff" stopOpacity="0.62" />
+                <Stop offset="0.86" stopColor={activeTheme.brandGradient[2]} stopOpacity="0.22" />
+                <Stop offset="1" stopColor={activeTheme.brandGradient[2]} stopOpacity="0" />
+              </SvgLinearGradient>
+              <SvgRadialGradient id="homeFlareSource" cx="50%" cy="50%" rx="50%" ry="50%">
+                <Stop offset="0" stopColor="#ffffff" stopOpacity="0.96" />
+                <Stop offset="0.12" stopColor={activeTheme.brandGradient[1]} stopOpacity="0.72" />
+                <Stop offset="0.42" stopColor={activeTheme.brandGradient[2]} stopOpacity="0.2" />
+                <Stop offset="1" stopColor={activeTheme.brandGradient[2]} stopOpacity="0" />
+              </SvgRadialGradient>
+            </Defs>
+            <Polygon points="-20,91 420,39 420,43 -20,96" fill="url(#homeFlareBeam)" />
+            <Circle cx="324" cy="51" r="44" fill="url(#homeFlareSource)" />
+            <Circle cx="238" cy="83" r="6" fill={activeTheme.brandGradient[1]} opacity="0.13" />
+            <Circle cx="180" cy="105" r="10" fill={activeTheme.brandGradient[2]} opacity="0.09" />
+            <Circle cx="117" cy="129" r="15" fill={activeTheme.brandGradient[0]} opacity="0.06" />
+          </Svg>
           <View style={styles.cardTopRow}>
             <View style={styles.walletIdentity}>
               <Pressable
@@ -7715,13 +7782,14 @@ function GrapeApp() {
 
     return (
       <View style={styles.stack}>
-        <View style={styles.sectionCard}>
-          <Pressable style={styles.detailBackRow} onPress={() => setSwapScreenVisible(false)}>
-            <Feather name="chevron-left" size={18} color={activeTheme.text} />
-            <Text style={styles.detailBackText}>Back to wallet</Text>
+        <View style={styles.swapHeaderCard}>
+          <Pressable style={styles.swapHeaderBackButton} onPress={() => setSwapScreenVisible(false)} accessibilityLabel="Back to wallet">
+            <Feather name="arrow-left" size={24} color={activeTheme.text} />
           </Pressable>
           <Text style={styles.sectionTitle}>Swap</Text>
-          <Text style={styles.sectionHint}>Review multiple Jupiter routes, then swap between assets held in this Solana wallet.</Text>
+          <View style={styles.swapHeaderSettingsIcon}>
+            <Feather name="sliders" size={22} color={activeTheme.muted} />
+          </View>
         </View>
 
         <View style={[styles.sectionCard, styles.swapFlowCard]}>
@@ -7729,23 +7797,6 @@ function GrapeApp() {
             <View style={styles.swapLeg}>
               <View style={styles.swapLegHeader}>
                 <Text style={styles.swapLegLabel}>Sell</Text>
-                <View style={styles.swapQuickRatios}>
-                  {swapRatioOptions.map((ratio) => {
-                    const disabled = availableInputAmount <= 0;
-                    return (
-                      <Pressable
-                        key={ratio}
-                        style={[styles.swapRatioChip, disabled ? styles.swapRatioChipDisabled : null]}
-                        disabled={disabled}
-                        onPress={() => setSwapAmountByRatio(ratio)}
-                      >
-                        <Text style={[styles.swapRatioChipText, disabled ? styles.swapRatioChipTextDisabled : null]}>
-                          {ratio === 1 ? 'Max' : `${Math.round(ratio * 100)}%`}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
               </View>
 
               <View style={styles.swapLegMain}>
@@ -7824,6 +7875,24 @@ function GrapeApp() {
                 </View>
               </View>
             </View>
+          </View>
+
+          <View style={styles.swapQuickRatios}>
+            {swapRatioOptions.map((ratio) => {
+              const disabled = availableInputAmount <= 0;
+              return (
+                <Pressable
+                  key={ratio}
+                  style={[styles.swapRatioChip, disabled ? styles.swapRatioChipDisabled : null]}
+                  disabled={disabled}
+                  onPress={() => setSwapAmountByRatio(ratio)}
+                >
+                  <Text style={[styles.swapRatioChipText, disabled ? styles.swapRatioChipTextDisabled : null]}>
+                    {ratio === 1 ? 'Max' : `${Math.round(ratio * 100)}%`}
+                  </Text>
+                </Pressable>
+              );
+            })}
           </View>
 
           <View style={styles.swapSettingsRow}>
@@ -10825,6 +10894,10 @@ function createStyles(palette: MobileThemePalette) {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(5, 6, 10, 0.4)'
   },
+  homeHeroFlare: {
+    ...StyleSheet.absoluteFillObject,
+    opacity: 0.7
+  },
   walletIdentity: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -12108,7 +12181,32 @@ function createStyles(palette: MobileThemePalette) {
   },
   swapFlowCard: {
     gap: 16,
-    padding: 18
+    padding: 0,
+    borderWidth: 0,
+    backgroundColor: 'transparent',
+    elevation: 0,
+    shadowOpacity: 0
+  },
+  swapHeaderCard: {
+    minHeight: 58,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    paddingHorizontal: 4
+  },
+  swapHeaderBackButton: {
+    width: 42,
+    height: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 16
+  },
+  swapHeaderSettingsIcon: {
+    width: 42,
+    height: 42,
+    marginLeft: 'auto',
+    alignItems: 'center',
+    justifyContent: 'center'
   },
   rebalanceMobileTitleRow: {
     flexDirection: 'row',
@@ -12233,10 +12331,21 @@ function createStyles(palette: MobileThemePalette) {
     marginTop: 3
   },
   swapFlowShell: {
-    gap: 12
+    gap: 0
   },
   swapLeg: {
-    gap: 10
+    gap: 14,
+    minHeight: 190,
+    padding: 20,
+    borderRadius: 26,
+    borderWidth: 1,
+    borderColor: palette.panelBorder,
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.09)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.76)'
+          : 'rgba(255,255,255,0.045)'
   },
   swapLegHeader: {
     flexDirection: 'row',
@@ -12254,27 +12363,25 @@ function createStyles(palette: MobileThemePalette) {
   swapQuickRatios: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    padding: 3,
-    borderRadius: 999,
-    backgroundColor:
-      palette.id === 'apple'
-        ? 'rgba(255,255,255,0.12)'
-        : palette.id === 'champagne'
-          ? 'rgba(255,255,255,0.86)'
-          : 'rgba(255,255,255,0.08)'
+    gap: 10
   },
   swapRatioChip: {
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: 999
+    flex: 1,
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 14,
+    borderRadius: 15,
+    borderWidth: 1,
+    borderColor: palette.panelBorder,
+    backgroundColor:
+      palette.id === 'champagne' ? 'rgba(255,255,255,0.82)' : 'rgba(255,255,255,0.07)'
   },
   swapRatioChipDisabled: {
     opacity: 0.45
   },
   swapRatioChipText: {
     color: palette.text,
-    fontSize: 12,
+    fontSize: 15,
     fontWeight: '800'
   },
   swapRatioChipTextDisabled: {
@@ -12284,7 +12391,8 @@ function createStyles(palette: MobileThemePalette) {
     gap: 10
   },
   swapSelectShell: {
-    minHeight: 76
+    minHeight: 68,
+    borderRadius: 17
   },
   swapLegValueRow: {
     alignItems: 'flex-end'
@@ -12298,8 +12406,8 @@ function createStyles(palette: MobileThemePalette) {
   swapLegAmountInput: {
     width: '100%',
     color: palette.text,
-    fontSize: 36,
-    lineHeight: 40,
+    fontSize: 42,
+    lineHeight: 48,
     fontWeight: '900',
     textAlign: 'right',
     letterSpacing: -1.2,
@@ -12308,8 +12416,8 @@ function createStyles(palette: MobileThemePalette) {
   swapLegQuote: {
     width: '100%',
     color: palette.text,
-    fontSize: 34,
-    lineHeight: 38,
+    fontSize: 40,
+    lineHeight: 46,
     fontWeight: '900',
     textAlign: 'right',
     letterSpacing: -1
@@ -12323,7 +12431,8 @@ function createStyles(palette: MobileThemePalette) {
     alignSelf: 'center',
     alignItems: 'center',
     justifyContent: 'center',
-    marginVertical: -6,
+    marginVertical: -10,
+    zIndex: 2,
     borderRadius: 999,
     borderWidth: 1,
     borderColor: palette.panelBorder,

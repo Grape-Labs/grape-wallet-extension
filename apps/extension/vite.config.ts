@@ -133,6 +133,8 @@ function createManifestPlugin(mainnetRpcUrl: string, extensionKey?: string): Plu
           'https://api.devnet.solana.com/*',
           'https://api.coingecko.com/*',
           'https://api.geckoterminal.com/*',
+          'https://solana.com/*',
+          'https://blog.ethereum.org/*',
           'https://ethereum-rpc.publicnode.com/*',
           'https://ethereum-sepolia-rpc.publicnode.com/*',
           'https://fullnode.mainnet.sui.io/*',

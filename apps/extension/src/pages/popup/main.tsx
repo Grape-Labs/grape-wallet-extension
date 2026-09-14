@@ -220,6 +220,33 @@ type DiscoverDapp = {
   url: string;
   featured?: boolean;
 };
+type DiscoverFeedItem = {
+  id: string;
+  source: string;
+  title: string;
+  summary: string;
+  url: string;
+  publishedAt: number;
+};
+type DiscoverFeedSource = {
+  label: string;
+  siteUrl: string;
+  feedUrl: string;
+};
+const DISCOVER_FEED_SOURCES: Partial<Record<WalletStateResponse['wallet']['selectedChain'], DiscoverFeedSource>> = {
+  solana: {
+    label: 'Solana',
+    siteUrl: 'https://solana.com/changelog',
+    feedUrl: 'https://solana.com/changelog/rss.xml'
+  },
+  ethereum: {
+    label: 'Ethereum Foundation',
+    siteUrl: 'https://blog.ethereum.org',
+    feedUrl: 'https://blog.ethereum.org/feed.xml'
+  }
+};
+const DISCOVER_FEED_CACHE_TTL_MS = 15 * 60 * 1_000;
+const DISCOVER_FEED_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1_000;
 const SOLANA_DISCOVER_DAPPS: DiscoverDapp[] = [
   { name: 'Grape Governance', description: 'Open the Grape DAO directly', category: 'Governance', url: 'https://www.governance.so/dao/By2sVGZXwfQq6rAiAM3rNPJ9iQfb5e2QhnF4YjJ4Bip', featured: true },
   { name: 'Roundtrip AI', description: 'Community-built travel app', category: 'Community', url: 'https://round-trip.ai.studio/', featured: true },
@@ -244,6 +271,8 @@ const SOLANA_DISCOVER_DAPPS: DiscoverDapp[] = [
   { name: 'Access', description: 'Open token-gated communities', category: 'Community', url: 'https://access.governance.so' },
   { name: 'Reputation', description: 'Explore community reputation', category: 'Community', url: OG_REPUTATION_DISCOVERY_URL }
 ];
+
+const SOLANA_SWAP_FEE_ESTIMATE_SOL = 0.00001;
 const SUI_DISCOVER_DAPPS: DiscoverDapp[] = [
   { name: 'Cetus', description: 'Swap and provide concentrated liquidity', category: 'DeFi', url: 'https://app.cetus.zone', featured: true },
   { name: 'NAVI Protocol', description: 'Lend, borrow, and manage Sui assets', category: 'DeFi', url: 'https://app.naviprotocol.io', featured: true },
@@ -317,6 +346,43 @@ function DiscoverAppIcon(props: { name: string; url: string; faviconUrl?: string
   );
 }
 
+function parseDiscoverFeed(xml: string, source: DiscoverFeedSource): DiscoverFeedItem[] {
+  const document = new DOMParser().parseFromString(xml, 'text/xml');
+  if (document.querySelector('parsererror')) throw new Error('Invalid discovery feed');
+  const nodes = [...document.querySelectorAll('item, entry')];
+
+  return nodes.slice(0, 5).flatMap((node, index) => {
+    const title = node.querySelector('title')?.textContent?.trim() ?? '';
+    const linkNode = node.querySelector('link');
+    const link = linkNode?.getAttribute('href')?.trim() || linkNode?.textContent?.trim() || '';
+    if (!title || !link) return [];
+    const rawSummary = node.querySelector('description, summary, content')?.textContent ?? '';
+    const summaryDocument = new DOMParser().parseFromString(`<body>${rawSummary}</body>`, 'text/html');
+    const summary = (summaryDocument.body.textContent ?? '').replace(/\s+/g, ' ').trim();
+    const publishedText = node.querySelector('pubDate, published, updated')?.textContent?.trim() ?? '';
+    const publishedAt = Date.parse(publishedText);
+
+    return [{
+      id: `${source.label}-${link}-${index}`,
+      source: source.label,
+      title,
+      summary,
+      url: new URL(link, source.siteUrl).toString(),
+      publishedAt: Number.isFinite(publishedAt) ? publishedAt : Date.now()
+    }];
+  });
+}
+
+function formatFeedAge(publishedAt: number): string {
+  const elapsedMinutes = Math.max(1, Math.floor((Date.now() - publishedAt) / 60_000));
+  if (elapsedMinutes < 60) return `${elapsedMinutes}m`;
+  const hours = Math.floor(elapsedMinutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d`;
+  return new Date(publishedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
 function getSelectedWalletIdForChain(
   wallet: WalletStateResponse['wallet'],
   chain: WalletStateResponse['wallet']['selectedChain']
@@ -340,7 +406,7 @@ function parseInitialAssetId(): string {
   return asset?.trim() ? asset : 'sol';
 }
 
-function WalletSplash(props: { title: string; status: string }) {
+function WalletSplash(props: { title: string; status: string; error?: boolean; onRetry?: () => void }) {
   return (
     <div className="wallet-splash-shell">
       <div className="wallet-splash-card">
@@ -354,9 +420,13 @@ function WalletSplash(props: { title: string; status: string }) {
           <h1 className="wallet-splash-title">{props.title}</h1>
           <p className="wallet-splash-status">{props.status}</p>
         </div>
-        <div className="wallet-splash-progress" aria-hidden="true">
-          <div className="wallet-splash-progress-bar" />
-        </div>
+        {props.error ? (
+          <Button className="button-block" onClick={props.onRetry}>Try again</Button>
+        ) : (
+          <div className="wallet-splash-progress" aria-hidden="true">
+            <div className="wallet-splash-progress-bar" />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -536,6 +606,15 @@ function formatWholeNumberString(value: string | null | undefined): string {
   } catch {
     return value;
   }
+}
+
+function formatDecimalAmountString(value: string | null | undefined): string {
+  if (!value) return '0';
+  const match = value.match(/^(-?)(\d+)(?:\.(\d+))?$/);
+  if (!match) return value;
+  const [, sign, whole, fraction] = match;
+  const groupedWhole = BigInt(whole).toLocaleString();
+  return `${sign}${groupedWhole}${fraction ? `.${fraction}` : ''}`;
 }
 
 function formatGovernanceVotingPowerType(
@@ -1287,6 +1366,19 @@ function AssetPickerOptionRow(props: { option: AssetPickerDisplayOption; active?
   );
 }
 
+function SwapAssetSelectorSummary(props: { option: AssetPickerDisplayOption }) {
+  return (
+    <span className="swap-selector-summary">
+      <TokenAvatar
+        token={{ symbol: props.option.symbol, logoUri: props.option.logoUri }}
+        fallbackLabel={props.option.symbol.slice(0, 1)}
+        sol={props.option.sol}
+      />
+      <strong>{props.option.symbol}</strong>
+    </span>
+  );
+}
+
 function CollectibleCard(props: { item: CollectibleItem; onSelect: () => void }) {
   const title = props.item.name ?? props.item.collectionName ?? 'Collectible';
 
@@ -1472,6 +1564,8 @@ function PopupPage() {
   const [homeTab, setHomeTab] = useState<HomeTab>('tokens');
   const [discoverQuery, setDiscoverQuery] = useState('');
   const [discoverCategory, setDiscoverCategory] = useState<DiscoverCategory>('All');
+  const [discoverFeed, setDiscoverFeed] = useState<DiscoverFeedItem[]>([]);
+  const [discoverFeedLoading, setDiscoverFeedLoading] = useState(false);
   const [copiedAddress, setCopiedAddress] = useState(false);
   const [receiveQr, setReceiveQr] = useState('');
   const [assetId, setAssetId] = useState(() => parseInitialAssetId());
@@ -1526,6 +1620,7 @@ function PopupPage() {
   const [swapSelectedRouteId, setSwapSelectedRouteId] = useState<string | null>(null);
   const [swapResult, setSwapResult] = useState<WalletSwapExecuteResponse | null>(null);
   const [swapError, setSwapError] = useState<string | null>(null);
+  const [swapAdvisory, setSwapAdvisory] = useState<string | null>(null);
   const [swapInputSearch, setSwapInputSearch] = useState('');
   const [swapStockSearch, setSwapStockSearch] = useState('');
   const [swapTokenSearchResults, setSwapTokenSearchResults] = useState<RebalanceAsset[]>([]);
@@ -1659,6 +1754,7 @@ function PopupPage() {
   const [burnAmount, setBurnAmount] = useState('');
   const [burnConfirmation, setBurnConfirmation] = useState('');
   const [burnPassword, setBurnPassword] = useState('');
+  const [assessingBurn, setAssessingBurn] = useState(false);
   const [tokenActionSubmitting, setTokenActionSubmitting] = useState<'burn' | 'close' | null>(null);
   const [confidentialAction, setConfidentialAction] = useState<'configure' | 'deposit' | 'apply' | 'withdraw' | 'transfer' | 'unwrap' | null>(null);
   const [confidentialAmount, setConfidentialAmount] = useState('');
@@ -1722,7 +1818,13 @@ function PopupPage() {
     }
     try {
       setSurfaceError(null);
-      const nextState = await sendRuntimeMessage<WalletStateResponse>({ type: 'wallet_get_state' });
+      const nextState = await Promise.race([
+        sendRuntimeMessage<WalletStateResponse>({ type: 'wallet_get_state' }),
+        new Promise<never>((_, reject) => window.setTimeout(
+          () => reject(new Error('Grape could not reach the wallet service. Reload the extension and try again.')),
+          8_000
+        ))
+      ]);
       setState(nextState);
       if (nextState.wallet.setup === 'ready' && !nextState.session.locked && nextState.access.granted) {
         setAssetsLoading(true);
@@ -2011,6 +2113,49 @@ function PopupPage() {
     setDiscoverCategory('All');
     setDiscoverQuery('');
   }, [selectedChainValue]);
+
+  useEffect(() => {
+    const source = DISCOVER_FEED_SOURCES[selectedChainValue];
+    if (!source || view !== 'discover') {
+      setDiscoverFeed([]);
+      setDiscoverFeedLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    const cacheKey = `grape:discover-feed:v1:${selectedChainValue}`;
+    let cachedAt = 0;
+    try {
+      const cached = JSON.parse(localStorage.getItem(cacheKey) ?? 'null') as { fetchedAt?: number; items?: DiscoverFeedItem[] } | null;
+      cachedAt = cached?.fetchedAt ?? 0;
+      if (cached?.items?.length && Date.now() - cachedAt < DISCOVER_FEED_CACHE_MAX_AGE_MS) {
+        setDiscoverFeed(cached.items);
+      } else {
+        setDiscoverFeed([]);
+      }
+    } catch {
+      setDiscoverFeed([]);
+    }
+
+    if (Date.now() - cachedAt < DISCOVER_FEED_CACHE_TTL_MS) return;
+    setDiscoverFeedLoading(true);
+    void fetch(source.feedUrl)
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`Feed returned HTTP ${response.status}`);
+        const items = parseDiscoverFeed(await response.text(), source);
+        if (items.length === 0) throw new Error('Feed is empty');
+        localStorage.setItem(cacheKey, JSON.stringify({ fetchedAt: Date.now(), items }));
+        if (!cancelled) setDiscoverFeed(items);
+      })
+      .catch(() => {
+        // Discovery remains usable without a feed; retain any cached items silently.
+      })
+      .finally(() => {
+        if (!cancelled) setDiscoverFeedLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [selectedChainValue, view]);
 
   useEffect(() => {
     if ((selectedChainValue === 'sui' || selectedChainValue === 'monad' || selectedChainValue === 'ethereum') && (homeTab === 'community' || homeTab === 'governance')) {
@@ -3673,7 +3818,12 @@ function PopupPage() {
     setView('send');
   }
 
-  function openSwapForAsset(nextAssetId: string) {
+  function openSwapForAsset(
+    nextAssetId: string,
+    initialAmount = '',
+    advisory: string | null = null,
+    preferredOutputMint?: string
+  ) {
     const nextAsset =
       assetOptions.find((option) => option.id === nextAssetId) ??
       assetOptions.find((option) => option.id === 'sol') ??
@@ -3687,9 +3837,9 @@ function PopupPage() {
       : nextAsset.asset.kind === 'sui-coin' ? nextAsset.asset.coinType
         : nextAsset.asset.kind === 'evm-token' ? nextAsset.asset.tokenAddress : chainNativeMint;
     const fallbackToken = assets.tokens.find((token) => token.mint !== inputMint)?.mint;
-    const defaultOutputMint = selectedChainValue === 'solana'
+    const defaultOutputMint = preferredOutputMint ?? (selectedChainValue === 'solana'
       ? inputMint === COMMON_SWAP_TOKENS[1].mint ? JUPITER_SOL_MINT : COMMON_SWAP_TOKENS[1].mint
-      : inputMint === chainNativeMint ? fallbackToken ?? '' : chainNativeMint;
+      : inputMint === chainNativeMint ? fallbackToken ?? '' : chainNativeMint);
 
     setSwapInputAssetId(nextAsset.id);
     setSwapOutputMint(defaultOutputMint);
@@ -3697,11 +3847,54 @@ function PopupPage() {
     setSwapCustomOutputMint('');
     setSwapInputPickerOpen(false);
     setSwapOutputPickerOpen(false);
-    setSwapAmount('');
+    setSwapAmount(initialAmount);
     setSwapQuote(null);
     setSwapResult(null);
     setSwapError(null);
+    setSwapAdvisory(advisory);
     setView('swap');
+  }
+
+  async function handleOpenBurn() {
+    if (!assetDetails) return;
+
+    const inputAsset = assetOptions.find((option) => option.id === assetId)?.asset;
+    if (!inputAsset || inputAsset.kind !== 'spl-token' || wallet.selectedNetwork !== 'mainnet-beta') {
+      setAssetActionMode('burn');
+      setBurnAmount('');
+      setBurnConfirmation('');
+      return;
+    }
+
+    try {
+      setAssessingBurn(true);
+      setTokenActionError(null);
+      const quote = await sendRuntimeMessage<WalletSwapQuoteResponse>({
+        type: 'wallet_get_swap_quote',
+        amount: assetDetails.amount,
+        slippageBps: 50,
+        inputAsset,
+        outputMint: JUPITER_SOL_MINT
+      });
+      const bestRoute = quote.routes[0];
+      const outputSol = Number(bestRoute?.outputAmountUi ?? '0');
+      if (bestRoute && Number.isFinite(outputSol) && outputSol > SOLANA_SWAP_FEE_ESTIMATE_SOL) {
+        const advisory =
+          `Jupiter can return approximately ${outputSol.toLocaleString(undefined, { maximumFractionDigits: 9 })} SOL. ` +
+          `That is greater than the estimated ${SOLANA_SWAP_FEE_ESTIMATE_SOL} SOL transaction cost, so Grape prepared a swap to preserve the value first.`;
+        openSwapForAsset(assetId, assetDetails.amount, advisory, JUPITER_SOL_MINT);
+        return;
+      }
+    } catch {
+      // No executable Jupiter route means the token can continue to the burn flow.
+    } finally {
+      setAssessingBurn(false);
+    }
+
+    setSwapAdvisory(null);
+    setAssetActionMode('burn');
+    setBurnAmount('');
+    setBurnConfirmation('');
   }
 
   async function refreshSecurityReport() {
@@ -4240,6 +4433,8 @@ function PopupPage() {
       <WalletSplash
         title="Opening Grape"
         status={surfaceError ?? 'Reading your wallet state and preparing the popup.'}
+        error={!!surfaceError}
+        onRetry={() => void refresh()}
       />
     );
   }
@@ -5429,6 +5624,10 @@ function PopupPage() {
     return (
       <>
         <Card className="wallet-home-card">
+          <div className="wallet-hero-flare" aria-hidden="true">
+            <span className="wallet-hero-flare-source" />
+            <span className="wallet-hero-flare-ghosts" />
+          </div>
           <div className="wallet-home-topbar">
             <div className="wallet-home-network stack-tight">
               {renderChainSwitcher(true)}
@@ -7052,6 +7251,31 @@ function PopupPage() {
           ))}
         </div>
 
+        {discoverFeedLoading || discoverFeed.length > 0 ? (
+          <section className="discover-section discover-feed" aria-labelledby="discover-feed-title">
+            <div className="discover-section-heading">
+              <h3 id="discover-feed-title">Latest updates</h3>
+              <span>{chainLabel}</span>
+            </div>
+            <div className="discover-feed-list">
+              {discoverFeed.map((item) => (
+                <button key={item.id} type="button" className="discover-feed-row" onClick={() => openDapp(item.url)}>
+                  <DiscoverAppIcon name={item.source} url={DISCOVER_FEED_SOURCES[selectedChainValue]?.siteUrl ?? item.url} />
+                  <span className="discover-feed-copy">
+                    <span className="discover-feed-meta"><strong>{item.source}</strong><small>{formatFeedAge(item.publishedAt)}</small></span>
+                    <span className="discover-feed-title">{item.title}</span>
+                    {item.summary ? <small className="discover-feed-summary">{item.summary}</small> : null}
+                  </span>
+                  <ExternalLink size={14} aria-hidden="true" />
+                </button>
+              ))}
+              {discoverFeedLoading && discoverFeed.length === 0 ? (
+                <div className="discover-feed-skeleton" aria-label="Loading latest updates"><span /><span /><span /></div>
+              ) : null}
+            </div>
+          </section>
+        ) : null}
+
         <section className="discover-section" aria-labelledby="recent-dapps-title">
           <div className="discover-section-heading">
             <h3 id="recent-dapps-title">Recently connected</h3>
@@ -7270,7 +7494,7 @@ function PopupPage() {
               <div className="hero-balance asset-detail-balance">
                 {isCollectibleView
                   ? assetDetails.name ?? selectedCollectible?.name ?? 'NFT'
-                  : maskSensitiveValue(assetDetails.amount, privacyMode)}
+                  : maskSensitiveValue(formatDecimalAmountString(assetDetails.amount), privacyMode)}
               </div>
               <div className="muted">
                 {isCollectibleView
@@ -7296,18 +7520,18 @@ function PopupPage() {
                 onClick={() => {
                   setTokenActionError(null);
                   setTokenActionResult(null);
-                  setAssetActionMode(canBurn ? 'burn' : 'close');
                   if (canBurn) {
-                    setBurnAmount('');
-                    setBurnConfirmation('');
+                    void handleOpenBurn();
+                  } else {
+                    setAssetActionMode('close');
                   }
                 }}
                 aria-label={detailActionTitle}
                 title={detailActionTitle}
-                disabled={isWatchOnlyWallet || (canBurn ? !canBurn : !canCloseAccount)}
+                disabled={assessingBurn || isWatchOnlyWallet || (canBurn ? !canBurn : !canCloseAccount)}
               >
                 <span className="quick-action-icon">{detailActionIcon}</span>
-                <span>{canBurn ? 'Burn' : 'Close'}</span>
+                <span>{canBurn ? assessingBurn ? 'Checking…' : 'Burn' : 'Close'}</span>
               </button>
             </div>
           ) : (
@@ -7456,15 +7680,13 @@ function PopupPage() {
               {makeConfidentialResult ? <p>Created confidential mint {makeConfidentialResult.wrappedMint.slice(0, 4)}…{makeConfidentialResult.wrappedMint.slice(-4)}. It is now available in Assets.</p> : null}
             </div>
           ) : null}
-          {!isCollectibleView ? (
+          {!isCollectibleView && !canBurn ? (
             <div className="danger-box token-cleanup-entry-warning">
               <AlertTriangle size={17} />
               <span>
-                {canBurn
-                  ? `Burn permanently destroys ${assetDetails.symbol ?? 'this token'}. Any market value will be lost and cannot be recovered.`
-                  : canCloseAccount
-                    ? 'This token account is empty. Closing it removes the account and returns its SOL rent to your wallet.'
-                    : 'A token account can only be closed after its balance is zero and any delegate is removed.'}
+                {canCloseAccount
+                  ? 'This token account is empty. Closing it removes the account and returns its SOL rent to your wallet.'
+                  : 'A token account can only be closed after its balance is zero and any delegate is removed.'}
               </span>
             </div>
           ) : null}
@@ -9099,7 +9321,13 @@ function PopupPage() {
       swapQuote?.routes[0] ??
       null;
     const quoteOutputValue = activeSwapRoute ? `${activeSwapRoute.outputAmountUi} ${outputAssetSymbol}` : '0';
-    const swapPrecisionHint = `${inputAssetSymbol} supports up to ${selectedSwapInputDecimals} decimal place${selectedSwapInputDecimals === 1 ? '' : 's'}.`;
+    const inputAmountNumber = Number(swapAmount || '0');
+    const inputUnitPrice = selectedSwapInputAsset?.asset.kind === 'sol'
+      ? assets.nativePriceUsd ?? null
+      : selectedSwapInputHolding?.priceUsd ?? null;
+    const inputValueUsd = inputUnitPrice != null && Number.isFinite(inputAmountNumber)
+      ? formatUsd(inputAmountNumber * inputUnitPrice)
+      : null;
     const normalizedInputSearch = swapInputSearch.trim().toLowerCase();
     const filteredSwapInputOptions = assetOptions.filter((option) => {
       if (!normalizedInputSearch) return true;
@@ -9201,29 +9429,12 @@ function PopupPage() {
     return (
       <>
         <Card className="swap-flow-card">
-          <div className="send-flow-header">
-            <button type="button" className="send-back-button" onClick={() => setView('home')} aria-label="Back to wallet">
-              <ArrowLeft size={20} />
-            </button>
-            <h2>Swap</h2>
-          </div>
+          {swapAdvisory ? <p className="success-box">{swapAdvisory}</p> : null}
 
           <div className="swap-flow-shell">
             <section className="swap-leg">
               <div className="swap-leg-header">
                 <span className="send-field-label">Sell</span>
-                <div className="swap-quick-ratios">
-                  {[0.25, 0.5, 0.75, 1].map((ratio) => (
-                    <button
-                      key={ratio}
-                      type="button"
-                      className="swap-ratio-chip"
-                      onClick={() => setSwapAmountByRatio(ratio)}
-                    >
-                      {ratio === 1 ? 'Max' : `${Math.round(ratio * 100)}%`}
-                    </button>
-                  ))}
-                </div>
               </div>
 
               <div className="swap-leg-main">
@@ -9235,7 +9446,7 @@ function PopupPage() {
                     aria-expanded={swapInputPickerOpen}
                     onClick={() => setSwapInputPickerOpen((value) => !value)}
                   >
-                    <AssetPickerOptionRow option={selectedSwapInputAsset} privacyMode={privacyMode} />
+                    <SwapAssetSelectorSummary option={selectedSwapInputAsset} />
                     <ChevronDown className="send-select-chevron" size={18} />
                   </button>
                   {swapInputPickerOpen ? (
@@ -9287,7 +9498,10 @@ function PopupPage() {
                     aria-label="Swap amount"
                   />
                 </div>
-                <div className="swap-precision-hint muted">{swapPrecisionHint}</div>
+                <div className="swap-leg-meta muted">
+                  <span>{inputValueUsd ?? '$0.00'}</span>
+                  <span>Balance: {selectedSwapInputAsset.balance}</span>
+                </div>
               </div>
             </section>
 
@@ -9309,7 +9523,7 @@ function PopupPage() {
                     aria-expanded={swapOutputPickerOpen}
                     onClick={() => setSwapOutputPickerOpen((value) => !value)}
                   >
-                    <AssetPickerOptionRow
+                    <SwapAssetSelectorSummary
                       option={{
                         id: swapUseCustomOutputMint ? `custom:${effectiveSwapOutputMint}` : effectiveSwapOutputMint,
                         name: swapUseCustomOutputMint ? 'Custom mint' : selectedSwapOutputToken?.name ?? selectedSwapOutputOption?.name ?? selectedSwapOutputOption?.symbol ?? outputAssetSymbol,
@@ -9323,7 +9537,6 @@ function PopupPage() {
                               : selectedSwapOutputToken?.logoUri,
                         sol: !swapUseCustomOutputMint && isNativeSwapOutput
                       }}
-                      privacyMode={privacyMode}
                     />
                     <ChevronDown className="send-select-chevron" size={18} />
                   </button>
@@ -9385,10 +9598,27 @@ function PopupPage() {
                 </div>
 
                 <div className="swap-leg-value-row">
-                  <div className="swap-leg-quote">{quoteOutputValue}</div>
+                  <div className="swap-leg-quote">{activeSwapRoute?.outputAmountUi ?? '0'}</div>
+                </div>
+                <div className="swap-leg-meta muted">
+                  <span>&nbsp;</span>
+                  <span>Balance: {outputAssetBalance}</span>
                 </div>
               </div>
             </section>
+          </div>
+
+          <div className="swap-quick-ratios">
+            {[0.25, 0.5, 0.75, 1].map((ratio) => (
+              <button
+                key={ratio}
+                type="button"
+                className="swap-ratio-chip"
+                onClick={() => setSwapAmountByRatio(ratio)}
+              >
+                {ratio === 1 ? 'Max' : `${Math.round(ratio * 100)}%`}
+              </button>
+            ))}
           </div>
 
           <div className="swap-settings-row">

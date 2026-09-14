@@ -229,6 +229,16 @@ const SOLANA_TOKEN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
 const JUPITER_SOL_MINT = 'So11111111111111111111111111111111111111112';
 const MOBILE_SOLANA_ASSET_CACHE_TTL_MS = 30_000;
 const mobileSolanaAssetCache = new Map<string, { expiresAt: number; assets: MobileAsset[] }>();
+const MOBILE_TOKEN_METADATA_STORAGE_KEY = 'grape:mobile:token-metadata-cache';
+const MOBILE_ASSET_SNAPSHOT_PREFIX = 'grape:mobile:asset-snapshot:';
+const MOBILE_TOKEN_METADATA_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+type MobileCachedTokenMetadata = {
+  name?: string;
+  symbol?: string;
+  logoUri?: string;
+  decimals?: number;
+  refreshedAt: number;
+};
 const MOBILE_REPUTATION_CACHE_TTL_MS = 30_000;
 const mobileReputationCache = new Map<string, { expiresAt: number; data: MobileReputationResponse }>();
 const MOBILE_VERIFICATION_CACHE_TTL_MS = 30_000;
@@ -238,6 +248,33 @@ const mobileGovernanceCache = new Map<string, { expiresAt: number; data: MobileG
 const MOBILE_DEVICE_LINK_TTL_MS = 10 * 60 * 1000;
 const MOBILE_DEVICE_LINK_KDF_ITERATIONS = 20_000;
 const MOBILE_DEVICE_LINK_MAX_IMPORT_ITERATIONS = 50_000;
+
+async function loadMobileTokenMetadataCache(): Promise<Record<string, MobileCachedTokenMetadata>> {
+  try {
+    const raw = await AsyncStorage.getItem(MOBILE_TOKEN_METADATA_STORAGE_KEY);
+    return raw ? JSON.parse(raw) as Record<string, MobileCachedTokenMetadata> : {};
+  } catch {
+    return {};
+  }
+}
+
+async function storeMobileTokenMetadata(
+  metadataByMint: Record<string, { name?: string; symbol?: string; logoUri?: string; decimals?: number }>
+) {
+  const entries = Object.entries(metadataByMint);
+  if (entries.length === 0) return;
+  const cache = await loadMobileTokenMetadataCache();
+  const refreshedAt = Date.now();
+  for (const [mint, metadata] of entries) {
+    cache[mint] = { ...cache[mint], ...metadata, refreshedAt };
+  }
+  const boundedCache = Object.fromEntries(
+    Object.entries(cache)
+      .sort(([, left], [, right]) => right.refreshedAt - left.refreshedAt)
+      .slice(0, 2_000)
+  );
+  await AsyncStorage.setItem(MOBILE_TOKEN_METADATA_STORAGE_KEY, JSON.stringify(boundedCache));
+}
 
 function normalizeWalletAddressKey(chain: GrapeChain, address: string) {
   const trimmed = address.trim();
@@ -2508,9 +2545,8 @@ async function loadSolanaAssets(address: string): Promise<MobileAsset[]> {
     programId: string;
     decimals?: number;
   };
-  const [lamports, shyftTokens, rpcTokenEntries] = await Promise.all([
+  const [lamports, rpcTokenEntries, cachedMetadata] = await Promise.all([
     loadMobileSolanaBalanceLamports(address),
-    fetchMobileShyftWalletTokens(address, DEFAULT_SOLANA_NETWORK).catch(() => []),
     Promise.all([
       connection.getParsedTokenAccountsByOwner(owner, {
         programId: new PublicKey(SOLANA_LEGACY_TOKEN_PROGRAM)
@@ -2543,8 +2579,24 @@ async function loadSolanaAssets(address: string): Promise<MobileAsset[]> {
           });
         return parsedEntries;
       })
-      .catch(() => [] as SolanaRpcTokenEntry[])
+      .catch(() => [] as SolanaRpcTokenEntry[]),
+    loadMobileTokenMetadataCache()
   ]);
+
+  const metadataNeedsRefresh = rpcTokenEntries.length === 0 || rpcTokenEntries.some((entry) => {
+    const metadata = cachedMetadata[entry.mint];
+    return !metadata || Date.now() - metadata.refreshedAt >= MOBILE_TOKEN_METADATA_CACHE_TTL_MS;
+  });
+  const refreshedTokens = metadataNeedsRefresh
+    ? await fetchMobileShyftWalletTokens(address, DEFAULT_SOLANA_NETWORK).catch(() => null)
+    : null;
+  const shyftTokens = refreshedTokens ?? [];
+  if (refreshedTokens) {
+    const refreshedMetadata = Object.fromEntries(shyftTokens.map((token) => [token.mint, token]));
+    await storeMobileTokenMetadata(Object.fromEntries(
+      rpcTokenEntries.map((token) => [token.mint, refreshedMetadata[token.mint] ?? {}])
+    ));
+  }
 
   const mergedTokenEntries = new Map<
     string,
@@ -2562,9 +2614,10 @@ async function loadSolanaAssets(address: string): Promise<MobileAsset[]> {
     }
   >();
 
-  const shyftTokenMap = new Map(
-    shyftTokens.map((token) => [token.mint.trim(), token] as const)
+  const shyftTokenMap = new Map<string, { name?: string; symbol?: string; logoUri?: string; decimals?: number; balanceLabel?: string; balanceUi?: number }>(
+    Object.entries(cachedMetadata).map(([mint, metadata]) => [mint, metadata])
   );
+  shyftTokens.forEach((token) => shyftTokenMap.set(token.mint.trim(), token));
 
   rpcTokenEntries.forEach((entry) => {
     const mint = entry.mint.trim();
@@ -2670,6 +2723,7 @@ async function loadSolanaAssets(address: string): Promise<MobileAsset[]> {
     expiresAt: Date.now() + (lamports != null && assets.length > 1 ? MOBILE_SOLANA_ASSET_CACHE_TTL_MS : 5_000),
     assets
   });
+  await AsyncStorage.setItem(`${MOBILE_ASSET_SNAPSHOT_PREFIX}${address}`, JSON.stringify(assets)).catch(() => undefined);
 
   return assets;
 }
@@ -2680,12 +2734,30 @@ async function loadSolanaAssetsFast(address: string): Promise<MobileAsset[]> {
     return [];
   }
 
-  const [lamports, shyftTokens] = await Promise.all([
+  const [lamports, storedSnapshot] = await Promise.all([
     loadMobileSolanaBalanceLamports(address),
-    fetchMobileShyftWalletTokens(address, DEFAULT_SOLANA_NETWORK).catch(() => [])
+    AsyncStorage.getItem(`${MOBILE_ASSET_SNAPSHOT_PREFIX}${address}`).catch(() => null)
   ]);
 
   const solAmount = lamports == null ? null : lamports / 1_000_000_000;
+  if (storedSnapshot) {
+    try {
+      const cachedAssets = JSON.parse(storedSnapshot) as MobileAsset[];
+      if (Array.isArray(cachedAssets) && cachedAssets.length > 0) {
+        return cachedAssets.map((asset) => asset.id === 'sol'
+          ? {
+              ...asset,
+              amountLabel: solAmount == null ? asset.amountLabel : `${solAmount.toFixed(9).replace(/\.?0+$/, '')} SOL`,
+              amountUi: solAmount ?? asset.amountUi,
+              valueLabel: formatUsdValue(asset.priceUsd && solAmount != null ? solAmount * asset.priceUsd : null)
+            }
+          : asset);
+      }
+    } catch {
+      // Ignore malformed snapshots and fall back to a native-balance-only shell.
+    }
+  }
+
   const assets: MobileAsset[] = [
     {
       id: 'sol',
@@ -2703,26 +2775,6 @@ async function loadSolanaAssetsFast(address: string): Promise<MobileAsset[]> {
       tokenType: 'native'
     }
   ];
-
-  shyftTokens.forEach((token) => {
-    const mint = token.mint.trim();
-    const symbol = token.symbol || shortenAddress(mint);
-    assets.push({
-      id: mint,
-      name: token.name || shortenAddress(mint),
-      symbol,
-      amountLabel: token.balanceLabel ?? `${token.balanceUi ?? 0}`,
-      amountUi: token.balanceUi ?? 0,
-      valueLabel: formatUsdValue(null),
-      logoUri: token.logoUri,
-      chain: 'solana',
-      address: mint,
-      metadataSource: 'shyft',
-      decimals: token.decimals,
-      description: `Metadata powered by Shyft for ${symbol}.`,
-      tokenType: 'spl'
-    });
-  });
 
   return assets;
 }
