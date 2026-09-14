@@ -1,52 +1,65 @@
-# Grape Wallet 0.5.179
+# Grape Wallet 0.5.200
 
-**Version 0.5.179** refreshes the wallet experience across the browser extension and mobile app with a clearer portfolio hierarchy, more useful screen space, and faster access to essential wallet actions. This release also improves mobile SOL balance reliability and makes wallet addresses and private keys easier to copy when needed.
+**Version 0.5.200** makes Grape faster and more informative across the browser extension and mobile wallet. This release introduces efficient token metadata caching, a cleaner swap experience, immediate token-detail previews, richer discovery content, improved mobile RPC controls, and additional visual polish throughout the wallet.
 
 ## Highlights
 
-- Redesigned the wallet home screen across extension and mobile with a stronger balance hero and clearer visual hierarchy.
-- Expanded the browser extension to a balanced `402px` width, giving balances, tabs, and token values more room without feeling oversized.
-- Theme artwork is now contained within the wallet hero, keeping the asset area cleaner and easier to read.
-- Updated home navigation to a streamlined underline-tab layout.
-- Improved action buttons and increased asset-row typography and numerical space.
-- Added **Copy address** alongside Share on the Receive screen in both extension and mobile.
-- Added a dedicated copy button when revealing a private key.
-- Improved mobile SOL balance loading with retries and a fallback RPC endpoint.
-- Added a mobile setting to test, save, and reset a custom Solana RPC endpoint.
+- Redesigned the swap interface across extension and mobile with compact asset panels, clearer balances, percentage shortcuts, and improved token selection.
+- Added persistent token metadata caching across extension and mobile to reduce redundant API calls while still refreshing stale information.
+- Token details now appear immediately using portfolio data already loaded by the wallet instead of opening on an empty loading screen.
+- Added thousands separators to large token balances for easier reading.
+- Added support for testing, saving, and resetting the active Solana RPC endpoint from the mobile wallet.
+- Discovery icons now support SVG artwork alongside PNG, JPEG, and other raster formats.
+- Added a cached, chain-aware **Latest updates** feed to extension Discover using official Solana and Ethereum sources.
+- Added cinematic, theme-aware lens-flare artwork to the wallet hero on extension and mobile.
+- Improved extension startup recovery so users can retry instead of remaining stuck on the opening screen.
+- Improved token cleanup by checking for a viable Jupiter route before burning and recommending a value-preserving swap when appropriate.
 
 ## Browser extension
 
-### Refreshed wallet home
+### Cleaner swaps and token screens
 
-- Widened the extension layout and ensured the lock screen and wallet content use the full available width.
-- Redesigned the balance hero and primary action row for better focus and easier interaction.
-- Moved theme artwork into the hero so it no longer competes with portfolio content.
-- Replaced segmented home tabs with a cleaner underline treatment.
-- Increased token-name, balance, and value readability while reserving more space for larger numbers.
-- Updated the bottom navigation to align with the wider layout.
+- Reworked the swap screen into a denser two-panel layout that keeps both selected assets, balances, and values visible.
+- Improved the token picker layout so search results remain contained within the extension viewport.
+- Added clearer asset selectors and more compact percentage and confirmation controls.
+- Preloads token names, symbols, artwork, balances, and estimated values while full token details continue loading.
+- Formats large token balances with locale-aware thousands separators.
+- Removed the persistent burn warning from the normal token overview; destructive warnings remain part of the actual burn flow.
+- Checks Jupiter before opening the burn flow and prepares a swap to SOL when the expected return is greater than the estimated transaction cost.
 
-### Easier copying
+### Discovery and performance
 
-- Added a one-tap wallet-address copy action to the Receive QR screen.
-- Added a copy helper beside revealed private keys, while preserving the existing verification and reveal safeguards.
+- Added official ecosystem updates to Discover for Solana and Ethereum.
+- Feed results use a 15-minute refresh interval and a seven-day fallback cache for resilient loading.
+- Feed failures remain unobtrusive, leaving the dApp directory fully usable.
+- Added SVG favicon support for dApps that do not provide raster icons.
+- Added persistent token metadata caching with freshness checks to reduce repeated metadata requests.
+
+### Reliability and polish
+
+- Added a retry state when the extension cannot finish loading wallet state.
+- Refined menu, settings, token-picker, and navigation spacing to prevent controls from touching or overflowing.
+- Added a theme-colored cinematic flare layer to the portfolio hero, including reduced-motion support.
 
 ## Mobile wallet
 
-### Consistent portfolio design
+### Faster portfolio loading
 
-- Applied the same hero-first hierarchy used by the extension.
-- Refined the balance card, action row, tabs, asset rows, and token-value spacing for improved readability.
-- Limited theme artwork to the hero on the ready wallet screen for a calmer portfolio view.
+- Added persistent token metadata caching to reduce repeated API and RPC work between wallet refreshes.
+- Uses cached metadata immediately while refreshing expired entries in the background.
+- Reuses preliminary portfolio data when opening token details to avoid an empty loading state.
+- Improved large-number formatting for token balances.
 
-### Reliability and wallet tools
+### Wallet controls and design
 
-- Native SOL remains visible even when zero-balance assets are hidden.
-- SOL balance requests now retry and fall back to the default Solana RPC when the configured endpoint is temporarily unavailable.
-- Unavailable balances are identified clearly instead of incorrectly appearing as zero.
-- Custom Solana RPC endpoints can now be tested and managed from **Settings → Network & RPC** and are kept in secure device storage.
-- Added one-tap copy controls for Receive addresses and revealed private keys.
+- Added mobile controls for testing, saving, and resetting custom Solana RPC endpoints.
+- Improved settings-card spacing and navigation clearance.
+- Updated the swap interface to match the extension’s clearer, more compact hierarchy.
+- Added SVG support for icons in mobile Discover.
+- Added a lightweight, theme-aware lens flare to the mobile wallet hero.
 
 ## Notes
 
-- Private keys remain hidden until the wallet’s existing verification and reveal flow is completed.
-- RPC fallback is used only when the configured Solana endpoint cannot return the native balance.
+- The Discover feed currently uses the official Solana changelog and Ethereum Foundation feeds. Chains without a verified official feed continue to show the existing dApp directory without an empty feed section.
+- Cached token metadata is refreshed according to freshness rules so performance improvements do not permanently preserve stale information.
+- Burn remains destructive and still requires confirmation; the Jupiter check is intended to help preserve recoverable market value before burning.
