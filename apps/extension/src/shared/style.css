@@ -2670,6 +2670,19 @@ select {
   line-height: 1.35;
 }
 
+/* Native Windows menus can use a light background despite inheriting theme text.
+   Keep menu colors opaque and paired for light, dark, and forced-color modes. */
+select option,
+select optgroup {
+  background-color: Canvas;
+  color: CanvasText;
+}
+
+select option:checked {
+  background-color: Highlight;
+  color: HighlightText;
+}
+
 .textarea {
   min-height: 120px;
   resize: vertical;
@@ -5741,16 +5754,6 @@ body[data-surface='popup'] .asset-panel-card {
   color: var(--theme-text);
   padding: 0 14px;
   font: inherit;
-}
-
-.staking-select option {
-  background: color-mix(in srgb, var(--theme-surface-strong) 88%, var(--theme-input-bg) 12%);
-  color: var(--theme-text);
-}
-
-.staking-select option:checked {
-  background: color-mix(in srgb, var(--theme-accent) 26%, var(--theme-surface-strong));
-  color: var(--theme-text);
 }
 
 .staking-password-shell {
