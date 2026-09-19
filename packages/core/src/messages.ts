@@ -596,7 +596,8 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     type: z.literal('wallet_get_reputation')
   }),
   z.object({
-    type: z.literal('wallet_get_verification')
+    type: z.literal('wallet_get_verification'),
+    forceRefresh: z.boolean().optional()
   }),
   z.object({
     type: z.literal('wallet_refresh_access')
@@ -605,7 +606,8 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     type: z.literal('wallet_clear_access')
   }),
   z.object({
-    type: z.literal('wallet_get_governance')
+    type: z.literal('wallet_get_governance'),
+    forceRefresh: z.boolean().optional()
   }),
   z.object({
     type: z.literal('wallet_scan_governance_eligibility')

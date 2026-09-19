@@ -1,3 +1,5 @@
+import { describeGovernanceVote } from '../../../packages/solana/src/governanceVote';
+import { createGovernanceRpcConnection } from '../../../packages/solana/src/governanceRpc';
 import { getMobileSolanaRpcUrl } from './config';
 
 const DEFAULT_SOLANA_NETWORK = 'mainnet-beta';
@@ -5,7 +7,6 @@ const DEFAULT_GOVERNANCE_PROGRAM_ID = 'GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPC
 const GOVERNANCE_PROGRAM_VERSION_V1 = 1;
 const GOVERNANCE_PROGRAM_VERSION_V2 = 2;
 const GOVERNANCE_PROGRAM_VERSION_V3 = 3;
-const GOVERNANCE_GRAPHQL_URL = 'https://grape.shyft.to/v1/graphql/';
 
 type GovernanceOwner = {
   owner: string;
@@ -26,31 +27,6 @@ type GovernanceMembershipRecord = {
   governingTokenOwner: string;
   governanceDelegate: string | null;
   governingTokenDepositAmount: string;
-};
-
-type GovernanceProgramAccount = {
-  pubkey: string;
-  realm: string;
-  baseVotingTime: number | null;
-};
-
-type GovernanceProposalRecord = {
-  pubkey: string;
-  governance: string;
-  governingTokenMint: string;
-  tokenOwnerRecord: string;
-  state: number;
-  descriptionLink: string | null;
-  name: string;
-  draftAt: number | null;
-  votingAt: number | null;
-  maxVotingTime: number | null;
-  yesVotes: string;
-  noVotes: string;
-  abstainVotes: string;
-  denyVotes: string;
-  options: MobileGovernanceProposalChoice[];
-  hasDenyOption: boolean;
 };
 
 export type MobileGovernanceProposalChoice = {
@@ -85,6 +61,7 @@ export type MobileGovernanceProposal = {
   tokenOwnerRecordId: string | null;
   canVote: boolean;
   hasVoted: boolean;
+  recordedVotes?: { governingTokenOwner: string; isDelegate: boolean; choice: string }[];
   hasDenyOption: boolean;
   isDelegate: boolean;
   votingPowerType: 'community' | 'council' | 'delegated-community' | 'delegated-council' | 'unknown';
@@ -97,11 +74,15 @@ export type MobileGovernanceProposal = {
 };
 
 export type MobileGovernanceResponse = {
+  discoveryWarnings?: string[];
+  warnings?: string[];
   trackedDaos: string[];
   discoveredDaos: string[];
   daos: Array<{
     daoId: string;
     realmName: string;
+    proposalStatus?: 'ready' | 'unavailable';
+    votingPower?: Array<{ mint: string; kind: string; amount: string; delegated: boolean }>;
   }>;
   memberDaos: number;
   proposals: MobileGovernanceProposal[];
@@ -159,16 +140,6 @@ const GOVERNANCE_OWNERS: GovernanceOwner[] = [
   { owner: 'jtogvBNH3WBSWDYD5FJfQP2ZxNTuf82zL8GkEhPeaJx', name: 'Jito', dao: 'jjCAwuuNpJCNMLAanpwgJZ6cdXzLPXe2GfD6TaDQBXt' }
 ];
 
-const GOVERNANCE_REALM_DIRECTORY_CACHE_TTL_MS = 15 * 60 * 1000;
-const GOVERNANCE_REALM_DIRECTORY_PAGE_SIZE = 1000;
-const GRAPHQL_RETRYABLE_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);
-let governanceRealmDirectoryCache:
-  | {
-      expiresAt: number;
-      realms: GovernanceRealmInfo[];
-    }
-  | null = null;
-
 function loadSolanaWeb3Module() {
   return require('@solana/web3.js') as typeof import('@solana/web3.js');
 }
@@ -179,21 +150,11 @@ function loadSplGovernanceModule() {
 
 function getConnection() {
   const { Connection } = loadSolanaWeb3Module();
-  return new Connection(getMobileSolanaRpcUrl(DEFAULT_SOLANA_NETWORK), 'confirmed');
+  return createGovernanceRpcConnection(new Connection(getMobileSolanaRpcUrl(DEFAULT_SOLANA_NETWORK), 'confirmed'));
 }
 
 function getNetworkLabel() {
   return getMobileSolanaRpcUrl(DEFAULT_SOLANA_NETWORK).includes('devnet') ? 'devnet' : 'mainnet-beta';
-}
-
-function findGovernanceOwnerByDao(daoId: string): GovernanceOwner {
-  return (
-    GOVERNANCE_OWNERS.find((entry) => entry.dao === daoId) ?? {
-      owner: DEFAULT_GOVERNANCE_PROGRAM_ID,
-      name: DEFAULT_GOVERNANCE_PROGRAM_ID,
-      dao: daoId
-    }
-  );
 }
 
 export async function resolveMobileGovernanceProgramVersion(
@@ -234,6 +195,49 @@ export async function resolveMobileGovernanceProgramVersion(
   return GOVERNANCE_PROGRAM_VERSION_V1;
 }
 
+// Bound program scans so indexed RPC providers are not flooded by discovery.
+async function mapGovernanceRpc<T, R>(items: T[], load: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let cursor = 0;
+  await Promise.all(Array.from({ length: Math.min(2, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor++;
+      results[index] = await load(items[index]);
+    }
+  }));
+  return results;
+}
+
+function getGovernanceRpcFailureReason(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/too big|scan limit|excluded from account secondary indexes/i.test(message)) return 'RPC scan limit';
+  if (/429|rate limit|too many requests/i.test(message)) return 'RPC rate limit';
+  return 'RPC unavailable';
+}
+
+// A realm's token-owner-record addresses are deterministic; no program scan is needed.
+async function fetchGovernanceKnownRealmMemberships(
+  connection: import('@solana/web3.js').Connection,
+  programId: import('@solana/web3.js').PublicKey,
+  owner: import('@solana/web3.js').PublicKey
+) {
+  const { PublicKey } = loadSolanaWeb3Module();
+  const { getRealm, getTokenOwnerRecordAddress, getTokenOwnerRecord } = loadSplGovernanceModule();
+  const records: Awaited<ReturnType<typeof getTokenOwnerRecord>>[] = [];
+  const realmIds = Array.from(new Set(GOVERNANCE_OWNERS.filter((entry) => entry.owner === programId.toBase58()).map((entry) => entry.dao)));
+  for (const realmId of realmIds) {
+    const realmKey = new PublicKey(realmId);
+    const realm = await getRealm(connection, realmKey);
+    const mints = [realm.account.communityMint, realm.account.config.councilMint].filter((mint): mint is import('@solana/web3.js').PublicKey => !!mint);
+    const keys = await Promise.all(mints.map((mint) => getTokenOwnerRecordAddress(programId, realmKey, mint, owner)));
+    const infos = await connection.getMultipleAccountsInfo(keys, 'confirmed');
+    for (let index = 0; index < keys.length; index++) {
+      if (infos[index]) records.push(await getTokenOwnerRecord(connection, keys[index]));
+    }
+  }
+  return records;
+}
+
 function getGovernanceNamespaces(): Array<{ namespace: string; programId: string }> {
   const seen = new Set<string>();
   const entries = [
@@ -259,58 +263,6 @@ function normalizeTrackedDaoIds(value: string[]) {
         .filter(Boolean)
     )
   );
-}
-
-function escapeGraphqlString(value: string) {
-  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-}
-
-function delay(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function parseGovernanceNumber(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value !== 'string') {
-    return null;
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-  if (/^0x/i.test(trimmed)) {
-    const parsed = Number.parseInt(trimmed, 16);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-  const parsed = Number(trimmed);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function parseGovernanceBigIntString(value: unknown): string {
-  if (typeof value === 'bigint') {
-    return value.toString();
-  }
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return BigInt(Math.trunc(value)).toString();
-  }
-  if (typeof value !== 'string') {
-    return '0';
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return '0';
-  }
-  try {
-    return BigInt(trimmed).toString();
-  } catch {
-    try {
-      return BigInt(`0x${trimmed.replace(/^0x/i, '')}`).toString();
-    } catch {
-      return '0';
-    }
-  }
 }
 
 function formatProposalStateLabel(stateCode: number) {
@@ -346,41 +298,8 @@ function isActiveGovernanceProposalState(stateCode: number) {
   return stateCode === ProposalState.Draft || stateCode === ProposalState.SigningOff || stateCode === ProposalState.Voting;
 }
 
-function isRecentGovernanceProposal(referenceTimestamp: number | null, recentWindowSeconds = 60 * 60 * 24 * 30) {
-  if (!referenceTimestamp || referenceTimestamp <= 0) {
-    return false;
-  }
-
-  return referenceTimestamp >= Math.floor(Date.now() / 1000) - recentWindowSeconds;
-}
-
-function shouldDisplayGovernanceProposal(input: {
-  stateCode: number;
-  draftAt: number | null;
-  votingAt: number | null;
-  maxVotingTime?: number | null;
-}) {
-  const { ProposalState } = loadSplGovernanceModule();
-  const votingEndsAt =
-    input.votingAt !== null && input.maxVotingTime !== null && input.maxVotingTime !== undefined
-      ? input.votingAt + input.maxVotingTime
-      : null;
-
-  if (input.stateCode === ProposalState.Voting) {
-    if (!votingEndsAt) {
-      return true;
-    }
-    return isRecentGovernanceProposal(votingEndsAt, 60 * 60 * 24 * 7);
-  }
-
-  if (isActiveGovernanceProposalState(input.stateCode)) {
-    return true;
-  }
-
-  return isRecentGovernanceProposal(votingEndsAt ?? input.votingAt ?? input.draftAt);
-}
-
 function compareGovernanceProposalDisplayOrder(left: MobileGovernanceProposal, right: MobileGovernanceProposal) {
+  if (left.canVote !== right.canVote) return left.canVote ? -1 : 1;
   const leftActive = isActiveGovernanceProposalState(left.stateCode) ? 1 : 0;
   const rightActive = isActiveGovernanceProposalState(right.stateCode) ? 1 : 0;
   if (leftActive !== rightActive) {
@@ -421,442 +340,19 @@ function limitGovernanceProposalsForDisplay(
   return [...active, ...recent.slice(0, maxProposals - active.length)];
 }
 
-async function fetchGovernanceGraphql<T>(query: string): Promise<T> {
-  let lastStatus: number | null = null;
-
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    const response = await fetch(GOVERNANCE_GRAPHQL_URL, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'accept-encoding': 'gzip'
-      },
-      body: JSON.stringify({ query }),
-      cache: 'no-store'
-    });
-
-    if (!response.ok) {
-      lastStatus = response.status;
-      if (!GRAPHQL_RETRYABLE_STATUS_CODES.has(response.status) || attempt === 3) {
-        throw new Error(`GraphQL request failed with ${response.status}.`);
-      }
-      await delay(250 * attempt);
-      continue;
-    }
-
-    const payload = (await response.json()) as {
-      data?: T;
-      errors?: Array<{ message?: string }>;
-    };
-
-    if (Array.isArray(payload.errors) && payload.errors.length > 0) {
-      throw new Error(payload.errors.map((entry) => entry.message || 'Unknown GraphQL error').join('; '));
-    }
-
-    if (!payload.data) {
-      throw new Error('GraphQL response did not include data.');
-    }
-
-    return payload.data;
-  }
-
-  throw new Error(`GraphQL request failed with ${lastStatus ?? 'unknown status'}.`);
-}
-
-function buildGovernanceRealmQuery(namespace: string, daoId: string) {
-  const escapedDaoId = escapeGraphqlString(daoId);
-  return `
-    query GovernanceRealm {
-      ${namespace}_RealmV2(where: {pubkey: {_eq: "${escapedDaoId}"}}) {
-        pubkey
-        name
-        communityMint
-        config
-      }
-      ${namespace}_RealmV1(where: {pubkey: {_eq: "${escapedDaoId}"}}) {
-        pubkey
-        name
-        communityMint
-        config
-      }
-    }
-  `;
-}
-
-function buildGovernanceRealmDirectoryQuery(namespace: string, offset = 0) {
-  return `
-    query GovernanceRealmDirectory {
-      ${namespace}_RealmV2(limit: ${GOVERNANCE_REALM_DIRECTORY_PAGE_SIZE}, offset: ${offset}) {
-        pubkey
-        name
-        communityMint
-        config
-      }
-      ${namespace}_RealmV1(limit: ${GOVERNANCE_REALM_DIRECTORY_PAGE_SIZE}, offset: ${offset}) {
-        pubkey
-        name
-        communityMint
-        config
-      }
-    }
-  `;
-}
-
-function buildGovernanceDirectMemberQuery(namespace: string, owner: string, offset = 0) {
-  const escapedOwner = escapeGraphqlString(owner);
-  return `
-    query GovernanceDirectMembers {
-      ${namespace}_TokenOwnerRecordV2(
-        limit: 1000,
-        offset: ${offset},
-        where: { governingTokenOwner: {_eq: "${escapedOwner}"} }
-      ) {
-        pubkey
-        realm
-        governingTokenMint
-        governingTokenOwner
-        governanceDelegate
-        governingTokenDepositAmount
-      }
-      ${namespace}_TokenOwnerRecordV1(
-        limit: 1000,
-        offset: ${offset},
-        where: { governingTokenOwner: {_eq: "${escapedOwner}"} }
-      ) {
-        pubkey
-        realm
-        governingTokenMint
-        governingTokenOwner
-        governanceDelegate
-        governingTokenDepositAmount
-      }
-    }
-  `;
-}
-
-function buildGovernanceDelegateQuery(namespace: string, owner: string, offset = 0) {
-  const escapedOwner = escapeGraphqlString(owner);
-  return `
-    query GovernanceDelegateRecords {
-      ${namespace}_TokenOwnerRecordV2(
-        limit: 1000,
-        offset: ${offset},
-        where: { governanceDelegate: {_eq: "${escapedOwner}"} }
-      ) {
-        pubkey
-        realm
-        governingTokenMint
-        governingTokenOwner
-        governanceDelegate
-        governingTokenDepositAmount
-      }
-      ${namespace}_TokenOwnerRecordV1(
-        limit: 1000,
-        offset: ${offset},
-        where: { governanceDelegate: {_eq: "${escapedOwner}"} }
-      ) {
-        pubkey
-        realm
-        governingTokenMint
-        governingTokenOwner
-        governanceDelegate
-        governingTokenDepositAmount
-      }
-    }
-  `;
-}
-
-function buildGovernanceMembershipQuery(namespace: string, daoId: string, owner: string) {
-  const escapedDaoId = escapeGraphqlString(daoId);
-  const escapedOwner = escapeGraphqlString(owner);
-  return `
-    query GovernanceMembership {
-      ${namespace}_TokenOwnerRecordV2(
-        limit: 1000,
-        where: {
-          realm: {_eq: "${escapedDaoId}"},
-          _or: [
-            { governingTokenOwner: {_eq: "${escapedOwner}"} },
-            { governanceDelegate: {_eq: "${escapedOwner}"} }
-          ]
-        }
-      ) {
-        pubkey
-        governingTokenMint
-        governingTokenOwner
-        governanceDelegate
-        governingTokenDepositAmount
-      }
-      ${namespace}_TokenOwnerRecordV1(
-        limit: 1000,
-        where: {
-          realm: {_eq: "${escapedDaoId}"},
-          _or: [
-            { governingTokenOwner: {_eq: "${escapedOwner}"} },
-            { governanceDelegate: {_eq: "${escapedOwner}"} }
-          ]
-        }
-      ) {
-        pubkey
-        governingTokenMint
-        governingTokenOwner
-        governanceDelegate
-        governingTokenDepositAmount
-      }
-    }
-  `;
-}
-
-function buildGovernanceScopedDirectMembershipQuery(namespace: string, daoId: string, owner: string) {
-  const escapedDaoId = escapeGraphqlString(daoId);
-  const escapedOwner = escapeGraphqlString(owner);
-  return `
-    query GovernanceScopedDirectMembership {
-      ${namespace}_TokenOwnerRecordV2(
-        limit: 1000,
-        where: {
-          realm: {_eq: "${escapedDaoId}"},
-          governingTokenOwner: {_eq: "${escapedOwner}"}
-        }
-      ) {
-        pubkey
-        governingTokenMint
-        governingTokenOwner
-        governanceDelegate
-        governingTokenDepositAmount
-      }
-      ${namespace}_TokenOwnerRecordV1(
-        limit: 1000,
-        where: {
-          realm: {_eq: "${escapedDaoId}"},
-          governingTokenOwner: {_eq: "${escapedOwner}"}
-        }
-      ) {
-        pubkey
-        governingTokenMint
-        governingTokenOwner
-        governanceDelegate
-        governingTokenDepositAmount
-      }
-    }
-  `;
-}
-
-function buildGovernanceScopedDelegateMembershipQuery(namespace: string, daoId: string, owner: string) {
-  const escapedDaoId = escapeGraphqlString(daoId);
-  const escapedOwner = escapeGraphqlString(owner);
-  return `
-    query GovernanceScopedDelegateMembership {
-      ${namespace}_TokenOwnerRecordV2(
-        limit: 1000,
-        where: {
-          realm: {_eq: "${escapedDaoId}"},
-          governanceDelegate: {_eq: "${escapedOwner}"}
-        }
-      ) {
-        pubkey
-        governingTokenMint
-        governingTokenOwner
-        governanceDelegate
-        governingTokenDepositAmount
-      }
-      ${namespace}_TokenOwnerRecordV1(
-        limit: 1000,
-        where: {
-          realm: {_eq: "${escapedDaoId}"},
-          governanceDelegate: {_eq: "${escapedOwner}"}
-        }
-      ) {
-        pubkey
-        governingTokenMint
-        governingTokenOwner
-        governanceDelegate
-        governingTokenDepositAmount
-      }
-    }
-  `;
-}
-
-function buildGovernanceAccountsQuery(namespace: string, daoId: string) {
-  const escapedDaoId = escapeGraphqlString(daoId);
-  return `
-    query GovernanceAccounts {
-      ${namespace}_GovernanceV2(limit: 500, where: {realm: {_eq: "${escapedDaoId}"}}) {
-        pubkey
-        realm
-        config
-      }
-      ${namespace}_GovernanceV1(limit: 500, where: {realm: {_eq: "${escapedDaoId}"}}) {
-        pubkey
-        realm
-        config
-      }
-    }
-  `;
-}
-
-function buildGovernanceProposalsQuery(namespace: string, governanceIds: string[]) {
-  const ids = governanceIds.map((entry) => `"${escapeGraphqlString(entry)}"`).join(', ');
-  return `
-    query GovernanceProposals {
-      ${namespace}_ProposalV2(
-        limit: 500,
-        order_by: {draftAt: desc},
-        where: {governance: {_in: [${ids}]}}
-      ) {
-        pubkey
-        governance
-        governingTokenMint
-        tokenOwnerRecord
-        state
-        descriptionLink
-        draftAt
-        votingAt
-        maxVotingTime
-        name
-        options
-        denyVoteWeight
-        abstainVoteWeight
-      }
-      ${namespace}_ProposalV1(
-        limit: 500,
-        order_by: {draftAt: desc},
-        where: {governance: {_in: [${ids}]}}
-      ) {
-        pubkey
-        governance
-        governingTokenMint
-        tokenOwnerRecord
-        state
-        descriptionLink
-        draftAt
-        votingAt
-        name
-        yesVotesCount
-        noVotesCount
-      }
-    }
-  `;
-}
-
-function buildGovernanceVoteRecordsQuery(namespace: string, owners: string[]) {
-  const ownerList = owners.map((owner) => `"${escapeGraphqlString(owner)}"`).join(', ');
-  return `
-    query GovernanceVotesByOwner {
-      ${namespace}_VoteRecordV2(limit: 5000, where: {governingTokenOwner: {_in: [${ownerList}]}}) {
-        proposal
-        governingTokenOwner
-      }
-      ${namespace}_VoteRecordV1(limit: 5000, where: {governingTokenOwner: {_in: [${ownerList}]}}) {
-        proposal
-        governingTokenOwner
-      }
-    }
-  `;
-}
-
-function buildEmptyGovernanceMembershipResponse(namespace: string): Record<string, unknown> {
-  return {
-    [`${namespace}_TokenOwnerRecordV2`]: [],
-    [`${namespace}_TokenOwnerRecordV1`]: []
-  };
-}
-
-function normalizeGovernanceRealmInfo(data: Record<string, unknown>, namespace: string, daoId: string): GovernanceRealmInfo | null {
-  const v2 = Array.isArray(data[`${namespace}_RealmV2`]) ? (data[`${namespace}_RealmV2`] as Array<Record<string, unknown>>) : [];
-  const v1 = Array.isArray(data[`${namespace}_RealmV1`]) ? (data[`${namespace}_RealmV1`] as Array<Record<string, unknown>>) : [];
-  const row = v2[0] ?? v1[0];
-  if (!row) {
-    return null;
-  }
-
-  const communityMint = typeof row.communityMint === 'string' ? row.communityMint : null;
-  if (!communityMint) {
-    return null;
-  }
-
-  return {
-    daoId,
-    name: typeof row.name === 'string' && row.name.trim() ? row.name.trim() : `DAO ${daoId.slice(0, 4)}`,
-    communityMint,
-    councilMint:
-      typeof (row.config as Record<string, unknown> | undefined)?.councilMint === 'string'
-        ? ((row.config as Record<string, unknown>).councilMint as string)
-        : null
-  };
-}
-
-function normalizeGovernanceRealmDirectoryEntries(data: Record<string, unknown>, namespace: string): GovernanceRealmInfo[] {
-  const v2 = Array.isArray(data[`${namespace}_RealmV2`]) ? (data[`${namespace}_RealmV2`] as Array<Record<string, unknown>>) : [];
-  const v1 = Array.isArray(data[`${namespace}_RealmV1`]) ? (data[`${namespace}_RealmV1`] as Array<Record<string, unknown>>) : [];
-  const rows = [...v2, ...v1];
-
-  const normalized = rows
-    .map((row) => {
-      const daoId = typeof row.pubkey === 'string' ? row.pubkey : null;
-      const communityMint = typeof row.communityMint === 'string' ? row.communityMint : null;
-      if (!daoId || !communityMint) {
-        return null;
-      }
-
-      return {
-        daoId,
-        name: typeof row.name === 'string' && row.name.trim() ? row.name.trim() : `DAO ${daoId.slice(0, 4)}`,
-        communityMint,
-        councilMint:
-          typeof (row.config as Record<string, unknown> | undefined)?.councilMint === 'string'
-            ? ((row.config as Record<string, unknown>).councilMint as string)
-            : null
-      } satisfies GovernanceRealmInfo;
-    })
-    .filter((entry): entry is GovernanceRealmInfo => !!entry);
-
-  return Array.from(new Map(normalized.map((entry) => [entry.daoId, entry] as const)).values());
-}
-
 async function fetchGovernanceRealmDirectory(): Promise<GovernanceRealmInfo[]> {
-  if (governanceRealmDirectoryCache && governanceRealmDirectoryCache.expiresAt > Date.now()) {
-    return governanceRealmDirectoryCache.realms;
-  }
-
-  const realms = (
-    await Promise.all(
-      getGovernanceNamespaces().map(async ({ namespace }) => {
-        const collected: GovernanceRealmInfo[] = [];
-        let offset = 0;
-
-        while (true) {
-          let page: Record<string, unknown>;
-          try {
-            page = await fetchGovernanceGraphql<Record<string, unknown>>(buildGovernanceRealmDirectoryQuery(namespace, offset));
-          } catch {
-            break;
-          }
-
-          const pageV2 = Array.isArray(page[`${namespace}_RealmV2`]) ? (page[`${namespace}_RealmV2`] as Array<Record<string, unknown>>) : [];
-          const pageV1 = Array.isArray(page[`${namespace}_RealmV1`]) ? (page[`${namespace}_RealmV1`] as Array<Record<string, unknown>>) : [];
-          const pageRealms = normalizeGovernanceRealmDirectoryEntries(page, namespace);
-          collected.push(...pageRealms);
-
-          if (pageV2.length < GOVERNANCE_REALM_DIRECTORY_PAGE_SIZE && pageV1.length < GOVERNANCE_REALM_DIRECTORY_PAGE_SIZE) {
-            break;
-          }
-          offset += GOVERNANCE_REALM_DIRECTORY_PAGE_SIZE;
-        }
-
-        return collected;
-      })
-    )
-  )
-    .flat()
-    .filter((entry, index, list) => list.findIndex((candidate) => candidate.daoId === entry.daoId) === index);
-
-  governanceRealmDirectoryCache = {
-    expiresAt: Date.now() + GOVERNANCE_REALM_DIRECTORY_CACHE_TTL_MS,
-    realms
-  };
-
-  return realms;
+  const { PublicKey } = loadSolanaWeb3Module();
+  const { getRealms } = loadSplGovernanceModule();
+  const connection = getConnection();
+  const batches = await mapGovernanceRpc(getGovernanceNamespaces(), async ({ programId }) => {
+    const accounts = await getRealms(connection, new PublicKey(programId));
+    return accounts.map((entry) => ({
+      daoId: entry.pubkey.toBase58(), name: entry.account.name,
+      communityMint: entry.account.communityMint.toBase58(),
+      councilMint: entry.account.config.councilMint?.toBase58() ?? null
+    }));
+  });
+  return Array.from(new Map(batches.flat().map((realm) => [realm.daoId, realm])).values());
 }
 
 export async function scanMobileGovernanceDaoEligibility(
@@ -916,129 +412,7 @@ export async function scanMobileGovernanceDaoEligibility(
     });
 }
 
-function normalizeGovernanceMembershipRecords(data: Record<string, unknown>, namespace: string): GovernanceMembershipRecord[] {
-  const rows = [
-    ...(Array.isArray(data[`${namespace}_TokenOwnerRecordV2`]) ? (data[`${namespace}_TokenOwnerRecordV2`] as Array<Record<string, unknown>>) : []),
-    ...(Array.isArray(data[`${namespace}_TokenOwnerRecordV1`]) ? (data[`${namespace}_TokenOwnerRecordV1`] as Array<Record<string, unknown>>) : [])
-  ];
-
-  const normalized = rows
-    .map((row) => {
-      const pubkey = typeof row.pubkey === 'string' ? row.pubkey : null;
-      const governingTokenMint = typeof row.governingTokenMint === 'string' ? row.governingTokenMint : null;
-      const governingTokenOwner = typeof row.governingTokenOwner === 'string' ? row.governingTokenOwner : null;
-      if (!pubkey || !governingTokenMint || !governingTokenOwner) {
-        return null;
-      }
-
-      return {
-        pubkey,
-        governingTokenMint,
-        governingTokenOwner,
-        governanceDelegate: typeof row.governanceDelegate === 'string' ? row.governanceDelegate : null,
-        governingTokenDepositAmount: parseGovernanceBigIntString(row.governingTokenDepositAmount)
-      } satisfies GovernanceMembershipRecord;
-    })
-    .filter((entry): entry is GovernanceMembershipRecord => !!entry);
-
-  return Array.from(new Map(normalized.map((entry) => [entry.pubkey, entry] as const)).values());
-}
-
-function normalizeGovernanceOwnerDaoIds(data: Record<string, unknown>, namespace: string, ownerAddress: string) {
-  const rows = [
-    ...(Array.isArray(data[`${namespace}_TokenOwnerRecordV2`]) ? (data[`${namespace}_TokenOwnerRecordV2`] as Array<Record<string, unknown>>) : []),
-    ...(Array.isArray(data[`${namespace}_TokenOwnerRecordV1`]) ? (data[`${namespace}_TokenOwnerRecordV1`] as Array<Record<string, unknown>>) : [])
-  ];
-
-  const directDaoIds = new Set<string>();
-  const delegateDaoIds = new Set<string>();
-
-  for (const row of rows) {
-    const realm = typeof row.realm === 'string' ? row.realm : '';
-    if (!realm) continue;
-
-    const deposit = parseGovernanceBigIntString(row.governingTokenDepositAmount);
-    if (BigInt(deposit) <= BigInt(0)) continue;
-
-    const isDelegate = typeof row.governanceDelegate === 'string' && row.governanceDelegate === ownerAddress;
-    const isDirect = typeof row.governingTokenOwner === 'string' && row.governingTokenOwner === ownerAddress;
-
-    if (isDelegate && !isDirect) {
-      delegateDaoIds.add(realm);
-    } else if (isDirect) {
-      directDaoIds.add(realm);
-    }
-  }
-
-  for (const daoId of directDaoIds) {
-    delegateDaoIds.delete(daoId);
-  }
-
-  return {
-    directDaoIds: Array.from(directDaoIds),
-    delegateDaoIds: Array.from(delegateDaoIds)
-  };
-}
-
-async function discoverGovernanceDaosForWallet(ownerAddress: string) {
-  const discovered = await Promise.all(
-    getGovernanceNamespaces().map(async ({ namespace }) => {
-      try {
-        const loadPagedTokenOwnerRows = async (queryBuilder: (offset: number) => string) => {
-          const mergedV2: Array<Record<string, unknown>> = [];
-          const mergedV1: Array<Record<string, unknown>> = [];
-
-          for (let offset = 0; offset < 10000; offset += 1000) {
-            const page = await fetchGovernanceGraphql<Record<string, unknown>>(queryBuilder(offset));
-            const pageV2 = Array.isArray(page[`${namespace}_TokenOwnerRecordV2`])
-              ? (page[`${namespace}_TokenOwnerRecordV2`] as Array<Record<string, unknown>>)
-              : [];
-            const pageV1 = Array.isArray(page[`${namespace}_TokenOwnerRecordV1`])
-              ? (page[`${namespace}_TokenOwnerRecordV1`] as Array<Record<string, unknown>>)
-              : [];
-
-            mergedV2.push(...pageV2);
-            mergedV1.push(...pageV1);
-
-            if (pageV2.length < 1000 && pageV1.length < 1000) {
-              break;
-            }
-          }
-
-          return {
-            [`${namespace}_TokenOwnerRecordV2`]: mergedV2,
-            [`${namespace}_TokenOwnerRecordV1`]: mergedV1
-          } satisfies Record<string, unknown>;
-        };
-
-        const [directData, delegateData] = await Promise.all([
-          loadPagedTokenOwnerRows((offset) => buildGovernanceDirectMemberQuery(namespace, ownerAddress, offset)),
-          loadPagedTokenOwnerRows((offset) => buildGovernanceDelegateQuery(namespace, ownerAddress, offset))
-        ]);
-
-        const mergedData: Record<string, unknown> = {
-          [`${namespace}_TokenOwnerRecordV2`]: [
-            ...(Array.isArray(directData[`${namespace}_TokenOwnerRecordV2`]) ? (directData[`${namespace}_TokenOwnerRecordV2`] as Array<Record<string, unknown>>) : []),
-            ...(Array.isArray(delegateData[`${namespace}_TokenOwnerRecordV2`]) ? (delegateData[`${namespace}_TokenOwnerRecordV2`] as Array<Record<string, unknown>>) : [])
-          ],
-          [`${namespace}_TokenOwnerRecordV1`]: [
-            ...(Array.isArray(directData[`${namespace}_TokenOwnerRecordV1`]) ? (directData[`${namespace}_TokenOwnerRecordV1`] as Array<Record<string, unknown>>) : []),
-            ...(Array.isArray(delegateData[`${namespace}_TokenOwnerRecordV1`]) ? (delegateData[`${namespace}_TokenOwnerRecordV1`] as Array<Record<string, unknown>>) : [])
-          ]
-        };
-
-        const { directDaoIds, delegateDaoIds } = normalizeGovernanceOwnerDaoIds(mergedData, namespace, ownerAddress);
-        return [...directDaoIds, ...delegateDaoIds];
-      } catch {
-        return [] as string[];
-      }
-    })
-  );
-
-  return Array.from(new Set(discovered.flat()));
-}
-
-async function discoverRpcGovernanceMembershipsForWallet(ownerAddress: string) {
+async function discoverRpcGovernanceMembershipsForWallet(ownerAddress: string, warnings: string[]) {
   const { PublicKey } = loadSolanaWeb3Module();
   const { getTokenOwnerRecordsByOwner, getGovernanceAccounts, TokenOwnerRecord, MemcmpFilter } = loadSplGovernanceModule();
   const owner = new PublicKey(ownerAddress);
@@ -1046,18 +420,12 @@ async function discoverRpcGovernanceMembershipsForWallet(ownerAddress: string) {
   const membershipsByRealm = new Map<string, GovernanceMembershipRecord[]>();
   const allProgramIds = Array.from(new Set([DEFAULT_GOVERNANCE_PROGRAM_ID, ...GOVERNANCE_OWNERS.map((entry) => entry.owner)]));
 
-  const [torResults, delegateTorResults] = await Promise.all([
-    Promise.allSettled(
-      allProgramIds.map((programId) => getTokenOwnerRecordsByOwner(connection, new PublicKey(programId), owner))
-    ),
-    Promise.allSettled(
-      allProgramIds.map((programId) =>
-        getGovernanceAccounts(connection, new PublicKey(programId), TokenOwnerRecord, [
-          new MemcmpFilter(122, owner.toBuffer())
-        ]).catch(() => [])
-      )
-    )
-  ]);
+  const results = await mapGovernanceRpc(allProgramIds, async (programId) => Promise.allSettled([
+    getTokenOwnerRecordsByOwner(connection, new PublicKey(programId), owner),
+    getGovernanceAccounts(connection, new PublicKey(programId), TokenOwnerRecord, [new MemcmpFilter(122, owner.toBuffer())])
+  ]));
+  const torResults = results.map((result) => result[0]);
+  const delegateTorResults = results.map((result) => result[1]);
 
   const addMembership = (entry: {
     pubkey: { toBase58(): string };
@@ -1088,7 +456,15 @@ async function discoverRpcGovernanceMembershipsForWallet(ownerAddress: string) {
   };
 
   for (let index = 0; index < allProgramIds.length; index += 1) {
+
     const ownerResult = torResults[index];
+    const programId = allProgramIds[index];
+    const programName = GOVERNANCE_OWNERS.find((entry) => entry.owner === programId)?.name ?? programId;
+    if (ownerResult.status === 'rejected') {
+      warnings.push(`Additional membership discovery for ${programName}: ${getGovernanceRpcFailureReason(ownerResult.reason)}. Known realms checked directly.`);
+      const fallback = await fetchGovernanceKnownRealmMemberships(connection, new PublicKey(programId), owner).catch(() => []);
+      fallback.forEach(addMembership);
+    }
     if (ownerResult.status === 'fulfilled') {
       for (const entry of ownerResult.value) {
         addMembership(entry);
@@ -1096,6 +472,7 @@ async function discoverRpcGovernanceMembershipsForWallet(ownerAddress: string) {
     }
 
     const delegateResult = delegateTorResults[index];
+    if (delegateResult.status === 'rejected') warnings.push(`Additional delegate discovery for ${programName}: ${getGovernanceRpcFailureReason(delegateResult.reason)}.`);
     if (delegateResult.status === 'fulfilled') {
       for (const entry of delegateResult.value) {
         addMembership(entry);
@@ -1104,121 +481,6 @@ async function discoverRpcGovernanceMembershipsForWallet(ownerAddress: string) {
   }
 
   return membershipsByRealm;
-}
-
-function normalizeGovernanceAccounts(data: Record<string, unknown>, namespace: string): GovernanceProgramAccount[] {
-  const rows = [
-    ...(Array.isArray(data[`${namespace}_GovernanceV2`]) ? (data[`${namespace}_GovernanceV2`] as Array<Record<string, unknown>>) : []),
-    ...(Array.isArray(data[`${namespace}_GovernanceV1`]) ? (data[`${namespace}_GovernanceV1`] as Array<Record<string, unknown>>) : [])
-  ];
-
-  return rows
-    .map((row) => {
-      const pubkey = typeof row.pubkey === 'string' ? row.pubkey : null;
-      const realm = typeof row.realm === 'string' ? row.realm : null;
-      const baseVotingTimeRaw = (row.config as Record<string, unknown> | undefined)?.baseVotingTime;
-      return pubkey && realm
-        ? ({
-            pubkey,
-            realm,
-            baseVotingTime: parseGovernanceNumber(baseVotingTimeRaw)
-          } satisfies GovernanceProgramAccount)
-        : null;
-    })
-    .filter((entry): entry is GovernanceProgramAccount => !!entry);
-}
-
-function normalizeGovernanceProposalRows(data: Record<string, unknown>, namespace: string): GovernanceProposalRecord[] {
-  const v2Rows = Array.isArray(data[`${namespace}_ProposalV2`]) ? (data[`${namespace}_ProposalV2`] as Array<Record<string, unknown>>) : [];
-  const v1Rows = Array.isArray(data[`${namespace}_ProposalV1`]) ? (data[`${namespace}_ProposalV1`] as Array<Record<string, unknown>>) : [];
-
-  const mappedV2 = v2Rows.map((row) => {
-    const options = Array.isArray(row.options)
-      ? row.options.map((option, index) => {
-          const item = option as Record<string, unknown>;
-          return {
-            rank: index,
-            label: typeof item.label === 'string' && item.label.trim() ? item.label.trim() : `Option ${index + 1}`,
-            voteWeight: parseGovernanceBigIntString(item.voteWeight),
-            voteResult: typeof item.voteResult === 'string' ? item.voteResult : null
-          };
-        })
-      : [];
-
-    return {
-      pubkey: typeof row.pubkey === 'string' ? row.pubkey : '',
-      governance: typeof row.governance === 'string' ? row.governance : '',
-      governingTokenMint: typeof row.governingTokenMint === 'string' ? row.governingTokenMint : '',
-      tokenOwnerRecord: typeof row.tokenOwnerRecord === 'string' ? row.tokenOwnerRecord : '',
-      state: parseGovernanceNumber(row.state) ?? -1,
-      descriptionLink: typeof row.descriptionLink === 'string' ? row.descriptionLink : null,
-      name: typeof row.name === 'string' ? row.name : 'Untitled proposal',
-      draftAt: parseGovernanceNumber(row.draftAt),
-      votingAt: parseGovernanceNumber(row.votingAt),
-      maxVotingTime: parseGovernanceNumber(row.maxVotingTime),
-      yesVotes: options[0]?.voteWeight ?? '0',
-      noVotes: '0',
-      abstainVotes: parseGovernanceBigIntString(row.abstainVoteWeight),
-      denyVotes: parseGovernanceBigIntString(row.denyVoteWeight),
-      options,
-      hasDenyOption: row.denyVoteWeight !== undefined && row.denyVoteWeight !== null
-    } satisfies GovernanceProposalRecord;
-  });
-
-  const mappedV1 = v1Rows.map((row) => ({
-    pubkey: typeof row.pubkey === 'string' ? row.pubkey : '',
-    governance: typeof row.governance === 'string' ? row.governance : '',
-    governingTokenMint: typeof row.governingTokenMint === 'string' ? row.governingTokenMint : '',
-    tokenOwnerRecord: typeof row.tokenOwnerRecord === 'string' ? row.tokenOwnerRecord : '',
-    state: parseGovernanceNumber(row.state) ?? -1,
-    descriptionLink: typeof row.descriptionLink === 'string' ? row.descriptionLink : null,
-    name: typeof row.name === 'string' ? row.name : 'Untitled proposal',
-    draftAt: parseGovernanceNumber(row.draftAt),
-    votingAt: parseGovernanceNumber(row.votingAt),
-    maxVotingTime: parseGovernanceNumber(row.maxVotingTime),
-    yesVotes: parseGovernanceBigIntString(row.yesVotesCount),
-    noVotes: parseGovernanceBigIntString(row.noVotesCount),
-    abstainVotes: '0',
-    denyVotes: '0',
-    options: [{ rank: 0, label: 'Approve', voteWeight: parseGovernanceBigIntString(row.yesVotesCount), voteResult: null }],
-    hasDenyOption: true
-  } satisfies GovernanceProposalRecord));
-
-  return [...mappedV2, ...mappedV1].filter(
-    (row) =>
-      row.pubkey &&
-      row.governance &&
-      row.governingTokenMint &&
-      row.tokenOwnerRecord &&
-      shouldDisplayGovernanceProposal({
-        stateCode: row.state,
-        draftAt: row.draftAt,
-        votingAt: row.votingAt,
-        maxVotingTime: row.maxVotingTime
-      })
-  );
-}
-
-function normalizeGovernanceVoteOwnersByProposal(data: Record<string, unknown>, namespace: string) {
-  const rows = [
-    ...(Array.isArray(data[`${namespace}_VoteRecordV2`]) ? (data[`${namespace}_VoteRecordV2`] as Array<Record<string, unknown>>) : []),
-    ...(Array.isArray(data[`${namespace}_VoteRecordV1`]) ? (data[`${namespace}_VoteRecordV1`] as Array<Record<string, unknown>>) : [])
-  ];
-
-  const votesByProposal = new Map<string, Set<string>>();
-  for (const row of rows) {
-    const proposal = typeof row.proposal === 'string' ? row.proposal : '';
-    const governingTokenOwner = typeof row.governingTokenOwner === 'string' ? row.governingTokenOwner : '';
-    if (!proposal || !governingTokenOwner) {
-      continue;
-    }
-    if (!votesByProposal.has(proposal)) {
-      votesByProposal.set(proposal, new Set<string>());
-    }
-    votesByProposal.get(proposal)?.add(governingTokenOwner);
-  }
-
-  return votesByProposal;
 }
 
 function resolveGovernanceProposalMembership(
@@ -1274,7 +536,7 @@ function buildGovernanceProposalVoteSources(
     .filter((membership) => {
       const isDirect = membership.governingTokenOwner === ownerAddress;
       if (isDirect) {
-        return !membership.governanceDelegate || membership.governanceDelegate === ownerAddress;
+        return true;
       }
       return membership.governanceDelegate === ownerAddress;
     })
@@ -1292,182 +554,99 @@ function buildGovernanceProposalVoteSources(
     });
 }
 
-async function fetchGovernanceForDaoViaGraphql(
-  ownerAddress: string,
-  daoId: string,
-  supplementalMemberships?: GovernanceMembershipRecord[]
-) {
-  const governanceOwner = findGovernanceOwnerByDao(daoId);
-  const namespace = governanceOwner.name;
-
-  const [realmData, directMembershipData, delegateMembershipData, governanceData] = await Promise.all([
-    fetchGovernanceGraphql<Record<string, unknown>>(buildGovernanceRealmQuery(namespace, daoId)),
-    fetchGovernanceGraphql<Record<string, unknown>>(buildGovernanceScopedDirectMembershipQuery(namespace, daoId, ownerAddress)),
-    fetchGovernanceGraphql<Record<string, unknown>>(buildGovernanceScopedDelegateMembershipQuery(namespace, daoId, ownerAddress)).catch(
-      () => buildEmptyGovernanceMembershipResponse(namespace)
-    ),
-    fetchGovernanceGraphql<Record<string, unknown>>(buildGovernanceAccountsQuery(namespace, daoId))
-  ]);
-
-  const realm = normalizeGovernanceRealmInfo(realmData, namespace, daoId);
-  const membershipRecords = Array.from(
-    new Map(
-      [
-        ...normalizeGovernanceMembershipRecords(directMembershipData, namespace),
-        ...normalizeGovernanceMembershipRecords(delegateMembershipData, namespace),
-        ...(supplementalMemberships ?? [])
-      ].map((entry) => [entry.pubkey, entry] as const)
-    ).values()
-  );
-  const governanceAccounts = normalizeGovernanceAccounts(governanceData, namespace);
-  const effectiveGovernanceAccounts = governanceAccounts;
-  if (!realm || effectiveGovernanceAccounts.length === 0) {
-    return {
-      daoId,
-      realmName: realm?.name ?? daoId,
-      source: 'shyft' as const,
-      member: membershipRecords.length > 0,
-      proposals: [] as MobileGovernanceProposal[]
-    };
-  }
-
-  const delegatorAddresses = membershipRecords
-    .filter((record) => record.governanceDelegate === ownerAddress && record.governingTokenOwner !== ownerAddress)
-    .map((record) => record.governingTokenOwner);
-  const voteQueryAddresses = Array.from(new Set([ownerAddress, ...delegatorAddresses]));
-
-  const [proposalData, voteData] = await Promise.all([
-    fetchGovernanceGraphql<Record<string, unknown>>(
-      buildGovernanceProposalsQuery(
-        namespace,
-        effectiveGovernanceAccounts.map((entry) => entry.pubkey)
-      )
-    ),
-    fetchGovernanceGraphql<Record<string, unknown>>(buildGovernanceVoteRecordsQuery(namespace, voteQueryAddresses))
-  ]);
-  const proposalRows = normalizeGovernanceProposalRows(proposalData, namespace);
-  const effectiveProposalRows = proposalRows;
-  const votedOwnersByProposal = normalizeGovernanceVoteOwnersByProposal(voteData, namespace);
-  const { ProposalState } = loadSplGovernanceModule();
-  const governanceConfigById = new Map(effectiveGovernanceAccounts.map((entry) => [entry.pubkey, entry] as const));
-
-  const proposals = effectiveProposalRows
-    .map((proposal) => {
-      const votedOwners = votedOwnersByProposal.get(proposal.pubkey) ?? new Set<string>();
-      const voteSources = buildGovernanceProposalVoteSources(
-        proposal.governingTokenMint,
-        ownerAddress,
-        membershipRecords,
-        votedOwners
-      );
-      const membership = resolveGovernanceProposalMembership(proposal.governingTokenMint, ownerAddress, membershipRecords);
-      const governanceConfig = governanceConfigById.get(proposal.governance);
-      const resolvedVotingTime =
-        proposal.maxVotingTime !== null && proposal.maxVotingTime !== undefined
-          ? proposal.maxVotingTime
-          : governanceConfig?.baseVotingTime ?? null;
-      const votingEndsAt =
-        proposal.votingAt !== null && resolvedVotingTime !== null
-          ? proposal.votingAt + resolvedVotingTime
-          : null;
-      const hasVoted = voteSources.some((source) => source.hasVoted);
-      const isDelegate = membership !== null && membership.governingTokenOwner !== ownerAddress;
-      const canVote = proposal.state === ProposalState.Voting && voteSources.some((source) => !source.hasVoted);
-
-      return {
-        daoId,
-        realmName: realm.name,
-        governanceProgramId: governanceOwner.owner,
-        governanceId: proposal.governance,
-        proposalId: proposal.pubkey,
-        proposalName: proposal.name,
-        descriptionLink: proposal.descriptionLink,
-        state: formatProposalStateLabel(proposal.state),
-        stateCode: proposal.state,
-        draftAt: proposal.draftAt,
-        votingAt: proposal.votingAt,
-        votingEndsAt,
-        governingTokenMint: proposal.governingTokenMint,
-        proposalOwnerRecordId: proposal.tokenOwnerRecord,
-        tokenOwnerRecordId: membership?.pubkey ?? null,
-        canVote,
-        hasVoted,
-        hasDenyOption: proposal.hasDenyOption,
-        isDelegate,
-        votingPowerType: getGovernanceProposalVotingPowerType(
-          proposal.governingTokenMint,
-          realm.councilMint,
-          membership,
-          ownerAddress
-        ),
-        voteSources,
-        choices: proposal.options,
-        yesVotes: proposal.yesVotes,
-        noVotes: proposal.noVotes,
-        abstainVotes: proposal.abstainVotes,
-        denyVotes: proposal.denyVotes
-      } satisfies MobileGovernanceProposal;
-    })
-    .sort((left, right) => (right.votingAt ?? right.draftAt ?? 0) - (left.votingAt ?? left.draftAt ?? 0));
-
-  return {
-    daoId,
-    realmName: realm.name,
-    source: 'shyft' as const,
-    member: membershipRecords.length > 0,
-    proposals
-  };
-}
-
-async function fetchGovernanceForDaoViaRpc(ownerAddress: string, daoId: string) {
+async function fetchGovernanceForDaoViaRpc(ownerAddress: string, daoId: string, warnings: string[] = [], preloadedMemberships?: GovernanceMembershipRecord[]) {
   const { PublicKey } = loadSolanaWeb3Module();
-  const { getAllGovernances, getAllProposals, getRealm, getTokenOwnerRecordsByOwner, getVoteRecordsByVoter, getGovernanceAccounts, TokenOwnerRecord, MemcmpFilter, ProposalState } = loadSplGovernanceModule();
-  const governanceOwner = findGovernanceOwnerByDao(daoId);
-  const programId = new PublicKey(governanceOwner.owner);
+  const { getAllGovernances, getProposalsByGovernance, getRealm, getTokenOwnerRecordsByOwner, getVoteRecordsByVoter, getGovernanceAccounts, TokenOwnerRecord, MemcmpFilter, ProposalState } = loadSplGovernanceModule();
+  const connection = getConnection();
+  const realmInfo = await connection.getAccountInfo(new PublicKey(daoId));
+  if (!realmInfo) throw new Error('DAO realm account was not found.');
+  const governanceOwner = { owner: realmInfo.owner.toBase58() };
+  const programId = realmInfo.owner;
   const realmPk = new PublicKey(daoId);
   const owner = new PublicKey(ownerAddress);
-  const connection = getConnection();
 
+  let governanceLoaded = true;
+  let voteStatusKnown = true;
   const [realmAccount, tokenOwnerRecords, delegatedTokenOwnerRecords, governanceAccounts] = await Promise.all([
     getRealm(connection, realmPk),
-    getTokenOwnerRecordsByOwner(connection, programId, owner).catch(() => []),
-    getGovernanceAccounts(connection, programId, TokenOwnerRecord, [new MemcmpFilter(122, owner.toBuffer())]).catch(() => []),
-    getAllGovernances(connection, programId, realmPk).catch(() => []),
+    preloadedMemberships ? Promise.resolve([]) : getTokenOwnerRecordsByOwner(connection, programId, owner),
+    preloadedMemberships ? Promise.resolve([]) : getGovernanceAccounts(connection, programId, TokenOwnerRecord, [new MemcmpFilter(122, owner.toBuffer())]),
+    getAllGovernances(connection, programId, realmPk).catch(() => {
+      governanceLoaded = false;
+      warnings.push(`Proposal accounts for ${daoId} could not be loaded. Membership balances are available.`);
+      return [];
+    }),
   ]);
 
   const realmTokenOwnerRecords = [
     ...tokenOwnerRecords.filter((entry) => entry.account.realm.toBase58() === daoId),
     ...delegatedTokenOwnerRecords.filter((entry) => entry.account.realm.toBase58() === daoId)
   ].filter((entry, index, allEntries) => allEntries.findIndex((candidate) => candidate.pubkey.equals(entry.pubkey)) === index);
-  if (realmTokenOwnerRecords.length === 0 || governanceAccounts.length === 0) {
-    return {
-      daoId,
-      realmName: realmAccount.account.name,
-      source: 'rpc' as const,
-      member: realmTokenOwnerRecords.length > 0,
-      proposals: [] as MobileGovernanceProposal[]
-    };
-  }
-
-  const proposalBatches = await getAllProposals(connection, programId, realmPk).catch(() => []);
-  const proposals = proposalBatches.flatMap((batch) => batch);
-  const membershipRecords = realmTokenOwnerRecords.map((entry) => ({
+  const membershipRecords = preloadedMemberships ?? realmTokenOwnerRecords.map((entry) => ({
     pubkey: entry.pubkey.toBase58(),
     governingTokenMint: entry.account.governingTokenMint.toBase58(),
     governingTokenOwner: entry.account.governingTokenOwner.toBase58(),
     governanceDelegate: entry.account.governanceDelegate?.toBase58() ?? null,
     governingTokenDepositAmount: entry.account.governingTokenDepositAmount.toString()
   } satisfies GovernanceMembershipRecord));
+  const mintIds = Array.from(new Set(membershipRecords.map((entry) => entry.governingTokenMint)));
+  const mintInfos = mintIds.length ? await connection.getMultipleAccountsInfo(mintIds.map((mint) => new PublicKey(mint))) : [];
+  const balances = new Map<string, { mint: string; kind: string; amount: bigint; delegated: boolean }>();
+  for (const entry of membershipRecords) {
+    const mint = entry.governingTokenMint;
+    const delegated = entry.governingTokenOwner !== ownerAddress;
+    const key = mint + ':' + delegated;
+    const balance = balances.get(key) ?? { mint, kind: mint === realmAccount.account.communityMint.toBase58() ? 'Community' : 'Council', amount: 0n, delegated };
+    balance.amount += BigInt(entry.governingTokenDepositAmount);
+    balances.set(key, balance);
+  }
+  const votingPower = Array.from(balances.values()).map((balance) => {
+    const data = mintInfos[mintIds.indexOf(balance.mint)]?.data;
+    if (!data || data.length < 45) return { ...balance, amount: balance.amount.toString() + ' raw units' };
+    const decimals = data[44];
+    const raw = balance.amount.toString().padStart(decimals + 1, '0');
+    const fraction = decimals ? raw.slice(-decimals).replace(/0+$/, '') : '';
+    return { ...balance, amount: (decimals ? raw.slice(0, -decimals) : raw) + (fraction ? '.' + fraction : '') };
+  });
+  if (governanceAccounts.length === 0) {
+    return {
+      daoId,
+      realmName: realmAccount.account.name,
+      source: 'rpc' as const,
+      proposalStatus: governanceLoaded ? 'ready' as const : 'unavailable' as const,
+      votingPower,
+      member: membershipRecords.length > 0,
+      proposals: [] as MobileGovernanceProposal[]
+    };
+  }
+
+  let proposalStatus: 'ready' | 'unavailable' = 'ready';
+  const proposalBatches = await mapGovernanceRpc(governanceAccounts, async (governance) => {
+    try {
+      return await getProposalsByGovernance(connection, programId, governance.pubkey);
+    } catch {
+      proposalStatus = 'unavailable';
+      warnings.push(`Some proposals for ${realmAccount.account.name} could not be loaded. Retry to check voting activity.`);
+      return [];
+    }
+  });
+  const proposals = proposalBatches.flatMap((batch) => batch);
   const delegatorAddresses = membershipRecords
     .filter((record) => record.governanceDelegate === ownerAddress && record.governingTokenOwner !== ownerAddress)
     .map((record) => record.governingTokenOwner);
   const voteRecordBatches = await Promise.all(
     Array.from(new Set([ownerAddress, ...delegatorAddresses])).map((address) =>
-      getVoteRecordsByVoter(connection, programId, new PublicKey(address)).catch(() => [])
+      getVoteRecordsByVoter(connection, programId, new PublicKey(address)).catch(() => {
+        voteStatusKnown = false;
+        proposalStatus = 'unavailable';
+        warnings.push(`Vote status for ${realmAccount.account.name} could not be checked. Refresh before voting.`);
+        return [];
+      })
     )
   );
   const votedOwnersByProposal = new Map<string, Set<string>>();
   for (const voteRecord of voteRecordBatches.flat()) {
+    if (voteRecord.account.isRelinquished) continue;
     const proposalId = voteRecord.account.proposal.toBase58();
     const governingTokenOwner = voteRecord.account.governingTokenOwner.toBase58();
     if (!votedOwnersByProposal.has(proposalId)) {
@@ -1480,17 +659,19 @@ async function fetchGovernanceForDaoViaRpc(ownerAddress: string, daoId: string) 
     daoId,
     realmName: realmAccount.account.name,
     source: 'rpc' as const,
-    member: realmTokenOwnerRecords.length > 0,
+    proposalStatus: proposalStatus as 'ready' | 'unavailable',
+    votingPower,
+    member: membershipRecords.length > 0,
     proposals: proposals
       .filter((entry) => isActiveGovernanceProposalState(entry.account.state))
       .map((entry) => {
         const proposalMint = entry.account.governingTokenMint.toBase58();
         const votedOwners = votedOwnersByProposal.get(entry.pubkey.toBase58()) ?? new Set<string>();
-        const voteSources = buildGovernanceProposalVoteSources(proposalMint, ownerAddress, membershipRecords, votedOwners);
+        const voteSources = voteStatusKnown ? buildGovernanceProposalVoteSources(proposalMint, ownerAddress, membershipRecords, votedOwners) : [];
         const membership = resolveGovernanceProposalMembership(proposalMint, ownerAddress, membershipRecords);
         const votingAt = entry.account.votingAt ? entry.account.votingAt.toNumber() : null;
         const votingEndsAt =
-          votingAt !== null && entry.account.maxVotingTime !== null ? votingAt + entry.account.maxVotingTime : null;
+          votingAt !== null ? votingAt + (entry.account.maxVotingTime ?? governanceAccounts.find((governance) => governance.pubkey.equals(entry.account.governance))?.account.config.baseVotingTime ?? 0) : null;
         const hasVoted = voteSources.some((source) => source.hasVoted);
         const isDelegate = membership !== null && membership.governingTokenOwner !== ownerAddress;
         const options =
@@ -1501,7 +682,7 @@ async function fetchGovernanceForDaoViaRpc(ownerAddress: string, daoId: string) 
                 voteWeight: option.voteWeight.toString(),
                 voteResult: option.voteResult != null ? String(option.voteResult) : null
               }))
-            : [{ rank: 0, label: 'Approve', voteWeight: entry.account.yesVotesCount.toString(), voteResult: null }];
+            : [{ rank: 0, label: 'Approve', voteWeight: entry.account.yesVotesCount?.toString() ?? '0', voteResult: null }];
 
         return {
           daoId,
@@ -1519,9 +700,15 @@ async function fetchGovernanceForDaoViaRpc(ownerAddress: string, daoId: string) 
           governingTokenMint: entry.account.governingTokenMint.toBase58(),
           proposalOwnerRecordId: entry.account.tokenOwnerRecord.toBase58(),
           tokenOwnerRecordId: membership?.pubkey ?? null,
-          canVote: entry.account.state === ProposalState.Voting && voteSources.some((source) => !source.hasVoted),
+          canVote: entry.account.state === ProposalState.Voting &&
+            votingEndsAt !== null && votingEndsAt > Math.floor(Date.now() / 1000) && voteSources.some((source) => !source.hasVoted),
           hasVoted,
-          hasDenyOption: entry.account.denyVoteWeight !== undefined,
+          recordedVotes: voteRecordBatches.flat().filter((record) => !record.account.isRelinquished && record.account.proposal.equals(entry.pubkey)).map((record) => ({
+            governingTokenOwner: record.account.governingTokenOwner.toBase58(),
+            isDelegate: record.account.governingTokenOwner.toBase58() !== ownerAddress,
+            choice: describeGovernanceVote(record.account, options)
+          })),
+          hasDenyOption: entry.account.denyVoteWeight != null || entry.account.yesVotesCount != null,
           isDelegate,
           votingPowerType: getGovernanceProposalVotingPowerType(
             proposalMint,
@@ -1531,8 +718,8 @@ async function fetchGovernanceForDaoViaRpc(ownerAddress: string, daoId: string) 
           ),
           voteSources,
           choices: options,
-          yesVotes: entry.account.yesVotesCount.toString(),
-          noVotes: entry.account.noVotesCount.toString(),
+          yesVotes: options[0]?.voteWeight ?? '0',
+          noVotes: entry.account.noVotesCount?.toString() ?? '0',
           abstainVotes: entry.account.abstainVoteWeight?.toString() ?? '0',
           denyVotes: entry.account.denyVoteWeight?.toString() ?? '0'
         } satisfies MobileGovernanceProposal;
@@ -1543,20 +730,17 @@ async function fetchGovernanceForDaoViaRpc(ownerAddress: string, daoId: string) 
 
 export async function fetchMobileGovernanceForWallet(ownerAddress: string, trackedDaoIds: string[]): Promise<MobileGovernanceResponse> {
   const uniqueTrackedDaoIds = normalizeTrackedDaoIds(trackedDaoIds);
-  const supplementalMembershipsByRealm = await discoverRpcGovernanceMembershipsForWallet(ownerAddress).catch(
-    () => new Map<string, GovernanceMembershipRecord[]>()
-  );
-  const discoveredDaoIds = Array.from(
-    new Set([
-      ...(await discoverGovernanceDaosForWallet(ownerAddress)),
-      ...supplementalMembershipsByRealm.keys()
-    ])
-  );
+  const warnings: string[] = [];
+  const discoveryWarnings: string[] = [];
+  const supplementalMembershipsByRealm = await discoverRpcGovernanceMembershipsForWallet(ownerAddress, discoveryWarnings);
+  const discoveredDaoIds = Array.from(supplementalMembershipsByRealm.keys());
   const uniqueDaoIds = Array.from(new Set([...discoveredDaoIds, ...uniqueTrackedDaoIds]));
 
   if (uniqueDaoIds.length === 0) {
     return {
-      trackedDaos: uniqueTrackedDaoIds,
+      warnings,
+      discoveryWarnings,
+    trackedDaos: uniqueTrackedDaoIds,
       discoveredDaos: [],
       daos: [],
       memberDaos: 0,
@@ -1570,12 +754,9 @@ export async function fetchMobileGovernanceForWallet(ownerAddress: string, track
   const results = await Promise.all(
     uniqueDaoIds.map(async (daoId) => {
       try {
-        return await fetchGovernanceForDaoViaGraphql(
-          ownerAddress,
-          daoId,
-          supplementalMembershipsByRealm.get(daoId)
-        );
+        return await fetchGovernanceForDaoViaRpc(ownerAddress, daoId, warnings, supplementalMembershipsByRealm.get(daoId));
       } catch {
+        warnings.push(`Unable to load proposals and voting power for ${daoId}.`);
         return {
           daoId,
           realmName: daoId,
@@ -1589,17 +770,21 @@ export async function fetchMobileGovernanceForWallet(ownerAddress: string, track
 
   const proposals = limitGovernanceProposalsForDisplay(results.flatMap((entry) => entry.proposals));
   const memberDaos = results.filter((entry) => entry.member).length;
-  const source = results.some((entry) => entry.source === 'shyft') ? 'shyft' : 'none';
+  const source = results.some((entry) => entry.source === 'rpc') ? 'rpc' : 'none';
   const daos: MobileGovernanceResponse['daos'] = results
     .filter((entry) => entry.member)
-    .map((entry) => ({
+    .map((entry): MobileGovernanceResponse['daos'][number] => ({
       daoId: entry.proposals[0]?.daoId ?? entry.daoId,
-      realmName: entry.realmName ?? entry.proposals[0]?.realmName ?? entry.daoId
+      realmName: entry.realmName ?? entry.proposals[0]?.realmName ?? entry.daoId,
+      votingPower: 'votingPower' in entry ? entry.votingPower : [],
+      proposalStatus: 'proposalStatus' in entry ? entry.proposalStatus : 'unavailable'
     }))
     .filter((entry, index, all) => all.findIndex((candidate) => candidate.daoId === entry.daoId) === index)
     .sort((left, right) => left.realmName.localeCompare(right.realmName));
 
   return {
+    warnings,
+    discoveryWarnings,
     trackedDaos: uniqueTrackedDaoIds,
     discoveredDaos: discoveredDaoIds,
     daos,

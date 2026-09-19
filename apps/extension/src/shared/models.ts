@@ -217,6 +217,7 @@ export type WalletGovernanceProposal = {
   tokenOwnerRecordId: string | null;
   canVote: boolean;
   hasVoted: boolean;
+  recordedVotes?: { governingTokenOwner: string; isDelegate: boolean; choice: string }[];
   hasDenyOption: boolean;
   isDelegate: boolean;
   votingPowerType: 'community' | 'council' | 'delegated-community' | 'delegated-council' | 'unknown';
@@ -229,6 +230,7 @@ export type WalletGovernanceProposal = {
 };
 
 export type GovernanceDaoSummary = {
+  proposalStatus?: 'ready' | 'unavailable';
   daoId: string;
   realmName: string;
   communityMint: string;
@@ -268,6 +270,8 @@ export type GovernanceEligibleDao = {
 };
 
 export type WalletGovernanceResponse = {
+  discoveryWarnings?: string[];
+  warnings?: string[];
   trackedDaos: string[];
   discoveredDaos: string[];
   delegateDaos: string[];

@@ -1,3 +1,4 @@
+import { CommunityPanel } from './CommunityPanel';
 import type { FormEvent, ReactNode } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
@@ -1683,6 +1684,7 @@ function PopupPage() {
     network: 'mainnet-beta',
     refreshedAt: Date.now()
   });
+  const [verificationRefreshNonce, setVerificationRefreshNonce] = useState(0);
   const [verificationLoading, setVerificationLoading] = useState(false);
   const [verificationError, setVerificationError] = useState<string | null>(null);
   const [governanceDaoInput, setGovernanceDaoInput] = useState('');
@@ -1700,6 +1702,7 @@ function PopupPage() {
     network: 'mainnet-beta',
     refreshedAt: Date.now()
   });
+  const [governanceRefreshNonce, setGovernanceRefreshNonce] = useState(0);
   const [governanceLoading, setGovernanceLoading] = useState(false);
   const [governanceError, setGovernanceError] = useState<string | null>(null);
   const [governanceEligibility, setGovernanceEligibility] = useState<GovernanceEligibleDao[]>([]);
@@ -2519,7 +2522,7 @@ function PopupPage() {
 
     let cancelled = false;
     setGovernanceLoading(true);
-    void sendRuntimeMessage<WalletGovernanceResponse>({ type: 'wallet_get_governance' })
+    void sendRuntimeMessage<WalletGovernanceResponse>({ type: 'wallet_get_governance', forceRefresh: governanceRefreshNonce > 0 })
       .then((nextGovernance) => {
         if (cancelled) {
           return;
@@ -2561,6 +2564,7 @@ function PopupPage() {
     state?.wallet.selectedChain,
     state?.wallet.selectedNetwork,
     state?.wallet.trackedGovernanceDaoIds,
+    governanceRefreshNonce,
     state?.wallet.setup
   ]);
 
@@ -2595,7 +2599,7 @@ function PopupPage() {
 
     let cancelled = false;
     setVerificationLoading(true);
-    void sendRuntimeMessage<WalletVerificationResponse>({ type: 'wallet_get_verification' })
+    void sendRuntimeMessage<WalletVerificationResponse>({ type: 'wallet_get_verification', forceRefresh: verificationRefreshNonce > 0 })
       .then((nextVerification) => {
         if (cancelled) {
           return;
@@ -2634,6 +2638,7 @@ function PopupPage() {
     state?.wallet.selectedChain,
     state?.wallet.selectedNetwork,
     state?.wallet.trackedVerificationSpaceIds,
+    verificationRefreshNonce,
     state?.wallet.setup
   ]);
 
@@ -4287,17 +4292,7 @@ function PopupPage() {
     ...verification.trackedSpaces
   ]).size;
   const verificationLinkedIdentityCount = verification.identities.length;
-  const visibleGovernanceProposals = governance.proposals.filter((proposal) => {
-    if (proposal.votingPowerType !== 'unknown') {
-      return true;
-    }
-
-    if (proposal.hasVoted) {
-      return true;
-    }
-
-    return (proposal.voteSources?.length ?? 0) > 0;
-  });
+  const visibleGovernanceProposals = governance.proposals;
   const liveGovernanceProposalCount = visibleGovernanceProposals.filter((proposal) => {
     const timeMeta = getGovernanceProposalTimeMeta(proposal);
     return proposal.stateCode === 2 && timeMeta.votingWindowOpen;
@@ -4994,6 +4989,12 @@ function PopupPage() {
             </span>
           </div>
         </div>
+        {proposal.recordedVotes?.map((vote) => (
+          <div key={vote.governingTokenOwner} className="governance-participation-status governance-participation-status-voted">
+            <strong>{vote.isDelegate ? 'Delegated vote · ' + vote.governingTokenOwner.slice(0, 4) + '…' + vote.governingTokenOwner.slice(-4) : 'You voted'}</strong>
+            <span>{vote.choice}</span>
+          </div>
+        ))}
         <div className="governance-proposal-metrics">
           <span>Yes {formatVotingPower(BigInt(proposal.yesVotes), voteDecimals, true)}</span>
           {BigInt(proposal.noVotes) > BigInt(0) ? <span>No {formatVotingPower(BigInt(proposal.noVotes), voteDecimals, true)}</span> : null}
@@ -6177,190 +6178,19 @@ function PopupPage() {
           {isSolanaChain ? (
             <Tabs.Content value="community">
               <div ref={communitySectionRef}>
-              <Card className="asset-panel-card community-panel-card">
-                <div className="community-panel-header">
-                  <div>
-                    <strong>Grape Community</strong>
-                    <p className="muted">
-                      Identity, reputation, access, claims, and governance start here. Track the spaces this wallet is
-                      part of and see how its standing evolves.
-                    </p>
-                  </div>
-                  <Button tone="secondary" onClick={() => setView('settings')}>
-                    Manage spaces
-                  </Button>
-                </div>
-
-                {reputationLoading ? <p className="muted">Loading OG reputation…</p> : null}
-                {!reputationLoading && reputationError ? <p className="danger-box">{reputationError}</p> : null}
-                {!reputationLoading && !reputationError && reputation.spaces.length > 0 ? (
-                  <>
-                    <div className="community-summary-grid">
-                      <div className="community-summary-card">
-                        <span className="muted">Effective points</span>
-                        <strong>{formatWholeNumberString(totalEffectiveReputationPoints)}</strong>
-                      </div>
-                      <div className="community-summary-card">
-                        <span className="muted">Latest season</span>
-                        <strong>{formatWholeNumberString(totalLatestSeasonReputationPoints)}</strong>
-                      </div>
-                    </div>
-                    <div className="grape-reputation-list">
-                      {reputation.spaces.map((space) => (
-                        <div key={`${space.daoId}:${space.currentSeason}`} className="grape-reputation-row">
-                          <div className="grape-reputation-space">
-                            <div className="grape-reputation-avatar">
-                              {space.imageUri ? <img src={space.imageUri} alt={space.name ?? 'Reputation space'} /> : 'OG'}
-                            </div>
-                            <div className="grape-reputation-copy">
-                              <strong>{space.name ?? `Space ${formatAddress(space.daoId)}`}</strong>
-                              <span>
-                                {space.symbol ?? formatAddress(space.repMint)} • {space.latestSeasonWithPoints}:{' '}
-                                {formatWholeNumberString(space.latestSeasonPoints)} pts
-                              </span>
-                            </div>
-                          </div>
-                          <div className="grape-reputation-points">
-                            <strong>{formatWholeNumberString(space.effectivePoints)}</strong>
-                            <div className="grape-reputation-points-meta">
-                              <span>effective</span>
-                              <button
-                                type="button"
-                                className="grape-reputation-link"
-                                onClick={() => window.open(buildOgReputationSpaceUrl(space.daoId), '_blank', 'noopener,noreferrer')}
-                                aria-label={`Open ${space.name ?? space.daoId} reputation space`}
-                                title="Open reputation space"
-                              >
-                                <ExternalLink size={13} />
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </>
-                ) : null}
-                {!reputationLoading && !reputationError && reputation.spaces.length === 0 ? (
-                  <div className="community-empty-state">
-                    <strong>No tracked reputation yet</strong>
-                    <p className="muted">
-                      Add the OG Reputation Spaces this wallet belongs to from Settings and Grape will surface the
-                      wallet&apos;s points here.
-                    </p>
-                    <Button onClick={() => setView('settings')}>Add spaces</Button>
-                  </div>
-                ) : null}
-
-                <div ref={verificationSectionRef} className="community-subsection">
-                  <div className="community-subsection-header">
-                    <div>
-                      <strong>Verification</strong>
-                      <p className="muted">
-                        Track which identities this wallet has linked in Grape Verification and jump directly into the
-                        verification dashboard for each community.
-                      </p>
-                    </div>
-                    <Button tone="secondary" onClick={() => setView('settings')}>
-                      Manage verification
-                    </Button>
-                  </div>
-
-                  {verificationLoading ? <p className="muted">Loading verification status…</p> : null}
-                  {!verificationLoading && verificationError ? <p className="danger-box">{verificationError}</p> : null}
-                  {!verificationLoading && !verificationError && trackedVerificationDaoCount > 0 ? (
-                    <div className="community-summary-grid">
-                      <div className="community-summary-card">
-                        <span className="muted">Tracked spaces</span>
-                        <strong>{trackedVerificationDaoCount}</strong>
-                      </div>
-                      <div className="community-summary-card">
-                        <span className="muted">Verified identities</span>
-                        <strong>{verification.totalVerified}</strong>
-                      </div>
-                      <div className="community-summary-card">
-                        <span className="muted">Linked identities</span>
-                        <strong>{verificationLinkedIdentityCount}</strong>
-                      </div>
-                      <div className="community-summary-card">
-                        <span className="muted">Needs verification</span>
-                        <strong>{Math.max(0, verificationLinkedIdentityCount - verification.totalVerified)}</strong>
-                      </div>
-                    </div>
-                  ) : null}
-                  {!verificationLoading && !verificationError && verification.identities.length > 0 ? (
-                    <div className="verification-list">
-                      {verification.identities.map((identity) => {
-                        const daoLabel = verificationDaoNameMap.get(identity.daoId) ?? `DAO ${formatAddress(identity.daoId)}`;
-                        const verifiedLabel = identity.verified ? 'Verified' : 'Linked';
-                        const linkedMeta =
-                          identity.linkedWalletCount > 1
-                            ? `${identity.linkedWalletCount} wallets linked`
-                            : '1 wallet linked';
-
-                        return (
-                          <div key={identity.linkId} className="verification-row">
-                            <div className="verification-copy">
-                              <strong>{daoLabel}</strong>
-                              <span>
-                                {formatVerificationPlatform(identity.platform)} • {verifiedLabel}
-                                {identity.expiresAt ? ` • expires ${formatRelativeTimeFromNow(identity.expiresAt)}` : ''}
-                              </span>
-                            </div>
-                            <div className="verification-actions">
-                              <StatusPill tone={identity.verified ? 'success' : 'warning'}>
-                                {formatVerificationPlatform(identity.platform)}
-                              </StatusPill>
-                              <span className="verification-meta">{linkedMeta}</span>
-                              <button
-                                type="button"
-                                className="grape-reputation-link"
-                                onClick={() => window.open(buildVerificationSpaceUrl(identity.daoId), '_blank', 'noopener,noreferrer')}
-                                aria-label={`Open ${daoLabel} verification`}
-                                title="Open verification dashboard"
-                              >
-                                <ExternalLink size={13} />
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : null}
-                  {!verificationLoading && !verificationError && trackedVerificationDaoCount > 0 && verification.identities.length === 0 ? (
-                    <div className="community-empty-state">
-                      <strong>No linked identities yet</strong>
-                      <p className="muted">
-                        This wallet is tracking verification spaces, but it has not linked a verified identity in those
-                        communities yet.
-                      </p>
-                      <Button
-                        onClick={() =>
-                          window.open(
-                            buildVerificationSpaceUrl(
-                              wallet.trackedVerificationSpaceIds[0] ?? verification.trackedSpaces[0] ?? ''
-                            ),
-                            '_blank',
-                            'noopener,noreferrer'
-                          )
-                        }
-                        disabled={(wallet.trackedVerificationSpaceIds[0] ?? verification.trackedSpaces[0] ?? '').length === 0}
-                      >
-                        Open verification
-                      </Button>
-                    </div>
-                  ) : null}
-                  {!verificationLoading && !verificationError && trackedVerificationDaoCount === 0 ? (
-                    <div className="community-empty-state">
-                      <strong>No verification spaces tracked</strong>
-                      <p className="muted">
-                        Add the DAO ids you want to verify against from Settings and Grape will show this wallet&apos;s
-                        linked verification status here.
-                      </p>
-                      <Button onClick={() => setView('settings')}>Add verification spaces</Button>
-                    </div>
-                  ) : null}
-                </div>
-              </Card>
+              <CommunityPanel
+                reputation={reputation} verification={verification}
+                reputationLoading={reputationLoading} verificationLoading={verificationLoading}
+                reputationError={reputationError} verificationError={verificationError}
+                effectivePoints={totalEffectiveReputationPoints} latestSeasonPoints={totalLatestSeasonReputationPoints}
+                trackedVerificationSpaces={Array.from(new Set([...wallet.trackedVerificationSpaceIds, ...verification.trackedSpaces]))}
+                daoNames={verificationDaoNameMap} verificationRef={verificationSectionRef}
+                formatPoints={formatWholeNumberString} formatAddress={formatAddress} formatTime={formatRelativeTimeFromNow}
+                onManage={() => setView('settings')}
+                onRefreshVerification={() => setVerificationRefreshNonce((value) => value + 1)}
+                onOpenReputation={(daoId) => window.open(buildOgReputationSpaceUrl(daoId), '_blank', 'noopener,noreferrer')}
+                onOpenVerification={(daoId) => window.open(buildVerificationSpaceUrl(daoId), '_blank', 'noopener,noreferrer')}
+              />
               </div>
             </Tabs.Content>
           ) : null}
@@ -6376,9 +6206,10 @@ function PopupPage() {
                       Track live proposals across the DAOs this wallet can vote in and cast votes directly from Grape.
                     </p>
                   </div>
-                  <Button tone="secondary" onClick={() => setView('settings')}>
-                    Manage DAOs
-                  </Button>
+                  <div className="inline wrap-actions">
+                    <Button tone="secondary" disabled={governanceLoading} onClick={() => setGovernanceRefreshNonce((value) => value + 1)}>{governanceLoading ? 'Refreshing…' : 'Refresh'}</Button>
+                    <Button tone="secondary" onClick={() => setView('settings')}>Manage DAOs</Button>
+                  </div>
                 </div>
 
                 {governanceVoteResult ? (
@@ -6387,9 +6218,28 @@ function PopupPage() {
                   </p>
                 ) : null}
                 {governanceVoteError ? <p className="danger-box">{governanceVoteError}</p> : null}
+                <div className="governance-dao-list">
+                  {(!governanceLoading ? governance.daos : []).map((dao) => (
+                    <div className="governance-dao-card" key={dao.daoId}>
+                      <div className="community-panel-header">
+                        <strong>{dao.realmName}</strong>
+                        <StatusPill tone="neutral">{dao.role === 'delegate' ? 'Delegate' : dao.role === 'treasury' ? 'Treasury' : 'Member'}</StatusPill>
+                      </div>
+                      <div className="governance-dao-stats">
+                        <div><span className="muted">Community deposit</span><div>{formatVotingPower(BigInt(dao.communityVotingPower), dao.communityTokenDecimals)}</div></div>
+                        <div><span className="muted">Council deposit</span><div>{formatVotingPower(BigInt(dao.councilVotingPower), 0)}</div></div>
+                        {dao.delegateCount > 0 ? <div><span className="muted">Delegated to you</span><div>{formatVotingPower(BigInt(dao.delegateCommunityVotingPower), dao.communityTokenDecimals)} community · {dao.delegateCouncilVotingPower} council</div></div> : null}
+                      </div>
+                      <p className="muted">{dao.proposalStatus === 'unavailable' ? 'Proposal check incomplete — refresh to retry' : governance.proposals.filter((proposal) => proposal.daoId === dao.daoId && proposal.canVote).length + ' proposals awaiting your vote'}</p>
+                    </div>
+                  ))}
+                </div>
                 {governanceLoading ? <p className="muted">Loading governance proposals…</p> : null}
                 {governanceError ? <p className="danger-box">{governanceError}</p> : null}
+                {governance.warnings?.length ? <div className="danger-box">{Array.from(new Set(governance.warnings)).map((warning) => <p key={warning}>{warning}</p>)}</div> : null}
+                {governance.discoveryWarnings?.length ? <details className="muted governance-discovery-note"><summary>Additional DAO discovery is limited</summary><p>The DAOs shown above were found. Some other programs could not be fully checked.</p>{Array.from(new Set(governance.discoveryWarnings)).map((warning) => <p key={warning}>{warning}</p>)}</details> : null}
                 {(() => {
+                  if (governanceLoading || governanceError || (governance.warnings?.length && !visibleGovernanceProposals.length)) return null;
                   const nowUnixSeconds = Math.floor(Date.now() / 1000);
                   const activeProposals = visibleGovernanceProposals.filter((proposal) => {
                     const timeMeta = getGovernanceProposalTimeMeta(proposal, nowUnixSeconds);
@@ -6419,8 +6269,7 @@ function PopupPage() {
                       <div className="community-empty-state">
                         <strong>No active votes</strong>
                         <p className="muted">
-                          There are no open proposals requiring your vote right now. Your DAO memberships and voting
-                          power are visible in <button type="button" className="link-button" onClick={() => setView('settings')}>Manage DAOs</button>.
+                          There are no open proposals requiring your vote right now. Your detected DAO memberships are shown above.
                         </p>
                       </div>
                     );
@@ -8579,16 +8428,16 @@ function PopupPage() {
                         const isDetected = detectedGovernanceDaoIds.has(dao.daoId);
                         const isTracked = governance.trackedDaos.includes(dao.daoId);
                         const matchedLabels = [
-                          dao.matchesCommunity ? `Community: ${dao.communityAmountLabel ?? 'Eligible'}` : null,
-                          dao.matchesCouncil ? `Council: ${dao.councilAmountLabel ?? 'Eligible'}` : null
+                          dao.communityHolding ? `Community: ${dao.communityHolding?.amount ?? 'Eligible'}` : null,
+                          dao.councilHolding ? `Council: ${dao.councilHolding?.amount ?? 'Eligible'}` : null
                         ].filter((value): value is string => !!value);
                         return (
                           <div key={`eligible:${dao.daoId}`} className="reputation-space-row">
                             <div className="stack compact-stack">
                               <div className="inline wrap-actions">
                                 <strong>{dao.realmName}</strong>
-                                {dao.matchesCommunity ? <StatusPill tone="neutral">Community</StatusPill> : null}
-                                {dao.matchesCouncil ? <StatusPill tone="neutral">Council</StatusPill> : null}
+                                {dao.communityHolding ? <StatusPill tone="neutral">Community</StatusPill> : null}
+                                {dao.councilHolding ? <StatusPill tone="neutral">Council</StatusPill> : null}
                                 {isDetected ? <StatusPill tone="success">Detected</StatusPill> : null}
                                 {!isDetected && isTracked ? <StatusPill tone="neutral">Tracked</StatusPill> : null}
                               </div>

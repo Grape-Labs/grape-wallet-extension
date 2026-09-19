@@ -1560,6 +1560,7 @@ function GrapeApp() {
     source: 'none',
     refreshedAt: Date.now()
   });
+  const [verificationRefreshNonce, setVerificationRefreshNonce] = useState(0);
   const [verificationLoading, setVerificationLoading] = useState(false);
   const [verificationLoadError, setVerificationLoadError] = useState<string | null>(null);
   const [governance, setGovernance] = useState<MobileGovernanceResponse>({
@@ -1572,6 +1573,7 @@ function GrapeApp() {
     network: 'mainnet-beta',
     refreshedAt: Date.now()
   });
+  const [governanceRefreshNonce, setGovernanceRefreshNonce] = useState(0);
   const [governanceLoading, setGovernanceLoading] = useState(false);
   const [governanceError, setGovernanceError] = useState<string | null>(null);
   const [governanceDaoInput, setGovernanceDaoInput] = useState('');
@@ -2850,7 +2852,7 @@ function GrapeApp() {
 
       setVerificationLoading(true);
       try {
-        const nextVerification = await loadWalletVerification(selectedWallet, walletState.trackedVerificationSpaceIds);
+        const nextVerification = await loadWalletVerification(selectedWallet, walletState.trackedVerificationSpaceIds, verificationRefreshNonce > 0);
         if (!mounted) {
           return;
         }
@@ -2879,7 +2881,7 @@ function GrapeApp() {
     return () => {
       mounted = false;
     };
-  }, [selectedWallet, unlocked, walletState.trackedVerificationSpaceIds]);
+  }, [selectedWallet, unlocked, walletState.trackedVerificationSpaceIds, verificationRefreshNonce]);
 
   useEffect(() => {
     let mounted = true;
@@ -2905,7 +2907,7 @@ function GrapeApp() {
 
       setGovernanceLoading(true);
       try {
-        const nextGovernance = await loadWalletGovernance(selectedWallet, walletState.trackedGovernanceDaoIds);
+        const nextGovernance = await loadWalletGovernance(selectedWallet, walletState.trackedGovernanceDaoIds, governanceRefreshNonce > 0);
         if (!mounted) {
           return;
         }
@@ -2937,7 +2939,7 @@ function GrapeApp() {
     return () => {
       mounted = false;
     };
-  }, [selectedWallet, unlocked, walletState.trackedGovernanceDaoIds]);
+  }, [selectedWallet, unlocked, walletState.trackedGovernanceDaoIds, governanceRefreshNonce]);
 
   useEffect(() => {
     setSelectedAssetId(null);
@@ -5175,6 +5177,12 @@ function GrapeApp() {
           </View>
         </View>
 
+        {proposal.recordedVotes?.map((vote) => (
+          <View key={vote.governingTokenOwner} style={styles.communityDetailCard}>
+            <Text style={styles.reputationName}>{vote.isDelegate ? 'Delegated vote · ' + shortenAddress(vote.governingTokenOwner) : 'You voted'}</Text>
+            <Text style={styles.reputationMeta}>{vote.choice}</Text>
+          </View>
+        ))}
         <View style={styles.governanceMetricsRow}>
           <Text style={styles.governanceMetricText}>Yes {formatWholeNumberString(proposal.yesVotes)}</Text>
           {BigInt(proposal.noVotes) > BigInt(0) ? (
@@ -5876,67 +5884,103 @@ function GrapeApp() {
     );
   }
 
-  function renderSolanaCommunityShortcuts() {
-    if (selectedWallet?.chain !== 'solana') {
-      return null;
-    }
+  function openCommunitySettings(section: string) {
+    setExpandedSettingsSections((current) => new Set([...current, section]));
+    setMainTab('settings');
+  }
 
-    const reputationValue = reputationLoading
-      ? 'Loading...'
-      : reputation.spaces.length > 0
-        ? `${totalEffectiveReputationPoints} pts`
-        : walletState.trackedReputationSpaceIds.length > 0
-          ? 'No points yet'
-          : 'Add spaces';
-    const reputationMeta = reputation.spaces.length > 0
-      ? `Latest season ${totalLatestSeasonReputationPoints} pts`
-      : `${reputation.spaces.length} space${reputation.spaces.length === 1 ? '' : 's'}`;
-    const governanceValue = governanceLoading
-      ? 'Loading...'
-      : actionableGovernanceProposalCount > 0
-        ? `${actionableGovernanceProposalCount} ready`
-        : governance.proposals.length > 0
-          ? `${governance.proposals.length} active`
-          : totalGovernanceDaoCount > 0
-            ? 'Tracked'
-            : 'Join DAOs';
-    const governanceMeta = `${totalGovernanceDaoCount} DAO${totalGovernanceDaoCount === 1 ? '' : 's'}`;
-    const verificationValue = verificationLoading
-      ? 'Loading...'
-      : verifiedIdentityCount > 0
-        ? `${verifiedIdentityCount} verified`
-        : trackedVerificationSpaceCount > 0
-          ? 'Verify now'
-          : 'Add spaces';
-    const verificationMeta = verifiedDaoCount > 0
-      ? `${verifiedDaoCount} DAO${verifiedDaoCount === 1 ? '' : 's'} verified`
-      : `${trackedVerificationSpaceCount} space${trackedVerificationSpaceCount === 1 ? '' : 's'}`;
-    const handleVerificationPress = () => {
-      if (trackedVerificationSpaceCount === 1 && walletState.trackedVerificationSpaceIds[0]) {
-        void openVerificationSpace(walletState.trackedVerificationSpaceIds[0]);
-        return;
-      }
-      setMainTab('settings');
-    };
-
+  function renderCommunityReputation() {
     return (
-      <View style={styles.communityShortcutStack}>
-        <View style={styles.communityShortcutRow}>
-          <Pressable style={styles.communityShortcutCard} onPress={() => setMainTab('settings')}>
-            <Text style={styles.communityShortcutLabel}>OG Reputation</Text>
-            <Text style={styles.communityShortcutValue}>{reputationValue}</Text>
-            <Text style={styles.communityShortcutMeta}>{reputationMeta}</Text>
+      <View style={styles.communityDetailCard}>
+        <View style={styles.communityDetailRow}>
+          <View style={styles.reputationCopy}>
+            <Text style={styles.reputationSummaryLabel}>OG Reputation</Text>
+            <Text style={styles.communityScore}>{reputationLoading ? '…' : totalEffectiveReputationPoints}<Text style={styles.reputationMeta}> pts</Text></Text>
+            <Text style={styles.reputationMeta}>Effective points</Text>
+          </View>
+          <View style={styles.reputationPoints}>
+            <Text style={styles.reputationPointsValue}>{reputationLoading ? '…' : totalLatestSeasonReputationPoints}</Text>
+            <Text style={styles.reputationMeta}>Latest season</Text>
+          </View>
+        </View>
+        {reputationLoading ? <ActivityIndicator accessibilityLabel="Loading reputation" color={activeTheme.grape} /> : null}
+        {reputationError ? <Text accessibilityRole="alert" style={styles.errorText}>{reputationError}</Text> : null}
+        {reputation.spaces.map((space) => (
+          <Pressable key={space.daoId} accessibilityRole="button" accessibilityLabel={'Open ' + (space.name ?? 'reputation space')} style={styles.communityDetailRow} onPress={() => void openOgReputationSpace(space.daoId)}>
+            <View style={styles.reputationAvatar}>
+              {space.imageUri ? <Image source={{ uri: space.imageUri }} style={styles.reputationAvatarImage} /> : <Feather name="award" size={22} color={activeTheme.text} />}
+            </View>
+            <View style={styles.reputationCopy}>
+              <Text style={styles.reputationName}>{space.name ?? shortenAddress(space.daoId)}</Text>
+              <Text style={styles.reputationMeta}>Season {space.latestSeasonWithPoints} · {formatWholeNumberString(space.latestSeasonPoints)} pts</Text>
+            </View>
+            {reputation.spaces.length > 1 ? <Text style={styles.reputationPointsValue}>{formatWholeNumberString(space.effectivePoints)}</Text> : null}
+            <Feather name="external-link" size={16} color={activeTheme.text} />
           </Pressable>
-          <Pressable style={styles.communityShortcutCard} onPress={() => setMainTab('governance')}>
-            <Text style={styles.communityShortcutLabel}>Governance</Text>
-            <Text style={styles.communityShortcutValue}>{governanceValue}</Text>
-            <Text style={styles.communityShortcutMeta}>{governanceMeta}</Text>
+        ))}
+        {!reputationLoading && !reputationError && reputation.spaces.length === 0 ? <PaperButton compact onPress={() => openCommunitySettings('reputation')}>Add a reputation space</PaperButton> : null}
+      </View>
+    );
+  }
+
+  function renderCommunityIdentities() {
+    const daoIds = [...new Set(verification.identities.map((identity) => identity.daoId))];
+    return (
+      <View style={styles.communityDetailCard}>
+        <View style={styles.communityDetailRow}>
+          <View style={styles.reputationCopy}>
+            <Text style={styles.reputationName}>Verification</Text>
+            <Text style={styles.reputationMeta}>{verifiedIdentityCount} of {verification.identities.length} identities verified</Text>
+          </View>
+          <Pressable accessibilityRole="button" accessibilityLabel="Refresh verification" disabled={verificationLoading} style={styles.communityIconButton} onPress={() => setVerificationRefreshNonce((value) => value + 1)}>
+            {verificationLoading ? <ActivityIndicator color={activeTheme.grape} /> : <Feather name="refresh-cw" size={18} color={activeTheme.text} />}
           </Pressable>
         </View>
-        <Pressable style={styles.communityInlineShortcut} onPress={handleVerificationPress}>
-          <Text style={styles.communityInlineShortcutLabel}>Verification</Text>
-          <Text style={styles.communityInlineShortcutValue}>{verificationValue}</Text>
-          <Text style={styles.communityInlineShortcutMeta}>{verificationMeta}</Text>
+        {verificationLoadError ? <Text accessibilityRole="alert" style={styles.errorText}>{verificationLoadError}</Text> : null}
+        {daoIds.map((daoId) => (
+          <View key={daoId} style={styles.communityIdentityGroup}>
+            <Pressable accessibilityRole="button" accessibilityLabel="Manage community identities" style={styles.communityDetailRow} onPress={() => void openVerificationSpace(daoId)}>
+              <Text style={[styles.reputationName, styles.reputationCopy]}>{reputation.spaces.find((space) => space.daoId === daoId)?.name ?? governance.daos.find((dao) => dao.daoId === daoId)?.realmName ?? shortenAddress(daoId)}</Text>
+              <Feather name="external-link" size={16} color={activeTheme.text} />
+            </Pressable>
+            {verification.identities.filter((identity) => identity.daoId === daoId).map((identity) => (
+              <View key={identity.linkId} style={styles.communityDetailRow}>
+                <Feather name="shield" size={18} color={activeTheme.text} />
+                <Text style={[styles.reputationMeta, styles.reputationCopy]}>{formatVerificationPlatformLabel(identity.platform)}</Text>
+                <Feather name={identity.verified ? 'check-circle' : 'clock'} size={14} color={activeTheme.text} />
+                <Text style={styles.reputationMeta}>{identity.verified ? 'Verified' : 'Unverified'}</Text>
+              </View>
+            ))}
+          </View>
+        ))}
+        {!verificationLoading && !verificationLoadError && !daoIds.length ? <Text style={styles.reputationMeta}>No linked identities yet.</Text> : null}
+        <PaperButton compact onPress={() => openCommunitySettings('verification')}>Manage verification</PaperButton>
+      </View>
+    );
+  }
+
+  function renderSolanaCommunityShortcuts() {
+    if (selectedWallet?.chain !== 'solana') return null;
+    return (
+      <View style={styles.communityShortcutStack}>
+        <View style={styles.communityDetailRow}>
+          <View style={styles.reputationCopy}>
+            <Text style={styles.reputationName}>Community</Text>
+            <Text style={styles.reputationMeta}>Your reputation & identities</Text>
+          </View>
+          <PaperButton compact onPress={() => openCommunitySettings('reputation')}>Manage</PaperButton>
+        </View>
+        {renderCommunityReputation()}
+        {renderCommunityIdentities()}
+        <Pressable accessibilityRole="button" style={styles.communityDetailCard} onPress={() => setMainTab('governance')}>
+          <View style={styles.communityDetailRow}>
+            <Feather name="users" size={20} color={activeTheme.text} />
+            <View style={styles.reputationCopy}>
+              <Text style={styles.reputationName}>Governance</Text>
+              <Text style={styles.reputationMeta}>{governanceLoading ? 'Loading DAOs…' : totalGovernanceDaoCount + ' DAOs · ' + actionableGovernanceProposalCount + ' awaiting your vote'}</Text>
+            </View>
+            <Feather name="chevron-right" size={18} color={activeTheme.text} />
+          </View>
         </Pressable>
       </View>
     );
@@ -7289,6 +7333,8 @@ function GrapeApp() {
           </View>
         </View>
 
+        {renderSolanaCommunityShortcuts()}
+
       </>
     );
   }
@@ -7352,7 +7398,7 @@ function GrapeApp() {
           <View style={styles.reputationSummaryGrid}>
             <View style={styles.reputationSummaryCard}>
               <Text style={styles.reputationSummaryLabel}>Active proposals</Text>
-              <Text style={styles.reputationSummaryValue}>{governance.proposals.length}</Text>
+              <Text style={styles.reputationSummaryValue}>{governance.proposals.filter((proposal) => proposal.stateCode === 2 && getGovernanceProposalTimeMeta(proposal, Math.floor(Date.now() / 1000)).votingWindowOpen).length}</Text>
             </View>
             <View style={styles.reputationSummaryCard}>
               <Text style={styles.reputationSummaryLabel}>Participating DAOs</Text>
@@ -7362,7 +7408,7 @@ function GrapeApp() {
         </View>
 
         <View style={styles.sectionCard}>
-          <Text style={styles.sectionTitle}>Your DAOs</Text>
+          <View style={styles.sectionHeader}><Text style={styles.sectionTitle}>Your DAOs</Text><PaperButton disabled={governanceLoading} onPress={() => setGovernanceRefreshNonce((value) => value + 1)}>Refresh</PaperButton></View>
           <Text style={styles.sectionHint}>
             Open the DAOs this wallet already participates in directly in Grape Discover.
           </Text>
@@ -7385,6 +7431,12 @@ function GrapeApp() {
                       </View>
                     </View>
                     <Text style={styles.sectionHint}>{dao.daoId}</Text>
+                    {dao.proposalStatus === 'unavailable' ? <Text style={styles.errorText}>Proposal check incomplete. Refresh to retry.</Text> : null}
+                    {dao.votingPower?.map((power) => (
+                      <Text key={power.mint + ':' + power.delegated} style={styles.sectionHint}>
+                        {power.delegated ? 'Delegated' : 'Deposited'} {power.kind.toLowerCase()}: {power.amount}
+                      </Text>
+                    ))}
                   </View>
                   <View style={styles.governanceEligibilityActions}>
                     <PaperButton
@@ -7511,6 +7563,8 @@ function GrapeApp() {
           </View>
         ) : null}
         {governanceVoteError ? <Text style={styles.errorText}>{governanceVoteError}</Text> : null}
+        {governance.warnings?.map((warning, index) => <Text key={index} style={styles.errorText}>{warning}</Text>)}
+        {governance.discoveryWarnings?.length ? <Text style={styles.sectionHint}>Additional DAO discovery is limited. The DAOs shown were found, but some other programs could not be checked.</Text> : null}
         {governanceLoading ? (
           <View style={styles.sectionCard}>
             <View style={styles.loadingRow}>
@@ -7524,7 +7578,7 @@ function GrapeApp() {
             <Text style={styles.errorText}>{governanceError}</Text>
           </View>
         ) : null}
-        {!governanceLoading && !governanceError && governance.proposals.length === 0 ? (
+        {!governanceLoading && !governanceError && !governance.warnings?.length && governance.proposals.length === 0 ? (
           <View style={styles.sectionCard}>
             <Text style={styles.sectionTitle}>No active governance proposals</Text>
             <Text style={styles.sectionHint}>
@@ -7548,7 +7602,16 @@ function GrapeApp() {
 
           return (
             <>
-              {activeProposals.map((proposal) => renderMobileGovernanceProposalCard(proposal, nowUnixSeconds))}
+              {[
+                { title: 'Needs your vote', proposals: activeProposals.filter((proposal) => proposal.canVote) },
+                { title: 'You voted', proposals: activeProposals.filter((proposal) => !proposal.canVote && proposal.hasVoted) },
+                { title: 'Other active proposals', proposals: activeProposals.filter((proposal) => !proposal.canVote && !proposal.hasVoted) }
+              ].map((group) => group.proposals.length ? (
+                <View key={group.title} style={styles.stack}>
+                  <Text style={styles.sectionTitle}>{group.title} · {group.proposals.length}</Text>
+                  {group.proposals.map((proposal) => renderMobileGovernanceProposalCard(proposal, nowUnixSeconds))}
+                </View>
+              ) : null)}
               {finalizingProposals.length > 0 ? (
                 <View style={styles.sectionCard}>
                   <Pressable
@@ -8859,56 +8922,7 @@ function GrapeApp() {
                 ? `${verificationTrackedCount} tracked`
                 : 'No spaces tracked',
           <>
-            <Text style={styles.sectionHint}>
-              Add the DAO ids you want to verify against. Mobile checks tracked spaces against Grape Verification via Shyft and opens the verification flow directly when needed.
-            </Text>
-          <View style={styles.reputationSummaryGrid}>
-            <View style={styles.reputationSummaryCard}>
-              <Text style={styles.reputationSummaryLabel}>Verified identities</Text>
-              <Text style={styles.reputationSummaryValue}>{verifiedIdentityCount}</Text>
-            </View>
-            <View style={styles.reputationSummaryCard}>
-              <Text style={styles.reputationSummaryLabel}>Tracked spaces</Text>
-              <Text style={styles.reputationSummaryValue}>{verificationTrackedCount}</Text>
-            </View>
-          </View>
-          {verificationLoading ? (
-            <View style={styles.loadingRow}>
-              <ActivityIndicator color={activeTheme.grape} />
-              <Text style={styles.sectionHint}>Checking Grape Verification identities...</Text>
-            </View>
-          ) : null}
-          {!verificationLoading && verificationLoadError ? <Text style={styles.errorText}>{verificationLoadError}</Text> : null}
-          {!verificationLoading && !verificationLoadError && verification.identities.length > 0 ? (
-            <View style={styles.stack}>
-              {verification.identities.map((identity) => (
-                <View key={identity.linkId} style={styles.governanceEligibilityCard}>
-                  <View style={styles.governanceProposalCopy}>
-                    <Text style={styles.governanceProposalTitle}>{formatVerificationPlatformLabel(identity.platform)}</Text>
-                    <View style={styles.governanceProposalBadges}>
-                      <View style={[styles.governanceStatusPill, identity.verified ? styles.governanceStatusPillSuccess : null]}>
-                        <Text style={[styles.governanceStatusPillText, identity.verified ? styles.governanceStatusPillTextSuccess : null]}>
-                          {identity.verified ? 'Verified' : 'Linked'}
-                        </Text>
-                      </View>
-                    </View>
-                    <Text style={styles.sectionHint}>{identity.daoId}</Text>
-                  </View>
-                  <View style={styles.governanceEligibilityActions}>
-                    <PaperButton
-                      mode="contained"
-                      style={styles.paperPrimaryButton}
-                      buttonColor={activeTheme.primaryButton}
-                      textColor={activeTheme.primaryButtonText}
-                      onPress={() => void openVerificationSpace(identity.daoId)}
-                    >
-                      Open
-                    </PaperButton>
-                  </View>
-                </View>
-              ))}
-            </View>
-          ) : null}
+            {renderCommunityIdentities()}
           <PaperTextInput
             value={verificationSpaceInput}
             onChangeText={setVerificationSpaceInput}
@@ -9062,18 +9076,7 @@ function GrapeApp() {
           >
             Discover communities
           </PaperButton>
-          {reputation.spaces.length > 0 ? (
-            <View style={styles.reputationSummaryGrid}>
-              <View style={styles.reputationSummaryCard}>
-                <Text style={styles.reputationSummaryLabel}>Effective points</Text>
-                <Text style={styles.reputationSummaryValue}>{totalEffectiveReputationPoints}</Text>
-              </View>
-              <View style={styles.reputationSummaryCard}>
-                <Text style={styles.reputationSummaryLabel}>Latest season points</Text>
-                <Text style={styles.reputationSummaryValue}>{totalLatestSeasonReputationPoints}</Text>
-              </View>
-            </View>
-          ) : null}
+          {renderCommunityReputation()}
           <PaperTextInput
             value={reputationSpaceInput}
             onChangeText={setReputationSpaceInput}
@@ -13665,6 +13668,37 @@ function createStyles(palette: MobileThemePalette) {
     color: palette.text,
     fontSize: 12,
     fontWeight: '800'
+  },
+  communityDetailCard: {
+    borderWidth: 1,
+    borderColor: palette.panelBorder,
+    borderRadius: 16,
+    padding: 14,
+    gap: 12
+  },
+  communityDetailRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    minHeight: 44
+  },
+  communityScore: {
+    color: palette.text,
+    fontSize: 32,
+    fontWeight: '900',
+    flexShrink: 1
+  },
+  communityIconButton: {
+    minWidth: 44,
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  communityIdentityGroup: {
+    borderTopWidth: 1,
+    borderColor: palette.panelBorder,
+    paddingTop: 8,
+    gap: 2
   },
   reputationSummaryGrid: {
     flexDirection: 'row',

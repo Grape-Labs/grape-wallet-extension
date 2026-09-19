@@ -10722,3 +10722,141 @@ body[data-surface='popup'] .swap-asset-menu .send-asset-option-row {
   width: 100%;
   min-width: 0;
 }
+
+.governance-dao-card {
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.035);
+  overflow-wrap: anywhere;
+}
+.governance-dao-card .community-panel-header { margin-bottom: 12px; }
+.governance-dao-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; }
+.governance-dao-stats > div { min-width: 0; font-variant-numeric: tabular-nums; }
+.governance-dao-stats .muted { font-size: 0.78rem; }
+.governance-dao-card > p { margin: 12px 0 0; font-size: 0.8rem; }
+
+/* Community: one reputation overview, then identities grouped by space. */
+.community-hub {
+  display: grid;
+  gap: 24px;
+  padding: 16px 0 20px;
+  color: var(--theme-text);
+  min-width: 0;
+}
+.community-hub-heading, .community-hub-section-title,
+.community-identity-group-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.community-hub h2, .community-hub h3, .community-hub p { margin: 0; }
+.community-hub h2 { font-size: 17px; line-height: 1.3; letter-spacing: -.025em; }
+.community-hub-heading p { margin-top: 4px; color: var(--theme-muted); font-size: 12px; }
+.community-hub h3 { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; letter-spacing: .01em; }
+.community-hub h3 svg { color: var(--theme-muted); }
+.community-hub-section { display: grid; gap: 10px; min-width: 0; }
+.community-hub-section-title > span { font-size: 11px; color: var(--theme-muted); }
+.community-hub button { font-family: inherit; cursor: pointer; }
+.community-hub button:focus-visible { outline: 2px solid var(--theme-accent); outline-offset: 3px; }
+.community-hub button:disabled { opacity: .5; cursor: wait; }
+.community-hub-tool, .community-hub-icon-button, .community-hub-text-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 0;
+  color: var(--theme-muted);
+  background: transparent;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  flex-shrink: 0;
+}
+.community-hub-tool { padding: 9px 10px; border: 1px solid var(--theme-divider); }
+.community-hub-icon-button { width: 30px; height: 30px; padding: 0; }
+.community-hub-text-action { color: var(--theme-text); padding: 8px 0; justify-content: flex-start; }
+.community-hub-tool:hover, .community-hub-icon-button:hover { color: var(--theme-text); background: var(--theme-surface-soft-hover); }
+.community-hub-text-action:hover { color: var(--theme-accent); }
+.community-reputation-card {
+  border: 1px solid var(--theme-divider);
+  border-radius: 16px;
+  overflow: hidden;
+  background: var(--theme-surface-soft);
+}
+.community-reputation-overview {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px;
+  background: radial-gradient(ellipse at 0 0, var(--theme-accent-soft), transparent 80%);
+}
+.community-hub-eyebrow { font-size: 11px; color: var(--theme-muted); }
+.community-reputation-total { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; margin-top: 4px; font-size: 36px; font-weight: 700; line-height: 1.1; letter-spacing: -.04em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.community-reputation-total > span { color: var(--theme-subtle); font-weight: 400; font-size: 13px; letter-spacing: 0; }
+.community-reputation-season { display: grid; gap: 5px; text-align: right; flex-shrink: 0; }
+.community-reputation-season strong { font-size: 18px; font-variant-numeric: tabular-nums; }
+.community-reputation-season strong span { color: var(--theme-muted); font-size: 11px; font-weight: 400; }
+.community-reputation-season > span { color: var(--theme-muted); font-size: 10px; }
+.community-reputation-spaces { border-top: 1px solid var(--theme-divider); }
+.community-reputation-space {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 14px 16px;
+  text-align: left;
+  background: transparent;
+  color: inherit;
+  border: 0;
+  border-radius: 0;
+}
+.community-reputation-space + .community-reputation-space { border-top: 1px solid var(--theme-divider); }
+.community-reputation-space:hover { background: var(--theme-surface-soft-hover); }
+.community-hub-avatar { position: relative; width: 34px; height: 34px; display: grid; place-items: center; flex-shrink: 0; border-radius: 50%; background: var(--theme-accent-soft); color: var(--theme-text); overflow: hidden; }
+.community-hub-avatar img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.community-hub-copy { display: grid; gap: 4px; min-width: 0; flex: 1; }
+.community-hub-copy strong { font-size: 13px; line-height: 1.25; overflow-wrap: anywhere; }
+.community-hub-copy small { font-size: 10px; color: var(--theme-muted); line-height: 1.35; overflow-wrap: anywhere; }
+.community-space-score { display: grid; gap: 3px; text-align: right; min-width: 0; max-width: 35%; }
+.community-space-score strong { font-size: 14px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.community-space-score small { font-size: 9px; color: var(--theme-muted); }
+.community-hub-external { flex-shrink: 0; color: var(--theme-subtle); }
+.community-verification-summary { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px; color: var(--theme-success); font-size: 11px; }
+.community-verification-summary > span { display: flex; align-items: center; gap: 6px; }
+.community-verification-summary small { font-size: 10px; color: var(--theme-muted); }
+.community-verification-summary.is-pending { color: var(--theme-warning); }
+.community-identity-groups { display: grid; gap: 12px; }
+.community-identity-group { border: 1px solid var(--theme-divider); border-radius: 14px; background: var(--theme-surface-soft); overflow: hidden; }
+.community-identity-group-title { padding: 8px 12px 8px 14px; border-bottom: 1px solid var(--theme-divider); }
+.community-identity-group-title > strong { font-size: 11px; color: var(--theme-muted); overflow-wrap: anywhere; }
+.community-identity-row { display: flex; align-items: center; gap: 10px; padding: 12px 14px; }
+.community-identity-row + .community-identity-row { border-top: 1px solid var(--theme-divider); }
+.community-platform-icon { display: grid; place-items: center; width: 30px; height: 30px; flex-shrink: 0; background: var(--theme-surface-soft); border-radius: 9px; color: var(--theme-muted); }
+.community-identity-status { display: inline-flex; align-items: center; gap: 3px; font-size: 10px; color: var(--theme-warning); white-space: nowrap; flex-shrink: 0; }
+.community-identity-status.is-verified { color: var(--theme-success); }
+.community-hub-empty { display: grid; justify-items: start; gap: 9px; border: 1px dashed var(--theme-divider); border-radius: 14px; padding: 18px; }
+.community-hub-empty > svg { color: var(--theme-muted); }
+.community-hub-empty > strong { font-size: 13px; }
+.community-hub-empty p { color: var(--theme-muted); font-size: 12px; line-height: 1.5; }
+.community-hub-loading { color: var(--theme-muted); font-size: 12px; padding: 22px 16px; border-radius: 14px; background: var(--theme-surface-soft); }
+.community-hub-error { display: grid; gap: 6px; padding: 12px; border-radius: 12px; background: var(--theme-danger-bg); color: var(--theme-danger-text); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.community-hub-spinning { animation: community-refresh 1s linear infinite; }
+@keyframes community-refresh { to { transform: rotate(360deg); } }
+@media (max-width: 360px) {
+  .community-reputation-overview { padding: 16px; gap: 10px; }
+  .community-reputation-total { font-size: 30px; }
+  .community-reputation-space { padding: 12px; gap: 8px; }
+  .community-identity-row { padding: 12px; gap: 8px; }
+}
+@media (prefers-reduced-motion: reduce) { .community-hub-spinning { animation: none; } }
+.community-space-symbol { font-size: 10px; color: var(--theme-muted); }
+.community-identity-group-title { padding-block: 3px; }
+.community-reputation-overview > div:first-child { min-width: 0; flex: 1; }
+.community-reputation-season { min-width: 0; flex: 0 1 42%; overflow-wrap: anywhere; }
+.wallet-home-tabs .content-tab:focus:not(:focus-visible) { outline: none; }
+.wallet-home-tabs .content-tab:focus-visible { outline: 2px solid var(--theme-accent); outline-offset: -3px; border-radius: 6px; }
