@@ -1342,7 +1342,8 @@ export async function loadWalletReputation(
 export async function loadWalletGovernance(
   wallet: MobileWallet,
   trackedDaoIds: string[],
-  forceRefresh = false
+  forceRefresh = false,
+  proposalDaoId?: string
 ): Promise<MobileGovernanceResponse> {
   if (wallet.chain !== 'solana') {
     return {
@@ -1358,14 +1359,14 @@ export async function loadWalletGovernance(
   }
 
   const normalizedDaoIds = normalizeTrackedDaoIds(trackedDaoIds);
-  const cacheKey = `${wallet.address}:${normalizedDaoIds.join(',')}`;
+  const cacheKey = `${wallet.address}:${normalizedDaoIds.join(',')}:${proposalDaoId ?? 'memberships'}`;
   const cached = mobileGovernanceCache.get(cacheKey);
   if (!forceRefresh && cached && cached.expiresAt > Date.now()) {
     return cached.data;
   }
 
   const { fetchMobileGovernanceForWallet } = require('./governance') as typeof import('./governance');
-  const data = await fetchMobileGovernanceForWallet(wallet.address, normalizedDaoIds);
+  const data = await fetchMobileGovernanceForWallet(wallet.address, normalizedDaoIds, proposalDaoId ?? null);
   if (!data.warnings?.length) mobileGovernanceCache.set(cacheKey, {
     expiresAt: Date.now() + MOBILE_GOVERNANCE_CACHE_TTL_MS,
     data

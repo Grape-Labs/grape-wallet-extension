@@ -1,3 +1,7 @@
+import { SendPrivacyPicker } from './src/SendPrivacyPicker';
+import { HoudiniSwapPanel } from './src/HoudiniSwapPanel';
+import { depositAmount, depositProblem, recordHoudiniDeposit, type HoudiniOrder } from '../../packages/houdini/src/client';
+import { hasPositiveGovernancePower, compareGovernancePower } from '../../packages/solana/src/governancePower';
 import { StatusBar } from 'expo-status-bar';
 import Constants from 'expo-constants';
 import bs58 from 'bs58';
@@ -1500,6 +1504,9 @@ function GrapeApp() {
   const [monadTokenAsset, setMonadTokenAsset] = useState<MobileAsset | null>(null);
   const [monadTokenLoading, setMonadTokenLoading] = useState(false);
   const [monadTokenError, setMonadTokenError] = useState<string | null>(null);
+  const [sendPrivate, setSendPrivate] = useState(false);
+  const [privateSendReview, setPrivateSendReview] = useState(false);
+  const [houdiniDeposit, setHoudiniDeposit] = useState<{ entry: HoudiniOrder; assetId: string; owner: string } | null>(null);
   const [swapScreenVisible, setSwapScreenVisible] = useState(false);
   const [swapInputAssetId, setSwapInputAssetId] = useState<string | null>(null);
   const [swapOutputAssetId, setSwapOutputAssetId] = useState<string | null>(null);
@@ -1573,6 +1580,7 @@ function GrapeApp() {
     network: 'mainnet-beta',
     refreshedAt: Date.now()
   });
+  const [selectedGovernanceDao, setSelectedGovernanceDao] = useState<string | null>(null);
   const [governanceRefreshNonce, setGovernanceRefreshNonce] = useState(0);
   const [governanceLoading, setGovernanceLoading] = useState(false);
   const [governanceError, setGovernanceError] = useState<string | null>(null);
@@ -2120,18 +2128,20 @@ function GrapeApp() {
   );
   const discoverApprovalRequiresReauth =
     !!discoverApproval && walletState.dappApprovalMode === 'strict' && discoverApproval.request.method !== 'connect';
-  const actionableGovernanceProposalCount = useMemo(
-    () => governance.proposals.filter((proposal) => proposal.canVote).length,
-    [governance.proposals]
-  );
-  const totalGovernanceDaoCount = useMemo(
-    () => new Set([...governance.discoveredDaos, ...governance.daos.map((dao) => dao.daoId), ...walletState.trackedGovernanceDaoIds]).size,
-    [governance.daos, governance.discoveredDaos, walletState.trackedGovernanceDaoIds]
+  useEffect(() => { setSelectedGovernanceDao(null); setGovernance((current) => ({ ...current, daos: [], proposals: [] })); }, [selectedWallet?.address]);
+  const visibleGovernanceDaos = useMemo(
+    () => governance.daos.filter((dao) => dao.votingPower?.some((power) => hasPositiveGovernancePower(power.amount))).sort((a, b) => compareGovernancePower(b.votingPower ?? [], a.votingPower ?? []) || a.realmName.localeCompare(b.realmName) || a.daoId.localeCompare(b.daoId)),
+    [governance.daos]
   );
   const participatingGovernanceDaoIds = useMemo(
-    () => new Set([...governance.discoveredDaos, ...governance.daos.map((dao) => dao.daoId), ...walletState.trackedGovernanceDaoIds]),
-    [governance.daos, governance.discoveredDaos, walletState.trackedGovernanceDaoIds]
+    () => new Set(visibleGovernanceDaos.map((dao) => dao.daoId)), [visibleGovernanceDaos]
   );
+  const visibleGovernanceProposals = useMemo(
+    () => governance.proposals.filter((proposal) => participatingGovernanceDaoIds.has(proposal.daoId) && proposal.daoId === selectedGovernanceDao),
+    [governance.proposals, participatingGovernanceDaoIds, selectedGovernanceDao]
+  );
+  const actionableGovernanceProposalCount = visibleGovernanceProposals.filter((proposal) => proposal.canVote).length;
+  const totalGovernanceDaoCount = participatingGovernanceDaoIds.size;
   const sendAssets = useMemo(
     () => {
       const transferable = assets.filter((asset) => asset.tokenType !== 'nft');
@@ -2907,11 +2917,11 @@ function GrapeApp() {
 
       setGovernanceLoading(true);
       try {
-        const nextGovernance = await loadWalletGovernance(selectedWallet, walletState.trackedGovernanceDaoIds, governanceRefreshNonce > 0);
+        const nextGovernance = await loadWalletGovernance(selectedWallet, walletState.trackedGovernanceDaoIds, governanceRefreshNonce > 0, selectedGovernanceDao ?? undefined);
         if (!mounted) {
           return;
         }
-        setGovernance(nextGovernance);
+        setGovernance((current) => selectedGovernanceDao ? { ...current, proposals: nextGovernance.proposals, warnings: nextGovernance.warnings } : nextGovernance);
         setGovernanceError(null);
       } catch (unknownError) {
         if (!mounted) {
@@ -2939,7 +2949,7 @@ function GrapeApp() {
     return () => {
       mounted = false;
     };
-  }, [selectedWallet, unlocked, walletState.trackedGovernanceDaoIds, governanceRefreshNonce]);
+  }, [selectedWallet, unlocked, walletState.trackedGovernanceDaoIds, governanceRefreshNonce, selectedGovernanceDao]);
 
   useEffect(() => {
     setSelectedAssetId(null);
@@ -4500,6 +4510,11 @@ function GrapeApp() {
   }
 
   async function handleSend() {
+    if (sendPrivate && !houdiniDeposit) {
+      if (!process.env.EXPO_PUBLIC_HOUDINI_API_URL || !selectedSendAsset || selectedSendAsset.tokenType === 'nft' || (selectedSendAsset.chain === 'sui' && selectedSendAsset.tokenType !== 'native')) { setError('Private send is not available for this asset.'); return; }
+      if (!sendRecipient.trim() || !(Number(sendAmount) > 0)) { setError('Enter a recipient and amount.'); return; }
+      setPrivateSendReview(true); return;
+    }
     if (!selectedWallet || !selectedSendAsset) {
       return;
     }
@@ -4510,6 +4525,7 @@ function GrapeApp() {
 
     setSendLoading(true);
     try {
+      if (houdiniDeposit && (depositProblem(houdiniDeposit.entry) || sendRecipient !== houdiniDeposit.entry.order.depositAddress || sendAmount !== depositAmount(houdiniDeposit.entry) || selectedSendAsset.id !== houdiniDeposit.assetId || selectedWallet.address !== houdiniDeposit.owner)) throw new Error('Houdini deposit details changed or expired. Return to Houdini and refresh the order.');
       const signature = await sendWalletAsset({
         wallet: selectedWallet,
         asset: selectedSendAsset,
@@ -4517,6 +4533,10 @@ function GrapeApp() {
         amount: sendAmount.trim()
       });
 
+      if (houdiniDeposit) {
+        await recordHoudiniDeposit(AsyncStorage, process.env.EXPO_PUBLIC_HOUDINI_API_URL ?? '', houdiniDeposit.owner, houdiniDeposit.entry.order.houdiniId, signature).catch(() => {});
+        setHoudiniDeposit(null);
+      }
       const activity = createSendActivity({
         wallet: selectedWallet,
         asset: selectedSendAsset,
@@ -5184,7 +5204,10 @@ function GrapeApp() {
           </View>
         ))}
         <View style={styles.governanceMetricsRow}>
-          <Text style={styles.governanceMetricText}>Yes {formatWholeNumberString(proposal.yesVotes)}</Text>
+          {proposal.choices.map((choice) => (
+            <Text key={choice.rank} style={styles.governanceMetricText}>{choice.label}: {formatWholeNumberString(choice.voteWeight)}</Text>
+          ))}
+          {BigInt(proposal.abstainVotes) > 0n ? <Text style={styles.governanceMetricText}>Abstain {formatWholeNumberString(proposal.abstainVotes)}</Text> : null}
           {BigInt(proposal.noVotes) > BigInt(0) ? (
             <Text style={styles.governanceMetricText}>No {formatWholeNumberString(proposal.noVotes)}</Text>
           ) : null}
@@ -5589,6 +5612,8 @@ function GrapeApp() {
   }
 
   function openSendScreen(assetId?: string | null) {
+    setSendPrivate(false); setPrivateSendReview(false);
+    setHoudiniDeposit(null);
     setSwapScreenVisible(false);
     setRebalanceScreenVisible(false);
     setBridgeScreenVisible(false);
@@ -5961,6 +5986,7 @@ function GrapeApp() {
 
   function renderSolanaCommunityShortcuts() {
     if (selectedWallet?.chain !== 'solana') return null;
+    const activeProposals = visibleGovernanceProposals.filter((proposal) => proposal.stateCode === 2 && getGovernanceProposalTimeMeta(proposal, Math.floor(Date.now() / 1000)).votingWindowOpen);
     return (
       <View style={styles.communityShortcutStack}>
         <View style={styles.communityDetailRow}>
@@ -5977,11 +6003,20 @@ function GrapeApp() {
             <Feather name="users" size={20} color={activeTheme.text} />
             <View style={styles.reputationCopy}>
               <Text style={styles.reputationName}>Governance</Text>
-              <Text style={styles.reputationMeta}>{governanceLoading ? 'Loading DAOs…' : totalGovernanceDaoCount + ' DAOs · ' + actionableGovernanceProposalCount + ' awaiting your vote'}</Text>
+              <Text style={styles.reputationMeta}>{governanceLoading ? 'Loading DAOs…' : totalGovernanceDaoCount + ' DAOs · Tap to explore proposals'}</Text>
             </View>
             <Feather name="chevron-right" size={18} color={activeTheme.text} />
           </View>
         </Pressable>
+        {activeProposals.slice(0, 3).map((proposal) => (
+          <Pressable key={proposal.proposalId} accessibilityRole="button" accessibilityLabel={'View proposal: ' + proposal.proposalName} style={styles.communityDetailCard} onPress={() => setMainTab('governance')}>
+            <Text style={styles.reputationMeta}>{proposal.realmName} · {getGovernanceProposalTimeMeta(proposal, Math.floor(Date.now() / 1000)).metaText}</Text>
+            <Text style={styles.reputationName}>{proposal.proposalName}</Text>
+            {proposal.recordedVotes?.map((vote) => <Text key={vote.governingTokenOwner} style={styles.reputationMeta}>{vote.isDelegate ? 'Delegated vote (' + shortenAddress(vote.governingTokenOwner) + ')' : 'You voted'}: {vote.choice}</Text>)}
+            <Text style={styles.reputationMeta}>{proposal.canVote ? (proposal.hasVoted ? 'More voting power available' : 'Needs your vote') : proposal.hasVoted ? 'Vote recorded' : 'View proposal'}</Text>
+          </Pressable>
+        ))}
+        {activeProposals.length > 3 ? <PaperButton compact onPress={() => setMainTab('governance')}>View all {activeProposals.length} active proposals</PaperButton> : null}
       </View>
     );
   }
@@ -7393,12 +7428,12 @@ function GrapeApp() {
         <View style={styles.sectionCard}>
           <Text style={styles.sectionTitle}>Governance</Text>
           <Text style={styles.sectionHint}>
-            Follow active proposals for the DAOs this wallet participates in and cast votes directly from mobile.
+            Your DAOs, highest voting power first. Open a DAO to load its proposals.
           </Text>
           <View style={styles.reputationSummaryGrid}>
             <View style={styles.reputationSummaryCard}>
-              <Text style={styles.reputationSummaryLabel}>Active proposals</Text>
-              <Text style={styles.reputationSummaryValue}>{governance.proposals.filter((proposal) => proposal.stateCode === 2 && getGovernanceProposalTimeMeta(proposal, Math.floor(Date.now() / 1000)).votingWindowOpen).length}</Text>
+              <Text style={styles.reputationSummaryLabel}>Proposals</Text>
+              <Text style={styles.reputationSummaryValue}>{selectedGovernanceDao ? visibleGovernanceProposals.filter((proposal) => proposal.stateCode === 2 && getGovernanceProposalTimeMeta(proposal, Math.floor(Date.now() / 1000)).votingWindowOpen).length : 'Open a DAO'}</Text>
             </View>
             <View style={styles.reputationSummaryCard}>
               <Text style={styles.reputationSummaryLabel}>Participating DAOs</Text>
@@ -7412,14 +7447,14 @@ function GrapeApp() {
           <Text style={styles.sectionHint}>
             Open the DAOs this wallet already participates in directly in Grape Discover.
           </Text>
-          {governanceLoading ? (
+          {governanceLoading && visibleGovernanceDaos.length === 0 ? (
             <View style={styles.loadingRow}>
               <ActivityIndicator color={activeTheme.grape} />
               <Text style={styles.sectionHint}>Loading DAO memberships...</Text>
             </View>
-          ) : governance.daos.length > 0 ? (
+          ) : visibleGovernanceDaos.length > 0 ? (
             <View style={styles.stack}>
-              {governance.daos.map((dao) => (
+              {visibleGovernanceDaos.filter((dao) => !selectedGovernanceDao || dao.daoId === selectedGovernanceDao).map((dao) => (
                 <View key={`member-dao:${dao.daoId}`} style={styles.governanceEligibilityCard}>
                   <View style={styles.governanceProposalCopy}>
                     <Text style={styles.governanceProposalTitle}>{dao.realmName}</Text>
@@ -7431,7 +7466,7 @@ function GrapeApp() {
                       </View>
                     </View>
                     <Text style={styles.sectionHint}>{dao.daoId}</Text>
-                    {dao.proposalStatus === 'unavailable' ? <Text style={styles.errorText}>Proposal check incomplete. Refresh to retry.</Text> : null}
+                    <PaperButton compact onPress={() => setSelectedGovernanceDao((current) => current === dao.daoId ? null : dao.daoId)}>{selectedGovernanceDao === dao.daoId ? 'Back to all DAOs' : 'View proposals'}</PaperButton>
                     {dao.votingPower?.map((power) => (
                       <Text key={power.mint + ':' + power.delegated} style={styles.sectionHint}>
                         {power.delegated ? 'Delegated' : 'Deposited'} {power.kind.toLowerCase()}: {power.amount}
@@ -7578,7 +7613,7 @@ function GrapeApp() {
             <Text style={styles.errorText}>{governanceError}</Text>
           </View>
         ) : null}
-        {!governanceLoading && !governanceError && !governance.warnings?.length && governance.proposals.length === 0 ? (
+        {selectedGovernanceDao && !governanceLoading && !governanceError && !governance.warnings?.length && visibleGovernanceProposals.length === 0 ? (
           <View style={styles.sectionCard}>
             <Text style={styles.sectionTitle}>No active governance proposals</Text>
             <Text style={styles.sectionHint}>
@@ -7589,13 +7624,13 @@ function GrapeApp() {
           </View>
         ) : null}
 
-        {!governanceLoading && !governanceError ? (() => {
+        {selectedGovernanceDao && !governanceLoading && !governanceError ? (() => {
           const nowUnixSeconds = Math.floor(Date.now() / 1000);
-          const activeProposals = governance.proposals.filter((proposal) => {
+          const activeProposals = visibleGovernanceProposals.filter((proposal) => {
             const timeMeta = getGovernanceProposalTimeMeta(proposal, nowUnixSeconds);
             return proposal.stateCode === 2 && timeMeta.votingWindowOpen;
           });
-          const finalizingProposals = governance.proposals.filter((proposal) => {
+          const finalizingProposals = visibleGovernanceProposals.filter((proposal) => {
             const timeMeta = getGovernanceProposalTimeMeta(proposal, nowUnixSeconds);
             return proposal.stateCode === 2 && !timeMeta.votingWindowOpen;
           });
@@ -7646,6 +7681,11 @@ function GrapeApp() {
   }
 
   function renderSendTab() {
+    const privateSendAvailable = !!process.env.EXPO_PUBLIC_HOUDINI_API_URL && !!selectedSendAsset && selectedSendAsset.tokenType !== 'nft' && !(selectedSendAsset.chain === 'sui' && selectedSendAsset.tokenType !== 'native');
+    if (privateSendReview && privateSendAvailable && selectedWallet && selectedSendAsset) {
+      const source = { id: selectedSendAsset.id, chain: selectedSendAsset.chain, symbol: selectedSendAsset.symbol, address: selectedSendAsset.address, native: selectedSendAsset.tokenType === 'native' };
+      return <HoudiniSwapPanel key={selectedWallet.address + source.id + sendAmount + sendRecipient} endpoint={process.env.EXPO_PUBLIC_HOUDINI_API_URL!.trim()} owner={selectedWallet.address} assets={[source]} color={activeTheme.text} muted={activeTheme.muted} border={activeTheme.panelBorder} privateSend={{ asset: source, amount: sendAmount, recipient: sendRecipient.trim() }} onBack={() => setPrivateSendReview(false)} onUsePublic={() => { setSendPrivate(false); setPrivateSendReview(false); }} onFund={(asset, entry) => { openSendScreen(asset.id); setSendRecipient(entry.order.depositAddress); setSendAmount(depositAmount(entry)); setHoudiniDeposit({ entry, assetId: asset.id, owner: selectedWallet.address }); }} />;
+    }
     const selectedSendAssetSubtitle = selectedSendAsset
       ? getAssetSubtitle(selectedSendAsset, selectedChainMeta.label, selectedChainMeta.short)
       : null;
@@ -7792,6 +7832,7 @@ function GrapeApp() {
           {selectedWallet?.chain === 'sui' && selectedSendAsset?.tokenType === 'sui-coin' ? (
             <Text style={styles.sectionHint}>Sui fungible token send is not available on mobile yet. Native SUI only.</Text>
           ) : null}
+          {houdiniDeposit ? <View style={styles.communityDetailCard}><Text style={styles.settingsTitle}>{houdiniDeposit.entry.mode === 'private' ? 'Fund private send' : 'Fund Houdini swap'}</Text><Text style={styles.sectionHint}>Final recipient: {houdiniDeposit.entry.recipient}</Text><Text style={styles.sectionHint}>Expected delivery: {houdiniDeposit.entry.order.outAmount} {houdiniDeposit.entry.to.symbol}. Delivery status is saved in this wallet.</Text></View> : privateSendAvailable ? <SendPrivacyPicker value={sendPrivate} onChange={setSendPrivate} theme={activeTheme} /> : null}
           {gasWarning ? <Text style={styles.errorText}>{gasWarning}</Text> : null}
           {error ? <Text style={styles.errorText}>{error}</Text> : null}
           <PaperButton
@@ -7802,7 +7843,7 @@ function GrapeApp() {
             disabled={sendLoading || !selectedWallet || !selectedSendAsset}
             onPress={() => void handleSend()}
           >
-            {sendLoading ? 'Sending...' : `Send ${selectedSendAsset?.symbol ?? selectedChainMeta.short}`}
+            {sendLoading ? 'Sending...' : sendPrivate && !houdiniDeposit ? 'Review private send' : houdiniDeposit ? 'Send deposit' : `Send ${selectedSendAsset?.symbol ?? selectedChainMeta.short}`}
           </PaperButton>
         </View>
       </View>
@@ -8375,11 +8416,7 @@ function GrapeApp() {
     const reputationTrackedCount = walletState.trackedReputationSpaceIds.length;
     const governanceTrackedCount = walletState.trackedGovernanceDaoIds.length;
     const trustedAppsCount = walletState.trustedDappOrigins.length;
-    const participatingDaoCount = new Set([
-      ...governance.discoveredDaos,
-      ...governance.daos.map((dao) => dao.daoId),
-      ...walletState.trackedGovernanceDaoIds
-    ]).size;
+    const participatingDaoCount = totalGovernanceDaoCount;
     const toggleSettingsSection = (section: string) => {
       setExpandedSettingsSections((previous) => {
         const next = new Set(previous);

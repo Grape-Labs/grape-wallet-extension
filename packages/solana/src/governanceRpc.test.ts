@@ -28,3 +28,20 @@ it('a rejected RPC request does not block subsequent requests', async () => {
   expect(await failed).toBe('unavailable');
   expect(await next).toBeNull();
 });
+
+it('shares concurrent and completed reads within a refresh but reads fresh on the next refresh', async () => {
+  vi.useFakeTimers();
+  const { createGovernanceRpcReadSession } = await import('./governanceRpc');
+  const getAccountInfo = vi.fn().mockResolvedValue({ data: 'account' });
+  const connection = { rpcEndpoint: 'https://rpc.test/session', getAccountInfo } as unknown as Connection;
+  const first = createGovernanceRpcReadSession(connection);
+  const reads = [first.getAccountInfo('key' as never), first.getAccountInfo('key' as never)];
+  await vi.runAllTimersAsync();
+  await Promise.all(reads);
+  await first.getAccountInfo('key' as never);
+  expect(getAccountInfo).toHaveBeenCalledTimes(1);
+  const next = createGovernanceRpcReadSession(connection).getAccountInfo('key' as never);
+  await vi.runAllTimersAsync();
+  await next;
+  expect(getAccountInfo).toHaveBeenCalledTimes(2);
+});

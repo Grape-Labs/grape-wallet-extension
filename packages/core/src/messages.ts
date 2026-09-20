@@ -607,6 +607,7 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('wallet_get_governance'),
+    proposalDaoId: z.string().optional(),
     forceRefresh: z.boolean().optional()
   }),
   z.object({

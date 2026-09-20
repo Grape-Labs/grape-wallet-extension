@@ -1,0 +1,7 @@
+{
+  "name": "@grape/houdini-api",
+  "private": true,
+  "type": "module",
+  "scripts": { "start": "node --env-file=.env server.mjs", "test": "node --test server.test.mjs" },
+  "engines": { "node": ">=22" }
+}

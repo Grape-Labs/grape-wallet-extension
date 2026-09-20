@@ -72,6 +72,9 @@ importers:
       '@grape/ethereum':
         specifier: workspace:*
         version: link:../../packages/ethereum
+      '@grape/houdini':
+        specifier: workspace:*
+        version: link:../../packages/houdini
       '@grape/monad':
         specifier: workspace:*
         version: link:../../packages/monad
@@ -131,6 +134,8 @@ importers:
         specifier: ^3.6.0
         version: 3.6.0(vite@6.4.1(@types/node@24.12.0)(lightningcss@1.32.0)(terser@5.46.0)(yaml@2.8.2))
 
+  apps/houdini-api: {}
+
   apps/mobile:
     dependencies:
       '@babel/runtime':
@@ -145,6 +150,9 @@ importers:
       '@grape/ethereum':
         specifier: workspace:*
         version: link:../../packages/ethereum
+      '@grape/houdini':
+        specifier: workspace:*
+        version: link:../../packages/houdini
       '@grape/mobile-passkeys':
         specifier: workspace:*
         version: link:../../packages/mobile-passkeys
@@ -290,6 +298,8 @@ importers:
       viem:
         specifier: ^2.38.2
         version: 2.47.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@4.3.6)
+
+  packages/houdini: {}
 
   packages/mobile-passkeys: {}
 

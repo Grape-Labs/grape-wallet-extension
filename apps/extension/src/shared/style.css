@@ -10860,3 +10860,48 @@ body[data-surface='popup'] .swap-asset-menu .send-asset-option-row {
 .community-reputation-season { min-width: 0; flex: 0 1 42%; overflow-wrap: anywhere; }
 .wallet-home-tabs .content-tab:focus:not(:focus-visible) { outline: none; }
 .wallet-home-tabs .content-tab:focus-visible { outline: 2px solid var(--theme-accent); outline-offset: -3px; border-radius: 6px; }
+
+.houdini-panel { display: grid; gap: 14px; padding: 6px 0 16px; }
+.houdini-panel h2, .houdini-panel h3, .houdini-panel p { margin: 0; }
+.houdini-panel label { display: grid; gap: 6px; font-size: 13px; }
+.houdini-panel input { width: 100%; min-width: 0; box-sizing: border-box; padding: 12px; border: 1px solid var(--theme-input-border); border-radius: 10px; background: transparent; color: inherit; }
+.houdini-panel button { padding: 12px; border-radius: 10px; border: 1px solid var(--theme-input-border); color: inherit; background: var(--theme-accent-soft); cursor: pointer; text-align: left; }
+.houdini-panel button:disabled { opacity: .5; cursor: default; }
+.houdini-header { display: flex; align-items: center; gap: 10px; min-height: 42px; }
+.houdini-header h2 { font-size: 1.3rem; }
+.houdini-panel .houdini-back { display: inline-grid; place-items: center; width: 38px; height: 38px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--theme-muted); font-size: 1.35rem; }
+.houdini-panel .houdini-back:hover { background: var(--theme-surface-soft-hover); color: var(--theme-text); }
+.houdini-intro { font-size: .86rem; line-height: 1.45; }
+.houdini-token-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.houdini-order { display: grid; gap: 10px; border: 1px solid var(--theme-input-border); border-radius: 14px; padding: 16px; }
+.houdini-private-summary { display: grid; grid-template-columns: minmax(100px, .65fr) minmax(0, 1.35fr); gap: 14px; padding: 14px 0; border-block: 1px solid var(--theme-divider); }
+.houdini-private-summary > div { display: grid; gap: 5px; min-width: 0; }
+.houdini-private-summary strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.houdini-panel .houdini-primary { width: 100%; min-height: 48px; border: 0; border-radius: 14px; background: var(--theme-accent); color: var(--theme-button-text); text-align: center; font-weight: 700; }
+.houdini-loading { padding: 12px 0; text-align: center; }
+.houdini-error { display: grid; gap: 12px; }
+.houdini-error .button, .houdini-error button { background: transparent; border-color: currentColor; text-align: center; }
+.houdini-results { max-height: 190px; overflow: auto; display: grid; gap: 6px; }
+.houdini-results small { display: block; overflow-wrap: anywhere; }
+.houdini-panel .mono { overflow-wrap: anywhere; font-size: 12px; }
+
+
+/* Keep Send focused on the amount and recipient; privacy details live in a sheet. */
+body[data-surface] .send-flow-card { background: transparent; border: 0; box-shadow: none; padding: 0; }
+body[data-surface] .send-flow-header h2 { font-size: 1.25rem; }
+.send-privacy-trigger { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 48px; padding: 12px 14px; border: 1px solid var(--theme-input-border); border-radius: 14px; background: transparent; color: var(--theme-text); font: inherit; text-align: left; cursor: pointer; }
+.send-privacy-trigger > svg:last-child { margin-left: auto; color: var(--theme-muted); }
+.send-privacy-sheet { position: fixed; inset: auto 0 0; margin: 0 auto; box-sizing: border-box; width: 100%; max-width: 480px; max-height: 90dvh; padding: 0; border: 1px solid var(--theme-input-border); border-radius: 24px 24px 0 0; background: var(--theme-surface-strong); color: var(--theme-text); overflow-y: auto; }
+.send-privacy-sheet::backdrop { background: rgba(0,0,0,.65); }
+.send-privacy-sheet-content { display: grid; gap: 18px; padding: 22px 18px; }
+.send-privacy-sheet-heading { display: flex; align-items: center; justify-content: space-between; }
+.send-privacy-sheet-heading h2 { margin: 0; font-size: 1.15rem; }
+.send-privacy-sheet-content > p { margin: 0; font-size: .875rem; }
+.send-privacy-options { display: grid; gap: 10px; }
+.send-privacy-option { display: flex; align-items: flex-start; gap: 12px; padding: 16px; border: 1px solid var(--theme-input-border); border-radius: 16px; background: var(--theme-surface-soft); color: var(--theme-text); text-align: left; font: inherit; cursor: pointer; }
+.send-privacy-option.selected { border-color: var(--theme-accent); }
+.send-privacy-option > span:last-child { display: grid; gap: 7px; }
+.send-privacy-option small { color: var(--theme-muted); font-size: .8rem; line-height: 1.5; }
+.send-privacy-indicator { box-sizing: border-box; width: 20px; height: 20px; flex: 0 0 20px; border: 2px solid var(--theme-muted); border-radius: 50%; margin-top: 1px; }
+.selected .send-privacy-indicator { border: 6px solid var(--theme-accent); }
+.send-privacy-trigger:focus-visible, .send-privacy-option:focus-visible { outline: 2px solid var(--theme-accent); outline-offset: 3px; }

@@ -1,5 +1,5 @@
 import { describeGovernanceVote } from '../../../packages/solana/src/governanceVote';
-import { createGovernanceRpcConnection } from '../../../packages/solana/src/governanceRpc';
+import { createGovernanceRpcConnection, createGovernanceRpcReadSession } from '../../../packages/solana/src/governanceRpc';
 import { getMobileSolanaRpcUrl } from './config';
 
 const DEFAULT_SOLANA_NETWORK = 'mainnet-beta';
@@ -412,11 +412,10 @@ export async function scanMobileGovernanceDaoEligibility(
     });
 }
 
-async function discoverRpcGovernanceMembershipsForWallet(ownerAddress: string, warnings: string[]) {
+async function discoverRpcGovernanceMembershipsForWallet(ownerAddress: string, warnings: string[], connection = getConnection()) {
   const { PublicKey } = loadSolanaWeb3Module();
   const { getTokenOwnerRecordsByOwner, getGovernanceAccounts, TokenOwnerRecord, MemcmpFilter } = loadSplGovernanceModule();
   const owner = new PublicKey(ownerAddress);
-  const connection = getConnection();
   const membershipsByRealm = new Map<string, GovernanceMembershipRecord[]>();
   const allProgramIds = Array.from(new Set([DEFAULT_GOVERNANCE_PROGRAM_ID, ...GOVERNANCE_OWNERS.map((entry) => entry.owner)]));
 
@@ -554,10 +553,9 @@ function buildGovernanceProposalVoteSources(
     });
 }
 
-async function fetchGovernanceForDaoViaRpc(ownerAddress: string, daoId: string, warnings: string[] = [], preloadedMemberships?: GovernanceMembershipRecord[]) {
+async function fetchGovernanceForDaoViaRpc(ownerAddress: string, daoId: string, warnings: string[] = [], preloadedMemberships?: GovernanceMembershipRecord[], connection = getConnection(), loadProposals = true) {
   const { PublicKey } = loadSolanaWeb3Module();
   const { getAllGovernances, getProposalsByGovernance, getRealm, getTokenOwnerRecordsByOwner, getVoteRecordsByVoter, getGovernanceAccounts, TokenOwnerRecord, MemcmpFilter, ProposalState } = loadSplGovernanceModule();
-  const connection = getConnection();
   const realmInfo = await connection.getAccountInfo(new PublicKey(daoId));
   if (!realmInfo) throw new Error('DAO realm account was not found.');
   const governanceOwner = { owner: realmInfo.owner.toBase58() };
@@ -571,7 +569,7 @@ async function fetchGovernanceForDaoViaRpc(ownerAddress: string, daoId: string, 
     getRealm(connection, realmPk),
     preloadedMemberships ? Promise.resolve([]) : getTokenOwnerRecordsByOwner(connection, programId, owner),
     preloadedMemberships ? Promise.resolve([]) : getGovernanceAccounts(connection, programId, TokenOwnerRecord, [new MemcmpFilter(122, owner.toBuffer())]),
-    getAllGovernances(connection, programId, realmPk).catch(() => {
+    (loadProposals ? getAllGovernances(connection, programId, realmPk) : Promise.resolve([])).catch(() => {
       governanceLoaded = false;
       warnings.push(`Proposal accounts for ${daoId} could not be loaded. Membership balances are available.`);
       return [];
@@ -728,13 +726,17 @@ async function fetchGovernanceForDaoViaRpc(ownerAddress: string, daoId: string, 
   };
 }
 
-export async function fetchMobileGovernanceForWallet(ownerAddress: string, trackedDaoIds: string[]): Promise<MobileGovernanceResponse> {
+export async function fetchMobileGovernanceForWallet(ownerAddress: string, trackedDaoIds: string[], proposalDaoId?: string | null): Promise<MobileGovernanceResponse> {
   const uniqueTrackedDaoIds = normalizeTrackedDaoIds(trackedDaoIds);
   const warnings: string[] = [];
   const discoveryWarnings: string[] = [];
-  const supplementalMembershipsByRealm = await discoverRpcGovernanceMembershipsForWallet(ownerAddress, discoveryWarnings);
+  const connection = createGovernanceRpcReadSession(getConnection());
+  const supplementalMembershipsByRealm = typeof proposalDaoId === 'string' ? new Map<string, GovernanceMembershipRecord[]>() : await discoverRpcGovernanceMembershipsForWallet(ownerAddress, discoveryWarnings, connection);
   const discoveredDaoIds = Array.from(supplementalMembershipsByRealm.keys());
-  const uniqueDaoIds = Array.from(new Set([...discoveredDaoIds, ...uniqueTrackedDaoIds]));
+  const uniqueDaoIds = (typeof proposalDaoId === 'string' ? [proposalDaoId] : Array.from(new Set([...discoveredDaoIds, ...uniqueTrackedDaoIds]))).filter((daoId) => {
+    const memberships = supplementalMembershipsByRealm.get(daoId);
+    return !memberships?.length || memberships.some((record) => BigInt(record.governingTokenDepositAmount) > 0n);
+  });
 
   if (uniqueDaoIds.length === 0) {
     return {
@@ -754,7 +756,7 @@ export async function fetchMobileGovernanceForWallet(ownerAddress: string, track
   const results = await Promise.all(
     uniqueDaoIds.map(async (daoId) => {
       try {
-        return await fetchGovernanceForDaoViaRpc(ownerAddress, daoId, warnings, supplementalMembershipsByRealm.get(daoId));
+        return await fetchGovernanceForDaoViaRpc(ownerAddress, daoId, warnings, supplementalMembershipsByRealm.get(daoId), connection, proposalDaoId !== null);
       } catch {
         warnings.push(`Unable to load proposals and voting power for ${daoId}.`);
         return {

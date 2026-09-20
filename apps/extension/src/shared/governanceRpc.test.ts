@@ -1,4 +1,5 @@
-import { createGovernanceRpcConnection } from '../../../../packages/solana/src/governanceRpc';
+import { describeGovernanceVote } from '../../../../packages/solana/src/governanceVote';
+import { createGovernanceRpcConnection, createGovernanceRpcReadSession } from '../../../../packages/solana/src/governanceRpc';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { runInNewContext } from 'node:vm';
@@ -7,12 +8,12 @@ import { PublicKey } from '@solana/web3.js';
 import { describe, expect, it, vi } from 'vitest';
 
 // Run the actual loaders without starting the extension service worker or React Native.
-function fixture(platform: 'mobile' | 'extension', options: { expired?: boolean; voted?: boolean; fail?: boolean; delegated?: boolean; noProposals?: boolean; proposalFailure?: boolean; v1?: boolean; scanLimit?: boolean; voteFailure?: boolean; governanceFailure?: boolean; partialProposals?: boolean } = {}) {
+function fixture(platform: 'mobile' | 'extension', options: { zeroPower?: boolean; expired?: boolean; voted?: boolean; fail?: boolean; delegated?: boolean; noProposals?: boolean; proposalFailure?: boolean; v1?: boolean; scanLimit?: boolean; voteFailure?: boolean; governanceFailure?: boolean; partialProposals?: boolean } = {}) {
   const key = (n: number) => new PublicKey(new Uint8Array(32).fill(n));
   const owner = key(1), realm = options.scanLimit ? new PublicKey('4ct8XU5tKbMNRphWy4rePsS9kBqPhDdvZoGpmprPaug4') : key(2), mint = key(3), proposalKey = key(4), governance = key(5), tor = key(6), delegator = key(7);
   const program = new PublicKey(options.scanLimit ? 'pytGY6tWRgGinSCvRLnSv4fHfBTMoiDGiCsesmHWM6U' : 'GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPCVZw');
   const now = Math.floor(Date.now() / 1000);
-  const membership = { pubkey: tor, account: { realm, governingTokenMint: mint, governingTokenOwner: options.delegated ? delegator : owner, governanceDelegate: options.delegated ? owner : key(8), governingTokenDepositAmount: 1234567890123456789n } };
+  const membership = { pubkey: tor, account: { realm, governingTokenMint: mint, governingTokenOwner: options.delegated ? delegator : owner, governanceDelegate: options.delegated ? owner : key(8), governingTokenDepositAmount: options.zeroPower ? 0n : 1234567890123456789n } };
   const proposal = { pubkey: proposalKey, account: { governance, governingTokenMint: mint, tokenOwnerRecord: tor, state: 2, name: 'Fund public goods', descriptionLink: '', votingAt: { toNumber: () => now - (options.expired ? 7200 : 60) }, draftAt: null, maxVotingTime: null, options: [{ label: 'Approve', voteWeight: 2000000n }], denyVoteWeight: 0n } };
   if (options.v1) Object.assign(proposal.account, { options: [], yesVotesCount: 2000000n, noVotesCount: 1000000n, denyVoteWeight: undefined, maxVotingTime: 1800 });
   const rpc = {
@@ -48,7 +49,7 @@ function fixture(platform: 'mobile' | 'extension', options: { expired?: boolean;
       if (options.proposalFailure) throw new Error('RPC unavailable');
       return options.noProposals ? [] : [proposal];
     }),
-    getVoteRecordsByVoter: vi.fn(async (_c: unknown, _p: unknown, voter: PublicKey) => { if (options.voteFailure) throw new Error('RPC unavailable'); return options.voted && voter.equals(membership.account.governingTokenOwner) ? [{ account: { proposal: proposalKey, governingTokenOwner: voter, isRelinquished: false } }] : []; })
+    getVoteRecordsByVoter: vi.fn(async (_c: unknown, _p: unknown, voter: PublicKey) => { if (options.voteFailure) throw new Error('RPC unavailable'); return options.voted && voter.equals(membership.account.governingTokenOwner) ? [{ pubkey: key(10), account: { proposal: proposalKey, governingTokenOwner: voter, isRelinquished: false, vote: { voteType: 1 } } }] : []; })
   };
   const path = resolve(platform === 'mobile' ? 'apps/mobile/src/governance.ts' : 'apps/extension/src/background/index.ts');
   let source = readFileSync(path, 'utf8');
@@ -63,10 +64,10 @@ function fixture(platform: 'mobile' | 'extension', options: { expired?: boolean;
   const exports: Record<string, (...args: any[]) => Promise<any>> = {};
   const fetch = vi.fn(() => { throw new Error('GraphQL must never be called'); });
   runInNewContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText, {
-    exports, ...sdk, PublicKey, fetch, console, createGovernanceRpcConnection,
-    require: (name: string) => name.endsWith('/governanceRpc') ? { createGovernanceRpcConnection } : name === './config' ? { getMobileSolanaRpcUrl: () => 'https://rpc.example.com' } : name === '@solana/web3.js' ? { PublicKey, Connection: class { constructor() { return rpc; } } } : sdk
+    exports, ...sdk, PublicKey, fetch, console, createGovernanceRpcConnection, createGovernanceRpcReadSession, describeGovernanceVote,
+    require: (name: string) => name.endsWith('/governanceVote') ? { describeGovernanceVote } : name.endsWith('/governanceRpc') ? { createGovernanceRpcConnection, createGovernanceRpcReadSession } : name === './config' ? { getMobileSolanaRpcUrl: () => 'https://rpc.example.com' } : name === '@solana/web3.js' ? { PublicKey, Connection: class { constructor() { return rpc; } } } : sdk
   });
-  return { sdk, fetch, realm, owner, load: () => platform === 'mobile' ? exports.fetchMobileGovernanceForWallet(owner.toBase58(), []) : exports.load(rpc, owner, []) };
+  return { sdk, fetch, realm, owner, load: (proposalDaoId?: string | null) => platform === 'mobile' ? exports.fetchMobileGovernanceForWallet(owner.toBase58(), [], proposalDaoId) : exports.load(rpc, owner, [], proposalDaoId) };
 }
 
 for (const platform of ['mobile', 'extension'] as const) {
@@ -88,6 +89,30 @@ for (const platform of ['mobile', 'extension'] as const) {
       const result = await fixture(platform, { delegated: true }).load();
       expect(result.memberDaos).toBe(1);
       expect(result.proposals[0]).toMatchObject({ canVote: true, isDelegate: true });
+    });
+    it('skips proposal and vote scans for hidden zero-power memberships', async () => {
+      const f = fixture(platform, { zeroPower: true });
+      const result = await f.load();
+      expect(result.proposals).toEqual([]);
+      expect(f.sdk.getAllGovernances).not.toHaveBeenCalled();
+      expect(f.sdk.getVoteRecordsByVoter).not.toHaveBeenCalled();
+    });
+    it('loads memberships without scanning governance accounts, proposals, or votes', async () => {
+      const f = fixture(platform);
+      const result = await f.load(null);
+      expect(result.daos).toHaveLength(1);
+      expect(result.proposals).toEqual([]);
+      expect(f.sdk.getAllGovernances).not.toHaveBeenCalled();
+      expect(f.sdk.getProposalsByGovernance).not.toHaveBeenCalled();
+      expect(f.sdk.getVoteRecordsByVoter).not.toHaveBeenCalled();
+    });
+    it('loads only the selected DAO without repeating discovery across programs', async () => {
+      const f = fixture(platform);
+      const result = await f.load(f.realm.toBase58());
+      expect(result.proposals).toHaveLength(1);
+      expect(f.sdk.getAllGovernances).toHaveBeenCalledTimes(1);
+      expect(f.sdk.getRealms).not.toHaveBeenCalled();
+      expect(f.sdk.getTokenOwnerRecordsByOwner).toHaveBeenCalledTimes(1);
     });
     it('retains DAO membership when there are no proposals', async () => {
       const result = await fixture(platform, { noProposals: true }).load();
@@ -140,7 +165,7 @@ for (const platform of ['mobile', 'extension'] as const) {
       expect((await fixture(platform, { expired: true }).load()).proposals[0].canVote).toBe(false);
     });
     it('recognizes existing delegated votes', async () => {
-      expect((await fixture(platform, { voted: true, delegated: true }).load()).proposals[0]).toMatchObject({ canVote: false, hasVoted: true });
+      expect((await fixture(platform, { voted: true, delegated: true }).load()).proposals[0]).toMatchObject({ canVote: false, hasVoted: true, recordedVotes: [{ isDelegate: true, choice: 'Deny' }] });
     });
     it('reports failed discovery instead of asserting that the wallet has no DAOs', async () => {
       const result = await fixture(platform, { fail: true }).load();

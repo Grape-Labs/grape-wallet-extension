@@ -1,6 +1,6 @@
 {
   "name": "@grape/extension",
-  "version": "0.5.205",
+  "version": "0.5.220",
   "private": true,
   "type": "module",
   "scripts": {
@@ -29,7 +29,8 @@
     "lucide-react": "^0.577.0",
     "qrcode": "^1.5.4",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "@grape/houdini": "workspace:*"
   },
   "devDependencies": {
     "vite-plugin-wasm": "^3.6.0"

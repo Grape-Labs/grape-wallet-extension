@@ -93,7 +93,7 @@ function shouldAllowEphemeralExtensionId(env: Record<string, string>): boolean {
   return rawValue === '1' || rawValue === 'true' || rawValue === 'yes';
 }
 
-function createManifestPlugin(mainnetRpcUrl: string, extensionKey?: string): Plugin {
+function createManifestPlugin(mainnetRpcUrl: string, extensionKey?: string, houdiniUrl?: string): Plugin {
   return {
     name: 'grape-manifest',
     apply: 'build',
@@ -128,6 +128,7 @@ function createManifestPlugin(mainnetRpcUrl: string, extensionKey?: string): Plu
         },
         permissions: ['storage', 'sidePanel', 'identity', 'scripting'],
         host_permissions: [
+          ...(houdiniUrl ? [toHostPermission(houdiniUrl)] : []),
           toHostPermission(mainnetRpcUrl),
           'https://api.mainnet-beta.solana.com/*',
           'https://api.devnet.solana.com/*',
@@ -197,7 +198,7 @@ export default defineConfig(({ mode }) => {
   return {
     root: extensionRoot,
     envDir: workspaceRoot,
-    plugins: [wasm(), react(), createManifestPlugin(mainnetRpcUrl, extensionKey)],
+    plugins: [wasm(), react(), createManifestPlugin(mainnetRpcUrl, extensionKey, env.VITE_HOUDINI_API_URL)],
     publicDir: resolve(extensionRoot, 'public'),
     resolve: {
       alias: {

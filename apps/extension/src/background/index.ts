@@ -1,6 +1,6 @@
 import { describeGovernanceVote } from '../../../../packages/solana/src/governanceVote';
 import { fetchVerificationRpc } from '../../../../packages/solana/src/verificationRpc';
-import { createGovernanceRpcConnection } from '../../../../packages/solana/src/governanceRpc';
+import { createGovernanceRpcConnection, createGovernanceRpcReadSession } from '../../../../packages/solana/src/governanceRpc';
 import {
   createEmptyWalletState,
   createInitialSessionState,
@@ -3009,9 +3009,10 @@ class WalletController {
   private async refreshGovernanceCache(
     walletId: string,
     network: 'mainnet-beta' | 'devnet',
-    publicKey: string
+    publicKey: string,
+    proposalDaoId?: string
   ): Promise<WalletGovernanceResponse> {
-    const cacheKey = this.getGovernanceCacheKey(walletId, network, publicKey);
+    const cacheKey = this.getGovernanceCacheKey(walletId, network, publicKey) + ':' + (proposalDaoId ?? 'memberships');
     const inFlight = this.governanceRefreshes.get(cacheKey);
     if (inFlight) {
       return inFlight;
@@ -3059,7 +3060,7 @@ class WalletController {
       const connection = this.createConnection(network, walletState);
       let result: WalletGovernanceResponse;
       try {
-        result = await fetchGovernanceForWallet(connection, owner, trackedDaos);
+        result = await fetchGovernanceForWallet(connection, owner, trackedDaos, proposalDaoId ?? null);
       } catch {
         result = {
           trackedDaos,
@@ -3085,7 +3086,7 @@ class WalletController {
     return refreshPromise;
   }
 
-  async getGovernance(forceRefresh = false) {
+  async getGovernance(forceRefresh = false, proposalDaoId?: string) {
     const { walletState, selectedWallet } = await this.ensureReadyWallet();
     const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
     if (!activeAccount || selectedWallet.chain !== 'solana') {
@@ -3103,13 +3104,13 @@ class WalletController {
       };
     }
 
-    const cacheKey = this.getGovernanceCacheKey(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey);
+    const cacheKey = this.getGovernanceCacheKey(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey) + ':' + (proposalDaoId ?? 'memberships');
     const cached = this.governanceCache.get(cacheKey);
     if (!forceRefresh && cached && Date.now() - cached.cachedAt < REPUTATION_CACHE_TTL_MS) {
       return cached.data;
     }
 
-    return this.refreshGovernanceCache(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey);
+    return this.refreshGovernanceCache(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey, proposalDaoId);
   }
 
   async scanGovernanceEligibility(): Promise<GovernanceEligibleDao[]> {
@@ -7580,7 +7581,8 @@ async function fetchGovernanceForDaoViaRpc(
   isNonMemberDao = false,
   // When provided, skip getTokenOwnerRecordsByOwner — caller already has the data
   skipTorFetch = false,
-  warnings: string[] = []
+  warnings: string[] = [],
+  loadProposals = true
 ): Promise<{
   source: 'rpc';
   member: boolean;
@@ -7599,7 +7601,7 @@ async function fetchGovernanceForDaoViaRpc(
     skipTorFetch ? Promise.resolve([]) : getGovernanceAccounts(connection, programId, TokenOwnerRecord, [
       new MemcmpFilter(1, realmPk.toBuffer()), new MemcmpFilter(122, owner.toBuffer())
     ]),
-    getAllGovernances(connection, programId, realmPk).catch(() => {
+    (loadProposals ? getAllGovernances(connection, programId, realmPk) : Promise.resolve([])).catch(() => {
       governanceLoaded = false;
       warnings.push(`Proposal accounts for ${daoId} could not be loaded. Membership balances are available.`);
       return [];
@@ -7782,9 +7784,10 @@ async function fetchGovernanceForDaoViaRpc(
 async function fetchGovernanceForWallet(
   connection: Connection,
   owner: PublicKey,
-  trackedDaoIds: string[]
+  trackedDaoIds: string[],
+  proposalDaoId?: string | null
 ): Promise<WalletGovernanceResponse> {
-  connection = createGovernanceRpcConnection(connection);
+  connection = createGovernanceRpcReadSession(connection);
   const uniqueTrackedDaoIds = Array.from(
     new Set(
       trackedDaoIds
@@ -7794,12 +7797,15 @@ async function fetchGovernanceForWallet(
   );
   const warnings: string[] = [];
   const discoveryWarnings: string[] = [];
-  const discoveredDaoOwnerMap = await discoverGovernanceDaoOwnersForWallet(connection, owner, discoveryWarnings);
+  const discoveredDaoOwnerMap = typeof proposalDaoId === 'string' ? new Map<string, Awaited<ReturnType<typeof discoverGovernanceDaoOwnersForWallet>> extends Map<string, infer V> ? V : never>() : await discoverGovernanceDaoOwnersForWallet(connection, owner, discoveryWarnings);
 
   const discoveredDaoIds = [...discoveredDaoOwnerMap.keys()];
   const delegateDaoIds = discoveredDaoIds.filter((id) => discoveredDaoOwnerMap.get(id)?.isDelegate === true);
   const governedDaoIds = discoveredDaoIds.filter((id) => discoveredDaoOwnerMap.get(id)?.isNonMember === true);
-  const uniqueDaoIds = Array.from(new Set([...discoveredDaoIds, ...uniqueTrackedDaoIds]));
+  const uniqueDaoIds = (typeof proposalDaoId === 'string' ? [proposalDaoId] : Array.from(new Set([...discoveredDaoIds, ...uniqueTrackedDaoIds]))).filter((daoId) => {
+    const memberships = discoveredDaoOwnerMap.get(daoId)?.memberships;
+    return !memberships?.length || memberships.some((record) => BigInt(record.governingTokenDepositAmount) > 0n);
+  });
 
   if (uniqueDaoIds.length === 0) {
     return {
@@ -7833,7 +7839,8 @@ async function fetchGovernanceForWallet(
             discovered?.memberships,
             isNonMemberDao,
             !!discovered,
-            warnings
+            warnings,
+            proposalDaoId !== null
           );
         } catch {
           warnings.push(`Unable to load proposals and voting power for ${daoId}.`);
@@ -8974,7 +8981,7 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
           sendResponse(await controller.clearAccessSession());
           break;
         case 'wallet_get_governance':
-          sendResponse(await controller.getGovernance(message.forceRefresh));
+          sendResponse(await controller.getGovernance(message.forceRefresh, message.proposalDaoId));
           break;
         case 'wallet_scan_governance_eligibility':
           sendResponse(await controller.scanGovernanceEligibility());

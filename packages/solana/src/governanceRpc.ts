@@ -29,3 +29,26 @@ export function createGovernanceRpcConnection(connection: Connection): Connectio
   wrappers.set(wrapped, wrapped);
   return wrapped;
 }
+
+/** Share identical reads only within one refresh, never across votes or refreshes. */
+export function createGovernanceRpcReadSession(connection: Connection): Connection {
+  const paced = createGovernanceRpcConnection(connection);
+  const reads = new Map<string, Promise<unknown>>();
+  const session = new Proxy(paced, {
+    get(target, property) {
+      const value = Reflect.get(target, property, target);
+      if (typeof value !== 'function' || !READ_METHODS.has(String(property))) return value;
+      return (...args: unknown[]) => {
+        const key = String(property) + ':' + JSON.stringify(args);
+        const existing = reads.get(key);
+        if (existing) return existing;
+        const pending = Promise.resolve().then(() => value(...args));
+        reads.set(key, pending);
+        void pending.catch(() => { if (reads.get(key) === pending) reads.delete(key); });
+        return pending;
+      };
+    }
+  });
+  wrappers.set(session, session);
+  return session;
+}

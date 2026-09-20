@@ -1,3 +1,7 @@
+import { SendPrivacyPicker } from './SendPrivacyPicker';
+import { HoudiniSwapPanel } from './HoudiniSwapPanel';
+import { depositAmount, depositProblem, recordHoudiniDeposit, type HoudiniOrder } from '../../../../../packages/houdini/src/client';
+import { hasPositiveGovernancePower, compareGovernancePower } from '../../../../../packages/solana/src/governancePower';
 import { CommunityPanel } from './CommunityPanel';
 import type { FormEvent, ReactNode } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -1570,6 +1574,9 @@ function PopupPage() {
   const [copiedAddress, setCopiedAddress] = useState(false);
   const [receiveQr, setReceiveQr] = useState('');
   const [assetId, setAssetId] = useState(() => parseInitialAssetId());
+  const [sendPrivate, setSendPrivate] = useState(false);
+  const [privateSendReview, setPrivateSendReview] = useState(false);
+  const [houdiniDeposit, setHoudiniDeposit] = useState<{ entry: HoudiniOrder; assetId: string; owner: string } | null>(null);
   const [sendAssetPickerOpen, setSendAssetPickerOpen] = useState(false);
   const [customEvmTokenAddress, setCustomEvmTokenAddress] = useState('');
   const [customEvmTokenPreview, setCustomEvmTokenPreview] = useState<ChainTokenPreviewResponse | null>(null);
@@ -1702,7 +1709,9 @@ function PopupPage() {
     network: 'mainnet-beta',
     refreshedAt: Date.now()
   });
+  const [selectedGovernanceDao, setSelectedGovernanceDao] = useState<string | null>(null);
   const [governanceRefreshNonce, setGovernanceRefreshNonce] = useState(0);
+  useEffect(() => { setSelectedGovernanceDao(null); setGovernance((current) => ({ ...current, daos: [], proposals: [] })); }, [state?.activeAccount?.publicKey, state?.wallet.selectedNetwork]);
   const [governanceLoading, setGovernanceLoading] = useState(false);
   const [governanceError, setGovernanceError] = useState<string | null>(null);
   const [governanceEligibility, setGovernanceEligibility] = useState<GovernanceEligibleDao[]>([]);
@@ -2522,12 +2531,12 @@ function PopupPage() {
 
     let cancelled = false;
     setGovernanceLoading(true);
-    void sendRuntimeMessage<WalletGovernanceResponse>({ type: 'wallet_get_governance', forceRefresh: governanceRefreshNonce > 0 })
+    void sendRuntimeMessage<WalletGovernanceResponse>({ type: 'wallet_get_governance', proposalDaoId: selectedGovernanceDao ?? undefined, forceRefresh: governanceRefreshNonce > 0 })
       .then((nextGovernance) => {
         if (cancelled) {
           return;
         }
-        setGovernance(nextGovernance);
+        setGovernance((current) => selectedGovernanceDao ? { ...current, proposals: nextGovernance.proposals, warnings: nextGovernance.warnings } : nextGovernance);
         setGovernanceError(null);
       })
       .catch((error) => {
@@ -2565,6 +2574,7 @@ function PopupPage() {
     state?.wallet.selectedNetwork,
     state?.wallet.trackedGovernanceDaoIds,
     governanceRefreshNonce,
+    selectedGovernanceDao,
     state?.wallet.setup
   ]);
 
@@ -3781,6 +3791,8 @@ function PopupPage() {
   }
 
   function openSend(nextAssetId = 'sol') {
+    setSendPrivate(false); setPrivateSendReview(false);
+    setHoudiniDeposit(null);
     setAssetId(nextAssetId);
     setSendAssetPickerOpen(false);
     setRecipientScannerVisible(false);
@@ -3806,6 +3818,7 @@ function PopupPage() {
   }
 
   function openSendForCollectible(item: CollectibleItem) {
+    setSendPrivate(false); setPrivateSendReview(false);
     if (!item.accountAddress || !item.programId) {
       setSurfaceError('This collectible is missing token account metadata, so it cannot be sent yet.');
       return;
@@ -4165,11 +4178,16 @@ function PopupPage() {
   }
 
   async function handleSend() {
+    if (sendPrivate && !houdiniDeposit) {
+      if (!import.meta.env.VITE_HOUDINI_API_URL || state?.wallet.chainState[selectedChain].selectedNetwork !== 'mainnet-beta' || selectedSendCollectible || !selectedAsset || assetId === 'custom-evm-token') { setSendError('Private send is not available for this asset or network.'); return; }
+      setPrivateSendReview(true); return;
+    }
     if (!selectedAsset) {
       return;
     }
 
     try {
+      if (houdiniDeposit && (depositProblem(houdiniDeposit.entry) || recipient !== houdiniDeposit.entry.order.depositAddress || amount !== depositAmount(houdiniDeposit.entry) || assetId !== houdiniDeposit.assetId || state?.activeAccount?.publicKey !== houdiniDeposit.owner)) throw new Error('Houdini deposit details changed or expired. Return to Houdini and refresh the order.');
       setSubmitting(true);
       setSendError(null);
       const sendAsset =
@@ -4195,6 +4213,10 @@ function PopupPage() {
         password: canUseUnlockedSigner ? undefined : password || undefined,
         asset: sendAsset
       });
+      if (houdiniDeposit) {
+        await recordHoudiniDeposit({ getItem: async key => (await chrome.storage.local.get(key))[key] ?? null, setItem: async (key, value) => { await chrome.storage.local.set({ [key]: value }); } }, import.meta.env.VITE_HOUDINI_API_URL, houdiniDeposit.owner, houdiniDeposit.entry.order.houdiniId, nextResult.signature).catch(() => {});
+        setHoudiniDeposit(null);
+      }
       setSendResult(nextResult);
       setSendError(null);
       setRecipient('');
@@ -4292,7 +4314,15 @@ function PopupPage() {
     ...verification.trackedSpaces
   ]).size;
   const verificationLinkedIdentityCount = verification.identities.length;
-  const visibleGovernanceProposals = governance.proposals;
+  const governancePowerForSort = (dao: WalletGovernanceResponse['daos'][number]) => [
+    { amount: dao.communityVotingPower, decimals: dao.communityTokenDecimals },
+    { amount: dao.delegateCommunityVotingPower, decimals: dao.communityTokenDecimals },
+    { amount: dao.councilVotingPower },
+    { amount: dao.delegateCouncilVotingPower }
+  ];
+  const visibleGovernanceDaos = governance.daos.filter((dao) => [dao.communityVotingPower, dao.councilVotingPower, dao.delegateCommunityVotingPower, dao.delegateCouncilVotingPower].some(hasPositiveGovernancePower)).sort((a, b) => compareGovernancePower(governancePowerForSort(b), governancePowerForSort(a)) || a.realmName.localeCompare(b.realmName) || a.daoId.localeCompare(b.daoId));
+  const visibleGovernanceDaoIds = new Set(visibleGovernanceDaos.map((dao) => dao.daoId));
+  const visibleGovernanceProposals = governance.proposals.filter((proposal) => proposal.daoId === selectedGovernanceDao && visibleGovernanceDaoIds.has(proposal.daoId));
   const liveGovernanceProposalCount = visibleGovernanceProposals.filter((proposal) => {
     const timeMeta = getGovernanceProposalTimeMeta(proposal);
     return proposal.stateCode === 2 && timeMeta.votingWindowOpen;
@@ -4302,7 +4332,6 @@ function PopupPage() {
     ...governance.delegateDaos,
     ...governance.governedDaos
   ]);
-  const visibleGovernanceDaoIds = new Set([...detectedGovernanceDaoIds, ...governance.trackedDaos]);
   const totalGovernanceDaoCount = visibleGovernanceDaoIds.size;
   const selectedNetworkCustomRpc =
     selectedChain === 'sui'
@@ -4996,7 +5025,10 @@ function PopupPage() {
           </div>
         ))}
         <div className="governance-proposal-metrics">
-          <span>Yes {formatVotingPower(BigInt(proposal.yesVotes), voteDecimals, true)}</span>
+          {proposal.choices.map((choice) => (
+            <span key={choice.rank}>{choice.label}: {formatVotingPower(BigInt(choice.voteWeight), voteDecimals, true)}</span>
+          ))}
+          {BigInt(proposal.abstainVotes) > 0n ? <span>Abstain {formatVotingPower(BigInt(proposal.abstainVotes), voteDecimals, true)}</span> : null}
           {BigInt(proposal.noVotes) > BigInt(0) ? <span>No {formatVotingPower(BigInt(proposal.noVotes), voteDecimals, true)}</span> : null}
           {BigInt(proposal.denyVotes) > BigInt(0) ? <span>Deny {formatVotingPower(BigInt(proposal.denyVotes), voteDecimals, true)}</span> : null}
         </div>
@@ -5776,7 +5808,7 @@ function PopupPage() {
                       : liveGovernanceProposalCount > 0
                         ? `${liveGovernanceProposalCount} live`
                         : totalGovernanceDaoCount > 0
-                          ? 'No live'
+                          ? (selectedGovernanceDao ? 'No live' : 'View DAOs')
                           : 'Scanning DAOs'}
                   </strong>
                   <span className="wallet-shortcut-meta">
@@ -6203,7 +6235,7 @@ function PopupPage() {
                   <div className="governance-panel-copy">
                     <strong className="governance-panel-title">Governance</strong>
                     <p className="muted governance-panel-description">
-                      Track live proposals across the DAOs this wallet can vote in and cast votes directly from Grape.
+                      Your DAOs, highest voting power first. Open a DAO to load its proposals.
                     </p>
                   </div>
                   <div className="inline wrap-actions">
@@ -6219,7 +6251,7 @@ function PopupPage() {
                 ) : null}
                 {governanceVoteError ? <p className="danger-box">{governanceVoteError}</p> : null}
                 <div className="governance-dao-list">
-                  {(!governanceLoading ? governance.daos : []).map((dao) => (
+                  {visibleGovernanceDaos.filter((dao) => !selectedGovernanceDao || dao.daoId === selectedGovernanceDao).map((dao) => (
                     <div className="governance-dao-card" key={dao.daoId}>
                       <div className="community-panel-header">
                         <strong>{dao.realmName}</strong>
@@ -6230,16 +6262,16 @@ function PopupPage() {
                         <div><span className="muted">Council deposit</span><div>{formatVotingPower(BigInt(dao.councilVotingPower), 0)}</div></div>
                         {dao.delegateCount > 0 ? <div><span className="muted">Delegated to you</span><div>{formatVotingPower(BigInt(dao.delegateCommunityVotingPower), dao.communityTokenDecimals)} community · {dao.delegateCouncilVotingPower} council</div></div> : null}
                       </div>
-                      <p className="muted">{dao.proposalStatus === 'unavailable' ? 'Proposal check incomplete — refresh to retry' : governance.proposals.filter((proposal) => proposal.daoId === dao.daoId && proposal.canVote).length + ' proposals awaiting your vote'}</p>
+                      <Button tone="secondary" onClick={() => setSelectedGovernanceDao((current) => current === dao.daoId ? null : dao.daoId)}>{selectedGovernanceDao === dao.daoId ? 'Back to all DAOs' : 'View proposals'}</Button>
                     </div>
                   ))}
                 </div>
-                {governanceLoading ? <p className="muted">Loading governance proposals…</p> : null}
+                {governanceLoading ? <p className="muted">{selectedGovernanceDao ? 'Loading selected DAO proposals…' : 'Loading DAO memberships…'}</p> : null}
                 {governanceError ? <p className="danger-box">{governanceError}</p> : null}
                 {governance.warnings?.length ? <div className="danger-box">{Array.from(new Set(governance.warnings)).map((warning) => <p key={warning}>{warning}</p>)}</div> : null}
                 {governance.discoveryWarnings?.length ? <details className="muted governance-discovery-note"><summary>Additional DAO discovery is limited</summary><p>The DAOs shown above were found. Some other programs could not be fully checked.</p>{Array.from(new Set(governance.discoveryWarnings)).map((warning) => <p key={warning}>{warning}</p>)}</details> : null}
                 {(() => {
-                  if (governanceLoading || governanceError || (governance.warnings?.length && !visibleGovernanceProposals.length)) return null;
+                  if (!selectedGovernanceDao || governanceLoading || governanceError || (governance.warnings?.length && !visibleGovernanceProposals.length)) return null;
                   const nowUnixSeconds = Math.floor(Date.now() / 1000);
                   const activeProposals = visibleGovernanceProposals.filter((proposal) => {
                     const timeMeta = getGovernanceProposalTimeMeta(proposal, nowUnixSeconds);
@@ -6612,6 +6644,13 @@ function PopupPage() {
       );
     }
 
+    const privateSendAvailable = !!import.meta.env.VITE_HOUDINI_API_URL && state?.wallet.chainState[selectedChain].selectedNetwork === 'mainnet-beta' && !selectedSendCollectible && !!selectedAsset && assetId !== 'custom-evm-token';
+    if (privateSendReview && privateSendAvailable && selectedAsset && state?.activeAccount) {
+      const source = { id: selectedAsset.id, chain: selectedChain, symbol: selectedAsset.symbol, native: ['sol', 'sui', 'eth', 'mon'].includes(selectedAsset.asset.kind), address: selectedAsset.asset.kind === 'spl-token' ? selectedAsset.asset.mint : selectedAsset.asset.kind === 'evm-token' ? selectedAsset.asset.tokenAddress : selectedAsset.asset.kind === 'sui-coin' ? selectedAsset.asset.coinType : undefined };
+      const destination = recipientResolution?.requestedRecipient === recipient ? recipientResolution.recipient : recipient.trim();
+      return <HoudiniSwapPanel key={state.activeAccount.publicKey + source.id + amount + destination} endpoint={import.meta.env.VITE_HOUDINI_API_URL.trim()} owner={state.activeAccount.publicKey} assets={[source]} privateSend={{ asset: source, amount, recipient: destination }} onBack={() => setPrivateSendReview(false)} onUsePublic={() => { setSendPrivate(false); setPrivateSendReview(false); }} onFund={(asset, entry) => { openSend(asset.id); setRecipient(entry.order.depositAddress); setAmount(depositAmount(entry)); setPassword(''); setHoudiniDeposit({ entry, assetId: asset.id, owner: state.activeAccount!.publicKey }); }} />;
+    }
+
     const isCollectibleSend = !!selectedSendCollectible;
     const isNativeSend =
       selectedAsset?.asset.kind === 'sol' ||
@@ -6967,6 +7006,9 @@ function PopupPage() {
               </div>
             ) : null}
 
+          {houdiniDeposit ? <div className="houdini-order"><strong>{houdiniDeposit.entry.mode === 'private' ? 'Fund private send' : 'Fund Houdini swap'}</strong><p className="mono">Final recipient: {houdiniDeposit.entry.recipient}</p><p>Expected delivery: {houdiniDeposit.entry.order.outAmount} {houdiniDeposit.entry.to.symbol}</p><p className="muted">This transfer funds your Houdini order. Its delivery status is saved in this wallet.</p></div> : null}
+            {!houdiniDeposit && privateSendAvailable ? <SendPrivacyPicker value={sendPrivate} onChange={setSendPrivate} /> : null}
+
             {!canUseUnlockedSigner ? (
               <div className="send-field-group">
                 <label className="send-field-label">Password</label>
@@ -7013,7 +7055,7 @@ function PopupPage() {
             }
             onClick={handleSend}
           >
-            Send now
+            {sendPrivate && !houdiniDeposit ? 'Review private send' : houdiniDeposit ? 'Send deposit' : 'Send now'}
           </Button>
         </div>
       </>
@@ -9958,14 +10000,14 @@ function PopupPage() {
 
   return (
     <PageShell
-      eyebrow={view === 'home' || view === 'asset' ? null : undefined}
+      eyebrow={view === 'home' || view === 'asset' || view === 'send' ? null : undefined}
       title={
         view === 'home'
           ? ''
           : view === 'discover'
             ? 'Discover'
           : view === 'send'
-            ? 'Send'
+            ? ''
             : view === 'receive'
               ? 'Receive'
               : view === 'swap'
@@ -9988,7 +10030,7 @@ function PopupPage() {
           : view === 'discover'
             ? 'Explore apps and revisit connected sites.'
           : view === 'send'
-            ? 'Send directly from the popup.'
+            ? undefined
             : view === 'receive'
               ? 'Share your wallet address safely.'
               : view === 'swap'
@@ -10005,7 +10047,7 @@ function PopupPage() {
                       ? 'Recover SOL held by empty token accounts.'
                     : 'Manage your wallet and connections.'
       }
-      actions={view === 'home' ? undefined : <div className="inline popup-actions">{renderWalletMenu()}</div>}
+      actions={view === 'home' || view === 'send' ? undefined : <div className="inline popup-actions">{renderWalletMenu()}</div>}
     >
       {view === 'home' ? renderHome() : null}
       {view === 'discover' ? renderDiscover() : null}
