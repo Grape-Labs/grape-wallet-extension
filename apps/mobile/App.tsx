@@ -7425,70 +7425,68 @@ function GrapeApp() {
 
     return (
       <View style={styles.stack}>
-        <View style={styles.sectionCard}>
-          <Text style={styles.sectionTitle}>Governance</Text>
-          <Text style={styles.sectionHint}>
-            Your DAOs, highest voting power first. Open a DAO to load its proposals.
-          </Text>
-          <View style={styles.reputationSummaryGrid}>
-            <View style={styles.reputationSummaryCard}>
-              <Text style={styles.reputationSummaryLabel}>Proposals</Text>
-              <Text style={styles.reputationSummaryValue}>{selectedGovernanceDao ? visibleGovernanceProposals.filter((proposal) => proposal.stateCode === 2 && getGovernanceProposalTimeMeta(proposal, Math.floor(Date.now() / 1000)).votingWindowOpen).length : 'Open a DAO'}</Text>
+        <View style={styles.governanceHubCard}>
+          <View style={styles.governanceHubHeader}>
+            <View style={styles.reputationCopy}>
+              <Text style={styles.sectionTitle}>Governance</Text>
+              <Text style={styles.reputationMeta}>
+                {selectedGovernanceDao
+                  ? `${visibleGovernanceDaos.find((dao) => dao.daoId === selectedGovernanceDao)?.realmName ?? 'DAO'} proposals`
+                  : `${totalGovernanceDaoCount} participating DAO${totalGovernanceDaoCount === 1 ? '' : 's'} · highest power first`}
+              </Text>
             </View>
-            <View style={styles.reputationSummaryCard}>
-              <Text style={styles.reputationSummaryLabel}>Participating DAOs</Text>
-              <Text style={styles.reputationSummaryValue}>{totalGovernanceDaoCount}</Text>
-            </View>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Refresh governance"
+              disabled={governanceLoading}
+              style={styles.communityIconButton}
+              onPress={() => setGovernanceRefreshNonce((value) => value + 1)}
+            >
+              {governanceLoading ? <ActivityIndicator size="small" color={activeTheme.grape} /> : <Feather name="refresh-cw" size={18} color={activeTheme.text} />}
+            </Pressable>
           </View>
-        </View>
-
-        <View style={styles.sectionCard}>
-          <View style={styles.sectionHeader}><Text style={styles.sectionTitle}>Your DAOs</Text><PaperButton disabled={governanceLoading} onPress={() => setGovernanceRefreshNonce((value) => value + 1)}>Refresh</PaperButton></View>
-          <Text style={styles.sectionHint}>
-            Open the DAOs this wallet already participates in directly in Grape Discover.
-          </Text>
           {governanceLoading && visibleGovernanceDaos.length === 0 ? (
             <View style={styles.loadingRow}>
               <ActivityIndicator color={activeTheme.grape} />
               <Text style={styles.sectionHint}>Loading DAO memberships...</Text>
             </View>
           ) : visibleGovernanceDaos.length > 0 ? (
-            <View style={styles.stack}>
-              {visibleGovernanceDaos.filter((dao) => !selectedGovernanceDao || dao.daoId === selectedGovernanceDao).map((dao) => (
-                <View key={`member-dao:${dao.daoId}`} style={styles.governanceEligibilityCard}>
-                  <View style={styles.governanceProposalCopy}>
-                    <Text style={styles.governanceProposalTitle}>{dao.realmName}</Text>
-                    <View style={styles.governanceProposalBadges}>
-                      <View style={[styles.governanceStatusPill, styles.governanceStatusPillSuccess]}>
-                        <Text style={[styles.governanceStatusPillText, styles.governanceStatusPillTextSuccess]}>
-                          Participating
-                        </Text>
+            <View style={styles.governanceDaoList}>
+              {visibleGovernanceDaos.filter((dao) => !selectedGovernanceDao || dao.daoId === selectedGovernanceDao).map((dao) => {
+                const positivePower = (dao.votingPower ?? []).filter((power) => hasPositiveGovernancePower(power.amount));
+                const isSelected = selectedGovernanceDao === dao.daoId;
+                return (
+                  <Pressable
+                    key={`member-dao:${dao.daoId}`}
+                    accessibilityRole="button"
+                    accessibilityLabel={isSelected ? `Back to all DAOs from ${dao.realmName}` : `View proposals for ${dao.realmName}`}
+                    style={({ pressed }) => [styles.governanceDaoRow, pressed || isSelected ? styles.governanceDaoRowActive : null]}
+                    onPress={() => setSelectedGovernanceDao((current) => current === dao.daoId ? null : dao.daoId)}
+                  >
+                    <View style={styles.governanceDaoIcon}>
+                      <Feather name={isSelected ? 'arrow-left' : 'users'} size={17} color={activeTheme.text} />
+                    </View>
+                    <View style={styles.reputationCopy}>
+                      <Text numberOfLines={1} style={styles.reputationName}>{dao.realmName}</Text>
+                      <View style={styles.governanceDaoPowerList}>
+                        {positivePower.map((power) => (
+                          <Text key={power.mint + ':' + power.delegated} style={styles.governanceDaoPowerText}>
+                            <Text style={styles.governanceDaoPowerValue}>{power.amount}</Text>{' '}{power.delegated ? 'delegated ' : ''}{power.kind.toLowerCase()}
+                          </Text>
+                        ))}
                       </View>
                     </View>
-                    <Text style={styles.sectionHint}>{dao.daoId}</Text>
-                    <PaperButton compact onPress={() => setSelectedGovernanceDao((current) => current === dao.daoId ? null : dao.daoId)}>{selectedGovernanceDao === dao.daoId ? 'Back to all DAOs' : 'View proposals'}</PaperButton>
-                    {dao.votingPower?.map((power) => (
-                      <Text key={power.mint + ':' + power.delegated} style={styles.sectionHint}>
-                        {power.delegated ? 'Delegated' : 'Deposited'} {power.kind.toLowerCase()}: {power.amount}
-                      </Text>
-                    ))}
-                  </View>
-                  <View style={styles.governanceEligibilityActions}>
-                    <PaperButton
-                      mode="contained"
-                      style={styles.paperPrimaryButton}
-                      buttonColor={activeTheme.primaryButton}
-                      textColor={activeTheme.primaryButtonText}
-                      onPress={() => openGovernanceDaoInDiscover(dao.daoId)}
-                    >
-                      Open
-                    </PaperButton>
-                  </View>
-                </View>
-              ))}
+                    {isSelected ? <Text style={styles.governanceDaoBackText}>All DAOs</Text> : <Feather name="chevron-right" size={17} color={activeTheme.muted} />}
+                  </Pressable>
+                );
+              })}
             </View>
           ) : (
-            <Text style={styles.sectionHint}>No participating DAOs are loaded for this wallet yet.</Text>
+            <View style={styles.governanceEmptyState}>
+              <Feather name="users" size={22} color={activeTheme.muted} />
+              <Text style={styles.reputationName}>No voting power found</Text>
+              <Text style={styles.reputationMeta}>This wallet has no deposited or delegated community or council voting power.</Text>
+            </View>
           )}
         </View>
 
@@ -7634,6 +7632,10 @@ function GrapeApp() {
             const timeMeta = getGovernanceProposalTimeMeta(proposal, nowUnixSeconds);
             return proposal.stateCode === 2 && !timeMeta.votingWindowOpen;
           });
+          const recentProposals = visibleGovernanceProposals
+            .filter((proposal) => proposal.stateCode !== 2)
+            .sort((left, right) => (right.votingEndsAt ?? right.votingAt ?? right.draftAt ?? 0) - (left.votingEndsAt ?? left.votingAt ?? left.draftAt ?? 0))
+            .slice(0, 5);
 
           return (
             <>
@@ -7671,6 +7673,36 @@ function GrapeApp() {
                       {finalizingProposals.map((proposal) => renderMobileGovernanceProposalCard(proposal, nowUnixSeconds))}
                     </View>
                   ) : null}
+                </View>
+              ) : null}
+              {recentProposals.length > 0 ? (
+                <View style={styles.governanceRecentSection}>
+                  <View style={styles.sectionHeader}>
+                    <Text style={styles.reputationName}>Recent proposals</Text>
+                    <Text style={styles.reputationMeta}>{recentProposals.length}</Text>
+                  </View>
+                  <View style={styles.governanceRecentList}>
+                    {recentProposals.map((proposal) => {
+                      const proposalTimestamp = proposal.votingEndsAt ?? proposal.votingAt ?? proposal.draftAt;
+                      const recordedVote = proposal.recordedVotes?.map((vote) => `${vote.isDelegate ? 'Delegate' : 'You'}: ${vote.choice}`).join(' · ');
+                      return (
+                        <Pressable
+                          key={proposal.proposalId}
+                          accessibilityRole="link"
+                          accessibilityLabel={`Open recent proposal ${proposal.proposalName}`}
+                          style={({ pressed }) => [styles.governanceRecentRow, pressed ? styles.governanceDaoRowActive : null]}
+                          onPress={() => void Linking.openURL(buildGovernanceProposalUrl(proposal.daoId, proposal.proposalId))}
+                        >
+                          <View style={styles.reputationCopy}>
+                            <Text numberOfLines={1} style={styles.governanceRecentTitle}>{proposal.proposalName}</Text>
+                            <Text style={styles.governanceRecentMeta}>{proposal.state}{proposalTimestamp ? ` · ${new Date(proposalTimestamp * 1000).toLocaleDateString()}` : ''}</Text>
+                          </View>
+                          {recordedVote ? <Text numberOfLines={2} style={styles.governanceRecentVote}>{recordedVote}</Text> : null}
+                          <Feather name="external-link" size={14} color={activeTheme.muted} />
+                        </Pressable>
+                      );
+                    })}
+                  </View>
                 </View>
               ) : null}
             </>
@@ -7832,7 +7864,7 @@ function GrapeApp() {
           {selectedWallet?.chain === 'sui' && selectedSendAsset?.tokenType === 'sui-coin' ? (
             <Text style={styles.sectionHint}>Sui fungible token send is not available on mobile yet. Native SUI only.</Text>
           ) : null}
-          {houdiniDeposit ? <View style={styles.communityDetailCard}><Text style={styles.settingsTitle}>{houdiniDeposit.entry.mode === 'private' ? 'Fund private send' : 'Fund Houdini swap'}</Text><Text style={styles.sectionHint}>Final recipient: {houdiniDeposit.entry.recipient}</Text><Text style={styles.sectionHint}>Expected delivery: {houdiniDeposit.entry.order.outAmount} {houdiniDeposit.entry.to.symbol}. Delivery status is saved in this wallet.</Text></View> : privateSendAvailable ? <SendPrivacyPicker value={sendPrivate} onChange={setSendPrivate} theme={activeTheme} /> : null}
+          {houdiniDeposit ? <View style={styles.communityDetailCard}><Text style={styles.settingsTitle}>Confirm Houdini deposit</Text><Text style={styles.sectionHint}>You are about to deposit exactly {depositAmount(houdiniDeposit.entry)} {houdiniDeposit.entry.from.symbol}. This signed transfer starts the private send.</Text><Text selectable style={styles.sectionHint}>Houdini deposit: {houdiniDeposit.entry.order.depositAddress}</Text><Text selectable style={styles.sectionHint}>Final recipient: {houdiniDeposit.entry.recipient}</Text><Text style={styles.sectionHint}>Expected delivery: {houdiniDeposit.entry.order.outAmount} {houdiniDeposit.entry.to.symbol}. Only approve this deposit once.</Text></View> : privateSendAvailable ? <SendPrivacyPicker value={sendPrivate} onChange={setSendPrivate} theme={activeTheme} /> : null}
           {gasWarning ? <Text style={styles.errorText}>{gasWarning}</Text> : null}
           {error ? <Text style={styles.errorText}>{error}</Text> : null}
           <PaperButton
@@ -7843,7 +7875,7 @@ function GrapeApp() {
             disabled={sendLoading || !selectedWallet || !selectedSendAsset}
             onPress={() => void handleSend()}
           >
-            {sendLoading ? 'Sending...' : sendPrivate && !houdiniDeposit ? 'Review private send' : houdiniDeposit ? 'Send deposit' : `Send ${selectedSendAsset?.symbol ?? selectedChainMeta.short}`}
+            {sendLoading ? 'Sending...' : sendPrivate && !houdiniDeposit ? 'Review private send' : houdiniDeposit ? `Deposit ${depositAmount(houdiniDeposit.entry)} ${houdiniDeposit.entry.from.symbol}` : `Send ${selectedSendAsset?.symbol ?? selectedChainMeta.short}`}
           </PaperButton>
         </View>
       </View>
@@ -13623,6 +13655,123 @@ function createStyles(palette: MobileThemePalette) {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8
+  },
+  governanceHubCard: {
+    gap: 12,
+    overflow: 'hidden'
+  },
+  governanceHubHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 2
+  },
+  governanceDaoList: {
+    overflow: 'hidden',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: palette.panelBorder,
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.08)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.68)'
+          : 'rgba(255,255,255,0.04)'
+  },
+  governanceDaoRow: {
+    minHeight: 72,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: palette.panelBorder
+  },
+  governanceDaoRowActive: {
+    backgroundColor:
+      palette.id === 'champagne'
+        ? 'rgba(117,67,54,0.08)'
+        : 'rgba(255,255,255,0.07)'
+  },
+  governanceDaoIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: palette.softPanel
+  },
+  governanceDaoPowerList: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    columnGap: 10,
+    rowGap: 2
+  },
+  governanceDaoPowerText: {
+    color: palette.muted,
+    fontSize: 11,
+    lineHeight: 16
+  },
+  governanceDaoPowerValue: {
+    color: palette.text,
+    fontWeight: '800'
+  },
+  governanceDaoBackText: {
+    color: palette.muted,
+    fontSize: 11,
+    fontWeight: '700'
+  },
+  governanceRecentSection: {
+    gap: 9
+  },
+  governanceRecentList: {
+    overflow: 'hidden',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: palette.panelBorder,
+    backgroundColor:
+      palette.id === 'apple'
+        ? 'rgba(255,255,255,0.08)'
+        : palette.id === 'champagne'
+          ? 'rgba(255,255,255,0.68)'
+          : 'rgba(255,255,255,0.04)'
+  },
+  governanceRecentRow: {
+    minHeight: 60,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: palette.panelBorder
+  },
+  governanceRecentTitle: {
+    color: palette.text,
+    fontSize: 13,
+    fontWeight: '800'
+  },
+  governanceRecentMeta: {
+    color: palette.muted,
+    fontSize: 11,
+    lineHeight: 16
+  },
+  governanceRecentVote: {
+    maxWidth: '36%',
+    color: palette.mint,
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '700',
+    textAlign: 'right'
+  },
+  governanceEmptyState: {
+    gap: 7,
+    padding: 18,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: palette.panelBorder
   },
   governanceMetricText: {
     color: palette.muted,

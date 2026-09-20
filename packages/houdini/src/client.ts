@@ -6,6 +6,9 @@ export type HoudiniOrder = {
 };
 export type HoudiniAsset = { id: string; chain: string; symbol: string; address?: string; native: boolean };
 export type HoudiniStorage = { getItem(key: string): Promise<string | null>; setItem(key: string, value: string): Promise<void> };
+class HoudiniRequestError extends Error {
+  constructor(message: string, readonly status: number, readonly code?: string) { super(message); }
+}
 export const orderStatus = (status: number) => ({ '-2': 'Preparing deposit', '-1': 'Preparing deposit', 0: 'Awaiting deposit', 1: 'Confirming deposit', 2: 'Exchanging', 3: 'Routing', 4: 'Delivered', 5: 'Expired', 6: 'Failed — contact support', 7: 'Refunded', 8: 'Order unavailable' }[status] ?? 'Checking status');
 export function orderIsOpen(entry: HoudiniOrder, now = Date.now()): boolean {
   if (entry.order.status < -2 || entry.order.status > 3) return false;
@@ -61,7 +64,7 @@ export class HoudiniClient {
     let response: Response;
     try { response = await fetch(this.endpoint.replace(/\/$/, '') + path, { method: body ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', 'X-User-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' }, ...(body ? { body: JSON.stringify(body) } : {}), signal: controller.signal }); } finally { clearTimeout(timeout); }
     const data = await response.json();
-    if (!response.ok) throw new Error(data.error ?? 'Houdini request failed.');
+    if (!response.ok) throw new HoudiniRequestError(data.error ?? 'Houdini request failed.', response.status, data.code);
     return data;
   }
   private async saveOrders(orders: HoudiniOrder[]) {
@@ -76,7 +79,11 @@ export class HoudiniClient {
     catch { this.update({ error: 'Saved orders could not be loaded. Do not repeat a deposit without checking its status.' }); }
     const pending = await this.storage.getItem(this.key + ':pending').catch(() => null);
     if (pending) {
-      try { await this.createFromTicket(pending); } catch (e) { this.update({ error: (e as Error).message }); }
+      try { await this.createFromTicket(pending, true); }
+      catch (e) {
+        if (e instanceof HoudiniRequestError && ['ORDER_NOT_FOUND', 'ORDER_NOT_CREATED', 'QUOTE_EXPIRED'].includes(e.code ?? '')) await this.storage.setItem(this.key + ':pending', '').catch(() => {});
+        if (!(e instanceof HoudiniRequestError) || e.code !== 'ORDER_NOT_FOUND') this.update({ error: (e as Error).message });
+      }
     }
     this.update({ ready: true }); this.poll();
   }
@@ -123,10 +130,13 @@ export class HoudiniClient {
       await this.storage.setItem(this.key + ':pending', quote.ticket);
       await this.createFromTicket(quote.ticket);
       this.update({ quotes: [] });
-    } catch (e) { this.update({ error: (e as Error).message }); } finally { this.update({ busy: false }); }
+    } catch (e) {
+      if (e instanceof HoudiniRequestError && ['ORDER_NOT_FOUND', 'ORDER_NOT_CREATED', 'QUOTE_EXPIRED'].includes(e.code ?? '')) await this.storage.setItem(this.key + ':pending', '').catch(() => {});
+      this.update({ error: (e as Error).message });
+    } finally { this.update({ busy: false }); }
   }
-  private async createFromTicket(ticket: string) {
-    const entry = await this.request<HoudiniOrder>('/orders', { ticket });
+  private async createFromTicket(ticket: string, recoverOnly = false) {
+    const entry = await this.request<HoudiniOrder>('/orders', { ticket, ...(recoverOnly ? { recoverOnly: true } : {}) });
     await this.saveOrders([entry, ...this.state.orders.filter(e => e.order.houdiniId !== entry.order.houdiniId)]);
     await this.storage.setItem(this.key + ':pending', '');
   }

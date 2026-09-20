@@ -2728,7 +2728,7 @@ class WalletController {
     return signatures;
   }
 
-  async getAssets(options?: { staleWhileRevalidate?: boolean }) {
+  async getAssets(options?: { staleWhileRevalidate?: boolean; forceRefresh?: boolean }) {
     const { walletState, selectedWallet } = await this.ensureReadyWallet();
     const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
     if (!activeAccount) {
@@ -2739,6 +2739,9 @@ class WalletController {
     }
 
     const cacheKey = this.getAssetCacheKey(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey);
+    if (options?.forceRefresh) {
+      return this.refreshAssetsCache(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey);
+    }
     const cache = await assetCacheStorage.get();
     const cached = cache[cacheKey];
 
@@ -8963,7 +8966,7 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
           sendResponse({ lamports: await controller.getBalanceLamports() });
           break;
         case 'wallet_get_assets':
-          sendResponse(await controller.getAssets({ staleWhileRevalidate: message.staleWhileRevalidate }));
+          sendResponse(await controller.getAssets({ staleWhileRevalidate: message.staleWhileRevalidate, forceRefresh: message.forceRefresh }));
           break;
         case 'wallet_refresh_asset_values':
           sendResponse(await controller.refreshAssetValues(message.chain));

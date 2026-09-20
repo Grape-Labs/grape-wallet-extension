@@ -586,7 +586,8 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('wallet_get_assets'),
-    staleWhileRevalidate: z.boolean().optional()
+    staleWhileRevalidate: z.boolean().optional(),
+    forceRefresh: z.boolean().optional()
   }),
   z.object({
     type: z.literal('wallet_refresh_asset_values'),

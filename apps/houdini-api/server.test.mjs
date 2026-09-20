@@ -34,7 +34,7 @@ test('quotes, idempotent orders, private status capability and backend-only cred
     const submitted = JSON.parse(calls.find(c => c.url.endsWith('/exchanges')).options.body);
     assert.equal(submitted.addressTo, 'recipient');
     assert.equal(submitted.refundAddress, 'sender');
-    assert.equal(submitted.markup, 0);
+    assert.equal('markup' in submitted, false, 'orders must preserve the quote markup by omitting an unquoted value');
     assert.equal(order.order.houdiniId, 'order-1');
     assert.equal(JSON.stringify(order).includes('test-secret'), false);
     assert.equal((await post('/status', { capability: 'order-1' })).status, 403);
@@ -119,5 +119,59 @@ test('reuses an active matching order even when a fresh quote has a new id', asy
     assert.equal(first.order.houdiniId, second.order.houdiniId);
     assert.equal(exchanges, 1);
     assert.equal((await (await post('/status', { capability: second.capability })).json()).order.houdiniId, 'one-order');
+  } finally { await new Promise(resolve => server.close(resolve)); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('clears a pending marker after Houdini definitively rejects order creation', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'houdini-rejected-'));
+  let exchanges = 0;
+  const fetcher = async (url) => {
+    if (url.includes('/tokens/')) return Response.json({ id: 'sol', symbol: 'SOL', enabled: true, hasCex: true, decimals: 9, mainnet: true, chainData: { shortName: 'solana', name: 'Solana' } });
+    if (url.includes('/quotes?')) return Response.json({ quotes: [{ quoteId: 'rejected-quote', type: 'private', amountOut: .97 }] });
+    if (url.endsWith('/exchanges')) { exchanges++; return Response.json({ code: 'INVALID_ADDRESS', message: 'Destination address is invalid' }, { status: 422 }); }
+    throw new Error('Unexpected request');
+  };
+  const server = await createHoudiniService({ key: 'key', secret: 'secret', signingSecret: 'x'.repeat(64), dataDir: dir, origins: [], trustProxy: false }, fetcher);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const post = (path, body) => fetch('http://127.0.0.1:' + server.address().port + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  try {
+    const request = { mode: 'private', from: 'sol', to: 'sol', amount: '1', recipient: 'recipient', refundAddress: 'sender' };
+    const quote = (await (await post('/quotes', request)).json()).quotes[0];
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const response = await post('/orders', { ticket: quote.ticket });
+      assert.equal(response.status, 422);
+      assert.equal((await response.json()).code, 'ORDER_NOT_CREATED');
+    }
+    assert.equal(exchanges, 2, 'a definitive rejection must not leave a permanent pending marker');
+  } finally { await new Promise(resolve => server.close(resolve)); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('reconciles an uncertain attempt without creating an order on wallet startup', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'houdini-recovery-'));
+  let exchanges = 0;
+  const fetcher = async (url) => {
+    if (url.includes('/tokens/')) return Response.json({ id: 'sol', symbol: 'SOL', enabled: true, hasCex: true, decimals: 9, mainnet: true, chainData: { shortName: 'solana', name: 'Solana' } });
+    if (url.includes('/quotes?')) return Response.json({ quotes: [{ quoteId: 'uncertain-quote', type: 'private', amountOut: .97 }] });
+    if (url.includes('/orders?')) return Response.json({ total: 0, orders: [] });
+    if (url.endsWith('/exchanges')) {
+      exchanges++;
+      if (exchanges === 1) throw new Error('connection reset');
+      return Response.json({ houdiniId: 'recovered-retry', anonymous: true, status: 0, receiverAddress: 'recipient', inAmount: 1, outAmount: .97, expires: new Date(Date.now() + 600000).toISOString() });
+    }
+    throw new Error('Unexpected request');
+  };
+  const server = await createHoudiniService({ key: 'key', secret: 'secret', signingSecret: 'x'.repeat(64), dataDir: dir, origins: [], trustProxy: false, pendingTimeoutMs: 0 }, fetcher);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const post = (path, body) => fetch('http://127.0.0.1:' + server.address().port + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  try {
+    const request = { mode: 'private', from: 'sol', to: 'sol', amount: '1', recipient: 'recipient', refundAddress: 'sender' };
+    const quote = (await (await post('/quotes', request)).json()).quotes[0];
+    assert.equal((await post('/orders', { ticket: quote.ticket })).status, 502);
+    const recovery = await post('/orders', { ticket: quote.ticket, recoverOnly: true });
+    assert.equal(recovery.status, 404);
+    assert.equal((await recovery.json()).code, 'ORDER_NOT_FOUND');
+    assert.equal(exchanges, 1, 'startup recovery must never create a new exchange');
+    assert.equal((await (await post('/orders', { ticket: quote.ticket })).json()).order.houdiniId, 'recovered-retry');
+    assert.equal(exchanges, 2, 'an explicit retry may create the order after reconciliation');
   } finally { await new Promise(resolve => server.close(resolve)); await rm(dir, { recursive: true, force: true }); }
 });

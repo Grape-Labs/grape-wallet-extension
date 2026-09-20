@@ -1671,6 +1671,7 @@ function PopupPage() {
   const [bridgeWalletPickerOpen, setBridgeWalletPickerOpen] = useState(false);
   const bridgeQuoteRequestRef = useRef(0);
   const [assetsLoading, setAssetsLoading] = useState(false);
+  const [manualRefreshStatus, setManualRefreshStatus] = useState<'idle' | 'refreshing' | 'success' | 'error'>('idle');
   const [reputation, setReputation] = useState<WalletReputationResponse>({
     spaces: [],
     totalPoints: '0',
@@ -1823,12 +1824,13 @@ function PopupPage() {
   const isPopupSurface = surface === 'popup';
   const selectedChainValue = state?.wallet.selectedChain ?? 'solana';
 
-  const refresh = async () => {
+  const refresh = async (forceAssets = false): Promise<boolean> => {
     if (assetRevalidateTimerRef.current !== null) {
       window.clearTimeout(assetRevalidateTimerRef.current);
       assetRevalidateTimerRef.current = null;
     }
     try {
+      if (forceAssets) setAssetsLoading(true);
       setSurfaceError(null);
       const nextState = await Promise.race([
         sendRuntimeMessage<WalletStateResponse>({ type: 'wallet_get_state' }),
@@ -1843,7 +1845,8 @@ function PopupPage() {
         try {
           const nextAssets = await sendRuntimeMessage<WalletAssetsResponse>({
             type: 'wallet_get_assets',
-            staleWhileRevalidate: true
+            staleWhileRevalidate: !forceAssets,
+            forceRefresh: forceAssets
           });
           setAssets(nextAssets);
           if (nextAssets.stale && assetRevalidateAttemptsRef.current < 6) {
@@ -1867,10 +1870,20 @@ function PopupPage() {
         setAssetsLoading(false);
         assetRevalidateAttemptsRef.current = 0;
       }
+      return true;
     } catch (error) {
       setAssetsLoading(false);
       setSurfaceError(error instanceof Error ? error.message : 'Unable to load wallet state.');
+      return false;
     }
+  };
+
+  const handleManualRefresh = async () => {
+    if (manualRefreshStatus === 'refreshing') return;
+    setManualRefreshStatus('refreshing');
+    const succeeded = await refresh(true);
+    setManualRefreshStatus(succeeded ? 'success' : 'error');
+    window.setTimeout(() => setManualRefreshStatus('idle'), succeeded ? 1800 : 4000);
   };
 
   const setPrivacyMode = async (enabled: boolean) => {
@@ -5669,13 +5682,14 @@ function PopupPage() {
             <div className="wallet-home-controls">
               <button
                 type="button"
-                className={`mini-icon-button subtle ${assetsLoading ? 'mini-icon-button-loading' : ''}`.trim()}
-                onClick={() => void refresh()}
-                aria-label={assetsLoading ? 'Refreshing wallet' : 'Refresh wallet'}
-                title={assetsLoading ? 'Refreshing...' : 'Refresh'}
-                disabled={assetsLoading}
+                className={`mini-icon-button subtle wallet-refresh-button ${manualRefreshStatus} ${manualRefreshStatus === 'refreshing' ? 'mini-icon-button-loading' : ''}`.trim()}
+                onClick={() => void handleManualRefresh()}
+                aria-label={manualRefreshStatus === 'refreshing' ? 'Refreshing wallet' : manualRefreshStatus === 'success' ? 'Wallet updated' : manualRefreshStatus === 'error' ? 'Refresh failed' : 'Refresh wallet'}
+                title={manualRefreshStatus === 'refreshing' ? 'Refreshing…' : manualRefreshStatus === 'success' ? 'Updated' : manualRefreshStatus === 'error' ? 'Refresh failed — try again' : 'Refresh wallet'}
+                disabled={manualRefreshStatus === 'refreshing'}
               >
-                <RefreshCcw size={13} />
+                {manualRefreshStatus === 'success' ? <Check size={14} /> : manualRefreshStatus === 'error' ? <AlertTriangle size={14} /> : <RefreshCcw size={14} />}
+                {manualRefreshStatus !== 'idle' ? <span>{manualRefreshStatus === 'refreshing' ? 'Refreshing…' : manualRefreshStatus === 'success' ? 'Updated' : 'Try again'}</span> : null}
               </button>
               {renderWalletSwitcher()}
               {renderWalletMenu()}
@@ -6230,19 +6244,26 @@ function PopupPage() {
           {isSolanaChain ? (
             <Tabs.Content value="governance">
               <div ref={governanceSectionRef}>
-              <Card className="asset-panel-card community-panel-card">
-                <div className="community-panel-header governance-panel-header">
-                  <div className="governance-panel-copy">
-                    <strong className="governance-panel-title">Governance</strong>
-                    <p className="muted governance-panel-description">
-                      Your DAOs, highest voting power first. Open a DAO to load its proposals.
-                    </p>
+              <Card className="asset-panel-card community-panel-card community-hub governance-hub">
+                <header className="community-hub-heading governance-hub-heading">
+                  <div>
+                    <h2>Governance</h2>
+                    <p>{selectedGovernanceDao ? `${visibleGovernanceDaos.find((dao) => dao.daoId === selectedGovernanceDao)?.realmName ?? 'DAO'} proposals` : `${totalGovernanceDaoCount} participating DAO${totalGovernanceDaoCount === 1 ? '' : 's'} · highest power first`}</p>
                   </div>
-                  <div className="inline wrap-actions">
-                    <Button tone="secondary" disabled={governanceLoading} onClick={() => setGovernanceRefreshNonce((value) => value + 1)}>{governanceLoading ? 'Refreshing…' : 'Refresh'}</Button>
-                    <Button tone="secondary" onClick={() => setView('settings')}>Manage DAOs</Button>
+                  <div className="governance-hub-tools">
+                    <button
+                      type="button"
+                      className="community-hub-icon-button"
+                      disabled={governanceLoading}
+                      onClick={() => setGovernanceRefreshNonce((value) => value + 1)}
+                      aria-label="Refresh governance"
+                      title="Refresh governance"
+                    >
+                      <RefreshCcw size={14} className={governanceLoading ? 'community-hub-spinning' : undefined} />
+                    </button>
+                    <button type="button" className="community-hub-tool" onClick={() => setView('settings')}><Settings size={14} /> Manage</button>
                   </div>
-                </div>
+                </header>
 
                 {governanceVoteResult ? (
                   <p className="success-box">
@@ -6250,22 +6271,49 @@ function PopupPage() {
                   </p>
                 ) : null}
                 {governanceVoteError ? <p className="danger-box">{governanceVoteError}</p> : null}
-                <div className="governance-dao-list">
-                  {visibleGovernanceDaos.filter((dao) => !selectedGovernanceDao || dao.daoId === selectedGovernanceDao).map((dao) => (
-                    <div className="governance-dao-card" key={dao.daoId}>
-                      <div className="community-panel-header">
-                        <strong>{dao.realmName}</strong>
-                        <StatusPill tone="neutral">{dao.role === 'delegate' ? 'Delegate' : dao.role === 'treasury' ? 'Treasury' : 'Member'}</StatusPill>
-                      </div>
-                      <div className="governance-dao-stats">
-                        <div><span className="muted">Community deposit</span><div>{formatVotingPower(BigInt(dao.communityVotingPower), dao.communityTokenDecimals)}</div></div>
-                        <div><span className="muted">Council deposit</span><div>{formatVotingPower(BigInt(dao.councilVotingPower), 0)}</div></div>
-                        {dao.delegateCount > 0 ? <div><span className="muted">Delegated to you</span><div>{formatVotingPower(BigInt(dao.delegateCommunityVotingPower), dao.communityTokenDecimals)} community · {dao.delegateCouncilVotingPower} council</div></div> : null}
-                      </div>
-                      <Button tone="secondary" onClick={() => setSelectedGovernanceDao((current) => current === dao.daoId ? null : dao.daoId)}>{selectedGovernanceDao === dao.daoId ? 'Back to all DAOs' : 'View proposals'}</Button>
+                {!governanceLoading || visibleGovernanceDaos.length > 0 ? (
+                  <section className="community-hub-section governance-dao-section" aria-label="Participating DAOs">
+                    <div className="community-hub-section-title">
+                      <h3><Landmark size={14} /> {selectedGovernanceDao ? 'Selected DAO' : 'Your DAOs'}</h3>
+                      {!selectedGovernanceDao && visibleGovernanceDaos.length > 0 ? <span>{visibleGovernanceDaos.length}</span> : null}
                     </div>
-                  ))}
-                </div>
+                    {visibleGovernanceDaos.length > 0 ? (
+                      <div className="governance-dao-compact-list">
+                        {visibleGovernanceDaos.filter((dao) => !selectedGovernanceDao || dao.daoId === selectedGovernanceDao).map((dao) => {
+                          const communityPower = BigInt(dao.communityVotingPower);
+                          const councilPower = BigInt(dao.councilVotingPower);
+                          const delegatedCommunityPower = BigInt(dao.delegateCommunityVotingPower);
+                          const delegatedCouncilPower = BigInt(dao.delegateCouncilVotingPower);
+                          const isSelected = selectedGovernanceDao === dao.daoId;
+                          const roleLabel = dao.role === 'delegate' ? 'Delegate' : dao.role === 'treasury' ? 'Treasury' : 'Member';
+                          return (
+                            <button
+                              type="button"
+                              className={`governance-dao-compact-row${isSelected ? ' is-selected' : ''}`}
+                              key={dao.daoId}
+                              onClick={() => setSelectedGovernanceDao((current) => current === dao.daoId ? null : dao.daoId)}
+                              aria-label={isSelected ? `Back to all DAOs from ${dao.realmName}` : `View proposals for ${dao.realmName}`}
+                            >
+                              <span className="community-hub-avatar governance-dao-avatar">{isSelected ? <ArrowLeft size={17} /> : <Landmark size={17} />}</span>
+                              <span className="governance-dao-compact-copy">
+                                <span className="governance-dao-compact-heading"><strong>{dao.realmName}</strong><small>{roleLabel}</small></span>
+                                <span className="governance-dao-power-list">
+                                  {communityPower > 0n ? <span><strong>{formatVotingPower(communityPower, dao.communityTokenDecimals)}</strong> community</span> : null}
+                                  {councilPower > 0n ? <span><strong>{formatVotingPower(councilPower, 0)}</strong> council</span> : null}
+                                  {delegatedCommunityPower > 0n ? <span><strong>{formatVotingPower(delegatedCommunityPower, dao.communityTokenDecimals)}</strong> delegated community</span> : null}
+                                  {delegatedCouncilPower > 0n ? <span><strong>{formatVotingPower(delegatedCouncilPower, 0)}</strong> delegated council</span> : null}
+                                </span>
+                              </span>
+                              {isSelected ? <span className="governance-dao-back-label">All DAOs</span> : <ChevronRight size={15} className="community-hub-external" />}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="community-hub-empty"><Landmark size={22} /><strong>No voting power found</strong><p>This wallet has no deposited or delegated community or council voting power.</p><button type="button" className="community-hub-text-action" onClick={() => setView('settings')}>Manage DAOs <ChevronRight size={14} /></button></div>
+                    )}
+                  </section>
+                ) : null}
                 {governanceLoading ? <p className="muted">{selectedGovernanceDao ? 'Loading selected DAO proposals…' : 'Loading DAO memberships…'}</p> : null}
                 {governanceError ? <p className="danger-box">{governanceError}</p> : null}
                 {governance.warnings?.length ? <div className="danger-box">{Array.from(new Set(governance.warnings)).map((warning) => <p key={warning}>{warning}</p>)}</div> : null}
@@ -6296,12 +6344,16 @@ function PopupPage() {
                     const timeMeta = getGovernanceProposalTimeMeta(proposal, nowUnixSeconds);
                     return proposal.stateCode === 2 && !timeMeta.votingWindowOpen;
                   });
-                  if (activeProposals.length === 0 && finalizingProposals.length === 0) {
+                  const recentProposals = visibleGovernanceProposals
+                    .filter((proposal) => proposal.stateCode !== 2)
+                    .sort((left, right) => (right.votingEndsAt ?? right.votingAt ?? right.draftAt ?? 0) - (left.votingEndsAt ?? left.votingAt ?? left.draftAt ?? 0))
+                    .slice(0, 5);
+                  if (activeProposals.length === 0 && finalizingProposals.length === 0 && recentProposals.length === 0) {
                     return (
                       <div className="community-empty-state">
-                        <strong>No active votes</strong>
+                        <strong>No proposals found</strong>
                         <p className="muted">
-                          There are no open proposals requiring your vote right now. Your detected DAO memberships are shown above.
+                          This DAO has no proposals available to show right now.
                         </p>
                       </div>
                     );
@@ -6387,6 +6439,37 @@ function PopupPage() {
                             </div>
                           ) : null}
                         </div>
+                      ) : null}
+                      {recentProposals.length > 0 ? (
+                        <section className="governance-recent-section" aria-label="Recent proposals">
+                          <div className="governance-proposal-group-heading">
+                            <strong>Recent proposals</strong>
+                            <StatusPill tone="neutral">{recentProposals.length}</StatusPill>
+                          </div>
+                          <div className="governance-recent-list">
+                            {recentProposals.map((proposal) => {
+                              const proposalUrl = buildGovernanceProposalUrl(proposal.daoId, proposal.proposalId);
+                              const proposalTimestamp = proposal.votingEndsAt ?? proposal.votingAt ?? proposal.draftAt;
+                              const recordedVote = proposal.recordedVotes?.map((vote) => `${vote.isDelegate ? 'Delegate' : 'You'}: ${vote.choice}`).join(' · ');
+                              return (
+                                <button
+                                  type="button"
+                                  className="governance-recent-row"
+                                  key={proposal.proposalId}
+                                  onClick={() => window.open(proposalUrl, '_blank', 'noopener,noreferrer')}
+                                  aria-label={`Open recent proposal ${proposal.proposalName} on governance.so`}
+                                >
+                                  <span className="governance-recent-copy">
+                                    <strong>{proposal.proposalName}</strong>
+                                    <small>{proposal.state}{proposalTimestamp ? ` · ${new Date(proposalTimestamp * 1000).toLocaleDateString()}` : ''}</small>
+                                  </span>
+                                  {recordedVote ? <span className="governance-recent-vote"><Check size={12} /> {recordedVote}</span> : null}
+                                  <ExternalLink size={13} className="community-hub-external" />
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </section>
                       ) : null}
                     </>
                   );
@@ -7006,7 +7089,7 @@ function PopupPage() {
               </div>
             ) : null}
 
-          {houdiniDeposit ? <div className="houdini-order"><strong>{houdiniDeposit.entry.mode === 'private' ? 'Fund private send' : 'Fund Houdini swap'}</strong><p className="mono">Final recipient: {houdiniDeposit.entry.recipient}</p><p>Expected delivery: {houdiniDeposit.entry.order.outAmount} {houdiniDeposit.entry.to.symbol}</p><p className="muted">This transfer funds your Houdini order. Its delivery status is saved in this wallet.</p></div> : null}
+          {houdiniDeposit ? <div className="houdini-order"><strong>Confirm Houdini deposit</strong><p>You are about to deposit exactly {depositAmount(houdiniDeposit.entry)} {houdiniDeposit.entry.from.symbol}. This signed transfer starts the private send.</p><p className="mono">Houdini deposit: {houdiniDeposit.entry.order.depositAddress}</p><p className="mono">Final recipient: {houdiniDeposit.entry.recipient}</p><p>Expected delivery: {houdiniDeposit.entry.order.outAmount} {houdiniDeposit.entry.to.symbol}</p><p className="muted">Only approve this deposit once. Delivery status is saved in this wallet.</p></div> : null}
             {!houdiniDeposit && privateSendAvailable ? <SendPrivacyPicker value={sendPrivate} onChange={setSendPrivate} /> : null}
 
             {!canUseUnlockedSigner ? (
@@ -7055,7 +7138,7 @@ function PopupPage() {
             }
             onClick={handleSend}
           >
-            {sendPrivate && !houdiniDeposit ? 'Review private send' : houdiniDeposit ? 'Send deposit' : 'Send now'}
+            {sendPrivate && !houdiniDeposit ? 'Review private send' : houdiniDeposit ? `Deposit ${depositAmount(houdiniDeposit.entry)} ${houdiniDeposit.entry.from.symbol}` : 'Send now'}
           </Button>
         </div>
       </>

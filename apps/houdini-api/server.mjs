@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 
 const BASE = 'https://api-partner.houdiniswap.com/v2';
 const text = (value, max = 200) => typeof value === 'string' && value.length > 0 && value.length <= max && !/[\r\n]/.test(value);
-const fail = (status, message) => Object.assign(new Error(message), { status });
+const fail = (status, message, code) => Object.assign(new Error(message), { status, code });
 const amountKey = (value) => {
   const [whole, fraction = ''] = String(value).split('.');
   const decimal = fraction.replace(/0+$/, '');
@@ -14,6 +14,16 @@ const amountKey = (value) => {
 };
 const sameRequest = (entry, quote) => entry?.mode === quote.mode && entry?.from?.id === quote.from?.id && entry?.to?.id === quote.to?.id && amountKey(entry?.amount) === amountKey(quote.amount) && entry?.recipient === quote.recipient && entry?.refundAddress === quote.refundAddress;
 const activeOrder = (entry) => entry?.order && entry.order.status >= -2 && entry.order.status <= 3 && (entry.order.status > 0 || !Number.isFinite(Date.parse(entry.order.expires)) || Date.parse(entry.order.expires) > Date.now());
+const upstreamOrderMatches = (order, pending) => {
+  const quote = pending?.quote;
+  if (!quote || order?.receiverAddress !== quote.recipient || amountKey(order?.inAmount) !== amountKey(quote.amount)) return false;
+  const fromId = order?.inToken?.id ?? order?.tokenFrom?.id;
+  const toId = order?.outToken?.id ?? order?.tokenTo?.id;
+  if (fromId && fromId !== quote.from?.id) return false;
+  if (toId && toId !== quote.to?.id) return false;
+  const created = Date.parse(order?.created);
+  return !Number.isFinite(created) || Math.abs(created - pending.createdAt) <= 10 * 60 * 1000;
+};
 export async function createHoudiniService(config, fetcher = fetch) {
   if (!config.key || !config.secret || !config.signingSecret || config.signingSecret.length < 32) throw new Error('Configure HOUDINI_API_KEY, HOUDINI_API_SECRET and a 32+ character HOUDINI_SIGNING_SECRET.');
   await mkdir(config.dataDir, { recursive: true, mode: 0o700 });
@@ -80,6 +90,19 @@ export async function createHoudiniService(config, fetcher = fetch) {
     return { id: t.id, symbol: t.symbol, name: t.name, address: t.address, mainnet: t.mainnet, decimals: t.decimals, chainData: { shortName: t.chainData.shortName, name: t.chainData.name, memoNeeded: !!t.chainData.memoNeeded } };
   };
   const inflight = new Map();
+  const reconcilePending = async (id, pending, context) => {
+    if (Date.now() - pending.createdAt < (config.pendingTimeoutMs ?? 90000)) throw fail(409, 'Houdini is still checking this order. Try again in a minute.', 'ORDER_PENDING');
+    const data = await upstream('/orders?page=1&pageSize=100', context);
+    const order = (data.orders ?? []).find(candidate => upstreamOrderMatches(candidate, pending));
+    if (order) {
+      const quote = pending.quote;
+      const entry = { mode: quote.mode ?? 'standard', order, from: quote.from, to: quote.to, amount: quote.amount, recipient: quote.recipient, refundAddress: quote.refundAddress, createdAt: pending.createdAt };
+      orders[id] = entry; await save();
+      return entry;
+    }
+    delete orders[id]; await save();
+    return null;
+  };
   async function route(method, url, body, context) {
     if (method === 'GET' && url.pathname === '/health') return { ready: true };
     if (method === 'GET' && url.pathname === '/tokens') {
@@ -108,16 +131,34 @@ export async function createHoudiniService(config, fetcher = fetch) {
       const existing = orders[q.id];
       if (existing?.order) return { ...existing, capability: sign({ kind: 'order', id: q.id }) };
       if (inflight.has(q.id)) return inflight.get(q.id);
-      if (existing) throw fail(409, 'Order creation is pending or uncertain. Do not create another deposit. Contact support with reference ' + q.id);
+      if (existing?.pending && existing.quote) {
+        const recovered = await reconcilePending(q.id, existing, context);
+        if (recovered) return { ...recovered, capability: sign({ kind: 'order', id: q.id }) };
+      } else if (existing) {
+        delete orders[q.id]; await save();
+      }
       const duplicate = Object.entries(orders).find(([, entry]) => activeOrder(entry) && sameRequest(entry, q));
       if (duplicate) return { ...duplicate[1], capability: sign({ kind: 'order', id: duplicate[0] }) };
-      if (Object.values(orders).some(entry => entry?.pending && sameRequest(entry.quote, q))) throw fail(409, 'A matching order is already being created. Wait a moment and refresh its status instead of creating another.');
-      if (q.expires < Date.now()) throw fail(409, 'Quote expired. Get a fresh quote.');
+      const matchingPending = Object.entries(orders).find(([, entry]) => entry?.pending && sameRequest(entry.quote, q));
+      if (matchingPending) {
+        const recovered = await reconcilePending(matchingPending[0], matchingPending[1], context);
+        if (recovered) return { ...recovered, capability: sign({ kind: 'order', id: matchingPending[0] }) };
+      }
+      if (body.recoverOnly === true) throw fail(404, 'The previous attempt did not create an order. Get a fresh quote.', 'ORDER_NOT_FOUND');
+      if (q.expires < Date.now()) throw fail(409, 'Quote expired. Get a fresh quote.', 'QUOTE_EXPIRED');
       const capability = sign({ kind: 'order', id: q.id });
       const job = (async () => {
         orders[q.id] = { pending: true, quote: { mode: q.mode, from: q.from, to: q.to, amount: q.amount, recipient: q.recipient, refundAddress: q.refundAddress }, createdAt: Date.now() };
         await save();
-        const order = await upstream('/exchanges', context, { quoteId: q.id, addressTo: q.recipient, refundAddress: q.refundAddress, markup: 0, walletInfo: 'Grape Wallet' });
+        let order;
+        try { order = await upstream('/exchanges', context, { quoteId: q.id, addressTo: q.recipient, refundAddress: q.refundAddress, walletInfo: 'Grape Wallet' }); }
+        catch (error) {
+          if (error.status >= 400 && error.status < 500 && error.status !== 429) {
+            delete orders[q.id]; await save();
+            throw fail(error.status, error.message, 'ORDER_NOT_CREATED');
+          }
+          throw error;
+        }
         if (!order.houdiniId) throw fail(502, 'Order response is incomplete. Contact support before retrying.');
         const entry = { mode: q.mode ?? 'standard', order, from: q.from, to: q.to, amount: q.amount, recipient: q.recipient, refundAddress: q.refundAddress, createdAt: Date.now() };
         orders[q.id] = entry; await save();
@@ -158,7 +199,7 @@ export async function createHoudiniService(config, fetcher = fetch) {
       if (!text(timezone, 100)) throw fail(400, 'Invalid timezone.');
       const data = await route(req.method, new URL(req.url, 'http://localhost'), body, { ip, timezone, agent: String(req.headers['user-agent'] ?? 'Grape Wallet') });
       res.end(JSON.stringify(data));
-    } catch (e) { res.writeHead(e.status ?? 500); res.end(JSON.stringify({ error: e.status ? e.message : 'Unable to process request.' })); }
+    } catch (e) { res.writeHead(e.status ?? 500); res.end(JSON.stringify({ error: e.status ? e.message : 'Unable to process request.', ...(e.code ? { code: e.code } : {}) })); }
   });
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

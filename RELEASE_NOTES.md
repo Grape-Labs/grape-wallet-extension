@@ -1,65 +1,86 @@
-# Grape Wallet 0.5.200
+# Grape Wallet 0.5.226
 
-**Version 0.5.200** makes Grape faster and more informative across the browser extension and mobile wallet. This release introduces efficient token metadata caching, a cleaner swap experience, immediate token-detail previews, richer discovery content, improved mobile RPC controls, and additional visual polish throughout the wallet.
+**Version 0.5.226** brings governance participation directly into Grape Wallet, improves the Community experience, introduces optional private sends through Houdini, and streamlines the Send interface across the browser extension and mobile wallet.
 
 ## Highlights
 
-- Redesigned the swap interface across extension and mobile with compact asset panels, clearer balances, percentage shortcuts, and improved token selection.
-- Added persistent token metadata caching across extension and mobile to reduce redundant API calls while still refreshing stale information.
-- Token details now appear immediately using portfolio data already loaded by the wallet instead of opening on an empty loading screen.
-- Added thousands separators to large token balances for easier reading.
-- Added support for testing, saving, and resetting the active Solana RPC endpoint from the mobile wallet.
-- Discovery icons now support SVG artwork alongside PNG, JPEG, and other raster formats.
-- Added a cached, chain-aware **Latest updates** feed to extension Discover using official Solana and Ethereum sources.
-- Added cinematic, theme-aware lens-flare artwork to the wallet hero on extension and mobile.
-- Improved extension startup recovery so users can retry instead of remaining stuck on the opening screen.
-- Improved token cleanup by checking for a viable Jupiter route before burning and recommending a value-preserving swap when appropriate.
+- Grape now discovers the Solana DAOs a wallet actively participates in and displays its community, council, and delegated voting power.
+- Governance discovery uses indexed Solana RPC calls and no longer depends on Shyft GraphQL.
+- DAOs with no voting power are hidden, while participating DAOs are ordered from highest to lowest voting power.
+- Active proposals load when a DAO is opened, reducing the initial Governance loading time.
+- Proposal cards show vote choices, current totals, voting deadlines, available voting sources, and how the wallet or its delegates have already voted.
+- Added optional private token sends through Houdini with quote review, route costs, delivery estimates, and persistent order tracking.
+- Redesigned Send privacy as a compact selector below the recipient instead of a large panel above the form.
+- Improved OG Reputation and Verification presentation in Community on extension and mobile.
+- Manual portfolio refresh now bypasses fresh caches, reloads balances and market data, and shows clear progress and completion feedback.
 
-## Browser extension
+## Governance
 
-### Cleaner swaps and token screens
+### Faster DAO discovery
 
-- Reworked the swap screen into a denser two-panel layout that keeps both selected assets, balances, and values visible.
-- Improved the token picker layout so search results remain contained within the extension viewport.
-- Added clearer asset selectors and more compact percentage and confirmation controls.
-- Preloads token names, symbols, artwork, balances, and estimated values while full token details continue loading.
-- Formats large token balances with locale-aware thousands separators.
-- Removed the persistent burn warning from the normal token overview; destructive warnings remain part of the actual burn flow.
-- Checks Jupiter before opening the burn flow and prepares a swap to SOL when the expected return is greater than the estimated transaction cost.
+- Replaced the unsupported governance GraphQL path with indexed RPC account queries.
+- Detects community, council, and delegated governance participation for the active Solana wallet.
+- Filters out DAOs where all detected voting-power balances are zero.
+- Sorts participating DAOs by total voting power in descending order.
+- Loads DAO membership first and fetches proposals only after the user selects a DAO.
+- Adds request pacing, deduplication, and short-lived caching to reduce redundant RPC calls during refreshes.
+- Redesigns the DAO overview as a compact, tappable list matching the Community tab on extension and mobile.
+- Hides each zero-value community, council, or delegated balance so every DAO row shows only voting power the wallet can use.
 
-### Discovery and performance
+### Proposals and voting
 
-- Added official ecosystem updates to Discover for Solana and Ethereum.
-- Feed results use a 15-minute refresh interval and a seven-day fallback cache for resilient loading.
-- Feed failures remain unobtrusive, leaving the dApp directory fully usable.
-- Added SVG favicon support for dApps that do not provide raster icons.
-- Added persistent token metadata caching with freshness checks to reduce repeated metadata requests.
+- Shows live proposals for the selected DAO, including their voting window and current state.
+- Shows the five most recent proposals below live voting, including the recorded wallet or delegated choice when available.
+- Identifies proposals that still require action from the wallet.
+- Displays named proposal choices and their recorded vote totals.
+- Shows whether the wallet has voted and which choice it selected.
+- Separately identifies votes and available power supplied through governance delegates.
+- Supports current SPL Governance proposal layouts, including version 2 proposal accounts and inherited voting deadlines.
+- Keeps direct links to the full proposal on governance.so.
 
-### Reliability and polish
+## Community
 
-- Added a retry state when the extension cannot finish loading wallet state.
-- Refined menu, settings, token-picker, and navigation spacing to prevent controls from touching or overflowing.
-- Added a theme-colored cinematic flare layer to the portfolio hero, including reduced-motion support.
+- Reworked the Community overview into a more compact hierarchy for reputation, verification, and tracked spaces.
+- Shows total effective OG Reputation points alongside points from the latest season.
+- Displays each reputation space with its community identity and score.
+- Groups linked and verified identities by community for easier scanning.
+- Added clearer tracked-space, linked-identity, verified-identity, and needs-verification summaries.
+- Replaced raw fetch failures with useful loading, refresh, and error states.
+- Applied the updated Community experience to both extension and mobile.
 
-## Mobile wallet
+## Send and private transfers
 
-### Faster portfolio loading
+### Cleaner Send experience
 
-- Added persistent token metadata caching to reduce repeated API and RPC work between wallet refreshes.
-- Uses cached metadata immediately while refreshing expired entries in the background.
-- Reuses preliminary portfolio data when opening token details to avoid an empty loading state.
-- Improved large-number formatting for token balances.
+- Removed the duplicated Send title and excess header space from the extension.
+- Moved privacy selection below the recipient as one compact field.
+- Opens Public and Private send choices in a focused bottom sheet instead of permanently occupying the form.
+- Applied the same privacy selector and review hierarchy to mobile.
 
-### Wallet controls and design
+### Optional Houdini private sends
 
-- Added mobile controls for testing, saving, and resetting custom Solana RPC endpoints.
-- Improved settings-card spacing and navigation clearance.
-- Updated the swap interface to match the extension’s clearer, more compact hierarchy.
-- Added SVG support for icons in mobile Discover.
-- Added a lightweight, theme-aware lens flare to the mobile wallet hero.
+- Adds **Private send** as an optional mode for supported tokens and mainnet networks when a Houdini service is configured.
+- Uses a same-token private route so the recipient receives the selected asset without a direct wallet-to-wallet transfer.
+- Loads private quotes automatically and shows the estimated output, route cost, provider, and delivery time before order creation.
+- Surfaces Houdini's actual amount limits and routing errors; for example, an amount below the provider minimum now shows the required minimum.
+- Saves active orders locally so they remain visible after reopening the wallet.
+- Detects matching active orders and prevents accidental duplicate order creation in both the wallet client and backend service.
+- Automatically reconciles interrupted order attempts with Houdini, clears confirmed stale pending markers, and keeps retry available after token or network failures.
+- Keeps deposit details bound to the reviewed token, amount, recipient, wallet, and order before signing.
+- Keeps Houdini API credentials in the backend service and out of extension and mobile bundles.
+- Includes a quick **Use Public send** fallback when a private route is unavailable.
+- Keeps the standalone Houdini deposit-address route hidden from Swap for now; Houdini is available through Private send.
+
+## Extension and mobile parity
+
+- Governance membership discovery, voting-power filtering, DAO sorting, proposal details, and recorded-vote visibility are available on both wallet surfaces.
+- Community reputation and verification summaries use the same structure across extension and mobile.
+- Send privacy, private quote review, active-order protection, and Houdini funding checks share the same core implementation.
 
 ## Notes
 
-- The Discover feed currently uses the official Solana changelog and Ethereum Foundation feeds. Chains without a verified official feed continue to show the existing dApp directory without an empty feed section.
-- Cached token metadata is refreshed according to freshness rules so performance improvements do not permanently preserve stale information.
-- Burn remains destructive and still requires confirmation; the Jupiter check is intended to help preserve recoverable market value before burning.
+- Governance only lists DAOs where the wallet currently has positive community, council, or delegated voting power.
+- Proposal data is fetched per DAO to keep the initial Governance view responsive.
+- Houdini availability depends on the configured backend service, supported assets, provider limits, and network availability.
+- Private routing reduces the direct on-chain connection between sender and recipient, but it does not guarantee anonymity.
+- Users should review the quoted output, fees, destination, and deposit expiry before funding a private-send order.

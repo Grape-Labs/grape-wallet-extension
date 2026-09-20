@@ -7,7 +7,8 @@ export function HoudiniSwapPanel({ endpoint, owner, assets, color, muted, border
   const [state, setState] = useState(client.state);
   const [term, setTerm] = useState('');
   const [side, setSide] = useState<'from' | 'to'>('from');
-  useEffect(() => { setState(client.state); const unsubscribe = client.subscribe(() => setState(client.state)); void client.start().then(async () => { if (privateSend && !findOpenPrivateSend(client.state.orders, privateSend.asset, privateSend.amount, privateSend.recipient)) { await client.preparePrivateSend(privateSend.asset, privateSend.amount, privateSend.recipient); await client.quote(); } }); return () => { unsubscribe(); client.stop(); }; }, [client]);
+  const loadPrivateQuote = async () => { if (!privateSend) return; await client.preparePrivateSend(privateSend.asset, privateSend.amount, privateSend.recipient); await client.quote(); };
+  useEffect(() => { setState(client.state); const unsubscribe = client.subscribe(() => setState(client.state)); void client.start().then(async () => { if (privateSend && !findOpenPrivateSend(client.state.orders, privateSend.asset, privateSend.amount, privateSend.recipient)) await loadPrivateQuote(); }); return () => { unsubscribe(); client.stop(); }; }, [client]);
   const visibleOrders = state.orders.filter(entry => privateSend ? entry.mode === 'private' && orderIsOpen(entry) : true);
   const existingPrivateSend = privateSend ? findOpenPrivateSend(state.orders, privateSend.asset, privateSend.amount, privateSend.recipient) : undefined;
   const label = (value: string, subtle = false) => <Text selectable style={{ color: subtle ? muted : color, fontSize: subtle ? 12 : 15 }}>{value}</Text>;
@@ -29,7 +30,7 @@ export function HoudiniSwapPanel({ endpoint, owner, assets, color, muted, border
     {input('Receiving address on ' + (state.to?.chainData.name ?? 'destination network'), state.recipient, recipient => client.change({ recipient }))}
     {state.to && assets.some(a => a.chain === state.to?.chainData.shortName) ? action('Use this wallet', () => client.change({ recipient: owner })) : null}
     </> : null}
-    {!privateSend || state.error ? action(state.busy ? 'Finding route…' : state.error && privateSend ? 'Try again' : 'Get quotes', () => void client.quote(), !state.ready || !state.from || !state.to || !state.amount || !state.recipient) : state.busy ? label('Finding the best private route…', true) : null}
+    {!privateSend || state.error ? action(state.busy ? 'Finding route…' : state.error && privateSend ? 'Try again' : 'Get quotes', () => void (privateSend ? loadPrivateQuote() : client.quote()), !state.ready || (!privateSend && (!state.from || !state.to || !state.amount || !state.recipient))) : state.busy ? label('Finding the best private route…', true) : null}
     {state.error ? <View style={styles.stack}><Text accessibilityRole="alert" style={{ color: '#ff9988' }}>{state.error}</Text>{privateSend && onUsePublic ? action('Use Public send', onUsePublic) : null}</View> : null}
     {state.quotes.map(quote => <View key={quote.quoteId} style={[styles.card, { borderColor: border }]}>
       {label('Recipient gets approximately ' + quote.amountOut + ' ' + state.to?.symbol)}{privateSend && privateSendCost(state.amount, quote.amountOut) !== null ? label('Estimated route cost: ' + privateSendCost(state.amount, quote.amountOut) + ' ' + state.from?.symbol, true) : null}{label(quote.provider + (quote.duration ? ' · about ' + quote.duration + ' min' : ''), true)}
@@ -46,11 +47,11 @@ export function HoudiniSwapPanel({ endpoint, owner, assets, color, muted, border
       {label('Recipient: ' + entry.recipient, true)}{label('Output: ' + entry.order.outAmount + ' ' + entry.to.symbol)}
       {label('Deposit expiry: ' + new Date(entry.order.expires).toLocaleString(), true)}{label('Order: ' + entry.order.houdiniId, true)}
       {entry.order.outTransactionOutHash ? label('Delivery transaction: ' + entry.order.outTransactionOutHash, true) : null}
-      {action('Refresh status', () => void client.run(async () => { await client.refresh(entry); }))}
-      {entry.order.status === 0 ? <>{label('Only deposit once. If already sent, wait for confirmation.', true)}{action('Review deposit in Send', () => void client.run(async () => {
+      {entry.order.status === 0 ? <><View style={[styles.notice, { borderColor: border }]}>{label('No funds have moved yet. Deposit exactly ' + depositAmount(entry) + ' ' + entry.from.symbol + ' before expiry to start this private transfer.')}</View>{action('Deposit ' + depositAmount(entry) + ' ' + entry.from.symbol, () => void client.run(async () => {
         const fresh = await client.refresh(entry); const problem = depositProblem(fresh); if (problem) throw new Error(problem);
         const asset = matchingAsset(fresh.from, assets); if (!asset) throw new Error('Switch to the wallet holding the input token.'); onFund(asset, fresh);
       }), !!depositProblem(entry) || !matchingAsset(entry.from, assets))}{depositProblem(entry) ? label(depositProblem(entry)!, true) : null}</> : null}
+      {action('Refresh status', () => void client.run(async () => { await client.refresh(entry); }))}
       {action('Houdini support', () => void Linking.openURL('https://houdiniswap.com'))}
     </View>)}
   </View>;
