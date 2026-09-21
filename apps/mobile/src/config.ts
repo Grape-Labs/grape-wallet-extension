@@ -608,7 +608,8 @@ const MOBILE_LIFI_NATIVE_TOKEN_ADDRESS = {
   solana: '11111111111111111111111111111111',
   sui: '0x2::sui::SUI',
   monad: '0x0000000000000000000000000000000000000000',
-  ethereum: '0x0000000000000000000000000000000000000000'
+  ethereum: '0x0000000000000000000000000000000000000000',
+  zcash: ''
 } as const;
 export { MOBILE_LIFI_NATIVE_TOKEN_ADDRESS };
 
@@ -653,19 +654,22 @@ const MOBILE_LIFI_NATIVE_SYMBOL = {
   solana: 'SOL',
   sui: 'SUI',
   monad: 'MON',
-  ethereum: 'ETH'
+  ethereum: 'ETH',
+  zcash: 'ZEC'
 } as const;
 const MOBILE_LIFI_NATIVE_DECIMALS = {
   solana: 9,
   sui: 9,
   monad: 18,
-  ethereum: 18
+  ethereum: 18,
+  zcash: 8
 } as const;
 const MOBILE_SUPPORTED_BRIDGE_DESTINATIONS = {
   solana: ['ethereum', 'monad', 'sui'] as const,
   ethereum: ['solana', 'monad', 'sui'] as const,
   monad: ['solana', 'ethereum'] as const,
-  sui: [] as const
+  sui: [] as const,
+  zcash: [] as const
 } as const;
 
 function createMobileLifiHeaders(): Record<string, string> | undefined {

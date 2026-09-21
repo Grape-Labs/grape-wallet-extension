@@ -540,7 +540,7 @@ export type WalletActivityItem = {
 
 export type WalletActivityResponse = {
   items: WalletActivityItem[];
-  source: 'shyft' | 'none';
+  source: 'shyft' | 'zcash' | 'none';
   network: WalletState['selectedNetwork'];
   refreshedAt: number;
 };

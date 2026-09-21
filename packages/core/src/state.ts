@@ -9,7 +9,7 @@ export const STORAGE_KEYS = {
 } as const;
 
 export type WalletSetupState = 'empty' | 'ready';
-export type GrapeChain = 'solana' | 'sui' | 'monad' | 'ethereum';
+export type GrapeChain = 'solana' | 'sui' | 'monad' | 'ethereum' | 'zcash';
 export type GrapeNetwork = 'mainnet-beta' | 'devnet';
 export type DappApprovalMode = 'strict' | 'non-strict';
 export type GrapeTheme =
@@ -69,7 +69,7 @@ export const SUPPORTED_THEME_MOTION_INTENSITIES = [
   'expressive'
 ] as const satisfies readonly ThemeMotionIntensity[];
 
-export const SUPPORTED_CHAINS = ['solana', 'sui', 'monad', 'ethereum'] as const satisfies readonly GrapeChain[];
+export const SUPPORTED_CHAINS = ['solana', 'sui', 'monad', 'ethereum', 'zcash'] as const satisfies readonly GrapeChain[];
 
 export type VaultRecord = {
   version: 1;
@@ -172,6 +172,7 @@ export type WalletState = {
     sui: SuiChainState;
     monad: MonadChainState;
     ethereum: MonadChainState;
+    zcash: MonadChainState;
   };
   selectedWalletId?: string;
   selectedNetwork: GrapeNetwork;
@@ -331,6 +332,9 @@ export function createEmptyWalletState(): WalletState {
         selectedNetwork: 'mainnet-beta'
       },
       ethereum: {
+        selectedNetwork: 'mainnet-beta'
+      },
+      zcash: {
         selectedNetwork: 'mainnet-beta'
       }
     },
@@ -573,6 +577,9 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
       },
       ethereum: {
         selectedNetwork: 'mainnet-beta'
+      },
+      zcash: {
+        selectedNetwork: 'mainnet-beta'
       }
       },
       selectedWalletId: 'wallet-1',
@@ -738,6 +745,10 @@ function normalizeChainState(
     ethereum: {
       selectedNetwork: chainState?.ethereum?.selectedNetwork ?? 'mainnet-beta',
       customRpcUrl: chainState?.ethereum?.customRpcUrl?.trim() || undefined
+    },
+    zcash: {
+      selectedNetwork: chainState?.zcash?.selectedNetwork ?? 'mainnet-beta',
+      customRpcUrl: chainState?.zcash?.customRpcUrl?.trim() || undefined
     }
   };
 }
@@ -768,6 +779,10 @@ function normalizeSelectedWalletIds(
 
   if (!next.ethereum) {
     next.ethereum = wallets.find((wallet) => wallet.chain === 'ethereum')?.id;
+  }
+
+  if (!next.zcash) {
+    next.zcash = wallets.find((wallet) => wallet.chain === 'zcash')?.id;
   }
 
   return next;

@@ -1,3 +1,4 @@
+import { sha256 } from '@noble/hashes/sha2.js';
 import type { GrapeChain } from './state';
 
 export type BridgeTransactionRequest = {
@@ -65,4 +66,31 @@ export function hasExecutableBridgeTransaction(
   }
 
   return extractExecutableBridgeTransactionRequest(quoteResponse, sourceChain) !== null;
+}
+
+
+/** Validate literal addresses without requiring a wallet stored in Grape. */
+export function isValidBridgeRecipient(chain: GrapeChain, address: string): boolean {
+  if (chain === 'ethereum' || chain === 'monad') return /^0x[0-9a-fA-F]{40}$/.test(address) && !/^0x0{40}$/.test(address);
+  if (chain === 'sui') return /^0x[0-9a-fA-F]{64}$/.test(address) && !/^0x0{64}$/.test(address);
+  if (!/^[1-9A-HJ-NP-Za-km-z]{32,64}$/.test(address)) return false;
+  const alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  let value = 0n;
+  for (const char of address) value = value * 58n + BigInt(alphabet.indexOf(char));
+  const bytes: number[] = [];
+  while (value > 0n) { bytes.unshift(Number(value & 255n)); value >>= 8n; }
+  for (const char of address) { if (char !== '1') break; bytes.unshift(0); }
+  if (chain === 'solana') return bytes.length === 32 && bytes.some((byte) => byte !== 0);
+  if (chain !== 'zcash' || bytes.length !== 26 || bytes[0] !== 0x1c || ![0xb8, 0xbd].includes(bytes[1])) return false;
+  const checksum = sha256(sha256(Uint8Array.from(bytes.slice(0, -4))));
+  return bytes.slice(-4).every((byte, index) => byte === checksum[index]);
+}
+
+export function assertBridgeRecipient(quote: Record<string, unknown>, chain: GrapeChain, recipient: string): void {
+  const action = quote.action as { toAddress?: string } | undefined;
+  const quoted = action?.toAddress;
+  const normalize = (value: string) => chain === 'ethereum' || chain === 'monad' || chain === 'sui' ? value.toLowerCase() : value;
+  if (!quoted || normalize(quoted) !== normalize(recipient)) {
+    throw new Error('The bridge recipient changed. Request a new quote before continuing.');
+  }
 }

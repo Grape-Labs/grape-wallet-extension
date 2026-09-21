@@ -19,15 +19,15 @@ let surfacePort: chrome.runtime.Port | null = null;
 let surfaceId: string | null = null;
 
 class PageErrorBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
-  override state = { error: null as string | null };
+  state = { error: null as string | null };
 
-  static override getDerivedStateFromError(error: unknown) {
+  static getDerivedStateFromError(error: unknown) {
     return {
       error: error instanceof Error ? error.message : 'A page error occurred.'
     };
   }
 
-  override render() {
+  render() {
     if (this.state.error) {
       return (
         <div className="page-fallback-shell">

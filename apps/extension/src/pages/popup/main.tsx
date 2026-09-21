@@ -1,5 +1,7 @@
+import { isValidBridgeRecipient } from '@grape/core';
 import { SendPrivacyPicker } from './SendPrivacyPicker';
 import { HoudiniSwapPanel } from './HoudiniSwapPanel';
+import { HoudiniZcashBridgePanel } from './HoudiniZcashBridgePanel';
 import { depositAmount, depositProblem, recordHoudiniDeposit, type HoudiniOrder } from '../../../../../packages/houdini/src/client';
 import { hasPositiveGovernancePower, compareGovernancePower } from '../../../../../packages/solana/src/governancePower';
 import { CommunityPanel } from './CommunityPanel';
@@ -10,6 +12,7 @@ import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import * as Tabs from '@radix-ui/react-tabs';
 import {
   AlertTriangle,
+  ArrowDown,
   ArrowDownLeft,
   ArrowLeft,
   ArrowLeftRight,
@@ -27,6 +30,7 @@ import {
   Globe2,
   Home,
   Landmark,
+  LoaderCircle,
   Menu,
   PanelRightOpen,
   Pencil,
@@ -106,7 +110,7 @@ type PopupView = 'home' | 'discover' | 'send' | 'receive' | 'swap' | 'bridge' | 
 type HomeTab = 'tokens' | 'rebalance' | 'community' | 'governance' | 'collectibles' | 'activity' | 'staking';
 
 const WALLET_FAQ = [
-  ['Which networks does Grape support?', 'Grape can manage Solana, Sui, Monad, and Ethereum wallets. Available actions vary by chain, and Discover recommendations follow the selected network.'],
+  ['Which networks does Grape support?', 'Grape can manage Solana, Sui, Monad, Ethereum, and transparent Zcash wallets. Shielded Zcash addresses are not supported yet.'],
   ['How do swaps and bridges work?', 'Solana swaps use Jupiter routing. Cross-chain routes use LI.FI where supported. Review the input, output, minimum received, price impact, fees, and destination chain before signing.'],
   ['What is the portfolio rebalancer?', 'The optional Solana rebalancer plans multiple Jupiter swaps around target allocations. Transactions are independent, so execution can stop after a partial rebalance.'],
   ['What can I do in Discover?', 'Discover provides a chain-specific dApp directory, search, and recently connected sites. Connecting or signing still requires wallet support for that chain and action.'],
@@ -130,6 +134,7 @@ type AssetOption =
         | { kind: 'sui' }
         | { kind: 'mon' }
         | { kind: 'eth' }
+        | { kind: 'zec' }
         | { kind: 'sui-coin'; coinType: string; decimals: number }
         | { kind: 'evm-token'; tokenAddress: string; decimals: number; symbol?: string };
     }
@@ -214,7 +219,8 @@ const CHAIN_OPTIONS = [
   { id: 'solana', label: 'Solana', shortLabel: 'SOL', enabled: true },
   { id: 'sui', label: 'Sui', shortLabel: 'SUI', enabled: true },
   { id: 'monad', label: 'Monad', shortLabel: 'MON', enabled: true },
-  { id: 'ethereum', label: 'Ethereum', shortLabel: 'ETH', enabled: true }
+  { id: 'ethereum', label: 'Ethereum', shortLabel: 'ETH', enabled: true },
+  { id: 'zcash', label: 'Zcash', shortLabel: 'ZEC', enabled: true }
 ] as const;
 const VISIBLE_CHAIN_OPTIONS = CHAIN_OPTIONS.filter((chain) => chain.enabled);
 type DiscoverCategory = 'All' | 'DeFi' | 'Staking' | 'Collectibles' | 'Governance' | 'Community' | 'Analytics' | 'Explorer' | 'Tools';
@@ -322,7 +328,8 @@ const DISCOVER_DAPPS_BY_CHAIN: Record<WalletStateResponse['wallet']['selectedCha
   solana: SOLANA_DISCOVER_DAPPS,
   sui: SUI_DISCOVER_DAPPS,
   monad: MONAD_DISCOVER_DAPPS,
-  ethereum: ETHEREUM_DISCOVER_DAPPS
+  ethereum: ETHEREUM_DISCOVER_DAPPS,
+  zcash: []
 };
 const DISCOVER_CATEGORIES: DiscoverCategory[] = ['All', 'DeFi', 'Staking', 'Collectibles', 'Governance', 'Community', 'Analytics', 'Explorer', 'Tools'];
 
@@ -1008,7 +1015,7 @@ function formatBaseUnitAmount(amount: number | null, decimals = 9, symbol?: stri
   return symbol ? `${formatted} ${symbol}` : formatted;
 }
 
-function formatNetworkLabel(chain: 'solana' | 'sui' | 'monad' | 'ethereum', network: 'mainnet-beta' | 'devnet'): string {
+function formatNetworkLabel(chain: WalletStateResponse['wallet']['selectedChain'], network: 'mainnet-beta' | 'devnet'): string {
   if (chain === 'sui') {
     return network === 'devnet' ? 'devnet' : 'mainnet';
   }
@@ -1017,6 +1024,9 @@ function formatNetworkLabel(chain: 'solana' | 'sui' | 'monad' | 'ethereum', netw
   }
   if (chain === 'ethereum') {
     return network === 'devnet' ? 'sepolia' : 'mainnet';
+  }
+  if (chain === 'zcash') {
+    return network === 'devnet' ? 'testnet' : 'mainnet';
   }
 
   return network;
@@ -1659,6 +1669,8 @@ function PopupPage() {
   const recipientScannerVideoRef = useRef<HTMLVideoElement | null>(null);
   const [bridgeDestinationChain, setBridgeDestinationChain] = useState<WalletStateResponse['wallet']['selectedChain'] | null>(null);
   const [bridgeDestinationWalletId, setBridgeDestinationWalletId] = useState('');
+  const [bridgeExternalAddress, setBridgeExternalAddress] = useState('');
+  const [bridgeZcashReview, setBridgeZcashReview] = useState(false);
   const [bridgeAmount, setBridgeAmount] = useState('');
   const [bridgePassword, setBridgePassword] = useState('');
   const [bridgeQuote, setBridgeQuote] = useState<WalletBridgeQuoteResponse | null>(null);
@@ -2122,14 +2134,16 @@ function PopupPage() {
           ? state.wallet.chainState.monad.customRpcUrl ?? ''
         : state.wallet.selectedChain === 'ethereum'
           ? state.wallet.chainState.ethereum.customRpcUrl ?? ''
+        : state.wallet.selectedChain === 'zcash'
+          ? state.wallet.chainState.zcash.customRpcUrl ?? ''
         : state.wallet.customRpcUrls[state.wallet.selectedNetwork] ?? '';
     setCustomRpcEnabled(!!nextCustomRpc);
     setCustomRpcInput(nextCustomRpc);
     setCustomRpcError(null);
-  }, [state?.wallet.chainState.ethereum.customRpcUrl, state?.wallet.chainState.monad.customRpcUrl, state?.wallet.chainState.sui.customRpcUrl, state?.wallet.customRpcUrls, state?.wallet.selectedChain, state?.wallet.selectedNetwork]);
+  }, [state?.wallet.chainState.ethereum.customRpcUrl, state?.wallet.chainState.monad.customRpcUrl, state?.wallet.chainState.sui.customRpcUrl, state?.wallet.chainState.zcash.customRpcUrl, state?.wallet.customRpcUrls, state?.wallet.selectedChain, state?.wallet.selectedNetwork]);
 
   useEffect(() => {
-    if ((selectedChainValue === 'sui' || selectedChainValue === 'monad' || selectedChainValue === 'ethereum') && homeTab === 'staking') {
+    if ((selectedChainValue === 'sui' || selectedChainValue === 'monad' || selectedChainValue === 'ethereum' || selectedChainValue === 'zcash') && homeTab === 'staking') {
       setHomeTab('tokens');
     }
   }, [homeTab, selectedChainValue]);
@@ -2183,13 +2197,13 @@ function PopupPage() {
   }, [selectedChainValue, view]);
 
   useEffect(() => {
-    if ((selectedChainValue === 'sui' || selectedChainValue === 'monad' || selectedChainValue === 'ethereum') && (homeTab === 'community' || homeTab === 'governance')) {
+    if ((selectedChainValue === 'sui' || selectedChainValue === 'monad' || selectedChainValue === 'ethereum' || selectedChainValue === 'zcash') && (homeTab === 'community' || homeTab === 'governance')) {
       setHomeTab('tokens');
     }
   }, [homeTab, selectedChainValue]);
 
   useEffect(() => {
-    if ((selectedChainValue === 'sui' || selectedChainValue === 'monad' || selectedChainValue === 'ethereum') && (view === 'security' || view === 'asset' || view === 'reclaim-rent')) {
+    if ((selectedChainValue === 'sui' || selectedChainValue === 'monad' || selectedChainValue === 'ethereum' || selectedChainValue === 'zcash') && (view === 'security' || view === 'asset' || view === 'reclaim-rent')) {
       setView('home');
     }
   }, [selectedChainValue, view]);
@@ -2698,18 +2712,19 @@ function PopupPage() {
     [assets.collections]
   );
   const assetOptions = useMemo<AssetOption[]>(() => {
-    if (selectedChainValue === 'sui' || selectedChainValue === 'monad' || selectedChainValue === 'ethereum') {
+    if (selectedChainValue === 'sui' || selectedChainValue === 'monad' || selectedChainValue === 'ethereum' || selectedChainValue === 'zcash') {
       const isMonad = selectedChainValue === 'monad';
       const isEthereum = selectedChainValue === 'ethereum';
+      const isZcash = selectedChainValue === 'zcash';
       const nativeOption: AssetOption = {
         id: selectedChainValue,
-        label: assets.nativeSymbol ?? (isEthereum ? 'ETH' : isMonad ? 'MON' : 'SUI'),
-        name: assets.nativeName ?? (isEthereum ? 'Ethereum' : isMonad ? 'Monad' : 'Sui'),
-        symbol: assets.nativeSymbol ?? (isEthereum ? 'ETH' : isMonad ? 'MON' : 'SUI'),
+        label: assets.nativeSymbol ?? (isZcash ? 'ZEC' : isEthereum ? 'ETH' : isMonad ? 'MON' : 'SUI'),
+        name: assets.nativeName ?? (isZcash ? 'Zcash' : isEthereum ? 'Ethereum' : isMonad ? 'Monad' : 'Sui'),
+        symbol: assets.nativeSymbol ?? (isZcash ? 'ZEC' : isEthereum ? 'ETH' : isMonad ? 'MON' : 'SUI'),
         balance: privacyModeEnabled ? '***' : homeBalance,
         logoUri: assets.nativeLogoUri,
         asset: {
-          kind: isEthereum ? ('eth' as const) : isMonad ? ('mon' as const) : ('sui' as const)
+          kind: isZcash ? ('zec' as const) : isEthereum ? ('eth' as const) : isMonad ? ('mon' as const) : ('sui' as const)
         }
       };
 
@@ -2803,7 +2818,7 @@ function PopupPage() {
     selectedChainValue
   ]);
   const sendAssetOptions = useMemo<AssetOption[]>(() => {
-    if (selectedChainValue === 'sui' || selectedChainValue === 'monad' || selectedChainValue === 'ethereum') {
+    if (selectedChainValue === 'sui' || selectedChainValue === 'monad' || selectedChainValue === 'ethereum' || selectedChainValue === 'zcash') {
       return assetOptions;
     }
 
@@ -3361,7 +3376,7 @@ function PopupPage() {
   }
 
   async function handleGetBridgeQuote(requestId = Date.now()) {
-    if (!bridgeDestinationChain || !selectedBridgeDestinationWallet || !bridgeAmount.trim()) {
+    if (!bridgeDestinationChain || !bridgeRecipientValid || !bridgeAmount.trim()) {
       return;
     }
 
@@ -3374,7 +3389,7 @@ function PopupPage() {
         type: 'wallet_get_bridge_quote',
         amount: bridgeAmount,
         toChain: bridgeDestinationChain,
-        destinationWalletId: selectedBridgeDestinationWallet.id
+        destinationAddress: bridgeDestinationAddress
       });
       if (bridgeQuoteRequestRef.current === requestId) {
         setBridgeQuote(quote);
@@ -3394,7 +3409,7 @@ function PopupPage() {
   }
 
   async function handleExecuteBridge() {
-    if (!bridgeQuote || !bridgeDestinationChain || !selectedBridgeDestinationWallet) {
+    if (!bridgeQuote || !bridgeDestinationChain || !bridgeRecipientValid) {
       return;
     }
 
@@ -3414,7 +3429,7 @@ function PopupPage() {
         type: 'wallet_execute_bridge',
         quoteResponse: activeRoute.quoteResponse,
         toChain: bridgeDestinationChain,
-        destinationWalletId: selectedBridgeDestinationWallet.id,
+        destinationAddress: bridgeDestinationAddress,
         password: canUseUnlockedSigner ? undefined : bridgePassword || undefined
       });
       setBridgeResult(result);
@@ -4274,7 +4289,8 @@ function PopupPage() {
         solana: { selectedNetwork: 'mainnet-beta', customRpcUrls: {} },
         sui: { selectedNetwork: 'mainnet-beta' },
         monad: { selectedNetwork: 'mainnet-beta' },
-        ethereum: { selectedNetwork: 'mainnet-beta' }
+        ethereum: { selectedNetwork: 'mainnet-beta' },
+        zcash: { selectedNetwork: 'mainnet-beta' }
       },
       idleTimeoutMs: 5 * 60_000
     } as WalletStateResponse['wallet']);
@@ -4313,6 +4329,7 @@ function PopupPage() {
   const isSuiChain = selectedChain === 'sui';
   const isMonadChain = selectedChain === 'monad';
   const isEthereumChain = selectedChain === 'ethereum';
+  const isZcashChain = selectedChain === 'zcash';
   const selectedNetworkLabel = formatNetworkLabel(selectedChain, wallet.selectedNetwork);
   const totalEffectiveReputationPoints = reputation.spaces.reduce((sum, space) => sum + BigInt(space.effectivePoints), BigInt(0)).toString();
   const totalLatestSeasonReputationPoints = reputation.spaces.reduce((sum, space) => sum + BigInt(space.latestSeasonPoints), BigInt(0)).toString();
@@ -4353,6 +4370,8 @@ function PopupPage() {
         ? wallet.chainState.monad.customRpcUrl ?? ''
       : selectedChain === 'ethereum'
         ? wallet.chainState.ethereum.customRpcUrl ?? ''
+      : selectedChain === 'zcash'
+        ? wallet.chainState.zcash.customRpcUrl ?? ''
       : wallet.customRpcUrls[wallet.selectedNetwork] ?? '';
 
   async function handleWalletSelect(walletId: string) {
@@ -4364,7 +4383,7 @@ function PopupPage() {
     await refresh();
   }
 
-  async function handleChainSelect(chain: 'solana' | 'sui' | 'monad' | 'ethereum') {
+  async function handleChainSelect(chain: WalletStateResponse['wallet']['selectedChain']) {
     if (chain === selectedChain || !wallet.wallets.some((walletEntry) => walletEntry.chain === chain)) {
       return;
     }
@@ -4381,8 +4400,14 @@ function PopupPage() {
       VISIBLE_CHAIN_OPTIONS.filter(
         (chain) =>
           chain.id !== selectedChain &&
-          getSupportedBridgeDestinations(selectedChain).includes(chain.id) &&
-          wallet.wallets.some((walletEntry) => walletEntry.chain === chain.id)
+          (
+            getSupportedBridgeDestinations(selectedChain).includes(chain.id) ||
+            (
+              chain.id === 'zcash' &&
+              (selectedChain === 'solana' || selectedChain === 'ethereum') &&
+              Boolean(import.meta.env.VITE_HOUDINI_API_URL?.trim())
+            )
+          )
       ),
     [selectedChain, wallet.wallets]
   );
@@ -4396,11 +4421,23 @@ function PopupPage() {
   );
 
   const selectedBridgeDestinationWallet =
-    bridgeDestinationWallets.find((walletEntry) => walletEntry.id === bridgeDestinationWalletId) ?? bridgeDestinationWallets[0];
+    bridgeDestinationWalletId === 'external' ? undefined : bridgeDestinationWallets.find((walletEntry) => walletEntry.id === bridgeDestinationWalletId) ?? bridgeDestinationWallets[0];
   const selectedBridgeDestinationAccount =
     selectedBridgeDestinationWallet?.accounts.find((account) => account.id === selectedBridgeDestinationWallet.selectedAccountId) ??
     selectedBridgeDestinationWallet?.accounts[0] ??
     null;
+
+  const bridgeUsesExternalAddress = bridgeDestinationWalletId === 'external' || bridgeDestinationWallets.length === 0;
+  const bridgeDestinationAddress = bridgeUsesExternalAddress ? bridgeExternalAddress.trim() : selectedBridgeDestinationAccount?.publicKey ?? '';
+  const bridgeRecipientValid = Boolean(bridgeDestinationChain && isValidBridgeRecipient(bridgeDestinationChain, bridgeDestinationAddress));
+
+  useEffect(() => {
+    bridgeQuoteRequestRef.current = 0;
+    setBridgeQuote(null);
+    setBridgeSelectedRouteId(null);
+    setBridgeZcashReview(false);
+    setBridgeError(null);
+  }, [bridgeDestinationAddress, bridgeDestinationChain, bridgeAmount]);
 
   useEffect(() => {
     if (bridgeDestinationChainOptions.length === 0) {
@@ -4429,7 +4466,7 @@ function PopupPage() {
       return;
     }
 
-    if (!nextWallets.some((walletEntry) => walletEntry.id === bridgeDestinationWalletId)) {
+    if (bridgeDestinationWalletId !== 'external' && !nextWallets.some((walletEntry) => walletEntry.id === bridgeDestinationWalletId)) {
       setBridgeDestinationWalletId(nextWallets[0].id);
     }
   }, [bridgeDestinationChain, bridgeDestinationWalletId, wallet.wallets]);
@@ -4439,7 +4476,7 @@ function PopupPage() {
       return;
     }
 
-    if (!bridgeDestinationChain || !selectedBridgeDestinationWallet || !bridgeAmount.trim() || selectedChainValue === 'sui') {
+    if (!bridgeDestinationChain || bridgeDestinationChain === 'zcash' || !bridgeRecipientValid || !bridgeAmount.trim() || selectedChainValue === 'sui') {
       bridgeQuoteRequestRef.current = 0;
       setQuotingBridge(false);
       return;
@@ -4458,6 +4495,8 @@ function PopupPage() {
     bridgeAmount,
     bridgeDestinationChain,
     bridgeDestinationWalletId,
+    bridgeDestinationAddress,
+    bridgeRecipientValid,
     bridgeResult,
     selectedBridgeDestinationWallet,
     selectedChainValue,
@@ -4485,7 +4524,7 @@ function PopupPage() {
             Open full-page setup
           </Button>
         </Card>
-        <OnboardingView compact onComplete={refresh} />
+        <OnboardingView compact onComplete={async () => { await refresh(); }} />
       </PageShell>
     );
   }
@@ -4674,6 +4713,11 @@ function PopupPage() {
             : selectedChain === 'ethereum'
               ? {
                   type: 'wallet_set_ethereum_custom_rpc',
+                  rpcUrl: customRpcEnabled ? customRpcInput.trim() || null : null
+                }
+            : selectedChain === 'zcash'
+              ? {
+                  type: 'wallet_set_zcash_custom_rpc',
                   rpcUrl: customRpcEnabled ? customRpcInput.trim() || null : null
                 }
           : {
@@ -5658,14 +5702,14 @@ function PopupPage() {
   }
 
   function renderHome() {
-    const nativeAssetName = assets.nativeName ?? (isEthereumChain ? 'Ethereum' : isSuiChain ? 'Sui' : isMonadChain ? 'Monad' : 'Solana');
-    const nativeAssetSymbol = assets.nativeSymbol ?? (isEthereumChain ? 'ETH' : isSuiChain ? 'SUI' : isMonadChain ? 'MON' : 'SOL');
+    const nativeAssetName = assets.nativeName ?? (isZcashChain ? 'Zcash' : isEthereumChain ? 'Ethereum' : isSuiChain ? 'Sui' : isMonadChain ? 'Monad' : 'Solana');
+    const nativeAssetSymbol = assets.nativeSymbol ?? (isZcashChain ? 'ZEC' : isEthereumChain ? 'ETH' : isSuiChain ? 'SUI' : isMonadChain ? 'MON' : 'SOL');
     const activeHomeTab =
-      (isSuiChain || isMonadChain || isEthereumChain) &&
+      (isSuiChain || isMonadChain || isEthereumChain || isZcashChain) &&
       (homeTab === 'collectibles' || homeTab === 'staking' || homeTab === 'rebalance' || homeTab === 'community' || homeTab === 'governance')
         ? 'tokens'
         : homeTab;
-    const nativeAssetId = isEthereumChain ? 'ethereum' : isMonadChain ? 'monad' : isSuiChain ? 'sui' : 'sol';
+    const nativeAssetId = isZcashChain ? 'zcash' : isEthereumChain ? 'ethereum' : isMonadChain ? 'monad' : isSuiChain ? 'sui' : 'sol';
 
     return (
       <>
@@ -5688,8 +5732,11 @@ function PopupPage() {
                 title={manualRefreshStatus === 'refreshing' ? 'Refreshing…' : manualRefreshStatus === 'success' ? 'Updated' : manualRefreshStatus === 'error' ? 'Refresh failed — try again' : 'Refresh wallet'}
                 disabled={manualRefreshStatus === 'refreshing'}
               >
-                {manualRefreshStatus === 'success' ? <Check size={14} /> : manualRefreshStatus === 'error' ? <AlertTriangle size={14} /> : <RefreshCcw size={14} />}
-                {manualRefreshStatus !== 'idle' ? <span>{manualRefreshStatus === 'refreshing' ? 'Refreshing…' : manualRefreshStatus === 'success' ? 'Updated' : 'Try again'}</span> : null}
+                {manualRefreshStatus === 'refreshing'
+                  ? <LoaderCircle size={14} />
+                  : manualRefreshStatus === 'success'
+                    ? <Check size={14} />
+                    : <RefreshCcw size={14} />}
               </button>
               {renderWalletSwitcher()}
               {renderWalletMenu()}
@@ -6729,7 +6776,7 @@ function PopupPage() {
 
     const privateSendAvailable = !!import.meta.env.VITE_HOUDINI_API_URL && state?.wallet.chainState[selectedChain].selectedNetwork === 'mainnet-beta' && !selectedSendCollectible && !!selectedAsset && assetId !== 'custom-evm-token';
     if (privateSendReview && privateSendAvailable && selectedAsset && state?.activeAccount) {
-      const source = { id: selectedAsset.id, chain: selectedChain, symbol: selectedAsset.symbol, native: ['sol', 'sui', 'eth', 'mon'].includes(selectedAsset.asset.kind), address: selectedAsset.asset.kind === 'spl-token' ? selectedAsset.asset.mint : selectedAsset.asset.kind === 'evm-token' ? selectedAsset.asset.tokenAddress : selectedAsset.asset.kind === 'sui-coin' ? selectedAsset.asset.coinType : undefined };
+      const source = { id: selectedAsset.id, chain: selectedChain, symbol: selectedAsset.symbol, native: ['sol', 'sui', 'eth', 'mon', 'zec'].includes(selectedAsset.asset.kind), address: selectedAsset.asset.kind === 'spl-token' ? selectedAsset.asset.mint : selectedAsset.asset.kind === 'evm-token' ? selectedAsset.asset.tokenAddress : selectedAsset.asset.kind === 'sui-coin' ? selectedAsset.asset.coinType : undefined };
       const destination = recipientResolution?.requestedRecipient === recipient ? recipientResolution.recipient : recipient.trim();
       return <HoudiniSwapPanel key={state.activeAccount.publicKey + source.id + amount + destination} endpoint={import.meta.env.VITE_HOUDINI_API_URL.trim()} owner={state.activeAccount.publicKey} assets={[source]} privateSend={{ asset: source, amount, recipient: destination }} onBack={() => setPrivateSendReview(false)} onUsePublic={() => { setSendPrivate(false); setPrivateSendReview(false); }} onFund={(asset, entry) => { openSend(asset.id); setRecipient(entry.order.depositAddress); setAmount(depositAmount(entry)); setPassword(''); setHoudiniDeposit({ entry, assetId: asset.id, owner: state.activeAccount!.publicKey }); }} />;
     }
@@ -6739,10 +6786,11 @@ function PopupPage() {
       selectedAsset?.asset.kind === 'sol' ||
       selectedAsset?.asset.kind === 'sui' ||
       selectedAsset?.asset.kind === 'mon' ||
-      selectedAsset?.asset.kind === 'eth';
+      selectedAsset?.asset.kind === 'eth' ||
+      selectedAsset?.asset.kind === 'zec';
     const isCustomEvmToken = selectedAsset?.asset.kind === 'evm-token' && assetId === 'custom-evm-token';
-    const nativeSendLabel = assets.nativeName ?? (isEthereumChain ? 'Ethereum' : isSuiChain ? 'Sui' : isMonadChain ? 'Monad' : 'Solana');
-    const nativeSendSymbol = assets.nativeSymbol ?? (isEthereumChain ? 'ETH' : isSuiChain ? 'SUI' : isMonadChain ? 'MON' : 'SOL');
+    const nativeSendLabel = assets.nativeName ?? (isZcashChain ? 'Zcash' : isEthereumChain ? 'Ethereum' : isSuiChain ? 'Sui' : isMonadChain ? 'Monad' : 'Solana');
+    const nativeSendSymbol = assets.nativeSymbol ?? (isZcashChain ? 'ZEC' : isEthereumChain ? 'ETH' : isSuiChain ? 'SUI' : isMonadChain ? 'MON' : 'SOL');
     const selectedAssetName =
       isNativeSend
         ? nativeSendLabel
@@ -8009,7 +8057,7 @@ function PopupPage() {
                   await refresh();
                 }}
               >
-                {isMonadChain || isEthereumChain ? (
+                {isMonadChain || isEthereumChain || isZcashChain ? (
                   <>
                     <option value="mainnet-beta">Mainnet</option>
                     <option value="devnet">{isEthereumChain ? 'Sepolia' : 'Testnet'}</option>
@@ -8035,9 +8083,11 @@ function PopupPage() {
                   }}
                 />
                 <span>
-                  <strong>Custom RPC</strong>
+                  <strong>{isZcashChain ? 'Custom indexed API' : 'Custom RPC'}</strong>
                   <small className="muted">
-                    Use a custom endpoint for {isSuiChain || isMonadChain || isEthereumChain ? selectedNetworkLabel : wallet.selectedNetwork}.
+                    {isZcashChain
+                      ? `Use a custom transparent-address indexer for ${selectedNetworkLabel}.`
+                      : `Use a custom endpoint for ${isSuiChain || isMonadChain || isEthereumChain ? selectedNetworkLabel : wallet.selectedNetwork}.`}
                   </small>
                 </span>
               </label>
@@ -8054,12 +8104,14 @@ function PopupPage() {
                           ? 'Custom Monad RPC URL'
                           : isEthereumChain
                             ? 'Custom Ethereum RPC URL'
+                            : isZcashChain
+                              ? 'Custom Zcash indexed API URL'
                             : `Custom ${wallet.selectedNetwork} RPC URL`
                     }
                   />
                   <div className="inline wrap-actions">
                     <Button onClick={() => void handleSaveCustomRpc()} disabled={customRpcBusy || !customRpcInput.trim()}>
-                      {customRpcBusy ? 'Saving...' : 'Save RPC'}
+                      {customRpcBusy ? 'Saving...' : isZcashChain ? 'Save API' : 'Save RPC'}
                     </Button>
                     {selectedNetworkCustomRpc ? (
                       <Button
@@ -8084,7 +8136,12 @@ function PopupPage() {
                                         type: 'wallet_set_ethereum_custom_rpc',
                                         rpcUrl: null
                                       }
-                                : {
+                                  : isZcashChain
+                                    ? {
+                                        type: 'wallet_set_zcash_custom_rpc',
+                                        rpcUrl: null
+                                      }
+                                  : {
                                     type: 'wallet_set_custom_rpc',
                                     network: wallet.selectedNetwork,
                                     rpcUrl: null
@@ -8127,7 +8184,12 @@ function PopupPage() {
                                   type: 'wallet_set_ethereum_custom_rpc',
                                   rpcUrl: null
                                 }
-                          : {
+                            : isZcashChain
+                              ? {
+                                  type: 'wallet_set_zcash_custom_rpc',
+                                  rpcUrl: null
+                                }
+                            : {
                               type: 'wallet_set_custom_rpc',
                               network: wallet.selectedNetwork,
                               rpcUrl: null
@@ -9731,13 +9793,41 @@ function PopupPage() {
       VISIBLE_CHAIN_OPTIONS.find((option) => option.id === bridgeDestinationChain) ?? bridgeDestinationChainOptions[0] ?? null;
     const sourceSymbol = assets.nativeSymbol ?? LIFI_NATIVE_SYMBOL[selectedChain];
     const sourceName = assets.nativeName ?? sourceChainOption?.label ?? sourceSymbol;
-    const bridgeDestinationAddress = selectedBridgeDestinationAccount?.publicKey ?? null;
     const activeBridgeRoute =
       bridgeQuote?.routes.find((route) => route.id === bridgeSelectedRouteId) ??
       bridgeQuote?.routes[0] ??
       null;
     const bridgeCanExecute =
       activeBridgeRoute ? hasExecutableBridgeTransaction(activeBridgeRoute.quoteResponse, selectedChain) : false;
+    const zcashBridgeAssetId = selectedChain === 'solana' ? 'sol' : selectedChain;
+
+    if (
+      bridgeDestinationChain === 'zcash' &&
+      bridgeZcashReview &&
+      bridgeRecipientValid &&
+      bridgeDestinationAddress &&
+      state?.activeAccount &&
+      import.meta.env.VITE_HOUDINI_API_URL?.trim()
+    ) {
+      return (
+        <HoudiniZcashBridgePanel
+          endpoint={import.meta.env.VITE_HOUDINI_API_URL.trim()}
+          owner={state.activeAccount.publicKey}
+          asset={{ id: zcashBridgeAssetId, chain: selectedChain, symbol: sourceSymbol, native: true }}
+          recipient={bridgeDestinationAddress}
+          onBack={() => {
+            setBridgeZcashReview(false);
+          }}
+          onFund={(asset, entry) => {
+            openSend(asset.id);
+            setRecipient(entry.order.depositAddress);
+            setAmount(depositAmount(entry));
+            setPassword('');
+            setHoudiniDeposit({ entry, assetId: asset.id, owner: state.activeAccount!.publicKey });
+          }}
+        />
+      );
+    }
 
     if (isWatchOnlyWallet) {
       return (
@@ -9764,7 +9854,7 @@ function PopupPage() {
     if (bridgeDestinationChainOptions.length === 0) {
       return (
         <Card title="Bridge">
-          <p className="warning-box">No supported bridge destinations are available for this wallet yet. Add an Ethereum or Monad wallet to bridge from Solana, or switch to another source chain.</p>
+          <p className="warning-box">No supported bridge destinations are available for this source chain yet.</p>
           <Button tone="secondary" onClick={() => openExtensionPage('onboarding.html')}>
             Add another wallet
           </Button>
@@ -9828,6 +9918,7 @@ function PopupPage() {
             <section className="swap-leg">
               <div className="swap-leg-header">
                 <span className="send-field-label">From</span>
+                <span className="bridge-source-balance">{privacyMode ? 'Balance hidden' : `Available ${homeBalance}`}</span>
               </div>
               <div className="swap-leg-main">
                 <div className="send-select-shell swap-select-shell bridge-source-shell">
@@ -9861,7 +9952,7 @@ function PopupPage() {
             </section>
 
             <button type="button" className="swap-flip-button bridge-center-pill" aria-label="Bridge direction" disabled>
-              <ArrowUpRight size={18} />
+              <ArrowDown size={18} />
             </button>
 
             <section className="swap-leg">
@@ -9923,7 +10014,7 @@ function PopupPage() {
                           {selectedBridgeDestinationWallet ? selectedBridgeDestinationWallet.name.slice(0, 1).toUpperCase() : '?'}
                         </span>
                         <div className="bridge-select-text">
-                          <strong>{selectedBridgeDestinationWallet?.name ?? 'Select wallet'}</strong>
+                          <strong>{bridgeUsesExternalAddress ? 'Other wallet' : selectedBridgeDestinationWallet?.name ?? 'Select wallet'}</strong>
                           <span className="mono muted">{formatAddress(bridgeDestinationAddress ?? undefined)}</span>
                         </div>
                       </div>
@@ -9933,6 +10024,7 @@ function PopupPage() {
                   <DropdownMenu.Portal>
                     <DropdownMenu.Content className="popup-menu-content" sideOffset={8} align="start">
                       <div className="popup-menu-section">Destination wallet</div>
+                      <DropdownMenu.Item className="wallet-menu-action" onSelect={() => { setBridgeDestinationWalletId('external'); setBridgeWalletPickerOpen(false); setBridgeQuote(null); }}>Enter another address</DropdownMenu.Item>
                       <div className="wallet-menu-list">
                         {bridgeDestinationWallets.map((walletEntry) => {
                           const account =
@@ -9966,6 +10058,13 @@ function PopupPage() {
                 </DropdownMenu.Root>
               </div>
 
+              {bridgeUsesExternalAddress ? (
+                <label className="bridge-recipient-field">
+                  <span className="muted">Recipient address</span>
+                  <input aria-label="Bridge recipient address" value={bridgeExternalAddress} placeholder={`Paste a ${destinationChainOption?.label ?? ''} address`} spellCheck={false} autoComplete="off" onChange={(event) => { bridgeQuoteRequestRef.current = 0; setBridgeExternalAddress(event.target.value); setBridgeQuote(null); }} />
+                  {bridgeExternalAddress.trim() && !bridgeRecipientValid ? <span className="danger-text">Enter a valid address for this chain.</span> : null}
+                </label>
+              ) : null}
               {bridgeDestinationAddress ? (
                 <div className="bridge-destination-preview">
                   <span className="muted">Destination address</span>
@@ -9976,7 +10075,12 @@ function PopupPage() {
           </div>
         </Card>
 
-        <Card title="Quote">
+        {bridgeDestinationChain === 'zcash' ? (
+          <Card title="Zcash recipient">
+            <p className="muted">Review exchange quotes for this recipient on Zcash.</p>
+            <Button disabled={!bridgeRecipientValid} onClick={() => setBridgeZcashReview(true)}>Continue to Zcash quotes</Button>
+          </Card>
+        ) : <Card title="Quote">
           {bridgeError ? <p className="danger-box">{bridgeError}</p> : null}
           {quotingBridge ? (
             <p className="muted">Fetching the best route…</p>
@@ -10019,7 +10123,7 @@ function PopupPage() {
                 />
                 <KeyValueRow label="Estimated fees" value={activeBridgeRoute?.feeUsd ? `$${activeBridgeRoute.feeUsd}` : 'Unavailable'} />
               </div>
-              <KeyValueRow label="Destination" value={`${destinationChainOption?.label ?? bridgeDestinationChain} · ${selectedBridgeDestinationWallet?.name ?? 'Wallet'}`} />
+              <KeyValueRow label="Destination" value={`${destinationChainOption?.label ?? bridgeDestinationChain} · ${bridgeUsesExternalAddress ? formatAddress(bridgeDestinationAddress) : selectedBridgeDestinationWallet?.name ?? 'Wallet'}`} />
               <KeyValueRow
                 label="Route"
                 value={activeBridgeRoute?.routeLabels.length ? activeBridgeRoute.routeLabels.join(' → ') : 'Bridge route'}
@@ -10060,7 +10164,7 @@ function PopupPage() {
           ) : null}
 
           <div className="inline wrap-actions action-status-actions">
-            <Button tone="secondary" onClick={() => void handleGetBridgeQuote()} disabled={quotingBridge || !bridgeAmount.trim() || !bridgeDestinationChain}>
+            <Button tone="secondary" onClick={() => void handleGetBridgeQuote()} disabled={quotingBridge || !bridgeRecipientValid || !bridgeAmount.trim() || !bridgeDestinationChain}>
               {quotingBridge ? 'Quoting...' : 'Refresh quote'}
             </Button>
             <Button
@@ -10068,6 +10172,7 @@ function PopupPage() {
               disabled={
                 !bridgeQuote ||
                 !bridgeCanExecute ||
+                !bridgeRecipientValid ||
                 submittingBridge ||
                 quotingBridge ||
                 (!canUseUnlockedSigner && !bridgePassword.trim())
@@ -10076,14 +10181,14 @@ function PopupPage() {
               Bridge now
             </Button>
           </div>
-        </Card>
+        </Card>}
       </>
     );
   }
 
   return (
     <PageShell
-      eyebrow={view === 'home' || view === 'asset' || view === 'send' ? null : undefined}
+      eyebrow={view === 'home' || view === 'asset' || view === 'send' || view === 'bridge' ? null : undefined}
       title={
         view === 'home'
           ? ''
@@ -10096,7 +10201,7 @@ function PopupPage() {
               : view === 'swap'
                 ? 'Swap'
                 : view === 'bridge'
-                  ? 'Bridge'
+                  ? ''
                 : view === 'asset'
                   ? ''
                   : view === 'approval'
@@ -10119,7 +10224,7 @@ function PopupPage() {
               : view === 'swap'
                 ? 'Get a Jupiter quote and swap from your wallet.'
                 : view === 'bridge'
-                  ? 'Bridge native assets across the wallets you already manage in Grape.'
+                  ? undefined
                 : view === 'asset'
                   ? undefined
                   : view === 'approval'
@@ -10130,7 +10235,7 @@ function PopupPage() {
                       ? 'Recover SOL held by empty token accounts.'
                     : 'Manage your wallet and connections.'
       }
-      actions={view === 'home' || view === 'send' ? undefined : <div className="inline popup-actions">{renderWalletMenu()}</div>}
+      actions={view === 'home' || view === 'send' || view === 'bridge' ? undefined : <div className="inline popup-actions">{renderWalletMenu()}</div>}
     >
       {view === 'home' ? renderHome() : null}
       {view === 'discover' ? renderDiscover() : null}

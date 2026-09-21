@@ -93,7 +93,12 @@ function shouldAllowEphemeralExtensionId(env: Record<string, string>): boolean {
   return rawValue === '1' || rawValue === 'true' || rawValue === 'yes';
 }
 
-function createManifestPlugin(mainnetRpcUrl: string, extensionKey?: string, houdiniUrl?: string): Plugin {
+function createManifestPlugin(
+  mainnetRpcUrl: string,
+  extensionKey?: string,
+  houdiniUrl?: string,
+  zcashIndexerUrl?: string
+): Plugin {
   return {
     name: 'grape-manifest',
     apply: 'build',
@@ -129,7 +134,9 @@ function createManifestPlugin(mainnetRpcUrl: string, extensionKey?: string, houd
         permissions: ['storage', 'sidePanel', 'identity', 'scripting'],
         host_permissions: [
           ...(houdiniUrl ? [toHostPermission(houdiniUrl)] : []),
+          ...(zcashIndexerUrl ? [toHostPermission(zcashIndexerUrl)] : []),
           toHostPermission(mainnetRpcUrl),
+          'https://gemnodes.com/*',
           'https://api.mainnet-beta.solana.com/*',
           'https://api.devnet.solana.com/*',
           'https://api.coingecko.com/*',
@@ -198,7 +205,12 @@ export default defineConfig(({ mode }) => {
   return {
     root: extensionRoot,
     envDir: workspaceRoot,
-    plugins: [wasm(), react(), createManifestPlugin(mainnetRpcUrl, extensionKey, env.VITE_HOUDINI_API_URL)],
+    plugins: [wasm(), react(), createManifestPlugin(
+      mainnetRpcUrl,
+      extensionKey,
+      env.VITE_HOUDINI_API_URL,
+      env.VITE_GRAPE_ZCASH_INDEXER_URL
+    )],
     publicDir: resolve(extensionRoot, 'public'),
     resolve: {
       alias: {
@@ -212,7 +224,9 @@ export default defineConfig(({ mode }) => {
         '@grape/solana/': `${resolve(extensionRoot, '../../packages/solana/src')}/`,
         '@grape/sui': resolve(extensionRoot, '../../packages/sui/src/index.ts'),
         '@grape/sui/': `${resolve(extensionRoot, '../../packages/sui/src')}/`,
-        '@grape/ui': resolve(extensionRoot, '../../packages/ui/src/index.ts')
+        '@grape/ui': resolve(extensionRoot, '../../packages/ui/src/index.ts'),
+        '@grape/zcash': resolve(extensionRoot, '../../packages/zcash/src/index.ts'),
+        '@grape/zcash/': `${resolve(extensionRoot, '../../packages/zcash/src')}/`
       }
     },
     build: {

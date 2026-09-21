@@ -21,6 +21,7 @@
     "@grape/mobile-passkeys": "workspace:*",
     "@grape/monad": "workspace:*",
     "@grape/solana": "workspace:*",
+    "@grape/zcash": "workspace:*",
     "@ledgerhq/hw-app-solana": "7.10.7",
     "@ledgerhq/react-native-hw-transport-ble": "6.41.0",
     "@mysten/sui": "^2.6.0",

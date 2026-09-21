@@ -237,3 +237,11 @@ describe('message routing contracts', () => {
     expect(incident.type).toBe('wallet_run_incident_response');
   });
 });
+
+
+it('preserves external bridge destinations through runtime messages', () => {
+  const destinationAddress = '0x' + 'ab'.repeat(20);
+  const quoteResponse = { action: { toAddress: destinationAddress } };
+  expect(runtimeMessageSchema.parse({ type: 'wallet_get_bridge_quote', amount: '1', toChain: 'ethereum', destinationAddress })).toMatchObject({ destinationAddress });
+  expect(runtimeMessageSchema.parse({ type: 'wallet_execute_bridge', toChain: 'ethereum', destinationAddress, quoteResponse })).toMatchObject({ destinationAddress, quoteResponse });
+});

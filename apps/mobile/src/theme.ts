@@ -38,7 +38,8 @@ export const chains = [
   { id: 'solana', label: 'Solana', short: 'SOL', accent: '#8bf7c6' },
   { id: 'sui', label: 'Sui', short: 'SUI', accent: '#85d5ff' },
   { id: 'monad', label: 'Monad', short: 'MON', accent: '#ff976b' },
-  { id: 'ethereum', label: 'Ethereum', short: 'ETH', accent: '#c7b3ff' }
+  { id: 'ethereum', label: 'Ethereum', short: 'ETH', accent: '#c7b3ff' },
+  { id: 'zcash', label: 'Zcash', short: 'ZEC', accent: '#f4b728' }
 ] as const;
 
 export const mobileThemes: Array<{ id: GrapeTheme; label: string }> = [

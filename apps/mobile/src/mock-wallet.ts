@@ -60,5 +60,8 @@ export const mockAssetsByChain: Record<GrapeChain, MobileAssetRow[]> = {
   ethereum: [
     { id: 'eth', symbol: 'ETH', name: 'Ether', amountLabel: '0.84 ETH', valueLabel: '$2,104.12' },
     { id: 'usdc', symbol: 'USDC', name: 'USD Coin', amountLabel: '420 USDC', valueLabel: '$420.00' }
+  ],
+  zcash: [
+    { id: 'zec', symbol: 'ZEC', name: 'Zcash', amountLabel: '0 ZEC', valueLabel: '$0.00' }
   ]
 };

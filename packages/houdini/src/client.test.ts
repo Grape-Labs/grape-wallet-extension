@@ -1,5 +1,5 @@
-import { expect, it } from 'vitest';
-import { depositAmount, depositProblem, findOpenPrivateSend, matchingAsset, orderIsOpen, type HoudiniOrder } from './client';
+import { expect, it, vi } from 'vitest';
+import { HoudiniClient, depositAmount, depositProblem, findOpenPrivateSend, matchingAsset, orderIsOpen, type HoudiniOrder } from './client';
 const token = { id: 'sol', symbol: 'SOL', name: 'Solana', mainnet: true, decimals: 9, chainData: { shortName: 'solana', name: 'Solana' } };
 const entry: HoudiniOrder = { capability: 'opaque', from: token, to: token, recipient: 'recipient', refundAddress: 'sender', amount: '1', order: { houdiniId: 'id', status: 0, depositAddress: 'deposit', receiverAddress: 'recipient', inAmount: 1, outAmount: 1, expires: new Date(Date.now() + 600000).toISOString() } };
 it('blocks expired, memo-bearing, already sent, mismatched and non-waiting deposits', () => {
@@ -33,4 +33,27 @@ it('finds the same open private send and ignores completed or expired orders', (
   expect(findOpenPrivateSend([open], asset, '1', 'recipient')).toBe(open);
   expect(findOpenPrivateSend([{ ...open, order: { ...open.order, status: 4 } }], asset, '1', 'recipient')).toBeUndefined();
   expect(orderIsOpen({ ...open, order: { ...open.order, expires: new Date(0).toISOString() } })).toBe(false);
+});
+
+it('prepares a native cross-chain route to Zcash', async () => {
+  const zec = { id: 'zec', symbol: 'ZEC', name: 'Zcash', mainnet: true, decimals: 8, chainData: { shortName: 'Zcash', name: 'Zcash' } };
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    const url = String(input);
+    return Response.json({ tokens: url.includes('term=ZEC') ? [zec] : [token] });
+  });
+  const client = new HoudiniClient('https://houdini.example', 'owner', {
+    async getItem() { return null; },
+    async setItem() {}
+  });
+
+  await client.prepareCrossChain(
+    { id: 'sol', chain: 'solana', symbol: 'SOL', native: true },
+    { symbol: 'ZEC', chain: 'zcash' },
+    't1recipient'
+  );
+
+  expect(client.state.from?.symbol).toBe('SOL');
+  expect(client.state.to?.symbol).toBe('ZEC');
+  expect(client.state.recipient).toBe('t1recipient');
+  fetchMock.mockRestore();
 });

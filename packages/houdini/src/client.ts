@@ -112,6 +112,30 @@ export class HoudiniClient {
       this.change({ from: token, to: token, amount, recipient });
     } catch (e) { this.update({ error: (e as Error).message }); } finally { this.update({ busy: false }); }
   }
+  async prepareCrossChain(asset: HoudiniAsset, output: { symbol: string; chain: string }, recipient: string) {
+    this.update({ busy: true, error: null });
+    try {
+      const inputQuery = new URLSearchParams({
+        term: asset.native ? asset.symbol : asset.address ?? asset.symbol,
+        chain: asset.chain,
+        ...(asset.native ? { native: 'true' } : {})
+      });
+      const outputQuery = new URLSearchParams({ term: output.symbol, native: 'true' });
+      const [inputData, outputData] = await Promise.all([
+        this.request<{ tokens: HoudiniToken[] }>('/tokens?' + inputQuery),
+        this.request<{ tokens: HoudiniToken[] }>('/tokens?' + outputQuery)
+      ]);
+      const from = inputData.tokens.find(token => matchingAsset(token, [asset]));
+      const to = outputData.tokens.find(token =>
+        token.mainnet === true &&
+        token.symbol.toLowerCase() === output.symbol.toLowerCase() &&
+        token.chainData.shortName.toLowerCase() === output.chain.toLowerCase()
+      );
+      if (!from) throw new Error(`Houdini does not support ${asset.symbol} on ${asset.chain} as a funding asset.`);
+      if (!to) throw new Error(`Houdini does not currently support native ${output.symbol} delivery.`);
+      this.change({ from, to, amount: '', recipient });
+    } catch (e) { this.update({ error: (e as Error).message }); } finally { this.update({ busy: false }); }
+  }
   async quote() {
     if (this.state.busy || !this.state.from || !this.state.to) return;
     const revision = this.revision;

@@ -5,6 +5,7 @@ interface ImportMetaEnv {
   readonly VITE_GRAPE_JUP_API_KEY?: string;
   readonly VITE_GRAPE_SHYFT_API_KEY?: string;
   readonly VITE_GRAPE_PASSKEY_WEB_ORIGIN?: string;
+  readonly VITE_GRAPE_ZCASH_INDEXER_URL?: string;
 }
 
 interface ImportMeta {

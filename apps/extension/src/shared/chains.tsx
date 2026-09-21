@@ -59,6 +59,14 @@ function MonadIcon() {
   );
 }
 
+function ZcashIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="chain-icon-svg">
+      <path fill="currentColor" d="M6 4h12v3h-3.3l-5.1 10H18v3H6v-3h3.2l5.1-10H6zm4.5-3h3v4h-3zm0 18h3v4h-3z" />
+    </svg>
+  );
+}
+
 export function ChainLogoBadge(props: { chain: GrapeChain; className?: string }) {
   const gradientId = useId().replace(/:/g, '-');
 
@@ -70,6 +78,8 @@ export function ChainLogoBadge(props: { chain: GrapeChain; className?: string })
         <SuiIcon />
       ) : props.chain === 'ethereum' ? (
         <EthereumIcon />
+      ) : props.chain === 'zcash' ? (
+        <ZcashIcon />
       ) : (
         <MonadIcon />
       )}

@@ -7,7 +7,8 @@ const CHAIN_ALIASES: Record<GrapeChain, string[]> = {
   solana: ['solana'],
   sui: ['sui'],
   monad: ['monad'],
-  ethereum: ['eth', 'ethereum']
+  ethereum: ['eth', 'ethereum'],
+  zcash: ['zcash']
 };
 
 const FALLBACK_CHAIN_IDS: Partial<Record<GrapeChain, string>> = {
@@ -21,28 +22,32 @@ const SUPPORTED_BRIDGE_DESTINATIONS: Record<GrapeChain, GrapeChain[]> = {
   solana: ['ethereum', 'monad', 'sui'],
   sui: [],
   monad: ['solana', 'ethereum'],
-  ethereum: ['solana', 'monad', 'sui']
+  ethereum: ['solana', 'monad', 'sui'],
+  zcash: []
 };
 
 export const LIFI_NATIVE_TOKEN_ADDRESS: Record<GrapeChain, string> = {
   solana: '11111111111111111111111111111111',
   sui: '0x2::sui::SUI',
   monad: '0x0000000000000000000000000000000000000000',
-  ethereum: '0x0000000000000000000000000000000000000000'
+  ethereum: '0x0000000000000000000000000000000000000000',
+  zcash: ''
 };
 
 export const LIFI_NATIVE_SYMBOL: Record<GrapeChain, string> = {
   solana: 'SOL',
   sui: 'SUI',
   monad: 'MON',
-  ethereum: 'ETH'
+  ethereum: 'ETH',
+  zcash: 'ZEC'
 };
 
 export const LIFI_NATIVE_DECIMALS: Record<GrapeChain, number> = {
   solana: 9,
   sui: 9,
   monad: 18,
-  ethereum: 18
+  ethereum: 18,
+  zcash: 8
 };
 
 export function getSupportedBridgeDestinations(fromChain: GrapeChain): GrapeChain[] {

@@ -14,6 +14,8 @@ import {
   DEFAULT_THEME_BACKGROUND_STYLE,
   DEFAULT_THEME_MOTION_INTENSITY,
   extractExecutableBridgeTransactionRequest,
+  isValidBridgeRecipient,
+  assertBridgeRecipient,
   GRAPE_VERIFICATION_REQUIRED_DAO_ID,
   encryptText,
   normalizeCustomTheme,
@@ -73,6 +75,12 @@ import type { MobileReputationResponse } from './reputation';
 import type { MobileVerificationResponse } from './verification';
 import type { MobilePasskeyWalletConfig } from './passkeys';
 import { GRAPE_PASSKEY_WALLET_SPEC_VERSION } from '../../../packages/core/src/passkeys';
+import {
+  ZcashIndexerClient,
+  deriveZcashAccount,
+  importZcashPrivateKey,
+  sendZcashTransparent
+} from '@grape/zcash';
 
 export type MobileWalletSource = 'created' | 'imported-mnemonic' | 'imported-private-key' | 'ledger';
 
@@ -397,7 +405,32 @@ export async function loadMobileWalletState(): Promise<MobileWalletState> {
     activities: Array.isArray(parsed.activities) ? parsed.activities : []
   };
 
-  return normalizeMobileWalletState(baseState);
+  let normalized = normalizeMobileWalletState(baseState);
+  if (!normalized.wallets.some((wallet) => wallet.chain === 'zcash')) {
+    const mnemonicWallet = normalized.wallets.find((wallet) => wallet.source === 'created' || wallet.source === 'imported-mnemonic');
+    if (mnemonicWallet) {
+      const secret = await loadWalletSecretWithWalletFallback(normalized, mnemonicWallet).catch(() => null);
+      if (secret?.kind === 'mnemonic') {
+        const account = deriveZcashAccount(secret.mnemonic);
+        const zcashWallet = createWallet(
+          mnemonicWallet.name,
+          'zcash',
+          account.address,
+          account.derivationPath,
+          mnemonicWallet.source,
+          mnemonicWallet.secretRef
+        );
+        normalized = normalizeMobileWalletState({
+          ...normalized,
+          wallets: [...normalized.wallets, zcashWallet],
+          selectedWalletIds: { ...normalized.selectedWalletIds, zcash: zcashWallet.id }
+        });
+        await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
+      }
+    }
+  }
+
+  return normalized;
 }
 
 export async function persistMobileWalletState(state: MobileWalletState) {
@@ -740,6 +773,8 @@ export async function loadWalletAssets(wallet: MobileWallet): Promise<MobileAsse
       return loadEthereumAssets(wallet.address);
     case 'monad':
       return loadMonadAssets(wallet.address);
+    case 'zcash':
+      return loadZcashAssets(wallet.address);
     default:
       return [];
   }
@@ -767,6 +802,22 @@ export async function loadWalletActivity(wallet: MobileWallet): Promise<MobileAc
       }
 
       return loadMobileSolanaRpcActivity(wallet, 30);
+    }
+    case 'zcash': {
+      const activity = await createMobileZcashClient().getActivity(wallet.address, 30);
+      return activity.map((entry) => ({
+        id: `zcash:${entry.txid}`,
+        chain: 'zcash' as const,
+        walletId: wallet.id,
+        type: entry.direction,
+        title: entry.direction === 'sent' ? 'Sent ZEC' : entry.direction === 'received' ? 'Received ZEC' : 'Zcash transaction',
+        subtitle: entry.txid.slice(0, 12),
+        amountLabel: entry.valueZat === null ? 'ZEC' : `${Math.abs(entry.valueZat) / 100_000_000} ZEC`,
+        timestamp: entry.timestamp ?? Date.now(),
+        signature: entry.txid,
+        status: 'success' as const,
+        source: 'rpc' as const
+      }));
     }
     default:
       return [];
@@ -982,7 +1033,12 @@ function extractSwapRouteLabels(quoteResponse: MobileJupiterQuoteResponse): stri
     : [];
 }
 
-function resolveBridgeDestination(state: MobileWalletState, chain: GrapeChain, walletId?: string) {
+function resolveBridgeDestination(state: MobileWalletState, chain: GrapeChain, walletId?: string, address?: string) {
+  if (address !== undefined) {
+    const recipient = address.trim();
+    if (!isValidBridgeRecipient(chain, recipient)) throw new Error('Enter a valid destination address for ' + chain + '.');
+    return { chain, address: recipient };
+  }
   const chainWallets = state.wallets.filter((candidate) => candidate.chain === chain);
   const wallet = chainWallets.find((candidate) => candidate.id === walletId) ?? chainWallets[0];
   if (!wallet) {
@@ -1168,7 +1224,8 @@ export async function getWalletBridgeQuote(input: {
   wallet: MobileWallet;
   amount: string;
   toChain: GrapeChain;
-  destinationWalletId?: string;
+  destinationAddress?: string;
+    destinationWalletId?: string;
 }): Promise<MobileBridgeQuoteSummary> {
   if (input.wallet.chain === 'sui') {
     throw new Error('Bridge source is coming soon for Sui wallets.');
@@ -1182,7 +1239,7 @@ export async function getWalletBridgeQuote(input: {
     throw new Error(`Bridging from ${input.wallet.chain} to ${input.toChain} is not supported yet.`);
   }
 
-  const destinationWallet = resolveBridgeDestination(input.state, input.toChain, input.destinationWalletId);
+  const destinationWallet = resolveBridgeDestination(input.state, input.toChain, input.destinationWalletId, input.destinationAddress);
   const decimals = input.wallet.chain === 'solana' ? 9 : 18;
   const amountRaw = parseDecimalAmount(input.amount, decimals).toString();
 
@@ -1200,12 +1257,14 @@ export async function executeWalletBridge(input: {
   wallet: MobileWallet;
   quoteResponse: Record<string, unknown>;
   toChain: GrapeChain;
-  destinationWalletId?: string;
+  destinationAddress?: string;
+    destinationWalletId?: string;
 }): Promise<MobileBridgeExecuteResponse> {
   if (input.wallet.source === 'ledger') {
     throw new Error('Ledger bridge execution is not available on mobile yet.');
   }
-  const destinationWallet = resolveBridgeDestination(input.state, input.toChain, input.destinationWalletId);
+  const destinationWallet = resolveBridgeDestination(input.state, input.toChain, input.destinationWalletId, input.destinationAddress);
+  assertBridgeRecipient(input.quoteResponse, input.toChain, destinationWallet.address);
   const transactionRequest = extractExecutableBridgeTransactionRequest(input.quoteResponse, input.wallet.chain);
   if (!transactionRequest) {
     throw new Error('This bridge route requires an unsupported transaction format. Try a different route or amount.');
@@ -1591,7 +1650,9 @@ export async function sendNativeAsset(input: {
             ? 'ETH'
             : input.wallet.chain === 'monad'
               ? 'MON'
-              : 'SUI',
+              : input.wallet.chain === 'zcash'
+                ? 'ZEC'
+                : 'SUI',
       amountLabel: '',
       valueLabel: '',
       chain: input.wallet.chain,
@@ -1732,6 +1793,19 @@ export async function sendWalletAsset(input: {
             customRpcUrl: getMobileMonadRpcUrl(DEFAULT_EVM_NETWORK)
           });
     }
+    case 'zcash': {
+      if (!secret) throw new Error('Zcash Ledger signing is not available on mobile yet.');
+      const account = secret.kind === 'mnemonic'
+        ? deriveZcashAccount(secret.mnemonic, 'mainnet', input.wallet.derivationPath)
+        : importZcashPrivateKey(secret.secretKey);
+      if (account.address !== input.wallet.address) throw new Error('The Zcash signing key does not match this wallet.');
+      return (await sendZcashTransparent({
+        client: createMobileZcashClient(),
+        account,
+        recipient: input.recipient.trim(),
+        amount: input.amount
+      })).txid;
+    }
     default:
       throw new Error('Unsupported chain.');
   }
@@ -1871,6 +1945,16 @@ export async function exportMobileWalletPrivateKey(input: {
       return {
         chain: 'monad',
         privateKey: exportEvmPrivateKey(secret, loadMonadModule().resolveMonadVaultSecret(secret as VaultSecret)),
+        sourceKind: secret.kind
+      };
+    }
+    case 'zcash': {
+      const account = secret.kind === 'mnemonic'
+        ? deriveZcashAccount(secret.mnemonic, 'mainnet', input.wallet.derivationPath)
+        : importZcashPrivateKey(secret.secretKey);
+      return {
+        chain: 'zcash',
+        privateKey: account.privateKey,
         sourceKind: secret.kind
       };
     }
@@ -2219,7 +2303,7 @@ export function createSwapActivity(input: {
 
 export function createBridgeActivity(input: {
   wallet: MobileWallet;
-  destinationWallet: MobileWallet;
+  destinationWallet: Pick<MobileWallet, 'chain' | 'address'>;
   fromAmountLabel: string;
   toAmountLabel: string;
   signature: string;
@@ -2273,6 +2357,11 @@ async function createDerivedWallets(
     const monad = deriveMonadAccount0(mnemonic);
     return createWallet(walletLabel, 'monad', monad.address, monad.derivationPath, source, secretRef);
   }, 'monad');
+
+  await tryAddDerivedWallet(wallets, async () => {
+    const zcash = deriveZcashAccount(mnemonic);
+    return createWallet(walletLabel, 'zcash', zcash.address, zcash.derivationPath, source, secretRef);
+  }, 'zcash');
 
   return wallets;
 }
@@ -2409,6 +2498,10 @@ async function importPrivateKeyWallet(chain: GrapeChain, privateKey: string) {
       const { importMonadPrivateKey } = loadMonadModule();
       return importMonadPrivateKey(privateKey);
     }
+    case 'zcash': {
+      const imported = importZcashPrivateKey(privateKey);
+      return { secretKey: imported.privateKey, derivationPath: imported.derivationPath, address: imported.address };
+    }
     default:
       throw new Error('Unsupported chain for private key import.');
   }
@@ -2492,6 +2585,8 @@ async function resolveWalletAddressFromSecret(secret: StoredSecretPayload, chain
         return loadEthereumModule().deriveEthereumAccount0(secret.mnemonic).address;
       case 'monad':
         return loadMonadModule().deriveMonadAccount0(secret.mnemonic).address;
+      case 'zcash':
+        return deriveZcashAccount(secret.mnemonic).address;
     }
   }
 
@@ -3073,6 +3168,32 @@ async function loadMonadAssets(address: string): Promise<MobileAsset[]> {
     },
     ...nfts
   ];
+}
+
+function createMobileZcashClient() {
+  return new ZcashIndexerClient({
+    network: 'mainnet',
+    baseUrl: process.env.EXPO_PUBLIC_ZCASH_INDEXER_URL?.trim() || undefined
+  });
+}
+
+async function loadZcashAssets(address: string): Promise<MobileAsset[]> {
+  const snapshot = await createMobileZcashClient().getAddress(address);
+  const amountUi = snapshot.confirmedBalanceZat / 100_000_000;
+  return [{
+    id: 'zec',
+    name: 'Zcash',
+    symbol: 'ZEC',
+    amountLabel: `${amountUi.toLocaleString(undefined, { maximumFractionDigits: 8 })} ZEC`,
+    amountUi,
+    valueLabel: '',
+    chain: 'zcash',
+    address,
+    metadataSource: 'native',
+    decimals: 8,
+    description: 'Transparent ZEC balance. Shielded addresses are not supported yet.',
+    tokenType: 'native'
+  }];
 }
 
 async function loadMobileEvmNfts(baseUrl: string, chain: 'ethereum' | 'monad', owner: string): Promise<MobileAsset[]> {

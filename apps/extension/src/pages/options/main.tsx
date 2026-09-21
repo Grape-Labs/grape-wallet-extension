@@ -121,7 +121,6 @@ function OptionsPage() {
     }
 
     void QRCode.toDataURL(activeSession.qrPayload, {
-      errorCorrectionLevel: 'Q',
       margin: 8,
       width: 1400,
       color: {

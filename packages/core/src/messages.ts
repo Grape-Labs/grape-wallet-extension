@@ -25,6 +25,9 @@ const sendAssetSchema = z.discriminatedUnion('kind', [
     kind: z.literal('eth')
   }),
   z.object({
+    kind: z.literal('zec')
+  }),
+  z.object({
     kind: z.literal('sui-coin'),
     coinType: z.string().min(1),
     decimals: z.number().int().min(0).max(255)
@@ -291,6 +294,46 @@ export const providerRequestSchema = z.discriminatedUnion('method', [
       address: z.string().min(2),
       typedData: z.string().min(2)
     })
+  }),
+  z.object({
+    id: z.string(),
+    method: z.literal('zcash_requestAccounts'),
+    origin: pageOriginSchema,
+    params: z.object({}).default({})
+  }),
+  z.object({
+    id: z.string(),
+    method: z.literal('zcash_getAccounts'),
+    origin: pageOriginSchema,
+    params: z.object({}).default({})
+  }),
+  z.object({
+    id: z.string(),
+    method: z.literal('zcash_getAddresses'),
+    origin: pageOriginSchema,
+    params: z.object({}).default({})
+  }),
+  z.object({
+    id: z.string(),
+    method: z.literal('zcash_getBalance'),
+    origin: pageOriginSchema,
+    params: z.object({}).default({})
+  }),
+  z.object({
+    id: z.string(),
+    method: z.literal('zcash_sendTransaction'),
+    origin: pageOriginSchema,
+    params: z.object({
+      to: z.string().trim().min(1),
+      amount: decimalAmountSchema,
+      fundingSource: z.literal('transparent').optional()
+    })
+  }),
+  z.object({
+    id: z.string(),
+    method: z.literal('zcash_disconnect'),
+    origin: pageOriginSchema,
+    params: z.object({}).default({})
   })
 ]);
 
@@ -390,21 +433,21 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('wallet_import_private_key'),
-    chain: z.enum(['solana', 'sui', 'monad', 'ethereum']),
+    chain: z.enum(['solana', 'sui', 'monad', 'ethereum', 'zcash']),
     privateKey: z.string().min(1),
     password: z.string(),
     publicKey: z.string()
   }),
   z.object({
     type: z.literal('wallet_import_ledger'),
-    chain: z.enum(['solana', 'sui', 'monad', 'ethereum']),
+    chain: z.enum(['solana', 'sui', 'monad', 'ethereum', 'zcash']),
     derivationPath: z.string().min(1),
     password: z.string(),
     publicKey: z.string()
   }),
   z.object({
     type: z.literal('wallet_import_ledger_batch'),
-    chain: z.enum(['solana', 'sui', 'monad', 'ethereum']),
+    chain: z.enum(['solana', 'sui', 'monad', 'ethereum', 'zcash']),
     password: z.string(),
     accounts: z
       .array(
@@ -417,12 +460,12 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('wallet_import_watch_only'),
-    chain: z.enum(['solana', 'sui', 'monad', 'ethereum']),
+    chain: z.enum(['solana', 'sui', 'monad', 'ethereum', 'zcash']),
     publicKey: z.string().min(32)
   }),
   z.object({
     type: z.literal('wallet_scan_ledger_accounts'),
-    chain: z.enum(['solana', 'sui', 'monad', 'ethereum']),
+    chain: z.enum(['solana', 'sui', 'monad', 'ethereum', 'zcash']),
     network: z.enum(['mainnet-beta', 'devnet']),
     count: z.number().int().positive().max(128).optional()
   }),
@@ -442,7 +485,7 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('wallet_set_chain'),
-    chain: z.enum(['solana', 'sui', 'monad', 'ethereum'])
+    chain: z.enum(['solana', 'sui', 'monad', 'ethereum', 'zcash'])
   }),
   z.object({
     type: z.literal('wallet_set_theme'),
@@ -508,6 +551,10 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('wallet_set_ethereum_custom_rpc'),
+    rpcUrl: z.string().url().nullable()
+  }),
+  z.object({
+    type: z.literal('wallet_set_zcash_custom_rpc'),
     rpcUrl: z.string().url().nullable()
   }),
   z.object({
@@ -591,7 +638,7 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('wallet_refresh_asset_values'),
-    chain: z.enum(['solana', 'sui', 'monad', 'ethereum']).optional()
+    chain: z.enum(['solana', 'sui', 'monad', 'ethereum', 'zcash']).optional()
   }),
   z.object({
     type: z.literal('wallet_get_reputation')
@@ -750,13 +797,15 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('wallet_get_bridge_quote'),
     amount: decimalAmountSchema,
-    toChain: z.enum(['solana', 'sui', 'monad', 'ethereum']),
+    toChain: z.enum(['solana', 'sui', 'monad', 'ethereum', 'zcash']),
+    destinationAddress: z.string().trim().min(1).optional(),
     destinationWalletId: z.string().min(1).optional()
   }),
   z.object({
     type: z.literal('wallet_execute_bridge'),
     quoteResponse: bridgeQuoteResponseSchema,
-    toChain: z.enum(['solana', 'sui', 'monad', 'ethereum']),
+    toChain: z.enum(['solana', 'sui', 'monad', 'ethereum', 'zcash']),
+    destinationAddress: z.string().trim().min(1).optional(),
     destinationWalletId: z.string().min(1).optional(),
     password: z.string().min(1).optional()
   }),

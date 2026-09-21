@@ -6,6 +6,7 @@ import { Button, Card, Input, MnemonicGrid, PageShell, TextArea } from '@grape/u
 import { importEthereumPrivateKey, validateEthereumAddress, validateEthereumPrivateKey } from '@grape/ethereum';
 import { importMonadPrivateKey, validateMonadAddress, validateMonadPrivateKey } from '@grape/monad';
 import { importSuiPrivateKey, validateSuiAddress, validateSuiPrivateKey } from '@grape/sui';
+import { importZcashPrivateKey, isValidZcashTransparentAddress } from '@grape/zcash';
 import { ChainLogoBadge } from '../../shared/chains';
 import {
   createDeterministicPasskeyWalletSetup,
@@ -39,7 +40,7 @@ type EasySetupMethod = 'passkey' | 'approval' | 'restore' | 'import';
 type EasyRecoveryMode = 'passkey-only' | 'passkey-phrase' | 'trusted-recovery';
 type SetupMode = 'create' | 'import';
 type ImportMethod = 'mnemonic' | 'private-key' | 'watch-only' | 'ledger';
-type ImportChain = 'solana' | 'sui' | 'monad' | 'ethereum';
+type ImportChain = 'solana' | 'sui' | 'monad' | 'ethereum' | 'zcash';
 type LedgerImportChain = 'solana' | 'sui' | 'monad' | 'ethereum';
 type SetupStep = 1 | 2 | 3;
 type LedgerCandidate = {
@@ -56,8 +57,10 @@ const IMPORT_CHAIN_OPTIONS = [
   { id: 'solana', label: 'Solana', shortLabel: 'SOL' },
   { id: 'sui', label: 'Sui', shortLabel: 'SUI' },
   { id: 'monad', label: 'Monad', shortLabel: 'MON' },
-  { id: 'ethereum', label: 'Ethereum', shortLabel: 'ETH' }
+  { id: 'ethereum', label: 'Ethereum', shortLabel: 'ETH' },
+  { id: 'zcash', label: 'Zcash', shortLabel: 'ZEC' }
 ] as const satisfies ReadonlyArray<{ id: ImportChain; label: string; shortLabel: string }>;
+const LEDGER_CHAIN_OPTIONS = IMPORT_CHAIN_OPTIONS.filter((option) => option.id !== 'zcash');
 
 function getLedgerCandidateKey(account: Pick<LedgerCandidate, 'publicKey' | 'derivationPath'>) {
   return `${account.publicKey}:${account.derivationPath}`;
@@ -90,6 +93,13 @@ function validateImportedPrivateKey(chain: ImportChain, value: string) {
       return validateMonadPrivateKey(value);
     case 'ethereum':
       return validateEthereumPrivateKey(value);
+    case 'zcash':
+      try {
+        importZcashPrivateKey(value);
+        return true;
+      } catch {
+        return false;
+      }
   }
 }
 
@@ -103,6 +113,8 @@ function importPrivateKeyForChain(chain: ImportChain, value: string) {
       return importMonadPrivateKey(value).address;
     case 'ethereum':
       return importEthereumPrivateKey(value).address;
+    case 'zcash':
+      return importZcashPrivateKey(value).address;
   }
 }
 
@@ -116,6 +128,8 @@ function validateWatchOnlyAddress(chain: ImportChain, value: string) {
       return validateMonadAddress(value.trim());
     case 'ethereum':
       return validateEthereumAddress(value.trim());
+    case 'zcash':
+      return isValidZcashTransparentAddress(value.trim());
   }
 }
 
@@ -129,6 +143,8 @@ function getChainLabel(chain: ImportChain) {
       return 'Monad';
     case 'ethereum':
       return 'Ethereum';
+    case 'zcash':
+      return 'Zcash';
   }
 }
 
@@ -136,10 +152,11 @@ function renderChainOptionButtons<TChain extends ImportChain>(input: {
   value: TChain;
   onChange: (chain: TChain) => void;
   onBeforeChange?: () => void;
+  options?: ReadonlyArray<{ id: ImportChain; label: string; shortLabel: string }>;
 }) {
   return (
     <div className="inline wrap-actions chain-option-grid">
-      {IMPORT_CHAIN_OPTIONS.map((option) => {
+      {(input.options ?? IMPORT_CHAIN_OPTIONS).map((option) => {
         const active = input.value === option.id;
         return (
           <Button
@@ -1072,7 +1089,9 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
                             ? 'Paste a suiprivkey string, base64 string, hex string, or JSON byte array'
                             : privateKeyChain === 'monad'
                               ? 'Paste a 32-byte hex private key'
-                              : 'Paste a 32-byte hex private key'
+                              : privateKeyChain === 'zcash'
+                                ? 'Paste a 32-byte hex key or transparent WIF key'
+                                : 'Paste a 32-byte hex private key'
                       }
                       value={importPrivateKey}
                       onChange={(event) => setImportPrivateKey(event.target.value)}
@@ -1119,6 +1138,7 @@ async function scanLedgerAccounts(nextScanCount = ledgerScanCount) {
                     {renderChainOptionButtons({
                       value: ledgerChain,
                       onChange: setLedgerChain,
+                      options: LEDGER_CHAIN_OPTIONS,
                       onBeforeChange: () => {
                         setLedgerAccounts([]);
                         setLedgerSelectedAccounts([]);

@@ -33,11 +33,22 @@ declare global {
     grapeEthereum?: GrapeMonadProvider;
     ethereum?: GrapeMonadProvider;
     grapeSui?: SuiWalletStandardWallet;
+    grapeZcash?: GrapeZcashProvider;
+    grapewallet?: { isGrapeWallet: true; version: string; zcash: GrapeZcashProvider };
+    zcash?: GrapeZcashProvider;
     __grapeDebugEvents?: GrapeDebugEvent[];
     __grapeLastProviderDebug?: GrapeDebugEvent;
     [GRAPE_INPAGE_INIT_FLAG]?: boolean;
   }
 }
+
+type GrapeZcashProvider = {
+  isGrape: true;
+  request<T = unknown>(args: { method: string; params?: readonly unknown[] | Record<string, unknown> }): Promise<T>;
+  on(event: string, handler: (...args: unknown[]) => void): void;
+  removeListener(event: string, handler: (...args: unknown[]) => void): void;
+  disconnect(): Promise<void>;
+};
 
 type PendingRequest = {
   resolve: (value: unknown) => void;
@@ -60,7 +71,8 @@ if (!window[GRAPE_INPAGE_INIT_FLAG]) {
     const pendingRequests = new Map<string, PendingRequest>();
 
     const transport = {
-      request<T>(request: ProviderRequest): Promise<T> {
+      request<T>(rawRequest: unknown): Promise<T> {
+        const request = rawRequest as ProviderRequest;
         return new Promise((resolve, reject) => {
           pendingRequests.set(request.id, {
             resolve: resolve as (value: unknown) => void,
@@ -97,6 +109,52 @@ if (!window[GRAPE_INPAGE_INIT_FLAG]) {
       href: window.location.href,
       title: document.title
     });
+    const zcashListeners = new Map<string, Set<(...args: unknown[]) => void>>();
+    const emitZcash = (event: string, value?: unknown) => {
+      zcashListeners.get(event)?.forEach((listener) => listener(value));
+    };
+    const zcashProvider: GrapeZcashProvider = {
+      isGrape: true,
+      async request<T>(args: { method: string; params?: readonly unknown[] | Record<string, unknown> }): Promise<T> {
+        const method = args.method;
+        if (![
+          'zcash_requestAccounts',
+          'zcash_getAccounts',
+          'zcash_getAddresses',
+          'zcash_getBalance',
+          'zcash_sendTransaction',
+          'zcash_disconnect'
+        ].includes(method)) {
+          throw new Error(`Unsupported Zcash provider method: ${method}`);
+        }
+        const firstParam = Array.isArray(args.params) ? args.params[0] : args.params;
+        const params = firstParam && typeof firstParam === 'object' ? firstParam as Record<string, unknown> : {};
+        const result = await transport.request({
+          id: crypto.randomUUID(),
+          method,
+          origin: {
+            origin: window.location.origin,
+            href: window.location.href,
+            title: document.title
+          },
+          params
+        } as ProviderRequest) as T;
+        if (method === 'zcash_requestAccounts') emitZcash('accountsChanged', result);
+        if (method === 'zcash_disconnect') emitZcash('disconnect');
+        return result;
+      },
+      on(event, handler) {
+        const listeners = zcashListeners.get(event) ?? new Set();
+        listeners.add(handler);
+        zcashListeners.set(event, listeners);
+      },
+      removeListener(event, handler) {
+        zcashListeners.get(event)?.delete(handler);
+      },
+      async disconnect() {
+        await this.request({ method: 'zcash_disconnect' });
+      }
+    };
 
     window.addEventListener('message', (event) => {
       if (event.source !== window || event.data?.source !== FROM_CONTENT) {
@@ -155,6 +213,10 @@ if (!window[GRAPE_INPAGE_INIT_FLAG]) {
       href: window.location.href,
       title: document.title
     });
+    window.grapeZcash = zcashProvider;
+    window.grapewallet = { isGrapeWallet: true, version: '1.0.0', zcash: zcashProvider };
+    if (!window.zcash) window.zcash = zcashProvider;
+    window.dispatchEvent(new Event('grapewallet#initialized'));
   } catch (error) {
     console.error('Grape Wallet inpage initialization failed', error);
   }

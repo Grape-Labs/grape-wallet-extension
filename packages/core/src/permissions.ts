@@ -6,7 +6,9 @@ export type PermissionKind =
   | 'monad:accounts'
   | 'monad:sign'
   | 'ethereum:accounts'
-  | 'ethereum:sign';
+  | 'ethereum:sign'
+  | 'zcash:accounts'
+  | 'zcash:sign';
 
 export type OriginPermission = {
   origin: string;

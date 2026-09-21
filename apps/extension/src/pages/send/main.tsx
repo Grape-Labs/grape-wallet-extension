@@ -21,6 +21,7 @@ type AssetOption =
   | { id: string; label: string; balance: string; asset: { kind: 'sui' } }
   | { id: string; label: string; balance: string; asset: { kind: 'mon' } }
   | { id: string; label: string; balance: string; asset: { kind: 'eth' } }
+  | { id: string; label: string; balance: string; asset: { kind: 'zec' } }
   | {
       id: string;
       label: string;
@@ -89,7 +90,7 @@ function normalizeScannedRecipientInput(input: string): string {
 
   const [, scheme, remainder] = schemeMatch;
   const normalizedScheme = scheme.toLowerCase();
-  if (!['solana', 'ethereum', 'evm', 'monad', 'sui'].includes(normalizedScheme)) {
+  if (!['solana', 'ethereum', 'evm', 'monad', 'sui', 'zcash'].includes(normalizedScheme)) {
     return compact;
   }
 
@@ -146,8 +147,8 @@ function SendPage() {
   const assetOptions = useMemo<AssetOption[]>(() => {
     const selectedChain = state?.wallet.selectedChain ?? 'solana';
     const nativeSymbol =
-      assets.nativeSymbol ?? (selectedChain === 'sui' ? 'SUI' : selectedChain === 'monad' ? 'MON' : selectedChain === 'ethereum' ? 'ETH' : 'SOL');
-    const nativeDecimals = assets.nativeDecimals ?? (selectedChain === 'monad' || selectedChain === 'ethereum' ? 18 : 9);
+      assets.nativeSymbol ?? (selectedChain === 'sui' ? 'SUI' : selectedChain === 'monad' ? 'MON' : selectedChain === 'ethereum' ? 'ETH' : selectedChain === 'zcash' ? 'ZEC' : 'SOL');
+    const nativeDecimals = assets.nativeDecimals ?? (selectedChain === 'monad' || selectedChain === 'ethereum' ? 18 : selectedChain === 'zcash' ? 8 : 9);
     const nativeOption: AssetOption =
       selectedChain === 'sui'
         ? {
@@ -169,6 +170,13 @@ function SendPage() {
                 label: nativeSymbol,
                 balance: formatNativeBalance(assets.lamports, nativeDecimals, nativeSymbol),
                 asset: { kind: 'eth' }
+              }
+          : selectedChain === 'zcash'
+            ? {
+                id: 'zec',
+                label: nativeSymbol,
+                balance: formatNativeBalance(assets.lamports, nativeDecimals, nativeSymbol),
+                asset: { kind: 'zec' }
               }
           : {
               id: 'sol',
@@ -663,6 +671,8 @@ function SendPage() {
                     ? 'MON'
                     : result.asset.kind === 'eth'
                       ? 'ETH'
+                    : result.asset.kind === 'zec'
+                      ? 'ZEC'
                       : result.asset.kind === 'sui-coin'
                         ? 'SUI TOKEN'
                         : result.asset.kind === 'evm-token'

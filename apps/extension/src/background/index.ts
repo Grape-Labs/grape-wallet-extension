@@ -7,10 +7,13 @@ import {
   createDeviceLinkPayloadText,
   createVaultRecord,
   createPendingApproval,
+  createPermissionsState,
   base64ToBytes,
   decryptText,
   encryptText,
   extractExecutableBridgeTransactionRequest,
+  isValidBridgeRecipient,
+  assertBridgeRecipient,
   getSelectedWallet,
   getSelectedWalletForChain,
   parseDeviceLinkPayloadText,
@@ -199,6 +202,13 @@ import {
   validateEthereumAddress,
   type EthereumNetwork
 } from '@grape/ethereum';
+import {
+  ZcashIndexerClient,
+  deriveZcashAccount,
+  importZcashPrivateKey,
+  isValidZcashTransparentAddress,
+  sendZcashTransparent
+} from '@grape/zcash';
 
 import type {
   ApprovalRecord,
@@ -708,6 +718,10 @@ class WalletController {
       if (!validateMonadAddress(requestedRecipient)) {
         throw new RpcError('INVALID_RECIPIENT', 'Enter a valid Monad wallet address.');
       }
+    } else if (chain === 'zcash') {
+      if (!isValidZcashTransparentAddress(requestedRecipient, this.resolveZcashNetwork(walletState.selectedNetwork))) {
+        throw new RpcError('INVALID_RECIPIENT', 'Enter a valid transparent Zcash address. Shielded addresses are not supported yet.');
+      }
     } else if (!validateEthereumAddress(requestedRecipient)) {
       throw new RpcError('INVALID_RECIPIENT', 'Enter a valid Ethereum wallet address.');
     }
@@ -758,6 +772,20 @@ class WalletController {
     return createEthereumPublicClient(this.resolveEthereumNetwork(network), walletState.chainState.ethereum.customRpcUrl);
   }
 
+  private resolveZcashNetwork(network: 'mainnet-beta' | 'devnet') {
+    return network === 'devnet' ? ('testnet' as const) : ('mainnet' as const);
+  }
+
+  private createZcashClient(
+    network: 'mainnet-beta' | 'devnet',
+    walletState: Awaited<ReturnType<WalletController['getWalletState']>>
+  ) {
+    return new ZcashIndexerClient({
+      network: this.resolveZcashNetwork(network),
+      baseUrl: walletState.chainState.zcash.customRpcUrl || import.meta.env.VITE_GRAPE_ZCASH_INDEXER_URL || undefined
+    });
+  }
+
   private getSelectedNetworkForChain(
     walletState: Awaited<ReturnType<WalletController['getWalletState']>>,
     chain: GrapeChain
@@ -771,6 +799,8 @@ class WalletController {
         return walletState.chainState.monad.selectedNetwork;
       case 'ethereum':
         return walletState.chainState.ethereum.selectedNetwork;
+      case 'zcash':
+        return walletState.chainState.zcash.selectedNetwork;
       default:
         return walletState.selectedNetwork;
     }
@@ -846,6 +876,18 @@ class WalletController {
         };
       case 'monad_requestAccounts':
         return [account.publicKey];
+      case 'zcash_requestAccounts':
+        return {
+          transparent: account.publicKey,
+          shielded: '',
+          accounts: [{
+            id: account.id,
+            label: wallet.name,
+            walletId: wallet.id,
+            accountId: account.id,
+            addresses: { transparent: account.publicKey, shielded: '' }
+          }]
+        };
       default:
         throw new RpcError('UNKNOWN_REQUEST', 'Unsupported connection request.');
     }
@@ -946,6 +988,10 @@ class WalletController {
         ethereum: {
           ...walletState.chainState.ethereum,
           selectedNetwork: chain === 'ethereum' ? network : walletState.chainState.ethereum.selectedNetwork
+        },
+        zcash: {
+          ...walletState.chainState.zcash,
+          selectedNetwork: chain === 'zcash' ? network : walletState.chainState.zcash.selectedNetwork
         }
       },
       selectedNetwork: walletState.selectedChain === chain ? network : walletState.selectedNetwork
@@ -976,6 +1022,10 @@ class WalletController {
         ethereum: {
           ...walletState.chainState.ethereum,
           selectedNetwork: chain === 'ethereum' ? network : walletState.chainState.ethereum.selectedNetwork
+        },
+        zcash: {
+          ...walletState.chainState.zcash,
+          selectedNetwork: chain === 'zcash' ? network : walletState.chainState.zcash.selectedNetwork
         }
       },
       selectedChain: chain,
@@ -1005,7 +1055,7 @@ class WalletController {
 
   private async buildWalletProfile(input: {
     name: string;
-    chain: 'solana' | 'sui' | 'monad' | 'ethereum';
+    chain: GrapeChain;
     secret: VaultSecret;
     password?: string;
     publicKey: string;
@@ -1123,6 +1173,38 @@ class WalletController {
     };
     await assetCacheStorage.set(cache);
 
+    return result;
+  }
+
+  private async refreshZcashAssetsOnly(
+    walletId: string,
+    network: 'mainnet-beta' | 'devnet',
+    publicKey: string,
+    walletState: Awaited<ReturnType<WalletController['getWalletState']>>
+  ): Promise<WalletAssetsResponse> {
+    const snapshot = await this.createZcashClient(network, walletState).getAddress(publicKey);
+    const nativePricing = network === 'mainnet-beta'
+      ? await fetchZcashNativePrice().catch(() => ({ usdPrice: null, priceChange24h: null }))
+      : { usdPrice: null, priceChange24h: null };
+    const nativeValueUsd = nativePricing.usdPrice === null
+      ? null
+      : snapshot.confirmedBalanceZat / 100_000_000 * nativePricing.usdPrice;
+    const result: WalletAssetsResponse = {
+      lamports: snapshot.confirmedBalanceZat,
+      tokens: [],
+      collections: [],
+      nativeName: 'Zcash',
+      nativeSymbol: 'ZEC',
+      nativeDecimals: 8,
+      totalUsdValue: nativeValueUsd,
+      nativePriceUsd: nativePricing.usdPrice,
+      nativeValueUsd,
+      nativePriceChange24h: nativePricing.priceChange24h,
+      stale: snapshot.stale
+    };
+    const cache = await assetCacheStorage.get();
+    cache[this.getAssetCacheKey(walletId, network, publicKey)] = { cachedAt: Date.now(), data: result };
+    await assetCacheStorage.set(cache);
     return result;
   }
 
@@ -1336,6 +1418,9 @@ class WalletController {
       }
       if (targetWallet.chain === 'ethereum') {
         return this.refreshEthereumAssetsOnly(walletId, network, publicKey, walletState);
+      }
+      if (targetWallet.chain === 'zcash') {
+        return this.refreshZcashAssetsOnly(walletId, network, publicKey, walletState);
       }
 
       const owner = tryParseSolanaPublicKey(publicKey);
@@ -1704,7 +1789,7 @@ class WalletController {
     secret: VaultSecret,
     password: string | undefined,
     publicKey: string,
-    chain: 'solana' | 'sui' | 'monad' | 'ethereum' = 'solana',
+    chain: GrapeChain = 'solana',
     signer: import('@grape/core').WalletSigner = { kind: 'software' },
     source: import('@grape/core').WalletProfile['source'] = signer.kind === 'ledger'
       ? 'ledger'
@@ -1715,6 +1800,25 @@ class WalletController {
         : 'created'
   ) {
     const current = await this.getWalletState();
+    let verifiedPublicKey = publicKey.trim();
+    let verifiedZcashRawPublicKey: string | undefined;
+    if (chain === 'zcash') {
+      const network = this.resolveZcashNetwork(current.chainState.zcash.selectedNetwork);
+      if (signer.kind === 'watch-only') {
+        if (!isValidZcashTransparentAddress(verifiedPublicKey, network)) {
+          throw new RpcError('INVALID_PUBLIC_KEY', 'Enter a valid transparent Zcash address for the selected network.');
+        }
+      } else {
+        const account = secret.kind === 'mnemonic'
+          ? deriveZcashAccount(secret.mnemonic, network)
+          : secret.kind === 'private-key'
+            ? importZcashPrivateKey(secret.secretKey, network)
+            : null;
+        if (!account) throw new RpcError('INVALID_SECRET', 'A Zcash wallet requires a mnemonic or private key.');
+        verifiedPublicKey = account.address;
+        verifiedZcashRawPublicKey = account.publicKey;
+      }
+    }
     const nextWalletNumber = this.getNextWalletNumber(current);
     if (current.setup === 'ready' && signer.kind !== 'watch-only') {
       const passwordProtectedWallet = current.wallets.find((wallet) => !!wallet.vault);
@@ -1739,24 +1843,26 @@ class WalletController {
               ? `m/44'/501'/0'/0'`
               : chain === 'sui'
                 ? `m/44'/784'/0'/0'/0'`
+                : chain === 'zcash'
+                  ? `m/44'/133'/0'/0/0`
                 : `m/44'/60'/0'/0/0`
             : 'imported-private-key';
 
-    const rawPublicKey =
+    const rawPublicKey = verifiedZcashRawPublicKey ?? (
       chain === 'sui' && signer.kind !== 'watch-only'
         ? secret.kind === 'mnemonic'
           ? arrayBufferToBase64(deriveSuiAccount0(secret.mnemonic).keypair.getPublicKey().toRawBytes())
           : secret.kind === 'private-key'
             ? arrayBufferToBase64(importSuiPrivateKey(secret.secretKey).keypair.getPublicKey().toRawBytes())
             : undefined
-        : undefined;
+        : undefined);
 
     const profile = await this.buildWalletProfile({
       name: `Wallet ${nextWalletNumber}`,
       chain,
       secret,
       password,
-      publicKey,
+      publicKey: verifiedPublicKey,
       rawPublicKey,
       signer,
       source,
@@ -1774,7 +1880,9 @@ class WalletController {
             ? current.chainState.sui.selectedNetwork
             : chain === 'monad'
               ? current.chainState.monad.selectedNetwork
-              : current.chainState.ethereum.selectedNetwork,
+              : chain === 'ethereum'
+                ? current.chainState.ethereum.selectedNetwork
+                : current.chainState.zcash.selectedNetwork,
       selectedWalletIds: {
         ...current.selectedWalletIds,
         [chain]: profile.id
@@ -1819,9 +1927,10 @@ class WalletController {
     const suiAccount = deriveSuiAccount0(mnemonic);
     const monadAccount = deriveMonadAccount0(mnemonic);
     const ethereumAccount = deriveEthereumAccount0(mnemonic);
+    const zcashAccount = deriveZcashAccount(mnemonic);
     const signer: import('@grape/core').WalletSigner = { kind: 'software' };
 
-    const [solanaProfile, suiProfile, monadProfile, ethereumProfile] = await Promise.all([
+    const [solanaProfile, suiProfile, monadProfile, ethereumProfile, zcashProfile] = await Promise.all([
       this.buildWalletProfile({
         name: `Wallet ${nextWalletNumber}`,
         chain: 'solana',
@@ -1866,6 +1975,18 @@ class WalletController {
         source,
         derivationPath: ethereumAccount.derivationPath,
         biometricUnlock
+      }),
+      this.buildWalletProfile({
+        name: `Wallet ${nextWalletNumber}`,
+        chain: 'zcash',
+        secret: { kind: 'mnemonic', mnemonic },
+        password,
+        publicKey: zcashAccount.address,
+        rawPublicKey: zcashAccount.publicKey,
+        signer,
+        source,
+        derivationPath: zcashAccount.derivationPath,
+        biometricUnlock
       })
     ]);
     if (selectedSolanaAccounts?.length) {
@@ -1873,6 +1994,7 @@ class WalletController {
         id: `account-${account.index}`,
         index: account.index,
         publicKey: account.publicKey,
+        rawPublicKey: undefined,
         derivationPath: account.derivationPath
       }));
       solanaProfile.selectedAccountId = solanaProfile.accounts[0].id;
@@ -1881,7 +2003,7 @@ class WalletController {
     const nextState = {
       ...current,
       setup: 'ready' as const,
-      wallets: [...current.wallets, solanaProfile, suiProfile, monadProfile, ethereumProfile],
+      wallets: [...current.wallets, solanaProfile, suiProfile, monadProfile, ethereumProfile, zcashProfile],
       sharedBiometricUnlock: biometricUnlock ?? current.sharedBiometricUnlock,
       selectedChain: current.setup === 'ready' ? current.selectedChain : ('solana' as const),
       selectedWalletIds: {
@@ -1889,7 +2011,8 @@ class WalletController {
         solana: solanaProfile.id,
         sui: suiProfile.id,
         monad: monadProfile.id,
-        ethereum: ethereumProfile.id
+        ethereum: ethereumProfile.id,
+        zcash: zcashProfile.id
       },
       selectedWalletId: solanaProfile.id
     };
@@ -1908,6 +2031,10 @@ class WalletController {
       unlockedAt: Date.now()
     };
     this.unlockedSecrets[ethereumProfile.id] = {
+      secret: { kind: 'mnemonic', mnemonic },
+      unlockedAt: Date.now()
+    };
+    this.unlockedSecrets[zcashProfile.id] = {
       secret: { kind: 'mnemonic', mnemonic },
       unlockedAt: Date.now()
     };
@@ -1983,6 +2110,37 @@ class WalletController {
         unlockedAt: Date.now()
       }
     };
+    if (unlockedSecret.kind === 'mnemonic' && !walletState.wallets.some((wallet) => wallet.chain === 'zcash')) {
+      const sourceWallet = walletState.wallets.find((wallet) => wallet.id === unlockedWalletId);
+      const account = deriveZcashAccount(
+        unlockedSecret.mnemonic,
+        this.resolveZcashNetwork(walletState.chainState.zcash.selectedNetwork)
+      );
+      const zcashProfile = await this.buildWalletProfile({
+        name: sourceWallet?.name ?? `Wallet ${this.getNextWalletNumber(walletState)}`,
+        chain: 'zcash',
+        secret: unlockedSecret,
+        password,
+        publicKey: account.address,
+        rawPublicKey: account.publicKey,
+        signer: { kind: 'software' },
+        source: sourceWallet?.source === 'imported-mnemonic' ? 'imported-mnemonic' : 'created',
+        derivationPath: account.derivationPath,
+        biometricUnlock: sourceWallet?.biometricUnlock ?? walletState.sharedBiometricUnlock
+      });
+      await walletStateStorage.set({
+        ...walletState,
+        wallets: [...walletState.wallets, zcashProfile],
+        selectedWalletIds: {
+          ...walletState.selectedWalletIds,
+          zcash: zcashProfile.id
+        }
+      });
+      this.unlockedSecrets[zcashProfile.id] = {
+        secret: unlockedSecret,
+        unlockedAt: Date.now()
+      };
+    }
     await Promise.all([
       this.persistUnlockedSecrets(),
       unlockedPasswordSessionStorage.set({ value: password })
@@ -2361,6 +2519,19 @@ class WalletController {
     return this.getStateResponse();
   }
 
+  async setZcashCustomRpc(rpcUrl: string | null) {
+    const walletState = await this.getWalletState();
+    await walletStateStorage.set({
+      ...walletState,
+      chainState: {
+        ...walletState.chainState,
+        zcash: { ...walletState.chainState.zcash, customRpcUrl: rpcUrl?.trim() || undefined }
+      }
+    });
+    await this.invalidateAssetCache();
+    return this.getStateResponse();
+  }
+
   async selectWallet(walletId: string) {
     const walletState = await this.getWalletState();
     const selectedWallet = walletState.wallets.find((wallet) => wallet.id === walletId);
@@ -2380,7 +2551,7 @@ class WalletController {
     return this.getStateResponse();
   }
 
-  async setChain(chain: 'solana' | 'sui' | 'monad' | 'ethereum') {
+  async setChain(chain: GrapeChain) {
     const walletState = await this.getWalletState();
     const nextSelectedWalletId =
       walletState.selectedWalletIds[chain] ?? walletState.wallets.find((wallet) => wallet.chain === chain)?.id;
@@ -2400,7 +2571,9 @@ class WalletController {
             ? walletState.chainState.sui.selectedNetwork
             : chain === 'monad'
               ? walletState.chainState.monad.selectedNetwork
-              : walletState.chainState.ethereum.selectedNetwork,
+              : chain === 'ethereum'
+                ? walletState.chainState.ethereum.selectedNetwork
+                : walletState.chainState.zcash.selectedNetwork,
       selectedWalletId: nextSelectedWalletId ?? walletState.selectedWalletId
     });
     return this.getStateResponse();
@@ -2510,6 +2683,9 @@ class WalletController {
       const client = await this.createMonadClient(walletState.selectedNetwork, walletState);
       const balance = await getMonadHoldings(client, activeAccount.publicKey);
       return balance.totalWei > BigInt(Number.MAX_SAFE_INTEGER) ? null : Number(balance.totalWei);
+    }
+    if (selectedWallet.chain === 'zcash') {
+      return (await this.createZcashClient(walletState.selectedNetwork, walletState).getAddress(activeAccount.publicKey)).confirmedBalanceZat;
     }
     if (selectedWallet.chain === 'ethereum') {
       const client = await this.createEthereumClient(walletState.selectedNetwork, walletState);
@@ -3606,7 +3782,7 @@ class WalletController {
         commission: entry.commission,
         activatedStakeLamports: Number(entry.activatedStake ?? 0),
         lastVote: entry.lastVote,
-        rootSlot: entry.rootSlot
+        rootSlot: entry.lastVote
       }))
       .sort((left, right) => {
         if (right.activatedStakeLamports !== left.activatedStakeLamports) {
@@ -3629,12 +3805,47 @@ class WalletController {
   async getActivity(limit = 30): Promise<WalletActivityResponse> {
     const { walletState, selectedWallet } = await this.ensureReadyWallet();
     const activeAccount = selectedWallet.accounts.find((account) => account.id === selectedWallet.selectedAccountId);
-    if (!activeAccount || selectedWallet.chain !== 'solana' || !hasShyftApiKey()) {
+    if (!activeAccount) {
       return {
         items: [],
         source: 'none',
         network: walletState.selectedNetwork,
         refreshedAt: Date.now()
+      };
+    }
+
+    if (selectedWallet.chain === 'zcash') {
+      const activity = await this.createZcashClient(walletState.selectedNetwork, walletState).getActivity(activeAccount.publicKey, limit);
+      return {
+        items: activity.map((entry) => ({
+          signature: entry.txid,
+          timestamp: entry.timestamp ?? Date.now(),
+          status: 'success' as const,
+          type: entry.direction,
+          description: entry.direction === 'sent' ? 'Sent ZEC' : entry.direction === 'received' ? 'Received ZEC' : 'Zcash transaction',
+          feeSol: null,
+          feePayer: null,
+          protocolName: 'Zcash',
+          protocolAddress: null,
+          signers: [],
+          actions: [{
+            type: entry.direction,
+            label: entry.direction === 'sent' ? 'Sent' : entry.direction === 'received' ? 'Received' : 'Transfer',
+            amount: entry.valueZat === null ? null : `${Math.abs(entry.valueZat) / 100_000_000}`,
+            asset: 'ZEC',
+            address: null,
+            protocolName: 'Zcash'
+          }]
+        })),
+        source: 'zcash',
+        network: walletState.selectedNetwork,
+        refreshedAt: Date.now()
+      };
+    }
+
+    if (selectedWallet.chain !== 'solana' || !hasShyftApiKey()) {
+      return {
+        items: [], source: 'none', network: walletState.selectedNetwork, refreshedAt: Date.now()
       };
     }
 
@@ -3824,7 +4035,7 @@ class WalletController {
   }
 
   async revokeAllPermissions() {
-    await permissionsStorage.set([]);
+    await permissionsStorage.set(createPermissionsState());
     return this.getStateResponse();
   }
 
@@ -3897,6 +4108,8 @@ class WalletController {
           return deriveMonadAccount0(secret.mnemonic).address;
         case 'ethereum':
           return deriveEthereumAccount0(secret.mnemonic).address;
+        case 'zcash':
+          return deriveZcashAccount(secret.mnemonic).address;
       }
     }
 
@@ -3910,6 +4123,8 @@ class WalletController {
           return importMonadPrivateKey(secret.secretKey).address;
         case 'ethereum':
           return importEthereumPrivateKey(secret.secretKey).address;
+        case 'zcash':
+          return importZcashPrivateKey(secret.secretKey).address;
       }
     }
 
@@ -3927,6 +4142,9 @@ class WalletController {
     }
 
     const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, password);
+    if (secret.kind !== 'mnemonic' && secret.kind !== 'private-key') {
+      throw new RpcError('EXPORT_UNAVAILABLE', 'This wallet does not contain a portable software key.');
+    }
     const resolvedPublicKey = this.resolvePublicKeyFromSecret(secret, selectedWallet.chain);
     if (resolvedPublicKey !== activeAccount.publicKey) {
       throw new RpcError('EXPORT_FAILED', 'The selected wallet secret does not match the active account.');
@@ -4269,7 +4487,33 @@ class WalletController {
     const resolvedRecipient = await this.resolveRecipientForChain(selectedWallet.chain, input.recipient, walletState);
     let signature: string;
 
-    if (selectedWallet.chain === 'sui') {
+    if (selectedWallet.chain === 'zcash') {
+      try {
+        if (selectedWallet.signer.kind === 'ledger') {
+          throw new RpcError('LEDGER_UNSUPPORTED', 'Zcash Ledger signing is not available yet.');
+        }
+        if (input.asset.kind !== 'zec') {
+          throw new RpcError('UNSUPPORTED_ASSET', 'Use the Zcash wallet to send ZEC.');
+        }
+        const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
+        const account = secret.kind === 'mnemonic'
+          ? deriveZcashAccount(secret.mnemonic, this.resolveZcashNetwork(walletState.selectedNetwork), activeAccount.derivationPath)
+          : secret.kind === 'private-key'
+            ? importZcashPrivateKey(secret.secretKey, this.resolveZcashNetwork(walletState.selectedNetwork))
+            : null;
+        if (!account || account.address !== activeAccount.publicKey) {
+          throw new RpcError('SIGNER_MISMATCH', 'The Zcash signer does not match this account.');
+        }
+        signature = (await sendZcashTransparent({
+          client: this.createZcashClient(walletState.selectedNetwork, walletState),
+          account,
+          recipient: resolvedRecipient.recipient,
+          amount: input.amount
+        })).txid;
+      } catch (error) {
+        throw normalizeSigningError(error);
+      }
+    } else if (selectedWallet.chain === 'sui') {
       try {
         if (selectedWallet.signer.kind === 'ledger') {
           if (input.asset.kind === 'sui') {
@@ -4407,6 +4651,7 @@ class WalletController {
         input.asset.kind === 'sui' ||
         input.asset.kind === 'mon' ||
         input.asset.kind === 'eth' ||
+        input.asset.kind === 'zec' ||
         input.asset.kind === 'sui-coin' ||
         input.asset.kind === 'evm-token'
       ) {
@@ -5564,6 +5809,7 @@ class WalletController {
   async getBridgeQuote(input: {
     amount: string;
     toChain: GrapeChain;
+    destinationAddress?: string;
     destinationWalletId?: string;
   }): Promise<WalletBridgeQuoteResponse> {
     const { walletState, selectedWallet } = await this.ensureReadyWallet();
@@ -5589,7 +5835,7 @@ class WalletController {
       );
     }
 
-    const destination = this.resolveBridgeDestination(walletState, input.toChain, input.destinationWalletId);
+    const destination = this.resolveBridgeDestination(walletState, input.toChain, input.destinationWalletId, input.destinationAddress);
     const amountRaw = parseDecimalAmount(input.amount, LIFI_NATIVE_DECIMALS[selectedWallet.chain]).toString();
 
     try {
@@ -5611,6 +5857,7 @@ class WalletController {
   async executeBridge(input: {
     quoteResponse: Record<string, unknown>;
     toChain: GrapeChain;
+    destinationAddress?: string;
     destinationWalletId?: string;
     password?: string;
   }): Promise<WalletBridgeExecuteResponse> {
@@ -5647,7 +5894,8 @@ class WalletController {
       );
     }
 
-    const destination = this.resolveBridgeDestination(walletState, input.toChain, input.destinationWalletId);
+    const destination = this.resolveBridgeDestination(walletState, input.toChain, input.destinationWalletId, input.destinationAddress);
+    assertBridgeRecipient(input.quoteResponse, input.toChain, destination.account.publicKey);
     const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
 
     let signature: string;
@@ -5703,7 +5951,12 @@ class WalletController {
     };
   }
 
-  private resolveBridgeDestination(walletState: Awaited<ReturnType<typeof walletStateStorage.get>>, chain: GrapeChain, walletId?: string) {
+  private resolveBridgeDestination(walletState: Awaited<ReturnType<typeof walletStateStorage.get>>, chain: GrapeChain, walletId?: string, address?: string) {
+    if (address !== undefined) {
+      const publicKey = address.trim();
+      if (!isValidBridgeRecipient(chain, publicKey)) throw new RpcError('INVALID_RECIPIENT', 'Enter a valid destination address for ' + chain + '.');
+      return { wallet: { chain }, account: { publicKey } };
+    }
     const chainWallets = walletState.wallets.filter((candidate) => candidate.chain === chain);
     const wallet = chainWallets.find((candidate) => candidate.id === walletId) ?? chainWallets[0];
     if (!wallet) {
@@ -5781,7 +6034,7 @@ class WalletController {
     const isConnected = this.isProviderOriginConnected(port, request.origin.origin, requestChain);
     const allowsAutoConnect = isTrusted && walletState.autoConnectEnabled;
 
-    if (request.method === 'disconnect' || request.method === 'sui_disconnect') {
+    if (request.method === 'disconnect' || request.method === 'sui_disconnect' || request.method === 'zcash_disconnect') {
       this.setProviderOriginConnected(port, request.origin.origin, requestChain, false);
       return { disconnected: true };
     }
@@ -5804,6 +6057,56 @@ class WalletController {
 
     if (request.method === 'monad_accounts') {
       return allowsAutoConnect || isConnected ? [activeAccount.publicKey] : [];
+    }
+
+    if (request.method === 'zcash_getAccounts') {
+      return allowsAutoConnect || isConnected
+        ? {
+            transparent: activeAccount.publicKey,
+            shielded: '',
+            accounts: [{
+              id: activeAccount.id,
+              label: selectedWallet.name,
+              walletId: selectedWallet.id,
+              accountId: activeAccount.id,
+              addresses: { transparent: activeAccount.publicKey, shielded: '' }
+            }]
+          }
+        : null;
+    }
+
+    if (request.method === 'zcash_getAddresses') {
+      if (!isTrusted || (!walletState.autoConnectEnabled && !isConnected)) {
+        throw new RpcError('NOT_CONNECTED', 'Connect this site before requesting Zcash addresses.');
+      }
+      return this.buildProviderConnectResult(
+        { ...request, method: 'zcash_requestAccounts' } as ProviderRequest,
+        selectedWallet,
+        activeAccount
+      );
+    }
+
+    if (request.method === 'zcash_getBalance') {
+      if (!isTrusted || (!walletState.autoConnectEnabled && !isConnected)) {
+        throw new RpcError('NOT_CONNECTED', 'Connect this site before requesting the Zcash balance.');
+      }
+      const snapshot = await this.createZcashClient(selectedNetwork, walletState).getAddress(activeAccount.publicKey);
+      const transparent = formatUiAmount(String(snapshot.confirmedBalanceZat), 8);
+      const available = formatUiAmount(String(snapshot.unconfirmedBalanceZat), 8);
+      return {
+        transparent,
+        shielded: '0',
+        total: transparent,
+        available,
+        synced: !snapshot.stale,
+        accounts: [{
+          id: activeAccount.id,
+          walletId: selectedWallet.id,
+          accountId: activeAccount.id,
+          balance: { transparent, shielded: '0', total: transparent, available },
+          synced: !snapshot.stale
+        }]
+      };
     }
 
     if (isProviderConnectRequest(request)) {
@@ -5881,6 +6184,15 @@ class WalletController {
 
     if (request.method === 'monad_signTypedData' && request.params.address.trim().toLowerCase() !== activeAccount.publicKey.toLowerCase()) {
       throw new RpcError('ACCOUNT_MISMATCH', 'The requested signer does not match the active Monad wallet.');
+    }
+
+    if (request.method === 'zcash_sendTransaction') {
+      if (!isValidZcashTransparentAddress(request.params.to, this.resolveZcashNetwork(selectedNetwork))) {
+        throw new RpcError('INVALID_RECIPIENT', 'Grape currently supports transparent Zcash recipients only.');
+      }
+      if (request.params.fundingSource && request.params.fundingSource !== 'transparent') {
+        throw new RpcError('UNSUPPORTED_FUNDING_SOURCE', 'Shielded Zcash funds are not supported yet.');
+      }
     }
 
     const connection = this.createConnection(selectedNetwork, walletState);
@@ -6224,6 +6536,26 @@ class WalletController {
                 })
         };
       }
+      case 'zcash_sendTransaction': {
+        if (approvalWallet.signer.kind === 'ledger') {
+          throw new RpcError('LEDGER_UNSUPPORTED', 'Zcash Ledger signing is not available yet.');
+        }
+        const account = secret.kind === 'mnemonic'
+          ? deriveZcashAccount(secret.mnemonic, this.resolveZcashNetwork(approval.network), approvalAccount.derivationPath)
+          : secret.kind === 'private-key'
+            ? importZcashPrivateKey(secret.secretKey, this.resolveZcashNetwork(approval.network))
+            : null;
+        if (!account || account.address !== approvalAccount.publicKey) {
+          throw new RpcError('SIGNER_MISMATCH', 'The Zcash signer does not match this account.');
+        }
+        const result = await sendZcashTransparent({
+          client: this.createZcashClient(approval.network, walletState),
+          account,
+          recipient: approval.request.params.to,
+          amount: approval.request.params.amount
+        });
+        return result.txid;
+      }
       default:
         throw new RpcError('UNKNOWN_APPROVAL', 'Unsupported approval kind.');
     }
@@ -6497,6 +6829,7 @@ function toApprovalKind(request: ProviderRequest) {
     case 'connect':
     case 'sui_connect':
     case 'monad_requestAccounts':
+    case 'zcash_requestAccounts':
       return 'connect';
     case 'signMessage':
     case 'sui_signPersonalMessage':
@@ -6512,6 +6845,7 @@ function toApprovalKind(request: ProviderRequest) {
     case 'sendTransaction':
     case 'sui_signAndExecuteTransaction':
     case 'monad_sendTransaction':
+    case 'zcash_sendTransaction':
       return 'sign-and-send-transaction';
     default:
       throw new RpcError('UNKNOWN_REQUEST', 'Unsupported request type.');
@@ -6568,13 +6902,20 @@ function getProviderRequestChain(
         return 'monad';
       }
       throw new RpcError('CHAIN_UNSUPPORTED', 'Grape only supports Ethereum, Sepolia, Monad, and Monad testnet.');
+    case 'zcash_requestAccounts':
+    case 'zcash_getAccounts':
+    case 'zcash_getAddresses':
+    case 'zcash_getBalance':
+    case 'zcash_sendTransaction':
+    case 'zcash_disconnect':
+      return 'zcash';
     default:
       throw new RpcError('UNKNOWN_REQUEST', 'Unsupported provider chain.');
   }
 }
 
 function isProviderConnectRequest(request: ProviderRequest) {
-  return request.method === 'connect' || request.method === 'sui_connect' || request.method === 'monad_requestAccounts';
+  return request.method === 'connect' || request.method === 'sui_connect' || request.method === 'monad_requestAccounts' || request.method === 'zcash_requestAccounts';
 }
 
 function getAccountPermissionForChain(chain: GrapeChain): import('@grape/core').PermissionKind {
@@ -6587,6 +6928,8 @@ function getAccountPermissionForChain(chain: GrapeChain): import('@grape/core').
       return 'monad:accounts';
     case 'ethereum':
       return 'ethereum:accounts';
+    case 'zcash':
+      return 'zcash:accounts';
     default:
       return 'solana:accounts';
   }
@@ -6602,6 +6945,8 @@ function getSignPermissionForChain(chain: GrapeChain): import('@grape/core').Per
       return 'monad:sign';
     case 'ethereum':
       return 'ethereum:sign';
+    case 'zcash':
+      return 'zcash:sign';
     default:
       return 'solana:sign';
   }
@@ -6634,6 +6979,8 @@ function formatChainLabel(chain: GrapeChain) {
       return 'Sui';
     case 'solana':
       return 'Solana';
+    case 'zcash':
+      return 'Zcash';
     default:
       return chain;
   }
@@ -6725,7 +7072,7 @@ function u16leBytes(value: number) {
 }
 
 async function sha256Bytes(value: Uint8Array): Promise<Uint8Array> {
-  const hash = await crypto.subtle.digest('SHA-256', value);
+  const hash = await crypto.subtle.digest('SHA-256', Uint8Array.from(value).buffer);
   return new Uint8Array(hash);
 }
 
@@ -7082,7 +7429,7 @@ async function fetchOgReputationForWallet(
   const metadataByDao = await fetchVineSpaceMetadata(connection, matchedSpaces);
 
   return matchedSpaces
-    .map((space) => {
+    .map<WalletReputationResponse['spaces'][number] | null>((space) => {
       const reputation = reputationByDao.get(space.daoId);
       if (!reputation) {
         return null;
@@ -8622,6 +8969,18 @@ function formatBaseUnitDecimal(rawAmount: string, decimals: number): string {
   return fraction ? `${whole}.${fraction}` : whole;
 }
 
+async function fetchZcashNativePrice(): Promise<NativeUsdPriceQuote> {
+  const response = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=zcash&vs_currencies=usd&include_24hr_change=true', {
+    headers: { accept: 'application/json' }
+  });
+  if (!response.ok) throw new Error(`Zcash pricing request failed with ${response.status}.`);
+  const payload = await response.json() as { zcash?: { usd?: unknown; usd_24h_change?: unknown } };
+  return {
+    usdPrice: normalizeNumber(payload.zcash?.usd),
+    priceChange24h: normalizeNumber(payload.zcash?.usd_24h_change)
+  };
+}
+
 async function fetchEthereumNativePrice(network: 'mainnet-beta' | 'devnet'): Promise<NativeUsdPriceQuote> {
   if (network !== 'mainnet-beta') {
     return {
@@ -8924,6 +9283,9 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
         case 'wallet_set_ethereum_custom_rpc':
           sendResponse(await controller.setEthereumCustomRpc(message.rpcUrl));
           break;
+        case 'wallet_set_zcash_custom_rpc':
+          sendResponse(await controller.setZcashCustomRpc(message.rpcUrl));
+          break;
         case 'wallet_select':
           sendResponse(await controller.selectWallet(message.walletId));
           break;
@@ -9143,6 +9505,7 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
             await controller.getBridgeQuote({
               amount: message.amount,
               toChain: message.toChain,
+              destinationAddress: message.destinationAddress,
               destinationWalletId: message.destinationWalletId
             })
           );
@@ -9152,6 +9515,7 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
             await controller.executeBridge({
               quoteResponse: message.quoteResponse,
               toChain: message.toChain,
+              destinationAddress: message.destinationAddress,
               destinationWalletId: message.destinationWalletId,
               password: message.password
             })

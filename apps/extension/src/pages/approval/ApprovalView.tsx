@@ -768,6 +768,22 @@ export function ApprovalView(props: {
               ) : null}
             </div>
           ) : null}
+          {approval.request.method === 'zcash_sendTransaction' ? (
+            <div className="stack">
+              <KeyValueRow label="You send" value={`${approval.request.params.amount} ZEC`} />
+              <KeyValueRow
+                label="Recipient"
+                value={
+                  <span className="mono approval-address" title={approval.request.params.to}>
+                    {formatAddress(approval.request.params.to, 12, 10)}
+                  </span>
+                }
+              />
+              <p className="warning-box">
+                This is a transparent Zcash transfer. The sender, recipient, and amount will be visible on-chain.
+              </p>
+            </div>
+          ) : null}
           {approval.request.method === 'sui_signTransaction' ? (
             <p className="warning-box">This request asks to sign a Sui transaction for the selected wallet.</p>
           ) : null}
@@ -776,6 +792,9 @@ export function ApprovalView(props: {
           ) : null}
           {approval.request.method === 'monad_sendTransaction' ? (
             <p className="warning-box">This will sign and broadcast an EVM transaction to the selected RPC endpoint.</p>
+          ) : null}
+          {approval.request.method === 'zcash_sendTransaction' ? (
+            <p className="warning-box">This will construct, sign, and broadcast a transparent Zcash transaction.</p>
           ) : null}
         </Card>
       )}

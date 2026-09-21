@@ -1,3 +1,4 @@
+import { isValidBridgeRecipient } from '@grape/core';
 import { SendPrivacyPicker } from './src/SendPrivacyPicker';
 import { HoudiniSwapPanel } from './src/HoudiniSwapPanel';
 import { depositAmount, depositProblem, recordHoudiniDeposit, type HoudiniOrder } from '../../packages/houdini/src/client';
@@ -183,7 +184,8 @@ type MainTab = 'home' | 'receive' | 'discover' | 'governance' | 'activity' | 'se
 
 type DiscoverProviderRequest = {
   id: string;
-  method: 'connect' | 'disconnect' | 'signMessage' | 'signTransaction' | 'signAllTransactions' | 'signAndSendTransaction' | 'sendTransaction';
+  method: 'connect' | 'disconnect' | 'signMessage' | 'signTransaction' | 'signAllTransactions' | 'signAndSendTransaction' | 'sendTransaction'
+    | 'zcash_requestAccounts' | 'zcash_getAccounts' | 'zcash_getAddresses' | 'zcash_getBalance' | 'zcash_sendTransaction' | 'zcash_disconnect';
   origin?: {
     origin?: string;
     href?: string;
@@ -411,11 +413,17 @@ const ETHEREUM_DISCOVER_FAVORITES = [
   { label: 'Etherscan', subtitle: 'Explore accounts and transactions', url: 'https://etherscan.io' }
 ] as const;
 
+const ZCASH_DISCOVER_FAVORITES = [
+  { label: 'Zexplorer', subtitle: 'Explore transparent Zcash activity', url: 'https://www.zexplorer.app' },
+  { label: 'Zcash', subtitle: 'Official Zcash ecosystem and documentation', url: 'https://z.cash' }
+] as const;
+
 const DISCOVER_FAVORITES_BY_CHAIN: Record<MobileWalletState['selectedChain'], readonly { label: string; subtitle: string; url: string }[]> = {
   solana: SOLANA_DISCOVER_FAVORITES,
   sui: SUI_DISCOVER_FAVORITES,
   monad: MONAD_DISCOVER_FAVORITES,
-  ethereum: ETHEREUM_DISCOVER_FAVORITES
+  ethereum: ETHEREUM_DISCOVER_FAVORITES,
+  zcash: ZCASH_DISCOVER_FAVORITES
 };
 
 function getDiscoverSiteIcon(url: string) {
@@ -854,6 +862,41 @@ const GRAPE_DISCOVER_INJECTED_JS = `
   } else if (Array.isArray(window.solana.providers) && !window.solana.providers.includes(provider)) {
     window.solana.providers = window.solana.providers.concat(provider);
   }
+  const zcashListeners = {};
+  function emitZcash(event, payload) {
+    (zcashListeners[event] || []).slice().forEach(function (listener) {
+      try { listener(payload); } catch (error) { console.warn('Grape Zcash listener error', error); }
+    });
+  }
+  const zcashProvider = {
+    isGrape: true,
+    request: function (args) {
+      if (!args || typeof args.method !== 'string' || [
+        'zcash_requestAccounts', 'zcash_getAccounts', 'zcash_getAddresses',
+        'zcash_getBalance', 'zcash_sendTransaction', 'zcash_disconnect'
+      ].indexOf(args.method) < 0) {
+        return Promise.reject(new Error('Unsupported Zcash provider request.'));
+      }
+      const first = Array.isArray(args.params) ? args.params[0] : args.params;
+      return request(args.method, first && typeof first === 'object' ? first : {}).then(function (result) {
+        if (args.method === 'zcash_requestAccounts') emitZcash('accountsChanged', result);
+        if (args.method === 'zcash_disconnect') emitZcash('disconnect');
+        return result;
+      });
+    },
+    on: function (event, listener) {
+      zcashListeners[event] = zcashListeners[event] || [];
+      if (zcashListeners[event].indexOf(listener) < 0) zcashListeners[event].push(listener);
+    },
+    removeListener: function (event, listener) {
+      zcashListeners[event] = (zcashListeners[event] || []).filter(function (entry) { return entry !== listener; });
+    },
+    disconnect: function () { return zcashProvider.request({ method: 'zcash_disconnect' }); }
+  };
+  window.grapeZcash = zcashProvider;
+  window.grapewallet = { isGrapeWallet: true, version: '1.0.0', zcash: zcashProvider };
+  if (!window.zcash) window.zcash = zcashProvider;
+  try { window.dispatchEvent(new Event('grapewallet#initialized')); } catch (_error) {}
   registerWalletStandardWallet(walletStandardWallet);
   post({ type: 'grape-provider-ready', origin: originPayload() });
 })();
@@ -1484,6 +1527,7 @@ function GrapeApp() {
   const [assetTokenActivity, setAssetTokenActivity] = useState<MobileActivity[]>([]);
   const [assetTokenActivityLoading, setAssetTokenActivityLoading] = useState(false);
   const [assetsLoading, setAssetsLoading] = useState(false);
+  const [manualAssetRefreshStatus, setManualAssetRefreshStatus] = useState<'idle' | 'refreshing' | 'success' | 'error'>('idle');
   const [activityLoading, setActivityLoading] = useState(false);
   const [submitLoading, setSubmitLoading] = useState(false);
   const [submitStatus, setSubmitStatus] = useState<string | null>(null);
@@ -1535,6 +1579,9 @@ function GrapeApp() {
   const [bridgeAmount, setBridgeAmount] = useState('');
   const [bridgeToChain, setBridgeToChain] = useState<MobileWalletState['selectedChain']>('ethereum');
   const [bridgeDestinationWalletId, setBridgeDestinationWalletId] = useState<string | null>(null);
+  const [bridgeExternalAddress, setBridgeExternalAddress] = useState('');
+  const [bridgeZcashReview, setBridgeZcashReview] = useState(false);
+  const bridgeRequestRef = useRef(0);
   const [bridgeQuote, setBridgeQuote] = useState<MobileBridgeQuoteSummary | null>(null);
   const [bridgeSelectedRouteId, setBridgeSelectedRouteId] = useState<string | null>(null);
   const [bridgeQuoteLoading, setBridgeQuoteLoading] = useState(false);
@@ -1853,6 +1900,11 @@ function GrapeApp() {
     () => (selectedWallet?.chain === 'solana' ? selectedWallet : walletState.wallets.find((wallet) => wallet.chain === 'solana') ?? null),
     [selectedWallet, walletState.wallets]
   );
+  const discoverZcashWallet = useMemo(
+    () => (selectedWallet?.chain === 'zcash' ? selectedWallet : walletState.wallets.find((wallet) => wallet.chain === 'zcash') ?? null),
+    [selectedWallet, walletState.wallets]
+  );
+  const discoverApprovalWallet = discoverApproval?.request.method.startsWith('zcash_') ? discoverZcashWallet : discoverWallet;
   const selectedChainMeta = chainMeta(walletState.selectedChain);
   const selectedDiscoverFavorites = DISCOVER_FAVORITES_BY_CHAIN[walletState.selectedChain];
   const activeTheme = useMemo(
@@ -2127,7 +2179,7 @@ function GrapeApp() {
     [walletState.trustedDappOrigins]
   );
   const discoverApprovalRequiresReauth =
-    !!discoverApproval && walletState.dappApprovalMode === 'strict' && discoverApproval.request.method !== 'connect';
+    !!discoverApproval && walletState.dappApprovalMode === 'strict' && !['connect', 'zcash_requestAccounts'].includes(discoverApproval.request.method);
   useEffect(() => { setSelectedGovernanceDao(null); setGovernance((current) => ({ ...current, daos: [], proposals: [] })); }, [selectedWallet?.address]);
   const visibleGovernanceDaos = useMemo(
     () => governance.daos.filter((dao) => dao.votingPower?.some((power) => hasPositiveGovernancePower(power.amount))).sort((a, b) => compareGovernancePower(b.votingPower ?? [], a.votingPower ?? []) || a.realmName.localeCompare(b.realmName) || a.daoId.localeCompare(b.daoId)),
@@ -2298,10 +2350,17 @@ function GrapeApp() {
       return [] as MobileWalletState['selectedChain'][];
     }
 
-    return getMobileSupportedBridgeDestinations(
+    const destinations = getMobileSupportedBridgeDestinations(
       selectedWallet.chain as 'solana' | 'ethereum' | 'monad'
     ) as MobileWalletState['selectedChain'][];
-  }, [selectedWallet?.chain]);
+    if (
+      (selectedWallet.chain === 'solana' || selectedWallet.chain === 'ethereum') &&
+      process.env.EXPO_PUBLIC_HOUDINI_API_URL?.trim()
+    ) {
+      destinations.push('zcash');
+    }
+    return destinations;
+  }, [selectedWallet?.chain, walletState.wallets]);
   const bridgeDestinationWallets = useMemo(
     () => dedupeVisibleWallets(walletState.wallets.filter((wallet) => wallet.chain === bridgeToChain)),
     [bridgeToChain, walletState.wallets]
@@ -2313,6 +2372,18 @@ function GrapeApp() {
 
     return bridgeDestinationWallets[0] ?? null;
   }, [bridgeDestinationWalletId, bridgeDestinationWallets]);
+
+  const bridgeUsesExternalAddress = bridgeDestinationWalletId === 'external' || bridgeDestinationWallets.length === 0;
+  const bridgeRecipient = bridgeUsesExternalAddress ? bridgeExternalAddress.trim() : selectedBridgeDestinationWallet?.address ?? '';
+  const bridgeRecipientValid = isValidBridgeRecipient(bridgeToChain, bridgeRecipient);
+  useEffect(() => {
+    bridgeRequestRef.current += 1;
+    setBridgeQuote(null);
+    setBridgeSelectedRouteId(null);
+    setBridgeQuoteLoading(false);
+    setBridgeZcashReview(false);
+    setBridgeError(null);
+  }, [bridgeRecipient, bridgeToChain, bridgeAmount]);
 
   function resetSwapDraft() {
     setSwapQuote(null);
@@ -2996,7 +3067,7 @@ function GrapeApp() {
   }, [bridgeDestinationChains, selectedWallet?.id, walletState.selectedChain]);
 
   useEffect(() => {
-    if (!bridgeDestinationWallets.some((wallet) => wallet.id === bridgeDestinationWalletId)) {
+    if (bridgeDestinationWalletId !== 'external' && !bridgeDestinationWallets.some((wallet) => wallet.id === bridgeDestinationWalletId)) {
       setBridgeDestinationWalletId(bridgeDestinationWallets[0]?.id ?? null);
     }
   }, [bridgeDestinationWalletId, bridgeDestinationWallets]);
@@ -3245,7 +3316,7 @@ function GrapeApp() {
     });
   }
 
-  function handleDiscoverProviderMessage(event: WebViewMessageEvent) {
+  async function handleDiscoverProviderMessage(event: WebViewMessageEvent) {
     try {
       const payload = JSON.parse(event.nativeEvent.data) as {
         type?: string;
@@ -3280,18 +3351,20 @@ function GrapeApp() {
       };
       const requestOrigin = parseOriginFromUrl(request.origin?.origin || request.origin?.href || discoverCurrentUrl);
       const originHost = requestOrigin ? new URL(requestOrigin).host : 'unknown';
+      const isZcashRequest = request.method.startsWith('zcash_');
+      const requestWallet = isZcashRequest ? discoverZcashWallet : discoverWallet;
 
       if (!requestOrigin) {
         rejectDiscoverProviderRequest(request, 'BAD_ORIGIN', 'This page does not have a valid origin.');
         return;
       }
 
-      if (!discoverWallet) {
-        rejectDiscoverProviderRequest(request, 'NO_SOLANA_WALLET', 'Add or select a Solana wallet to use Grape Discover.');
+      if (!requestWallet) {
+        rejectDiscoverProviderRequest(request, 'NO_WALLET', `Add a ${isZcashRequest ? 'Zcash' : 'Solana'} wallet to use this dApp.`);
         return;
       }
 
-      if (request.method === 'disconnect') {
+      if (request.method === 'disconnect' || request.method === 'zcash_disconnect') {
         setDiscoverConnectedOrigins((currentValue) => currentValue.filter((entry) => entry !== requestOrigin));
         sendDiscoverProviderResponse({
           id: request.id,
@@ -3301,7 +3374,47 @@ function GrapeApp() {
         return;
       }
 
-      if (request.method === 'connect') {
+      const zcashConnection = {
+        transparent: requestWallet.address,
+        shielded: '',
+        accounts: [{
+          id: requestWallet.id,
+          label: requestWallet.name,
+          walletId: requestWallet.id,
+          accountId: requestWallet.id,
+          addresses: { transparent: requestWallet.address, shielded: '' }
+        }]
+      };
+
+      if (request.method === 'zcash_getAccounts') {
+        sendDiscoverProviderResponse({
+          id: request.id,
+          success: true,
+          result: isDiscoverOriginAuthorized(requestOrigin) ? zcashConnection : null
+        });
+        return;
+      }
+
+      if (request.method === 'zcash_getAddresses' || request.method === 'zcash_getBalance') {
+        if (!isDiscoverOriginAuthorized(requestOrigin)) {
+          rejectDiscoverProviderRequest(request, 'NOT_CONNECTED', 'Connect this site before requesting Zcash account data.');
+          return;
+        }
+        if (request.method === 'zcash_getAddresses') {
+          sendDiscoverProviderResponse({ id: request.id, success: true, result: zcashConnection });
+          return;
+        }
+        const zecAsset = (await loadWalletAssets(requestWallet)).find((asset) => asset.id === 'zec' || asset.symbol === 'ZEC');
+        const transparent = String(zecAsset?.amountUi ?? 0);
+        sendDiscoverProviderResponse({
+          id: request.id,
+          success: true,
+          result: { transparent, shielded: '0', total: transparent, available: transparent, synced: true }
+        });
+        return;
+      }
+
+      if (request.method === 'connect' || request.method === 'zcash_requestAccounts') {
         const silent = Boolean(request.params?.silent);
         const canAutoConnect = walletState.autoConnectEnabled && trustedDappOrigins.has(requestOrigin);
         if (silent && !canAutoConnect) {
@@ -3320,7 +3433,7 @@ function GrapeApp() {
           sendDiscoverProviderResponse({
             id: request.id,
             success: true,
-            result: { publicKey: discoverWallet.address }
+            result: isZcashRequest ? zcashConnection : { publicKey: requestWallet.address }
           });
           return;
         }
@@ -3333,7 +3446,7 @@ function GrapeApp() {
         request,
         origin: requestOrigin,
         originHost,
-        rememberOrigin: request.method === 'connect'
+        rememberOrigin: request.method === 'connect' || request.method === 'zcash_requestAccounts'
       });
       setDiscoverApprovalPassword('');
     } catch (unknownError) {
@@ -3342,12 +3455,14 @@ function GrapeApp() {
   }
 
   async function executeApprovedDiscoverRequest(approval: DiscoverApproval) {
-    if (!discoverWallet) {
-      throw new Error('Add a Solana wallet to use Grape Discover.');
+    const { request, origin, rememberOrigin } = approval;
+    const isZcashRequest = request.method.startsWith('zcash_');
+    const requestWallet = isZcashRequest ? discoverZcashWallet : discoverWallet;
+    if (!requestWallet) {
+      throw new Error(`Add a ${isZcashRequest ? 'Zcash' : 'Solana'} wallet to use this dApp.`);
     }
 
-    const { request, origin, rememberOrigin } = approval;
-    if (request.method === 'connect') {
+    if (request.method === 'connect' || request.method === 'zcash_requestAccounts') {
       if (rememberOrigin) {
         await rememberTrustedDappOrigin(origin);
       }
@@ -3355,8 +3470,46 @@ function GrapeApp() {
       sendDiscoverProviderResponse({
         id: request.id,
         success: true,
-        result: { publicKey: discoverWallet.address }
+        result: isZcashRequest
+          ? {
+              transparent: requestWallet.address,
+              shielded: '',
+              accounts: [{
+                id: requestWallet.id,
+                label: requestWallet.name,
+                walletId: requestWallet.id,
+                accountId: requestWallet.id,
+                addresses: { transparent: requestWallet.address, shielded: '' }
+              }]
+            }
+          : { publicKey: requestWallet.address }
       });
+      return;
+    }
+
+    if (request.method === 'zcash_sendTransaction') {
+      const recipient = typeof request.params?.to === 'string' ? request.params.to.trim() : '';
+      const amount = typeof request.params?.amount === 'string' ? request.params.amount.trim() : '';
+      const fundingSource = typeof request.params?.fundingSource === 'string' ? request.params.fundingSource : 'transparent';
+      if (fundingSource !== 'transparent') throw new Error('Shielded Zcash funds are not supported yet.');
+      if (!recipient || !amount) throw new Error('The Zcash transfer requires a recipient and amount.');
+      const txid = await sendWalletAsset({
+        wallet: requestWallet,
+        asset: {
+          id: 'zec',
+          name: 'Zcash',
+          symbol: 'ZEC',
+          amountLabel: '',
+          valueLabel: '',
+          chain: 'zcash',
+          decimals: 8,
+          metadataSource: 'native',
+          tokenType: 'native'
+        },
+        recipient,
+        amount
+      });
+      sendDiscoverProviderResponse({ id: request.id, success: true, result: txid });
       return;
     }
 
@@ -3364,7 +3517,7 @@ function GrapeApp() {
       const message = typeof request.params?.message === 'string' ? request.params.message : '';
       const result = await signMobileSolanaProviderMessage({
         state: walletState,
-        wallet: discoverWallet,
+        wallet: requestWallet,
         message
       });
       sendDiscoverProviderResponse({ id: request.id, success: true, result });
@@ -3375,7 +3528,7 @@ function GrapeApp() {
       const transaction = typeof request.params?.transaction === 'string' ? request.params.transaction : '';
       const result = await signMobileSolanaProviderTransaction({
         state: walletState,
-        wallet: discoverWallet,
+        wallet: requestWallet,
         transaction
       });
       sendDiscoverProviderResponse({ id: request.id, success: true, result });
@@ -3388,7 +3541,7 @@ function GrapeApp() {
         : [];
       const result = await signMobileSolanaProviderTransactions({
         state: walletState,
-        wallet: discoverWallet,
+        wallet: requestWallet,
         transactions
       });
       sendDiscoverProviderResponse({ id: request.id, success: true, result });
@@ -3399,7 +3552,7 @@ function GrapeApp() {
       const transaction = typeof request.params?.transaction === 'string' ? request.params.transaction : '';
       const result = await signAndSendMobileSolanaProviderTransaction({
         state: walletState,
-        wallet: discoverWallet,
+        wallet: requestWallet,
         transaction
       });
       sendDiscoverProviderResponse({
@@ -3598,7 +3751,7 @@ function GrapeApp() {
   }
 
   async function handleApproveDiscoverRequest() {
-    if (!discoverApproval || !discoverWallet) {
+    if (!discoverApproval || !discoverApprovalWallet) {
       return;
     }
 
@@ -3623,7 +3776,7 @@ function GrapeApp() {
   }
 
   async function handleApproveDiscoverRequestWithPassword() {
-    if (!discoverApproval || !discoverWallet) {
+    if (!discoverApproval || !discoverApprovalWallet) {
       return;
     }
 
@@ -3660,7 +3813,7 @@ function GrapeApp() {
   }
 
   async function handleApproveDiscoverRequestWithPasskey() {
-    if (!discoverApproval || !discoverWallet || !walletState.passkeyWallet || biometricLoading || submitLoading) {
+    if (!discoverApproval || !discoverApprovalWallet || !walletState.passkeyWallet || biometricLoading || submitLoading) {
       return;
     }
 
@@ -3697,7 +3850,7 @@ function GrapeApp() {
   }
 
   async function handleApproveDiscoverRequestWithBiometric() {
-    if (!discoverApproval || !discoverWallet || !walletState.biometricEnabled || !biometricAvailable || biometricLoading || submitLoading) {
+    if (!discoverApproval || !discoverApprovalWallet || !walletState.biometricEnabled || !biometricAvailable || biometricLoading || submitLoading) {
       return;
     }
 
@@ -4334,9 +4487,9 @@ function GrapeApp() {
     }
   }
 
-  async function handleRefreshAssets() {
+  async function handleRefreshAssets(): Promise<boolean> {
     if (!selectedWallet) {
-      return;
+      return false;
     }
 
     setAssetsLoading(true);
@@ -4419,13 +4572,23 @@ function GrapeApp() {
       setVerificationLoadError(null);
       setGovernanceError(null);
       setError(null);
+      return true;
     } catch (unknownError) {
       setError(unknownError instanceof Error ? unknownError.message : 'Unable to refresh holdings.');
+      return false;
     } finally {
       setAssetsLoading(false);
       setActivityLoading(false);
       setGovernanceLoading(false);
     }
+  }
+
+  async function handleManualAssetRefresh() {
+    if (manualAssetRefreshStatus === 'refreshing') return;
+    setManualAssetRefreshStatus('refreshing');
+    const succeeded = await handleRefreshAssets();
+    setManualAssetRefreshStatus(succeeded ? 'success' : 'error');
+    setTimeout(() => setManualAssetRefreshStatus('idle'), succeeded ? 1800 : 3000);
   }
 
   async function refreshAssetsAfterCleanup() {
@@ -4650,8 +4813,8 @@ function GrapeApp() {
   }
 
   async function handleGetBridgeQuote() {
-    if (!selectedWallet || !selectedBridgeDestinationWallet) {
-      setBridgeError('Choose a destination wallet first.');
+    if (!selectedWallet || !bridgeRecipientValid) {
+      setBridgeError('Enter a valid destination address.');
       return;
     }
     if (!bridgeAmount.trim()) {
@@ -4659,6 +4822,7 @@ function GrapeApp() {
       return;
     }
 
+    const requestId = ++bridgeRequestRef.current;
     setBridgeQuoteLoading(true);
     setBridgeError(null);
     try {
@@ -4667,21 +4831,23 @@ function GrapeApp() {
         wallet: selectedWallet,
         amount: bridgeAmount.trim(),
         toChain: bridgeToChain,
-        destinationWalletId: selectedBridgeDestinationWallet.id
+        destinationAddress: bridgeRecipient
       });
+      if (requestId !== bridgeRequestRef.current) return;
       setBridgeQuote(nextQuote);
       setBridgeSelectedRouteId(nextQuote.selectedRouteId);
     } catch (unknownError) {
+      if (requestId !== bridgeRequestRef.current) return;
       setBridgeQuote(null);
       setBridgeSelectedRouteId(null);
-      setBridgeError(unknownError instanceof Error ? unknownError.message : 'Unable to fetch a bridge quote.');
+      if (requestId === bridgeRequestRef.current) setBridgeError(unknownError instanceof Error ? unknownError.message : 'Unable to fetch a bridge quote.');
     } finally {
-      setBridgeQuoteLoading(false);
+      if (requestId === bridgeRequestRef.current) setBridgeQuoteLoading(false);
     }
   }
 
   async function handleExecuteBridge() {
-    if (!selectedWallet || !selectedBridgeDestinationWallet || !bridgeQuote) {
+    if (!selectedWallet || !bridgeRecipientValid || !bridgeQuote) {
       return;
     }
 
@@ -4699,11 +4865,11 @@ function GrapeApp() {
         wallet: selectedWallet,
         quoteResponse: activeRoute.quoteResponse,
         toChain: bridgeToChain,
-        destinationWalletId: selectedBridgeDestinationWallet.id
+        destinationAddress: bridgeRecipient
       });
       const activity = createBridgeActivity({
         wallet: selectedWallet,
-        destinationWallet: selectedBridgeDestinationWallet,
+        destinationWallet: { chain: bridgeToChain, address: bridgeRecipient },
         fromAmountLabel: `${result.fromAmountUi} ${result.fromSymbol}`,
         toAmountLabel: `${result.toAmountUi} ${result.toSymbol}`,
         signature: result.signature
@@ -7222,9 +7388,18 @@ function GrapeApp() {
                   <MaterialCommunityIcons name="wallet-outline" size={21} color={activeTheme.text} />
                 </Pressable>
               ) : null}
-              <Pressable style={styles.refreshChip} onPress={() => void handleRefreshAssets()} accessibilityLabel="Refresh assets">
+              <Pressable
+                style={styles.refreshChip}
+                disabled={manualAssetRefreshStatus === 'refreshing'}
+                onPress={() => void handleManualAssetRefresh()}
+                accessibilityLabel={manualAssetRefreshStatus === 'refreshing' ? 'Refreshing assets' : manualAssetRefreshStatus === 'success' ? 'Assets updated' : manualAssetRefreshStatus === 'error' ? 'Refresh failed, try again' : 'Refresh assets'}
+              >
                 <Animated.View style={[styles.refreshGlyphWrap, { transform: [{ rotate: refreshRotation }] }]}>
-                  <MaterialCommunityIcons name="refresh" size={22} color={activeTheme.text} />
+                  {manualAssetRefreshStatus === 'refreshing'
+                    ? <Feather name="loader" size={20} color={activeTheme.text} />
+                    : manualAssetRefreshStatus === 'success'
+                      ? <Feather name="check" size={21} color={activeTheme.mint} />
+                      : <MaterialCommunityIcons name="refresh" size={22} color={activeTheme.text} />}
                 </Animated.View>
               </Pressable>
             </View>
@@ -8281,6 +8456,45 @@ function GrapeApp() {
   }
 
   function renderBridgeTab() {
+    const bridgeNativeAsset = assets.find((asset) => asset.tokenType === 'native' && asset.chain === selectedWallet?.chain) ?? null;
+    if (
+      bridgeToChain === 'zcash' &&
+      bridgeZcashReview &&
+      selectedWallet &&
+      bridgeRecipientValid &&
+      bridgeNativeAsset &&
+      process.env.EXPO_PUBLIC_HOUDINI_API_URL?.trim()
+    ) {
+      const source = {
+        id: bridgeNativeAsset.id,
+        chain: bridgeNativeAsset.chain,
+        symbol: bridgeNativeAsset.symbol,
+        address: bridgeNativeAsset.address,
+        native: true
+      };
+      return (
+        <View style={styles.sectionCard}>
+          <HoudiniSwapPanel
+            endpoint={process.env.EXPO_PUBLIC_HOUDINI_API_URL.trim()}
+            owner={selectedWallet.address}
+            assets={[source]}
+            color={activeTheme.text}
+            muted={activeTheme.muted}
+            border={activeTheme.panelBorder}
+            bridge={{ asset: source, recipient: bridgeRecipient, toSymbol: 'ZEC', toChain: 'zcash' }}
+            onBack={() => {
+              setBridgeZcashReview(false);
+            }}
+            onFund={(asset, entry) => {
+              openSendScreen(asset.id);
+              setSendRecipient(entry.order.depositAddress);
+              setSendAmount(depositAmount(entry));
+              setHoudiniDeposit({ entry, assetId: asset.id, owner: selectedWallet.address });
+            }}
+          />
+        </View>
+      );
+    }
     const routeOptions = (bridgeQuote?.routes ?? []).map((route) => ({
       id: route.id,
       label: route.label,
@@ -8296,7 +8510,7 @@ function GrapeApp() {
             <Text style={styles.detailBackText}>Back to wallet</Text>
           </Pressable>
           <Text style={styles.sectionTitle}>Bridge</Text>
-          <Text style={styles.sectionHint}>Move a native asset from this wallet to another chain wallet you already manage in Grape.</Text>
+          <Text style={styles.sectionHint}>Bridge to your own wallet or any recipient on another supported chain.</Text>
         </View>
 
         <View style={[styles.sectionCard, styles.formCard]}>
@@ -8315,9 +8529,11 @@ function GrapeApp() {
           />
 
           <Text style={styles.sectionTitle}>Destination wallet</Text>
+          <PaperButton onPress={() => { setBridgeDestinationWalletId('external'); setBridgeQuote(null); }}>Use another wallet address</PaperButton>
+          {bridgeUsesExternalAddress ? <PaperTextInput label="Recipient address" value={bridgeExternalAddress} onChangeText={(value) => { bridgeRequestRef.current += 1; setBridgeExternalAddress(value); setBridgeQuote(null); }} autoCapitalize="none" autoCorrect={false} mode="outlined" style={styles.paperInput} textColor={activeTheme.text} error={Boolean(bridgeExternalAddress.trim()) && !bridgeRecipientValid} /> : null}
           <View style={styles.stack}>
             {bridgeDestinationWallets.length === 0 ? (
-              <Text style={styles.sectionHint}>Add a {chainMeta(bridgeToChain).label} wallet before bridging there.</Text>
+              <Text style={styles.sectionHint}>Paste the recipient’s {chainMeta(bridgeToChain).label} address above.</Text>
             ) : (
               bridgeDestinationWallets.map((wallet) => {
                 const active = wallet.id === selectedBridgeDestinationWallet?.id;
@@ -8359,10 +8575,10 @@ function GrapeApp() {
             style={styles.paperPrimaryButton}
             buttonColor={activeTheme.primaryButton}
             textColor={activeTheme.primaryButtonText}
-            disabled={bridgeQuoteLoading || bridgeExecuteLoading || !selectedBridgeDestinationWallet}
-            onPress={() => void handleGetBridgeQuote()}
+            disabled={bridgeQuoteLoading || bridgeExecuteLoading || !bridgeRecipientValid}
+            onPress={() => bridgeToChain === 'zcash' ? setBridgeZcashReview(true) : void handleGetBridgeQuote()}
           >
-            {bridgeQuoteLoading ? 'Fetching routes...' : 'Get routes'}
+            {bridgeQuoteLoading ? 'Fetching routes...' : bridgeToChain === 'zcash' ? 'Continue to Zcash quotes' : 'Get routes'}
           </PaperButton>
         </View>
 
@@ -9931,7 +10147,7 @@ function GrapeApp() {
                   <View style={styles.sendAssetPickerHeader}>
                     <Text style={styles.sectionTitle}>Approve in Grape Discover</Text>
                     <Text style={styles.sectionHint}>
-                      {`${discoverApproval.originHost} wants to ${discoverApproval.request.method === 'connect'
+                      {`${discoverApproval.originHost} wants to ${['connect', 'zcash_requestAccounts'].includes(discoverApproval.request.method)
                         ? 'connect to your wallet'
                         : discoverApproval.request.method === 'signMessage'
                           ? 'sign a message'
@@ -9947,8 +10163,16 @@ function GrapeApp() {
                     </View>
                     <View style={styles.exportSecretCard}>
                       <Text style={styles.exportSecretLabel}>Wallet</Text>
-                      <Text style={styles.settingsMono}>{discoverWallet ? `${discoverWallet.name} • ${discoverWallet.address}` : 'No Solana wallet selected'}</Text>
+                      <Text style={styles.settingsMono}>{discoverApprovalWallet ? `${discoverApprovalWallet.name} • ${discoverApprovalWallet.address}` : 'No wallet selected'}</Text>
                     </View>
+                    {discoverApproval.request.method === 'zcash_sendTransaction' ? (
+                      <View style={styles.exportSecretCard}>
+                        <Text style={styles.exportSecretLabel}>Transparent Zcash transfer</Text>
+                        <Text style={styles.sectionHint}>Send {String(discoverApproval.request.params?.amount ?? '')} ZEC</Text>
+                        <Text style={styles.settingsMono}>To: {String(discoverApproval.request.params?.to ?? '')}</Text>
+                        <Text style={styles.sectionHint}>The sender, recipient, and amount will be visible on-chain.</Text>
+                      </View>
+                    ) : null}
                     {renderApprovalTransactionReview()}
                     {discoverApprovalRequiresReauth ? (
                   <View style={styles.exportSecretCard}>
@@ -9958,7 +10182,7 @@ function GrapeApp() {
                     </Text>
                   </View>
                 ) : null}
-                {discoverApproval.request.method === 'connect' ? (
+                {['connect', 'zcash_requestAccounts'].includes(discoverApproval.request.method) ? (
                   <Pressable
                     style={styles.checkboxRow}
                     onPress={() =>
