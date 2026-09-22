@@ -36,3 +36,12 @@ export function hasRequiredGrapeVerificationAccess(
     return expiresAtMs === null || expiresAtMs > now;
   });
 }
+
+/** Seed Grape once for existing installations without replacing tracked spaces. */
+export function seedGrapeCommunitySpaces(value: string[] | null | undefined, defaultsApplied = false): string[] {
+  const spaces = Array.isArray(value) ? value : [];
+  return Array.from(new Set([
+    ...spaces.map((entry) => typeof entry === 'string' ? entry.trim() : '').filter(Boolean),
+    ...(defaultsApplied ? [] : [GRAPE_VERIFICATION_REQUIRED_DAO_ID])
+  ]));
+}

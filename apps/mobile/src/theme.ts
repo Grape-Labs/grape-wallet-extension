@@ -86,7 +86,7 @@ const themeMap: Record<GrapeTheme, Omit<MobileThemePalette, keyof BasePalette>> 
     brandGradient: ['#ff77dc', '#b57bff', '#78d8ff'],
     primaryButton: '#b57bff',
     primaryButtonText: '#190723',
-    footerBg: 'rgba(21, 6, 31, 0.92)'
+    footerBg: 'rgba(22, 16, 34, 0.96)'
   },
   comic: {
     id: 'comic',
@@ -257,6 +257,15 @@ const themeMap: Record<GrapeTheme, Omit<MobileThemePalette, keyof BasePalette>> 
 };
 
 const paletteOverrides: Partial<Record<GrapeTheme, Partial<BasePalette>>> = {
+  grape: {
+    bg: '#100d1b',
+    panel: 'rgba(24, 19, 38, 0.88)',
+    panelBorder: 'rgba(188, 154, 233, 0.15)',
+    softPanel: '#20192e',
+    muted: '#b8adc9',
+    subtle: '#a59ab8',
+    frost: 'rgba(153, 125, 193, 0.07)'
+  },
   comic: {
     bg: '#140a20',
     panel: 'rgba(39, 19, 70, 0.82)',

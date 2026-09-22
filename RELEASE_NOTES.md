@@ -1,11 +1,14 @@
-# Grape Wallet 0.5.235
+# Grape Wallet 0.5.238
 
-**Version 0.5.235** brings governance participation directly into Grape Wallet, improves the Community experience, introduces optional private sends and Zcash delivery through Houdini, adds transparent Zcash support, and streamlines Send and Bridge across the browser extension and mobile wallet.
+**Version 0.5.238** expands Bridge to external recipients, adds Zcash apps and tools, introduces soft color fades for the Grape theme, and makes mobile browsing more compact. This build also includes the governance, Community, private-send, and transparent Zcash improvements described below.
 
 ## Highlights
 
+- Added a shared Zcash Discover directory on extension and mobile, featuring exchanges, an explorer, community sites, and learning resources.
+- Replaced the flat black background in the Grape theme with soft violet, plum, and blue fades, plus coordinated panels and navigation on extension and mobile.
+- Mobile browser controls now collapse when navigating, keeping the current URL and loading indicator visible. Tap the URL or menu to expand the controls again.
+- Updated the default Solana mainnet RPC to Shyft on extension and mobile. Custom RPC selections remain respected, and mobile devnet uses its own endpoint.
 - Bridge to an external recipient by pasting an address, or select a saved wallet, on extension and mobile. Supported destinations no longer require owning a wallet on that chain. Recipient validation and quote invalidation protect against stale recipient selections.
-
 - Grape now discovers the Solana DAOs a wallet actively participates in and displays its community, council, and delegated voting power.
 - Governance discovery uses indexed Solana RPC calls and no longer depends on Shyft GraphQL.
 - DAOs with no voting power are hidden, while participating DAOs are ordered from highest to lowest voting power.
@@ -20,6 +23,26 @@
 - Adds native ZEC as a Bridge destination from supported Solana and Ethereum funding wallets through reviewed Houdini deposit orders.
 - Redesigns Bridge with one compact header, a readable amount and asset row, compact destination controls, and correctly truncated wallet addresses.
 
+## Bridge
+
+- Choose a saved destination wallet or paste an external recipient address on extension and mobile.
+- Supported destination chains no longer require owning a wallet on that chain in Grape.
+- Validate recipient addresses for the selected destination chain before requesting a route.
+- Clear old quotes when the recipient, amount, or destination chain changes. Reject execution if the quoted recipient no longer matches the selected recipient.
+- Deliver native ZEC from supported Solana and Ethereum wallets through Houdini deposit-address exchange routes when a backend is configured.
+- Review the provider quote, create a tracked order, then confirm its deposit through Send. Creating an order does not move funds.
+- Fixed Bridge layout overflow from long addresses and selectors. Destination controls and address previews stay within the extension width.
+- Removed the duplicate Bridge heading and tightened the amount, balance, and destination layout.
+
+## Appearance and mobile browser
+
+- Added a static, layered violet, plum, and blue background to the Grape theme on extension and mobile.
+- Coordinated the Grape theme’s panels, borders, secondary text, and bottom navigation with the new background.
+- Limited the visual changes to the Grape theme.
+- Mobile browser navigation dismisses the keyboard and collapses tabs, address editing, favorites, and menu controls into a compact URL bar.
+- The compact bar shows the current URL, including navigation changes and redirects, with a loading indicator while the page loads.
+- Tap the URL or menu to restore the full browser controls; back navigation remains available in the compact bar.
+
 ## Zcash
 
 - Adds Zcash as a selectable chain in the extension and mobile wallet.
@@ -29,6 +52,9 @@
 - Adds a Grape Zcash dapp provider on `window.grapewallet.zcash`, `window.grapeZcash`, and `window.zcash` when that name is available.
 - Supports `zcash_requestAccounts`, `zcash_getAccounts`, `zcash_getAddresses`, `zcash_getBalance`, `zcash_sendTransaction`, and `zcash_disconnect` with wallet approvals.
 - Adds a configurable Zcash indexed API endpoint through `VITE_GRAPE_ZCASH_INDEXER_URL` on extension and `EXPO_PUBLIC_ZCASH_INDEXER_URL` on mobile.
+- Added the same seven Discover entries on extension and mobile: Houdini Swap, ChangeNOW, Zexplorer, Zcash.me, ZecHub, the official Zcash ecosystem directory, and the community forum.
+- Labels this directory **Zcash apps & tools**. Listings are website shortcuts, not a guarantee that a site supports connecting to Grape.
+- Direct website connections require the site to integrate Grape’s Zcash provider. Zcash WalletConnect QR pairing is not included.
 - Clearly labels Zcash transfers as transparent. Shielded and Unified Address spending is not included in this release.
 
 ## Governance
@@ -57,6 +83,8 @@
 - Keeps direct links to the full proposal on governance.so.
 
 ## Community
+
+- Track the Grape DAO (`By2sVGZXwfQq6rAiAM3rNPJ9iQfb5e2QhnF4YjJ4Bip`) by default in Verification and Vine/OG Reputation on extension and mobile. Existing installations receive the default without replacing other tracked spaces.
 
 - Reworked the Community overview into a more compact hierarchy for reputation, verification, and tracked spaces.
 - Shows total effective OG Reputation points alongside points from the latest season.
@@ -90,6 +118,13 @@
 - Includes a quick **Use Public send** fallback when a private route is unavailable.
 - Keeps the standalone Houdini deposit-address route hidden from Swap for now; Houdini is available through Private send.
 
+## Network defaults
+
+- Set Shyft as the default Solana mainnet RPC in extension, mobile, and shared Solana network configuration.
+- Updated the local build configuration and example environment settings to use the new default.
+- Preserved user-selected custom RPC endpoints.
+- Fixed mobile network selection so a mainnet RPC environment setting cannot override devnet.
+
 ## Extension and mobile parity
 
 - Governance membership discovery, voting-power filtering, DAO sorting, recent proposals, proposal details, and recorded-vote visibility are available on both wallet surfaces.
@@ -100,6 +135,9 @@
 
 - Governance only lists DAOs where the wallet currently has positive community, council, or delegated voting power.
 - Proposal data is fetched per DAO to keep the initial Governance view responsive.
-- Houdini availability depends on the configured backend service, supported assets, provider limits, and network availability.
+- Houdini availability depends on the configured backend service, supported assets, provider limits, and network availability. Zcash delivery uses a cross-chain exchange route through Houdini; it is not a LI.FI Zcash bridge.
+- A physical mobile device requires a reachable HTTPS Houdini backend; the desktop localhost service is insufficient.
+- Mobile changes require an updated app build. The mobile package retains its separate version number.
+- Validation includes extension and mobile TypeScript checks, extension production builds, Android bundle exports, and recipient-validation regression tests. Live SOL-to-ZEC quotes were checked; a funded end-to-end Houdini transfer has not been verified.
 - Private routing reduces the direct on-chain connection between sender and recipient, but it does not guarantee anonymity.
 - Users should review the quoted output, fees, destination, and deposit expiry before funding a private-send order.

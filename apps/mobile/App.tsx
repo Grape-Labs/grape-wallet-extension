@@ -1,3 +1,4 @@
+import { ZCASH_DISCOVER_APPS, ZCASH_DISCOVER_NOTE } from '@grape/core';
 import { isValidBridgeRecipient } from '@grape/core';
 import { SendPrivacyPicker } from './src/SendPrivacyPicker';
 import { HoudiniSwapPanel } from './src/HoudiniSwapPanel';
@@ -34,6 +35,7 @@ import {
   Easing,
   Image,
   ImageBackground,
+  Keyboard,
   KeyboardAvoidingView,
   Linking,
   Platform,
@@ -51,7 +53,7 @@ import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-
 import QRCode from 'react-native-qrcode-svg';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
-import Svg, { Circle, Defs, LinearGradient as SvgLinearGradient, Polygon, Polyline, RadialGradient as SvgRadialGradient, Stop, SvgUri, Text as SvgText } from 'react-native-svg';
+import Svg, { Circle, Defs, LinearGradient as SvgLinearGradient, Polygon, Polyline, RadialGradient as SvgRadialGradient, Rect, Stop, SvgUri, Text as SvgText } from 'react-native-svg';
 import {
   Button as PaperButton,
   Checkbox,
@@ -413,10 +415,11 @@ const ETHEREUM_DISCOVER_FAVORITES = [
   { label: 'Etherscan', subtitle: 'Explore accounts and transactions', url: 'https://etherscan.io' }
 ] as const;
 
-const ZCASH_DISCOVER_FAVORITES = [
-  { label: 'Zexplorer', subtitle: 'Explore transparent Zcash activity', url: 'https://www.zexplorer.app' },
-  { label: 'Zcash', subtitle: 'Official Zcash ecosystem and documentation', url: 'https://z.cash' }
-] as const;
+const ZCASH_DISCOVER_FAVORITES = ZCASH_DISCOVER_APPS.map((app) => ({
+  label: app.name,
+  subtitle: app.description,
+  url: app.url
+}));
 
 const DISCOVER_FAVORITES_BY_CHAIN: Record<MobileWalletState['selectedChain'], readonly { label: string; subtitle: string; url: string }[]> = {
   solana: SOLANA_DISCOVER_FAVORITES,
@@ -1656,6 +1659,10 @@ function GrapeApp() {
   const [exportVerifiedWalletId, setExportVerifiedWalletId] = useState<string | null>(null);
   const [deviceLinkSession, setDeviceLinkSession] = useState<MobileDeviceLinkSession | null>(null);
   const [deviceLinkLoading, setDeviceLinkLoading] = useState(false);
+  const mainScrollRef = useRef<ScrollView>(null);
+  const mainScreenContentRef = useRef<View>(null);
+  const settingsSectionRefs = useRef<Record<string, View | null>>({});
+  const pendingManageSection = useRef<string | null>(null);
   const [expandedSettingsSections, setExpandedSettingsSections] = useState<Set<string>>(() => new Set(['current-wallet', 'backup']));
   const [solanaRpcInput, setSolanaRpcInput] = useState('');
   const [solanaRpcStatus, setSolanaRpcStatus] = useState<string | null>(null);
@@ -3214,6 +3221,8 @@ function GrapeApp() {
     }
 
     const nextUrl = normalized.url;
+    setDiscoverControlsExpanded(false);
+    Keyboard.dismiss();
     setDiscoverUrlInput(nextUrl);
     setDiscoverUrl(nextUrl);
     setDiscoverCurrentUrl(nextUrl);
@@ -3225,6 +3234,10 @@ function GrapeApp() {
 
   function handleDiscoverNavigationStateChange(nextState: WebViewNavigation) {
     if (typeof nextState.url === 'string' && nextState.url.trim()) {
+      if (nextState.url !== discoverCurrentUrl) {
+        setDiscoverControlsExpanded(false);
+        Keyboard.dismiss();
+      }
       setDiscoverCurrentUrl(nextState.url);
       setDiscoverSiteIconUrl('');
       setDiscoverUrlInput(nextState.url);
@@ -3240,6 +3253,8 @@ function GrapeApp() {
   }
 
   function handleSelectDiscoverTab(tab: DiscoverTab) {
+    setDiscoverControlsExpanded(false);
+    Keyboard.dismiss();
     setActiveDiscoverTabId(tab.id);
     setDiscoverUrl(tab.url);
     setDiscoverCurrentUrl(tab.url);
@@ -6076,7 +6091,8 @@ function GrapeApp() {
   }
 
   function openCommunitySettings(section: string) {
-    setExpandedSettingsSections((current) => new Set([...current, section]));
+    pendingManageSection.current = section;
+    setExpandedSettingsSections(new Set([section]));
     setMainTab('settings');
   }
 
@@ -6667,6 +6683,33 @@ function GrapeApp() {
         <View
           style={styles.discoverBrowserBar}
         >
+          {!discoverControlsExpanded ? (
+            <View style={styles.discoverNavigationBar}>
+              <Pressable
+                style={[styles.discoverControlButton, !discoverCanGoBack ? styles.discoverControlButtonDisabled : null]}
+                disabled={!discoverCanGoBack}
+                onPress={() => discoverWebViewRef.current?.goBack()}
+                accessibilityLabel="Go back"
+              >
+                <Feather name="chevron-left" size={18} color={discoverCanGoBack ? activeTheme.text : activeTheme.muted} />
+              </Pressable>
+              <Pressable
+                style={styles.discoverCompactAddress}
+                onPress={() => setDiscoverControlsExpanded(true)}
+                accessibilityRole="button"
+                accessibilityLabel={`Current URL: ${discoverCurrentUrl || discoverUrl}. Show browser controls`}
+              >
+                {discoverLoading ? <ActivityIndicator size="small" color={activeTheme.grape} /> : <Feather name="globe" size={14} color={activeTheme.muted} />}
+                <Text style={styles.discoverCompactAddressText} numberOfLines={1} ellipsizeMode="tail">
+                  {discoverCurrentUrl || discoverUrl}
+                </Text>
+                <Feather name="chevron-down" size={14} color={activeTheme.muted} />
+              </Pressable>
+              <Pressable style={styles.discoverControlButton} onPress={() => setDiscoverControlsExpanded(true)} accessibilityLabel="Show browser tabs and menu">
+                <Feather name="more-vertical" size={18} color={activeTheme.text} />
+              </Pressable>
+            </View>
+          ) : <>
           <View style={styles.discoverTabsBar}>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.discoverTabRow}>
               {discoverTabs.map((tab) => (
@@ -6732,6 +6775,8 @@ function GrapeApp() {
                 </Pressable>
           </View>
 
+          </>}
+
           {discoverControlsExpanded ? (
             <>
               <View style={styles.discoverMenuActions}>
@@ -6784,7 +6829,8 @@ function GrapeApp() {
                   </ScrollView>
                 </>
               ) : null}
-              <Text style={styles.swapPickerSectionLabel}>POPULAR {selectedChainMeta.label.toUpperCase()} APPS</Text>
+              <Text style={styles.swapPickerSectionLabel}>{walletState.selectedChain === 'zcash' ? 'ZCASH APPS & TOOLS' : `POPULAR ${selectedChainMeta.label.toUpperCase()} APPS`}</Text>
+              {walletState.selectedChain === 'zcash' ? <Text style={styles.sectionHint}>{ZCASH_DISCOVER_NOTE}</Text> : null}
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.discoverFavoriteRow}>
                 {selectedDiscoverFavorites.map((favorite) => (
                   <Pressable
@@ -6831,6 +6877,8 @@ function GrapeApp() {
                 setDiscoverLoadError(`HTTP ${event.nativeEvent.statusCode} while loading ${failingUrl}`);
               }}
               onLoadStart={() => {
+                setDiscoverControlsExpanded(false);
+                Keyboard.dismiss();
                 setDiscoverLoadError(null);
                 setDiscoverLoading(true);
               }}
@@ -7618,6 +7666,9 @@ function GrapeApp() {
               onPress={() => setGovernanceRefreshNonce((value) => value + 1)}
             >
               {governanceLoading ? <ActivityIndicator size="small" color={activeTheme.grape} /> : <Feather name="refresh-cw" size={18} color={activeTheme.text} />}
+            </Pressable>
+            <Pressable style={styles.communityIconButton} accessibilityRole="button" accessibilityLabel="Manage participating DAOs" onPress={() => openCommunitySettings('governance')}>
+              <Feather name="settings" size={18} color={activeTheme.text} />
             </Pressable>
           </View>
           {governanceLoading && visibleGovernanceDaos.length === 0 ? (
@@ -8681,8 +8732,22 @@ function GrapeApp() {
       const expanded = expandedSettingsSections.has(key);
 
       return (
-        <View style={styles.sectionCard}>
-          <Pressable style={styles.settingsSectionToggle} onPress={() => toggleSettingsSection(key)}>
+        <View style={styles.sectionCard}
+          ref={(node) => { settingsSectionRefs.current[key] = node; }}
+          onLayout={() => {
+            if (pendingManageSection.current !== key) return;
+            requestAnimationFrame(() => {
+              const target = settingsSectionRefs.current[key];
+              const content = mainScreenContentRef.current;
+              if (!target || !content || pendingManageSection.current !== key) return;
+              target.measureLayout(content, (_x, y) => {
+                if (pendingManageSection.current !== key) return;
+                mainScrollRef.current?.scrollTo({ y: Math.max(0, y), animated: false });
+                pendingManageSection.current = null;
+              }, () => {});
+            });
+          }}>
+          <Pressable accessibilityRole="button" accessibilityState={{ expanded }} style={styles.settingsSectionToggle} onPress={() => toggleSettingsSection(key)}>
             <View style={styles.settingsSectionToggleCopy}>
               <Text style={styles.sectionTitle}>{title}</Text>
               <Text style={styles.settingsSectionSummary}>{summary}</Text>
@@ -9824,6 +9889,7 @@ function GrapeApp() {
           keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
         >
         <ScrollView
+          ref={mainScrollRef}
           contentContainerStyle={[
             styles.mainContent,
             {
@@ -9839,6 +9905,8 @@ function GrapeApp() {
           keyboardDismissMode="interactive"
         >
             <Animated.View
+              ref={mainScreenContentRef}
+              collapsable={false}
               style={[
                 styles.screenShell,
                 {
@@ -10547,7 +10615,36 @@ function GrapeApp() {
     <PaperProvider theme={paperTheme}>
     <SafeAreaView style={styles.safe} edges={['top', 'right', 'bottom', 'left']}>
       <StatusBar style={activeTheme.id === 'champagne' ? 'dark' : 'light'} />
-      {backgroundAsset && screen !== 'ready' ? (
+      {activeTheme.id === 'grape' ? (
+        <View style={StyleSheet.absoluteFill} pointerEvents="none" accessible={false} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+          <Svg width="100%" height="100%" viewBox="0 0 400 850" preserveAspectRatio="none">
+            <Defs>
+              <SvgLinearGradient id="grapeAmbientBase" x1="0%" y1="0%" x2="100%" y2="100%">
+                <Stop offset="0%" stopColor="#130e20" />
+                <Stop offset="52%" stopColor="#0d0c18" />
+                <Stop offset="100%" stopColor="#100d1b" />
+              </SvgLinearGradient>
+              <SvgRadialGradient id="grapeAmbientViolet" cx="0%" cy="0%" rx="95%" ry="64%">
+                <Stop offset="0%" stopColor="#7935a9" stopOpacity={0.32} />
+                <Stop offset="100%" stopColor="#7935a9" stopOpacity={0} />
+              </SvgRadialGradient>
+              <SvgRadialGradient id="grapeAmbientBlue" cx="100%" cy="44%" rx="95%" ry="60%">
+                <Stop offset="0%" stopColor="#384a97" stopOpacity={0.22} />
+                <Stop offset="100%" stopColor="#384a97" stopOpacity={0} />
+              </SvgRadialGradient>
+              <SvgRadialGradient id="grapeAmbientPlum" cx="12%" cy="100%" rx="90%" ry="54%">
+                <Stop offset="0%" stopColor="#7e2a6f" stopOpacity={0.19} />
+                <Stop offset="100%" stopColor="#7e2a6f" stopOpacity={0} />
+              </SvgRadialGradient>
+            </Defs>
+            <Rect width="400" height="850" fill="url(#grapeAmbientBase)" />
+            <Rect width="400" height="850" fill="url(#grapeAmbientViolet)" />
+            <Rect width="400" height="850" fill="url(#grapeAmbientBlue)" />
+            <Rect width="400" height="850" fill="url(#grapeAmbientPlum)" />
+          </Svg>
+        </View>
+      ) : null}
+      {backgroundAsset && activeTheme.id !== 'grape' && screen !== 'ready' ? (
         <Image
           source={backgroundAsset}
           style={[styles.backgroundImage, { opacity: Math.min(activeTheme.backgroundImageOpacity, 0.12) }]}
@@ -10555,7 +10652,7 @@ function GrapeApp() {
         />
       ) : null}
       {activeTheme.backgroundTint && screen !== 'ready' ? <View style={[styles.backgroundTint, { backgroundColor: activeTheme.backgroundTint }]} pointerEvents="none" /> : null}
-      {screen !== 'ready' ? <View style={styles.bgGlowTop} pointerEvents="none" /> : null}
+      {activeTheme.id !== 'grape' && screen !== 'ready' ? <View style={styles.bgGlowTop} pointerEvents="none" /> : null}
       {screen !== 'ready' ? <View style={styles.bgGlowBottom} pointerEvents="none" /> : null}
 
       {screen === 'loading' ? (
@@ -11434,20 +11531,20 @@ function createStyles(palette: MobileThemePalette) {
           : 'rgba(255,255,255,0.06)',
     gap: 5
   },
-  discoverBrowserBarCollapsed: {
-    position: 'absolute',
-    bottom: 8,
-    left: '50%',
-    marginLeft: -20,
-    zIndex: 20,
-    elevation: 8,
-    width: 40,
-    height: 40,
-    paddingHorizontal: 2,
-    paddingVertical: 0,
-    borderRadius: 20,
-    gap: 0,
-    backgroundColor: palette.panel
+  discoverCompactAddress: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    minHeight: 40,
+    paddingHorizontal: 8
+  },
+  discoverCompactAddressText: {
+    flex: 1,
+    minWidth: 0,
+    color: palette.text,
+    fontSize: 13
   },
   discoverBrowserBarPrimary: {
     flexDirection: 'row',
@@ -13881,10 +13978,11 @@ function createStyles(palette: MobileThemePalette) {
     gap: 8
   },
   governanceHubCard: {
-    gap: 12,
+    gap: 22,
     overflow: 'hidden'
   },
   governanceHubHeader: {
+    paddingVertical: 6,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,

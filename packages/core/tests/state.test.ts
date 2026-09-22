@@ -1,3 +1,4 @@
+import { GRAPE_VERIFICATION_REQUIRED_DAO_ID, seedGrapeCommunitySpaces } from '../src/access';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -324,8 +325,8 @@ describe('wallet state', () => {
         selectedWalletIds: {
           solana: 'wallet-1'
         },
-        trackedReputationSpaceIds: [],
-        trackedVerificationSpaceIds: [],
+        trackedReputationSpaceIds: [GRAPE_VERIFICATION_REQUIRED_DAO_ID],
+        trackedVerificationSpaceIds: [GRAPE_VERIFICATION_REQUIRED_DAO_ID],
         trackedGovernanceDaoIds: [],
         chainState: {
           solana: {
@@ -392,8 +393,8 @@ describe('wallet state', () => {
         selectedWalletIds: {
           solana: 'wallet-1'
         },
-        trackedReputationSpaceIds: [],
-        trackedVerificationSpaceIds: [],
+        trackedReputationSpaceIds: [GRAPE_VERIFICATION_REQUIRED_DAO_ID],
+        trackedVerificationSpaceIds: [GRAPE_VERIFICATION_REQUIRED_DAO_ID],
         trackedGovernanceDaoIds: [],
         chainState: {
           solana: {
@@ -429,5 +430,24 @@ describe('wallet state', () => {
     expect(nextState.selectedWalletId).toBeUndefined();
     expect(nextState.setup).toBe('empty');
     expect(nextState.dappApprovalMode).toBe('strict');
+  });
+});
+
+
+describe('default Grape community tracking', () => {
+  it('tracks Grape in verification and reputation for new wallets', () => {
+    const state = createEmptyWalletState();
+    expect(state.trackedReputationSpaceIds).toEqual([GRAPE_VERIFICATION_REQUIRED_DAO_ID]);
+    expect(state.trackedVerificationSpaceIds).toEqual([GRAPE_VERIFICATION_REQUIRED_DAO_ID]);
+  });
+  it('adds Grape once to existing installations and preserves other spaces', () => {
+    const state = migrateWalletState({ ...createEmptyWalletState(), communityTrackingDefaultsApplied: undefined, trackedReputationSpaceIds: ['other-space'], trackedVerificationSpaceIds: [] });
+    expect(state.trackedReputationSpaceIds).toEqual(['other-space', GRAPE_VERIFICATION_REQUIRED_DAO_ID]);
+    expect(state.trackedVerificationSpaceIds).toEqual([GRAPE_VERIFICATION_REQUIRED_DAO_ID]);
+    expect(migrateWalletState(state)).toEqual(state);
+    expect(migrateWalletState({ ...state, trackedReputationSpaceIds: [] }).trackedReputationSpaceIds).toEqual([]);
+  });
+  it('deduplicates and trims tracked spaces during seeding', () => {
+    expect(seedGrapeCommunitySpaces([' ' + GRAPE_VERIFICATION_REQUIRED_DAO_ID + ' ', '', GRAPE_VERIFICATION_REQUIRED_DAO_ID])).toEqual([GRAPE_VERIFICATION_REQUIRED_DAO_ID]);
   });
 });

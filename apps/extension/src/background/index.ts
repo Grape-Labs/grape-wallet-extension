@@ -3617,10 +3617,14 @@ class WalletController {
     }
     const getProgramAccountsByAuthority = async (offset: number) => {
       let lastError: unknown = null;
+      let discoveryConnection = connection;
+      const fallbackEndpoint = walletState.selectedNetwork === 'devnet'
+        ? 'https://api.devnet.solana.com'
+        : 'https://api.mainnet-beta.solana.com';
 
       for (let attempt = 1; attempt <= STAKE_RETRY_ATTEMPTS; attempt += 1) {
         try {
-          return await connection.getProgramAccounts(StakeProgram.programId, {
+          return await discoveryConnection.getProgramAccounts(StakeProgram.programId, {
             commitment: 'confirmed',
             encoding: 'base64',
             dataSlice: {
@@ -3634,8 +3638,17 @@ class WalletController {
           });
         } catch (error) {
           lastError = error;
+          // Indexed providers may support staker (12) but not withdrawer (44).
+          // Retry only the rejected lookup against the standard RPC, retaining
+          // both authority checks so withdraw-only accounts are not omitted.
+          if (discoveryConnection === connection && connection.rpcEndpoint !== fallbackEndpoint &&
+              (isLikelyRetryableRpcError(error) || /invalid params|index.*not supported|excluded.*index/i.test(String(error)))) {
+            discoveryConnection = new Connection(fallbackEndpoint, { commitment: 'confirmed', disableRetryOnRateLimit: true });
+            attempt -= 1;
+            continue;
+          }
           if (!isLikelyRetryableRpcError(error) || attempt === STAKE_RETRY_ATTEMPTS) {
-            throw error;
+            throw new Error('Stake account discovery is temporarily unavailable on the RPC providers. Refresh to try again, or choose another Solana RPC in Settings.');
           }
           await delay(250 * attempt);
         }

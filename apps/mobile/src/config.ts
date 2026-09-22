@@ -1,6 +1,6 @@
 import Constants from 'expo-constants';
 
-export const MOBILE_SOLANA_DEFAULT_RPC_URL = 'https://api.mainnet-beta.solana.com';
+export const MOBILE_SOLANA_DEFAULT_RPC_URL = "https://rpc.shyft.to/?api_key=iMp59oPaEKIYBdmB";
 export const MOBILE_SOLANA_DEVNET_RPC_URL = 'https://api.devnet.solana.com';
 export const MOBILE_SUI_MAINNET_RPC_URL = 'https://fullnode.mainnet.sui.io:443';
 export const MOBILE_SUI_DEVNET_RPC_URL = 'https://fullnode.devnet.sui.io:443';
@@ -167,6 +167,7 @@ export function getMobileLifiApiKey() {
 }
 
 export function getMobileSolanaRpcUrl(network: 'mainnet-beta' | 'devnet' = 'mainnet-beta') {
+  if (network === 'devnet') return MOBILE_SOLANA_DEVNET_RPC_URL;
   if (network === 'mainnet-beta' && mobileSolanaCustomRpcUrl) {
     return mobileSolanaCustomRpcUrl;
   }
@@ -175,7 +176,7 @@ export function getMobileSolanaRpcUrl(network: 'mainnet-beta' | 'devnet' = 'main
     return custom;
   }
 
-  return network === 'devnet' ? MOBILE_SOLANA_DEVNET_RPC_URL : MOBILE_SOLANA_DEFAULT_RPC_URL;
+  return MOBILE_SOLANA_DEFAULT_RPC_URL;
 }
 
 export function getMobileSuiRpcUrl(network: 'mainnet' | 'devnet' = 'mainnet') {

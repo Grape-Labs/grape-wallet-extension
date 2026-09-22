@@ -3,7 +3,7 @@ import type { GrapeNetwork } from '@grape/core';
 import { SOLANA_CHAIN_IDS } from './constants';
 
 export const SOLANA_RPC_ENDPOINTS: Record<GrapeNetwork, string> = {
-  'mainnet-beta': 'https://api.mainnet-beta.solana.com',
+  'mainnet-beta': "https://rpc.shyft.to/?api_key=iMp59oPaEKIYBdmB",
   devnet: 'https://api.devnet.solana.com'
 };
 

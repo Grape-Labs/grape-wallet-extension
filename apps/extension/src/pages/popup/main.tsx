@@ -1,3 +1,4 @@
+import { ZCASH_DISCOVER_APPS, ZCASH_DISCOVER_NOTE } from '@grape/core';
 import { isValidBridgeRecipient } from '@grape/core';
 import { SendPrivacyPicker } from './SendPrivacyPicker';
 import { HoudiniSwapPanel } from './HoudiniSwapPanel';
@@ -5,6 +6,8 @@ import { HoudiniZcashBridgePanel } from './HoudiniZcashBridgePanel';
 import { depositAmount, depositProblem, recordHoudiniDeposit, type HoudiniOrder } from '../../../../../packages/houdini/src/client';
 import { hasPositiveGovernancePower, compareGovernancePower } from '../../../../../packages/solana/src/governancePower';
 import { CommunityPanel } from './CommunityPanel';
+import { CommunityDashboard } from './CommunityDashboard';
+import { CommunityWorkspace } from './CommunityWorkspace';
 import type { FormEvent, ReactNode } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
@@ -329,7 +332,7 @@ const DISCOVER_DAPPS_BY_CHAIN: Record<WalletStateResponse['wallet']['selectedCha
   sui: SUI_DISCOVER_DAPPS,
   monad: MONAD_DISCOVER_DAPPS,
   ethereum: ETHEREUM_DISCOVER_DAPPS,
-  zcash: []
+  zcash: [...ZCASH_DISCOVER_APPS]
 };
 const DISCOVER_CATEGORIES: DiscoverCategory[] = ['All', 'DeFi', 'Staking', 'Collectibles', 'Governance', 'Community', 'Analytics', 'Explorer', 'Tools'];
 
@@ -1188,7 +1191,7 @@ function TokenPriceChart(props: {
 
   if (points.length < 2) {
     return (
-      <Card title="Price activity">
+      <Card title="Price activity" className="price-chart-card">
         <div className="price-chart-empty">
           <span className="muted">Historical pricing isn’t available for this token yet.</span>
         </div>
@@ -1296,6 +1299,7 @@ function TokenRow(props: { token: TokenHolding; onSelect?: () => void; privacyMo
           <strong className="token-name" title={props.token.name ?? props.token.symbol ?? props.token.mint}>
             {primaryLabel}
           </strong>
+          <span className="desktop-token-symbol">{props.token.symbol}</span>
           <div className="token-subline">
             {secondaryLabel ? <span className={`token-subtitle ${unitPriceLabel ? '' : 'mono'}`.trim()}>{secondaryLabel}</span> : null}
             {changeLabel ? (
@@ -1305,6 +1309,10 @@ function TokenRow(props: { token: TokenHolding; onSelect?: () => void; privacyMo
             ) : null}
           </div>
         </div>
+      </div>
+      <div className="desktop-token-market">
+        <span>{unitPriceLabel ?? '—'}</span>
+        {changeLabel ? <span className={`token-change ${(props.token.priceChange24h ?? 0) < 0 ? 'negative' : 'positive'}`}>{changeLabel}</span> : null}
       </div>
       <div className="token-amount-group">
         <div className="token-amount">{maskSensitiveValue(valueLabel ?? '-', !!props.privacyMode)}</div>
@@ -1722,9 +1730,10 @@ function PopupPage() {
     network: 'mainnet-beta',
     refreshedAt: Date.now()
   });
+  const [selectedCommunityId, setSelectedCommunityId] = useState<string | null>(null);
   const [selectedGovernanceDao, setSelectedGovernanceDao] = useState<string | null>(null);
   const [governanceRefreshNonce, setGovernanceRefreshNonce] = useState(0);
-  useEffect(() => { setSelectedGovernanceDao(null); setGovernance((current) => ({ ...current, daos: [], proposals: [] })); }, [state?.activeAccount?.publicKey, state?.wallet.selectedNetwork]);
+  useEffect(() => { setSelectedCommunityId(null); setSelectedGovernanceDao(null); setGovernance((current) => ({ ...current, daos: [], proposals: [] })); }, [state?.activeAccount?.publicKey, state?.wallet.selectedNetwork]);
   const [governanceLoading, setGovernanceLoading] = useState(false);
   const [governanceError, setGovernanceError] = useState<string | null>(null);
   const [governanceEligibility, setGovernanceEligibility] = useState<GovernanceEligibleDao[]>([]);
@@ -1737,6 +1746,7 @@ function PopupPage() {
   const [governanceVoteResult, setGovernanceVoteResult] = useState<WalletGovernanceVoteResponse | null>(null);
   const [governancePassword, setGovernancePassword] = useState('');
   const [governanceShowFinalizing, setGovernanceShowFinalizing] = useState(false);
+  const pendingManageSection = useRef<string | null>(null);
   const [expandedSettingsSections, setExpandedSettingsSections] = useState<Set<'wallet' | 'reputation' | 'verification' | 'governance' | 'help'>>(
     new Set(['wallet'])
   );
@@ -5710,6 +5720,13 @@ function PopupPage() {
         ? 'tokens'
         : homeTab;
     const nativeAssetId = isZcashChain ? 'zcash' : isEthereumChain ? 'ethereum' : isMonadChain ? 'monad' : isSuiChain ? 'sui' : 'sol';
+    const allocation = [
+      { id: nativeAssetId, name: nativeAssetSymbol, value: assets.nativeValueUsd ?? 0 },
+      ...visibleHomeTokens.map((token) => ({ id: `${token.mint}:${token.programId}`, name: token.symbol ?? token.name ?? 'Token', value: token.valueUsd ?? 0 }))
+    ].filter((item) => Number.isFinite(item.value) && item.value > 0).sort((a, b) => b.value - a.value);
+    const allocationTotal = allocation.reduce((total, item) => total + item.value, 0);
+    const allocationRows = allocation.slice(0, 4);
+    if (allocation.length > 4) allocationRows.push({ id: 'other', name: 'Other assets', value: allocation.slice(4).reduce((total, item) => total + item.value, 0) });
 
     return (
       <>
@@ -5943,8 +5960,9 @@ function PopupPage() {
             ) : null}
           </Tabs.List>
 
-          <Tabs.Content value="tokens">
-            <Card className="asset-panel-card">
+          <Tabs.Content value="tokens" className="desktop-portfolio-grid">
+            <Card className="asset-panel-card wallet-asset-table">
+              <div className="desktop-asset-head" aria-hidden="true"><span>Asset</span><span>Price / 24h change</span><span>Balance</span></div>
               {assetsLoading ? (
                 <div className="token-list">
                   <AssetSkeletonRow />
@@ -5963,6 +5981,7 @@ function PopupPage() {
                         />
                         <div className="token-copy">
                           <strong className="token-name">{nativeAssetName}</strong>
+                          <span className="desktop-token-symbol">{nativeAssetSymbol}</span>
                           <div className="token-subline">
                             <span className="token-subtitle">{nativeAssetUnitPrice ?? nativeAssetSymbol}</span>
                             {nativeAssetChange ? (
@@ -5972,6 +5991,10 @@ function PopupPage() {
                             ) : null}
                           </div>
                         </div>
+                      </div>
+                      <div className="desktop-token-market">
+                        <span>{nativeAssetUnitPrice ?? '—'}</span>
+                        {nativeAssetChange ? <span className={`token-change ${(assets.nativePriceChange24h ?? 0) < 0 ? 'negative' : 'positive'}`}>{nativeAssetChange}</span> : null}
                       </div>
                       <div className="token-amount-group">
                         <div className="token-amount">{maskSensitiveValue(nativeAssetValue ?? homeBalance, privacyMode)}</div>
@@ -6005,6 +6028,58 @@ function PopupPage() {
                 </>
               )}
             </Card>
+            <aside className="desktop-portfolio-rail" aria-label="Portfolio overview">
+              <section className="dashboard-panel">
+                <span className="dashboard-eyebrow">Portfolio overview</span>
+                <h2>Your allocation</h2>
+                <p className="dashboard-description">Current value of your displayed assets.</p>
+                {assetsLoading ? <p className="muted" role="status">Loading balances…</p> : privacyMode ? <p className="muted">Balances are hidden.</p> : allocationRows.length ? (
+                  <>
+                    <div className="allocation-bar" aria-hidden="true">
+                      {allocationRows.map((item, index) => <span key={item.id} data-color={index} style={{ flexGrow: item.value / allocationTotal }} />)}
+                    </div>
+                    <div className="allocation-list">
+                      {allocationRows.map((item, index) => (
+                        <div className="allocation-row" key={item.id}>
+                          <span className="allocation-dot" data-color={index} aria-hidden="true" />
+                          <span>{item.name}</span>
+                          <strong>{(item.value / allocationTotal * 100).toFixed(1)}%</strong>
+                          <small>{formatUsd(item.value)}</small>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                ) : <p className="muted">Allocation appears when priced assets are available.</p>}
+              </section>
+              <section className="dashboard-panel dashboard-actions">
+                <span className="dashboard-eyebrow">Explore your wallet</span>
+                <button type="button" onClick={() => setHomeTab('activity')}><span><strong>Recent activity</strong><small>Review your transactions</small></span><ChevronRight size={18} /></button>
+                {isSolanaChain ? <button type="button" onClick={() => setHomeTab('governance')}><span><strong>Your DAOs</strong><small>Voting power and proposals</small></span><ChevronRight size={18} /></button> : null}
+                <button type="button" onClick={() => setView('discover')}><span><strong>Discover apps</strong><small>Explore the ecosystem</small></span><ChevronRight size={18} /></button>
+              </section>
+            </aside>
+            <section className="desktop-dashboard-lower dashboard-panel">
+              <div className="dashboard-section-title"><div><span className="dashboard-eyebrow">Your ecosystem</span><h2>Explore and participate</h2></div><button type="button" onClick={() => setView('discover')}>View all apps <ChevronRight size={16} /></button></div>
+              <div className="dashboard-app-grid">
+                {[...DISCOVER_DAPPS_BY_CHAIN[selectedChainValue]].sort((a, b) => Number('featured' in b && b.featured) - Number('featured' in a && a.featured)).slice(0, 4).map((app) => (
+                  <button className="dashboard-app" type="button" key={app.url} onClick={() => window.open(app.url, '_blank', 'noopener,noreferrer')}>
+                    <DiscoverAppIcon name={app.name} url={app.url} />
+                    <strong>{app.name}</strong><small>{app.category}</small><ExternalLink size={14} aria-hidden="true" />
+                  </button>
+                ))}
+              </div>
+              <p className="dashboard-description">Third-party apps. Review connection and signing requests carefully.</p>
+            </section>
+            <section className="desktop-dashboard-lower dashboard-panel">
+              <div className="dashboard-section-title"><div><span className="dashboard-eyebrow">Wallet timeline</span><h2>Recent activity</h2></div><button type="button" onClick={() => setHomeTab('activity')}>View activity <ChevronRight size={16} /></button></div>
+              {activityLoading ? <p className="muted">Loading activity…</p> : activityError ? <p className="muted">Activity is unavailable. Open Activity to retry.</p> : activity.length ? (
+                <div className="dashboard-timeline">
+                  {activity.slice(0, 4).map((item) => <button type="button" key={item.signature} onClick={() => { setExpandedActivitySignature(item.signature); setHomeTab('activity'); }}>
+                    <span className="dashboard-timeline-icon"><Clock3 size={18} /></span><span><strong>{formatActivityType(item.type)}</strong><small>{privacyMode ? 'Transaction details hidden' : item.description}</small></span><span className="dashboard-timeline-meta"><strong>{item.status}</strong><small>{formatActivityTime(item.timestamp)}</small></span>
+                  </button>)}
+                </div>
+              ) : <p className="dashboard-description">Open Activity to explore this wallet’s transaction history.</p>}
+            </section>
           </Tabs.Content>
 
           {isSolanaChain && rebalanceAddonEnabled ? (
@@ -6279,7 +6354,7 @@ function PopupPage() {
                 trackedVerificationSpaces={Array.from(new Set([...wallet.trackedVerificationSpaceIds, ...verification.trackedSpaces]))}
                 daoNames={verificationDaoNameMap} verificationRef={verificationSectionRef}
                 formatPoints={formatWholeNumberString} formatAddress={formatAddress} formatTime={formatRelativeTimeFromNow}
-                onManage={() => setView('settings')}
+                onManage={openCommunitySettings}
                 onRefreshVerification={() => setVerificationRefreshNonce((value) => value + 1)}
                 onOpenReputation={(daoId) => window.open(buildOgReputationSpaceUrl(daoId), '_blank', 'noopener,noreferrer')}
                 onOpenVerification={(daoId) => window.open(buildVerificationSpaceUrl(daoId), '_blank', 'noopener,noreferrer')}
@@ -6308,9 +6383,23 @@ function PopupPage() {
                     >
                       <RefreshCcw size={14} className={governanceLoading ? 'community-hub-spinning' : undefined} />
                     </button>
-                    <button type="button" className="community-hub-tool" onClick={() => setView('settings')}><Settings size={14} /> Manage</button>
+                    <button type="button" className="community-hub-tool" onClick={() => openCommunitySettings('governance')}><Settings size={14} /> Manage</button>
                   </div>
                 </header>
+
+        {!selectedCommunityId && !selectedGovernanceDao ? <CommunityDashboard
+          key={`${activePublicKey}:${wallet.selectedNetwork}`}
+          daos={visibleGovernanceDaos}
+          reputation={reputation}
+          verification={verification}
+          proposals={governance.proposals.filter(proposal => visibleGovernanceDaoIds.has(proposal.daoId))}
+          loading={governanceLoading || reputationLoading || verificationLoading}
+          incomplete={!!(governanceError || reputationError || verificationError || governance.warnings?.length || governance.discoveryWarnings?.length)}
+          privacy={privacyMode}
+          formatPower={formatVotingPower}
+          onDao={(id) => { setSelectedCommunityId(id); setSelectedGovernanceDao(visibleGovernanceDaoIds.has(id) ? id : null); setHomeTab('governance'); }}
+          onManage={openCommunitySettings}
+        /> : null}
 
                 {governanceVoteResult ? (
                   <p className="success-box">
@@ -6318,49 +6407,20 @@ function PopupPage() {
                   </p>
                 ) : null}
                 {governanceVoteError ? <p className="danger-box">{governanceVoteError}</p> : null}
-                {!governanceLoading || visibleGovernanceDaos.length > 0 ? (
-                  <section className="community-hub-section governance-dao-section" aria-label="Participating DAOs">
-                    <div className="community-hub-section-title">
-                      <h3><Landmark size={14} /> {selectedGovernanceDao ? 'Selected DAO' : 'Your DAOs'}</h3>
-                      {!selectedGovernanceDao && visibleGovernanceDaos.length > 0 ? <span>{visibleGovernanceDaos.length}</span> : null}
-                    </div>
-                    {visibleGovernanceDaos.length > 0 ? (
-                      <div className="governance-dao-compact-list">
-                        {visibleGovernanceDaos.filter((dao) => !selectedGovernanceDao || dao.daoId === selectedGovernanceDao).map((dao) => {
-                          const communityPower = BigInt(dao.communityVotingPower);
-                          const councilPower = BigInt(dao.councilVotingPower);
-                          const delegatedCommunityPower = BigInt(dao.delegateCommunityVotingPower);
-                          const delegatedCouncilPower = BigInt(dao.delegateCouncilVotingPower);
-                          const isSelected = selectedGovernanceDao === dao.daoId;
-                          const roleLabel = dao.role === 'delegate' ? 'Delegate' : dao.role === 'treasury' ? 'Treasury' : 'Member';
-                          return (
-                            <button
-                              type="button"
-                              className={`governance-dao-compact-row${isSelected ? ' is-selected' : ''}`}
-                              key={dao.daoId}
-                              onClick={() => setSelectedGovernanceDao((current) => current === dao.daoId ? null : dao.daoId)}
-                              aria-label={isSelected ? `Back to all DAOs from ${dao.realmName}` : `View proposals for ${dao.realmName}`}
-                            >
-                              <span className="community-hub-avatar governance-dao-avatar">{isSelected ? <ArrowLeft size={17} /> : <Landmark size={17} />}</span>
-                              <span className="governance-dao-compact-copy">
-                                <span className="governance-dao-compact-heading"><strong>{dao.realmName}</strong><small>{roleLabel}</small></span>
-                                <span className="governance-dao-power-list">
-                                  {communityPower > 0n ? <span><strong>{formatVotingPower(communityPower, dao.communityTokenDecimals)}</strong> community</span> : null}
-                                  {councilPower > 0n ? <span><strong>{formatVotingPower(councilPower, 0)}</strong> council</span> : null}
-                                  {delegatedCommunityPower > 0n ? <span><strong>{formatVotingPower(delegatedCommunityPower, dao.communityTokenDecimals)}</strong> delegated community</span> : null}
-                                  {delegatedCouncilPower > 0n ? <span><strong>{formatVotingPower(delegatedCouncilPower, 0)}</strong> delegated council</span> : null}
-                                </span>
-                              </span>
-                              {isSelected ? <span className="governance-dao-back-label">All DAOs</span> : <ChevronRight size={15} className="community-hub-external" />}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    ) : (
-                      <div className="community-hub-empty"><Landmark size={22} /><strong>No voting power found</strong><p>This wallet has no deposited or delegated community or council voting power.</p><button type="button" className="community-hub-text-action" onClick={() => setView('settings')}>Manage DAOs <ChevronRight size={14} /></button></div>
-                    )}
-                  </section>
-                ) : null}
+                {selectedCommunityId || selectedGovernanceDao ? <CommunityWorkspace
+                  id={(selectedCommunityId || selectedGovernanceDao)!}
+                  dao={visibleGovernanceDaos.find(dao => dao.daoId === (selectedCommunityId || selectedGovernanceDao))}
+                  reputation={reputation.spaces.find(space => space.daoId === (selectedCommunityId || selectedGovernanceDao))}
+                  identities={verification.identities.filter(identity => identity.daoId === (selectedCommunityId || selectedGovernanceDao) && identity.currentWalletLinked)}
+                  tokens={visibleHomeTokens.filter(token => { const dao = visibleGovernanceDaos.find(item => item.daoId === (selectedCommunityId || selectedGovernanceDao)); return dao && (token.mint === dao.communityMint || token.mint === dao.councilMint); })}
+                  privacy={privacyMode}
+                  loading={reputationLoading || verificationLoading}
+                  incomplete={!!(reputationError || verificationError || governanceError)}
+                  formatPower={formatVotingPower}
+                  onBack={() => { setSelectedCommunityId(null); setSelectedGovernanceDao(null); }}
+                  onManage={openCommunitySettings}
+                  onToken={openAssetDetails}
+                /> : null}
                 {governanceLoading ? <p className="muted">{selectedGovernanceDao ? 'Loading selected DAO proposals…' : 'Loading DAO memberships…'}</p> : null}
                 {governanceError ? <p className="danger-box">{governanceError}</p> : null}
                 {governance.warnings?.length ? <div className="danger-box">{Array.from(new Set(governance.warnings)).map((warning) => <p key={warning}>{warning}</p>)}</div> : null}
@@ -6622,14 +6682,14 @@ function PopupPage() {
               <div className="staking-summary-grid">
                 <div className="staking-summary-card">
                   <span className="muted">Stake accounts</span>
-                  <strong>{stakeLoading ? '...' : stakeAccounts.length}</strong>
+                  <strong>{stakeLoading ? '...' : stakeError ? 'Unavailable' : stakeAccounts.length}</strong>
                 </div>
                 <div className="staking-summary-card">
                   <span className="muted">Delegated</span>
                   <strong>
                     {stakeLoading
                       ? '...'
-                      : `${formatSolAmountFromLamports(
+                      : stakeError ? 'Unavailable' : `${formatSolAmountFromLamports(
                           stakeAccounts.reduce((sum, account) => sum + account.delegatedLamports, 0)
                         )} SOL`}
                   </strong>
@@ -6653,7 +6713,7 @@ function PopupPage() {
                   ))}
                 </div>
               ) : (
-                <p className="muted">{stakeLoading ? 'Loading stake accounts...' : 'No native stake accounts found yet.'}</p>
+                <p className="muted">{stakeLoading ? 'Loading stake accounts...' : stakeError ? 'Stake balances could not be checked. Refresh to try again.' : 'No native stake accounts found yet.'}</p>
               )}
 
               <div className="staking-form-grid">
@@ -7245,7 +7305,7 @@ function PopupPage() {
           <div className="discover-hero-icon" aria-hidden="true"><Globe2 size={22} /></div>
           <div>
             <h2>Explore {chainLabel}</h2>
-            <p>Discover {chainLabel} apps or return to connected sites.</p>
+            <p>{selectedChainValue === 'zcash' ? ZCASH_DISCOVER_NOTE : `Discover ${chainLabel} apps or return to connected sites.`}</p>
           </div>
         </section>
 
@@ -7328,7 +7388,7 @@ function PopupPage() {
 
         <section className="discover-section" aria-labelledby="discover-dapps-title">
           <div className="discover-section-heading">
-            <h3 id="discover-dapps-title">Discover dApps</h3>
+            <h3 id="discover-dapps-title">{selectedChainValue === 'zcash' ? 'Zcash apps & tools' : 'Discover dApps'}</h3>
             <span>{visibleDapps.length}</span>
           </div>
           <div className="discover-app-list">
@@ -7494,7 +7554,7 @@ function PopupPage() {
       !requiresValueConfirmation || burnConfirmation.trim().toUpperCase() === burnConfirmationPhrase;
 
     return (
-      <>
+      <div className={isCollectibleView ? undefined : "asset-desktop-dashboard"}>
         <Card className="asset-detail-card">
           <div className="send-flow-header asset-detail-topbar">
             <button type="button" className="send-back-button" onClick={() => setView('home')} aria-label="Back to wallet">
@@ -7722,6 +7782,20 @@ function PopupPage() {
             marketData={assetDetails.marketData}
           />
         ) : null}
+
+        {!isCollectibleView ? <aside className="desktop-token-trade dashboard-panel">
+          <span className="dashboard-eyebrow">Trade this asset</span>
+          <h2>Swap {assetDetails.symbol ?? 'token'}</h2>
+          <div className="desktop-token-trade-balance">
+            <TokenAvatar token={{ symbol: assetDetails.symbol, logoUri: tokenImage }} fallbackLabel={assetDetails.symbol?.slice(0, 1) ?? 'T'} />
+            <div><small>Available balance</small><strong>{maskSensitiveValue(formatDecimalAmountString(assetDetails.amount), privacyMode)} {assetDetails.symbol}</strong><small>{maskSensitiveValue(tokenValue ?? 'Value unavailable', privacyMode)}</small></div>
+          </div>
+          <p className="dashboard-description">Choose an amount and destination token, then review your live quote before confirming.</p>
+          <Button className="button-block" disabled={isWatchOnlyWallet} onClick={() => openSwapForAsset(assetId)}>Get swap quote <ArrowLeftRight size={16} /></Button>
+          <Button tone="secondary" className="button-block" disabled={isWatchOnlyWallet} onClick={() => openSend(assetId)}>Send {assetDetails.symbol} <SendHorizontal size={16} /></Button>
+        </aside> : null}
+
+        {!isCollectibleView && assetJsonMetadata?.description ? <section className="desktop-token-about dashboard-panel"><h2>About {assetDetails.name ?? assetDetails.symbol}</h2><p>{assetJsonMetadata.description}</p></section> : null}
 
         <details className="asset-advanced-details" open={isCollectibleView}>
           <summary>
@@ -7980,8 +8054,14 @@ function PopupPage() {
         ) : null}
 
         {tokenActionError ? <p className="danger-box">{tokenActionError}</p> : null}
-      </>
+      </div>
     );
+  }
+
+  function openCommunitySettings(section: 'reputation' | 'verification' | 'governance') {
+    pendingManageSection.current = section;
+    setExpandedSettingsSections(new Set([section]));
+    setView('settings');
   }
 
   function renderSettings() {
@@ -8012,7 +8092,17 @@ function PopupPage() {
 
       return (
         <Card className="settings-section-card">
-          <button type="button" className="settings-section-toggle" onClick={() => toggleSettingsSection(props.section)}>
+          <button type="button" className="settings-section-toggle" aria-expanded={isExpanded}
+            ref={(node) => {
+              if (node && pendingManageSection.current === props.section) {
+                pendingManageSection.current = null;
+                requestAnimationFrame(() => {
+                  node.scrollIntoView({ block: 'start', behavior: 'auto' });
+                  node.focus({ preventScroll: true });
+                });
+              }
+            }}
+            onClick={() => toggleSettingsSection(props.section)}>
             <div className="settings-section-toggle-copy">
               <strong>{props.title}</strong>
               <span className="settings-section-summary">{props.summary}</span>
@@ -10251,15 +10341,31 @@ function PopupPage() {
       {surfaceError && view !== 'send' ? <p className="danger-box">{surfaceError}</p> : null}
 
       <nav className="bottom-nav" aria-label="Wallet navigation">
+        <div className="desktop-nav-brand" aria-hidden="true"><img src="/icons/grape_logo_white.svg" alt="" /><span>Grape</span></div>
         <button
           type="button"
-          className={`bottom-nav-item ${view === 'home' ? 'active' : ''}`.trim()}
-          onClick={() => setView('home')}
+          className={`bottom-nav-item ${view === 'home' ? 'active' : ''} ${view === 'home' && homeTab !== 'tokens' ? 'desktop-overview-inactive' : ''}`.trim()}
+          onClick={() => { setHomeTab('tokens'); setView('home'); }}
           aria-label="Home"
           title="Home"
         >
-          <Home size={20} />
+          <Home size={20} /><span className="desktop-nav-label">Overview</span>
         </button>
+        <div className="desktop-dashboard-navigation">
+          <span className="dashboard-eyebrow">Your wallet</span>
+          {([
+            { tab: 'activity', label: 'Activity', icon: <Clock3 size={20} /> },
+            ...(isSolanaChain ? [
+              { tab: 'community', label: 'Community', icon: <Globe2 size={20} /> },
+              { tab: 'governance', label: 'Governance', icon: <Landmark size={20} /> },
+              { tab: 'staking', label: 'Staking', icon: <ArrowUpRight size={20} /> },
+              { tab: 'collectibles', label: 'NFTs', icon: <QrCode size={20} /> }
+            ] : [])
+          ] as { tab: HomeTab; label: string; icon: ReactNode }[]).map((entry) => (
+            <button type="button" key={entry.tab} className={`bottom-nav-item ${view === 'home' && homeTab === entry.tab ? 'active' : ''}`} aria-current={view === 'home' && homeTab === entry.tab ? 'page' : undefined} onClick={() => { setHomeTab(entry.tab); setView('home'); }}>{entry.icon}<span className="desktop-nav-label">{entry.label}</span></button>
+          ))}
+          <span className="dashboard-eyebrow">Explore</span>
+        </div>
         <button
           type="button"
           className={`bottom-nav-item ${view === 'discover' ? 'active' : ''}`.trim()}
@@ -10267,7 +10373,7 @@ function PopupPage() {
           aria-label="Discover dApps"
           title="Discover dApps"
         >
-          <Globe2 size={20} />
+          <Globe2 size={20} /><span className="desktop-nav-label">Discover</span>
         </button>
         <button
           type="button"
@@ -10276,7 +10382,7 @@ function PopupPage() {
           aria-label="Settings"
           title="Settings"
         >
-          <Settings size={20} />
+          <Settings size={20} /><span className="desktop-nav-label">Settings</span>
         </button>
       </nav>
     </PageShell>

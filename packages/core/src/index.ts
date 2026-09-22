@@ -13,3 +13,5 @@ export * from './permissions';
 export * from './state';
 export * from './storage';
 export * from './vault';
+
+export * from './discover';

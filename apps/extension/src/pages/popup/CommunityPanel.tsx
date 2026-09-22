@@ -17,7 +17,7 @@ type Props = {
   formatPoints: (value: string) => string;
   formatAddress: (value: string) => string;
   formatTime: (value: number) => string;
-  onManage: () => void;
+  onManage: (section: 'reputation' | 'verification') => void;
   onRefreshVerification: () => void;
   onOpenReputation: (daoId: string) => void;
   onOpenVerification: (daoId: string) => void;
@@ -46,7 +46,7 @@ export function CommunityPanel(props: Props) {
     <div className="community-hub">
       <header className="community-hub-heading">
         <div><h2>Community</h2><p>Your reputation &amp; identities</p></div>
-        <button className="community-hub-tool" onClick={props.onManage} type="button"><Settings size={14} /> Manage</button>
+        <button className="community-hub-tool" onClick={() => props.onManage('reputation')} type="button"><Settings size={14} /> Manage</button>
       </header>
 
       <section className="community-hub-section" aria-label="OG Reputation">
@@ -71,12 +71,12 @@ export function CommunityPanel(props: Props) {
             </div>
           </div>
         ) : (
-          <div className="community-hub-empty"><Sparkles size={22} /><strong>Your reputation starts here</strong><p>Add a space to track your points across seasons.</p><button type="button" className="community-hub-text-action" onClick={props.onManage}>Add a space <ChevronRight size={14} /></button></div>
+          <div className="community-hub-empty"><Sparkles size={22} /><strong>Your reputation starts here</strong><p>Add a space to track your points across seasons.</p><button type="button" className="community-hub-text-action" onClick={() => props.onManage('reputation')}>Add a space <ChevronRight size={14} /></button></div>
         )}
       </section>
 
       <section ref={props.verificationRef} className="community-hub-section" aria-label="Verification">
-        <div className="community-hub-section-title"><h3><ShieldCheck size={15} /> Verification</h3><button type="button" className="community-hub-icon-button" onClick={props.onRefreshVerification} disabled={verificationLoading} aria-label="Refresh verification" title="Refresh verification"><RefreshCcw size={14} className={verificationLoading ? 'community-hub-spinning' : undefined} /></button></div>
+        <div className="community-hub-section-title"><h3><ShieldCheck size={15} /> Verification</h3><div className="community-hub-tools"><button type="button" className="community-hub-icon-button" onClick={() => props.onManage('verification')} aria-label="Manage verification spaces" title="Manage verification spaces"><Settings size={14} /></button><button type="button" className="community-hub-icon-button" onClick={props.onRefreshVerification} disabled={verificationLoading} aria-label="Refresh verification" title="Refresh verification"><RefreshCcw size={14} className={verificationLoading ? 'community-hub-spinning' : undefined} /></button></div></div>
         {verificationLoading ? <div className="community-hub-loading" role="status">Checking linked identities…</div> : verificationError ? (
           <div className="community-hub-error" role="alert"><span>{verificationError}</span><button className="community-hub-text-action" type="button" onClick={props.onRefreshVerification}>Try again <RefreshCcw size={13} /></button></div>
         ) : groups.size > 0 ? (
@@ -95,7 +95,7 @@ export function CommunityPanel(props: Props) {
             </div>
           </>
         ) : (
-          <div className="community-hub-empty"><ShieldCheck size={22} /><strong>Connect your identities</strong><p>Link a social account to verify your place in a community.</p><button type="button" className="community-hub-text-action" onClick={() => props.trackedVerificationSpaces[0] ? props.onOpenVerification(props.trackedVerificationSpaces[0]) : props.onManage}>{props.trackedVerificationSpaces.length ? 'Verify an identity' : 'Add a community'} <ChevronRight size={14} /></button></div>
+          <div className="community-hub-empty"><ShieldCheck size={22} /><strong>Connect your identities</strong><p>Link a social account to verify your place in a community.</p><button type="button" className="community-hub-text-action" onClick={() => props.trackedVerificationSpaces[0] ? props.onOpenVerification(props.trackedVerificationSpaces[0]) : props.onManage('verification')}>{props.trackedVerificationSpaces.length ? 'Verify an identity' : 'Add a community'} <ChevronRight size={14} /></button></div>
         )}
       </section>
     </div>

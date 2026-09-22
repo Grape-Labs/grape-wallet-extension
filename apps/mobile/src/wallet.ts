@@ -17,6 +17,7 @@ import {
   isValidBridgeRecipient,
   assertBridgeRecipient,
   GRAPE_VERIFICATION_REQUIRED_DAO_ID,
+  seedGrapeCommunitySpaces,
   encryptText,
   normalizeCustomTheme,
   normalizeDappApprovalMode,
@@ -124,6 +125,7 @@ export type MobileWalletState = {
   dappApprovalMode: DappApprovalMode;
   selectedWalletIds: Partial<Record<GrapeChain, string>>;
   trustedDappOrigins: string[];
+  communityTrackingDefaultsApplied?: boolean;
   trackedReputationSpaceIds: string[];
   trackedVerificationSpaceIds: string[];
   trackedGovernanceDaoIds: string[];
@@ -361,7 +363,8 @@ export function createEmptyMobileWalletState(): MobileWalletState {
     dappApprovalMode: DEFAULT_DAPP_APPROVAL_MODE,
     selectedWalletIds: {},
     trustedDappOrigins: [],
-    trackedReputationSpaceIds: [],
+    communityTrackingDefaultsApplied: true,
+    trackedReputationSpaceIds: [GRAPE_VERIFICATION_REQUIRED_DAO_ID],
     trackedVerificationSpaceIds: [GRAPE_VERIFICATION_REQUIRED_DAO_ID],
     trackedGovernanceDaoIds: [],
     wallets: [],
@@ -396,6 +399,7 @@ export async function loadMobileWalletState(): Promise<MobileWalletState> {
   const baseState: MobileWalletState = {
     ...createEmptyMobileWalletState(),
     ...parsed,
+    communityTrackingDefaultsApplied: parsed.communityTrackingDefaultsApplied === true,
     wallets: Array.isArray(parsed.wallets) ? parsed.wallets : [],
     selectedWalletIds: parsed.selectedWalletIds ?? {},
     trustedDappOrigins: Array.isArray(parsed.trustedDappOrigins) ? parsed.trustedDappOrigins : [],
@@ -430,6 +434,9 @@ export async function loadMobileWalletState(): Promise<MobileWalletState> {
     }
   }
 
+  if (parsed.communityTrackingDefaultsApplied !== true) {
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
+  }
   return normalized;
 }
 
@@ -500,7 +507,8 @@ export async function createWalletSet(input: {
       return selected;
     }, {}),
     trustedDappOrigins: [],
-    trackedReputationSpaceIds: [],
+    communityTrackingDefaultsApplied: true,
+    trackedReputationSpaceIds: [GRAPE_VERIFICATION_REQUIRED_DAO_ID],
     trackedVerificationSpaceIds: [GRAPE_VERIFICATION_REQUIRED_DAO_ID],
     trackedGovernanceDaoIds: [],
     wallets,
@@ -593,7 +601,8 @@ export async function createPrivateKeyWallet(input: {
       [input.chain]: wallet.id
     },
     trustedDappOrigins: [],
-    trackedReputationSpaceIds: [],
+    communityTrackingDefaultsApplied: true,
+    trackedReputationSpaceIds: [GRAPE_VERIFICATION_REQUIRED_DAO_ID],
     trackedVerificationSpaceIds: [GRAPE_VERIFICATION_REQUIRED_DAO_ID],
     trackedGovernanceDaoIds: [],
     wallets: [wallet],
@@ -2925,7 +2934,8 @@ function normalizeMobileWalletState(state: MobileWalletState): MobileWalletState
     dappApprovalMode: normalizeDappApprovalMode(state.dappApprovalMode),
     rebalanceAddonEnabled: state.rebalanceAddonEnabled === true,
     trustedDappOrigins: normalizeTrustedDappOrigins(state.trustedDappOrigins),
-    trackedReputationSpaceIds: normalizeTrackedReputationSpaceIds(state.trackedReputationSpaceIds),
+    communityTrackingDefaultsApplied: true,
+    trackedReputationSpaceIds: seedGrapeCommunitySpaces(state.trackedReputationSpaceIds, state.communityTrackingDefaultsApplied === true),
     trackedVerificationSpaceIds: normalizeTrackedVerificationSpaceIds(state.trackedVerificationSpaceIds),
     trackedGovernanceDaoIds: normalizeTrackedDaoIds(state.trackedGovernanceDaoIds)
   };

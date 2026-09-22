@@ -1,3 +1,4 @@
+import { GRAPE_VERIFICATION_REQUIRED_DAO_ID, seedGrapeCommunitySpaces } from './access';
 import type { EncryptedPayload } from './crypto';
 
 export const STORAGE_KEYS = {
@@ -164,6 +165,7 @@ export type WalletState = {
   sharedBiometricUnlock?: BiometricUnlockConfig;
   selectedChain: GrapeChain;
   selectedWalletIds: Partial<Record<GrapeChain, string>>;
+  communityTrackingDefaultsApplied?: boolean;
   trackedReputationSpaceIds: string[];
   trackedVerificationSpaceIds: string[];
   trackedGovernanceDaoIds: string[];
@@ -196,6 +198,7 @@ export type LegacyWalletState = {
   selectedAccountId?: string;
   selectedChain?: GrapeChain;
   selectedWalletIds?: Partial<Record<GrapeChain, string>>;
+  communityTrackingDefaultsApplied?: boolean;
   trackedReputationSpaceIds?: string[];
   trackedVerificationSpaceIds?: string[];
   trackedGovernanceDaoIds?: string[];
@@ -317,8 +320,9 @@ export function createEmptyWalletState(): WalletState {
     sharedBiometricUnlock: undefined,
     selectedChain: DEFAULT_CHAIN,
     selectedWalletIds: {},
-    trackedReputationSpaceIds: [],
-    trackedVerificationSpaceIds: [],
+    communityTrackingDefaultsApplied: true,
+    trackedReputationSpaceIds: [GRAPE_VERIFICATION_REQUIRED_DAO_ID],
+    trackedVerificationSpaceIds: [GRAPE_VERIFICATION_REQUIRED_DAO_ID],
     trackedGovernanceDaoIds: [],
     chainState: {
       solana: {
@@ -519,8 +523,9 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
         input.sharedBiometricUnlock ?? normalizedWallets.find((wallet) => !!wallet.biometricUnlock)?.biometricUnlock,
       selectedChain,
       selectedWalletIds,
-      trackedReputationSpaceIds: normalizeTrackedReputationSpaceIds(input.trackedReputationSpaceIds),
-      trackedVerificationSpaceIds: normalizeTrackedVerificationSpaceIds(input.trackedVerificationSpaceIds),
+      communityTrackingDefaultsApplied: true,
+      trackedReputationSpaceIds: seedGrapeCommunitySpaces(input.trackedReputationSpaceIds, input.communityTrackingDefaultsApplied === true),
+      trackedVerificationSpaceIds: seedGrapeCommunitySpaces(input.trackedVerificationSpaceIds, input.communityTrackingDefaultsApplied === true),
       trackedGovernanceDaoIds: normalizeTrackedDaoIds(input.trackedGovernanceDaoIds),
       chainState,
       selectedWalletId: selectedWalletId ?? selectedWalletIds.solana ?? normalizedWallets.find((wallet) => wallet.chain === 'solana')?.id,
@@ -561,8 +566,9 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
       selectedWalletIds: {
         solana: 'wallet-1'
       },
-      trackedReputationSpaceIds: normalizeTrackedReputationSpaceIds(input.trackedReputationSpaceIds),
-      trackedVerificationSpaceIds: normalizeTrackedVerificationSpaceIds(input.trackedVerificationSpaceIds),
+      communityTrackingDefaultsApplied: true,
+      trackedReputationSpaceIds: seedGrapeCommunitySpaces(input.trackedReputationSpaceIds, input.communityTrackingDefaultsApplied === true),
+      trackedVerificationSpaceIds: seedGrapeCommunitySpaces(input.trackedVerificationSpaceIds, input.communityTrackingDefaultsApplied === true),
       trackedGovernanceDaoIds: normalizeTrackedDaoIds(input.trackedGovernanceDaoIds),
       chainState: {
         solana: {
@@ -603,8 +609,9 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
     sharedBiometricUnlock: input.sharedBiometricUnlock,
     selectedChain: input.selectedChain ?? DEFAULT_CHAIN,
     selectedWalletIds: {},
-    trackedReputationSpaceIds: normalizeTrackedReputationSpaceIds(input.trackedReputationSpaceIds),
-    trackedVerificationSpaceIds: normalizeTrackedVerificationSpaceIds(input.trackedVerificationSpaceIds),
+    communityTrackingDefaultsApplied: true,
+      trackedReputationSpaceIds: seedGrapeCommunitySpaces(input.trackedReputationSpaceIds, input.communityTrackingDefaultsApplied === true),
+    trackedVerificationSpaceIds: seedGrapeCommunitySpaces(input.trackedVerificationSpaceIds, input.communityTrackingDefaultsApplied === true),
     trackedGovernanceDaoIds: normalizeTrackedDaoIds(input.trackedGovernanceDaoIds),
     chainState: normalizeChainState(input.chainState, input.selectedNetwork, input.customRpcUrls),
     selectedNetwork: input.selectedNetwork ?? 'mainnet-beta',
@@ -631,14 +638,6 @@ export function normalizeDappApprovalMode(mode: unknown): DappApprovalMode {
   }
 
   return DEFAULT_DAPP_APPROVAL_MODE;
-}
-
-function normalizeTrackedReputationSpaceIds(value: string[] | undefined): string[] {
-  return normalizeTrackedDaoIds(value);
-}
-
-function normalizeTrackedVerificationSpaceIds(value: string[] | undefined): string[] {
-  return normalizeTrackedDaoIds(value);
 }
 
 function normalizeTrackedDaoIds(value: string[] | undefined): string[] {
