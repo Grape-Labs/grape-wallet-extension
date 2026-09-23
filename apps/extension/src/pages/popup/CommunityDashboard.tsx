@@ -1,3 +1,4 @@
+import { communitySpaceIds } from './communityAssociations';
 import { useState } from 'react';
 import { ChevronRight, Landmark, Settings, ShieldAlert } from 'lucide-react';
 import type { GovernanceDaoSummary, WalletGovernanceProposal, WalletReputationResponse, WalletVerificationResponse } from '../../shared/models';
@@ -38,8 +39,9 @@ export function CommunityDashboard(props: Props) {
       <div className="unified-community-grid">
         {(showAll ? ids : ids.slice(0, 4)).map(id => {
           const dao = props.daos.find(d => d.daoId === id);
-          const rep = props.reputation.spaces.find(s => s.daoId === id);
-          const identities = props.verification.identities.filter(i => i.daoId === id && i.currentWalletLinked);
+          const spaces = communitySpaceIds(id, !!dao);
+          const rep = props.reputation.spaces.find(s => s.daoId === spaces.reputation);
+          const identities = props.verification.identities.filter(i => i.daoId === spaces.verification && i.currentWalletLinked);
           const verified = identities.filter(i => i.verified && (i.expiresAt === null || i.expiresAt > now)).length;
           const name = dao?.realmName || rep?.name || `${id.slice(0, 4)}…${id.slice(-4)}`;
           const powers = dao ? [

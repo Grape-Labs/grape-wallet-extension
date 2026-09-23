@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { fetchShyftCollections } from './shyft';
+import { fetchShyftCollections, fetchShyftTransactionHistory } from './shyft';
 
 describe('shyft collections parsing', () => {
   afterEach(() => {
@@ -64,5 +64,23 @@ describe('shyft collections parsing', () => {
         ]
       }
     ]);
+  });
+});
+
+describe('activity transfer identity', () => {
+  afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
+  it('preserves wallet counterparties separately from the token mint', async () => {
+    vi.stubEnv('VITE_GRAPE_SHYFT_API_KEY', 'test-api-key');
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ success: true, result: [{
+        signature: 'test-transfer', timestamp: '2026-09-23T12:00:00Z', status: 'Success',
+        type: 'TOKEN_TRANSFER', actions: [{ type: 'TOKEN_TRANSFER',
+          info: { amount: 50, token_address: 'usdc-mint', sender: 'wallet', receiver: 'recipient' }
+        }]
+      }] })
+    })));
+    const items = await fetchShyftTransactionHistory('mainnet-beta', 'wallet');
+    expect(items[0].actions[0]).toMatchObject({ amount: '50', mint: 'usdc-mint', sender: 'wallet', recipient: 'recipient' });
   });
 });

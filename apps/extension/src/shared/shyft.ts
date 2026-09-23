@@ -414,6 +414,9 @@ function normalizeActivityAction(action: ShyftTransactionAction): WalletActivity
   return {
     type: normalizeString(action.type) ?? 'unknown',
     label: formatTypeLabel(normalizeString(action.type) ?? 'unknown'),
+    mint: extractStringFromRecord(info, ['token_address', 'tokenAddress', 'mint']),
+    sender: extractStringFromRecord(info, ['sender', 'source_owner', 'from_address']),
+    recipient: extractStringFromRecord(info, ['receiver', 'recipient', 'destination_owner', 'to_address']),
     amount: extractAmountFromRecord(info, [
       'amount',
       'amount_in',

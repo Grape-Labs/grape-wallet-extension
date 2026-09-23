@@ -516,6 +516,9 @@ export type WalletStakeActionResponse = {
 };
 
 export type WalletActivityAction = {
+  mint?: string | null;
+  sender?: string | null;
+  recipient?: string | null;
   type: string;
   label: string;
   amount?: string | null;

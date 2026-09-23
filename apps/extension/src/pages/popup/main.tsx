@@ -8,6 +8,8 @@ import { hasPositiveGovernancePower, compareGovernancePower } from '../../../../
 import { CommunityPanel } from './CommunityPanel';
 import { CommunityDashboard } from './CommunityDashboard';
 import { CommunityWorkspace } from './CommunityWorkspace';
+import { IdentityTools } from './IdentityTools';
+import { communitySpaceIds } from './communityAssociations';
 import type { FormEvent, ReactNode } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
@@ -35,6 +37,7 @@ import {
   Landmark,
   LoaderCircle,
   Menu,
+  Maximize2,
   PanelRightOpen,
   Pencil,
   Plus,
@@ -247,17 +250,14 @@ type DiscoverFeedSource = {
   siteUrl: string;
   feedUrl: string;
 };
-const DISCOVER_FEED_SOURCES: Partial<Record<WalletStateResponse['wallet']['selectedChain'], DiscoverFeedSource>> = {
-  solana: {
-    label: 'Solana',
-    siteUrl: 'https://solana.com/changelog',
-    feedUrl: 'https://solana.com/changelog/rss.xml'
-  },
-  ethereum: {
-    label: 'Ethereum Foundation',
-    siteUrl: 'https://blog.ethereum.org',
-    feedUrl: 'https://blog.ethereum.org/feed.xml'
-  }
+const DISCOVER_FEED_SOURCES: Partial<Record<WalletStateResponse['wallet']['selectedChain'], DiscoverFeedSource[]>> = {
+  solana: [
+    { label: 'Solana News', siteUrl: 'https://solana.com/news', feedUrl: 'https://solana.com/news/rss.xml' },
+    { label: 'Solana Developer Updates', siteUrl: 'https://solana.com/changelog', feedUrl: 'https://solana.com/changelog/rss.xml' }
+  ],
+  ethereum: [{ label: 'Ethereum Foundation', siteUrl: 'https://blog.ethereum.org', feedUrl: 'https://blog.ethereum.org/feed.xml' }],
+  sui: [{ label: 'Sui', siteUrl: 'https://www.sui.io/blog', feedUrl: 'https://blog.sui.io/rss/' }],
+  zcash: [{ label: 'Zcash Foundation', siteUrl: 'https://zfnd.org/blog/', feedUrl: 'https://zfnd.org/feed/' }]
 };
 const DISCOVER_FEED_CACHE_TTL_MS = 15 * 60 * 1_000;
 const DISCOVER_FEED_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -366,11 +366,14 @@ function parseDiscoverFeed(xml: string, source: DiscoverFeedSource): DiscoverFee
   if (document.querySelector('parsererror')) throw new Error('Invalid discovery feed');
   const nodes = [...document.querySelectorAll('item, entry')];
 
-  return nodes.slice(0, 5).flatMap((node, index) => {
+  return nodes.slice(0, 10).flatMap((node, index) => {
     const title = node.querySelector('title')?.textContent?.trim() ?? '';
     const linkNode = node.querySelector('link');
     const link = linkNode?.getAttribute('href')?.trim() || linkNode?.textContent?.trim() || '';
     if (!title || !link) return [];
+    let url: URL;
+    try { url = new URL(link, source.siteUrl); } catch { return []; }
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return [];
     const rawSummary = node.querySelector('description, summary, content')?.textContent ?? '';
     const summaryDocument = new DOMParser().parseFromString(`<body>${rawSummary}</body>`, 'text/html');
     const summary = (summaryDocument.body.textContent ?? '').replace(/\s+/g, ' ').trim();
@@ -381,14 +384,15 @@ function parseDiscoverFeed(xml: string, source: DiscoverFeedSource): DiscoverFee
       id: `${source.label}-${link}-${index}`,
       source: source.label,
       title,
-      summary,
-      url: new URL(link, source.siteUrl).toString(),
-      publishedAt: Number.isFinite(publishedAt) ? publishedAt : Date.now()
+      summary: summary.slice(0, 240),
+      url: url.toString(),
+      publishedAt: Number.isFinite(publishedAt) ? publishedAt : 0
     }];
   });
 }
 
 function formatFeedAge(publishedAt: number): string {
+  if (!publishedAt) return 'Date unavailable';
   const elapsedMinutes = Math.max(1, Math.floor((Date.now() - publishedAt) / 60_000));
   if (elapsedMinutes < 60) return `${elapsedMinutes}m`;
   const hours = Math.floor(elapsedMinutes / 60);
@@ -1457,6 +1461,9 @@ function ActivityTypeIcon(props: { item: WalletActivityItem }) {
 
 function ActivityRow(props: {
   item: WalletActivityItem;
+  owner: string;
+  tokens: TokenHolding[];
+  privacy: boolean;
   expanded: boolean;
   network: 'mainnet-beta' | 'devnet';
   onToggle: () => void;
@@ -1468,6 +1475,26 @@ function ActivityRow(props: {
         ? 'Failed'
         : 'Unknown';
   const feeLabel = formatActivityFee(props.item.feeSol);
+  const transfers = props.item.actions.filter(action => /transfer|send|receive/i.test(action.type));
+  const related = transfers.filter(action => action.sender === props.owner || action.recipient === props.owner);
+  const rows = (related.length ? related : transfers).slice(0, 2).map(action => {
+    const token = props.tokens.find(token => token.mint === action.mint);
+    const native = /sol_transfer/i.test(action.type);
+    const symbol = token?.symbol || action.asset || (native ? 'SOL' : null);
+    const incoming = action.recipient === props.owner && action.sender !== props.owner;
+    const outgoing = action.sender === props.owner && action.recipient !== props.owner;
+    const value = Number(action.amount);
+    const amount = action.amount == null ? null : Number.isFinite(value)
+      ? (value > 0 && value < 0.01 ? '<0.01' : new Intl.NumberFormat('en-US', { maximumFractionDigits: 6 }).format(value))
+      : action.amount;
+    return { action, token, native, symbol, incoming, outgoing, amount };
+  });
+  const primary = rows[0];
+  const swapped = /swap/i.test(props.item.type);
+  const title = swapped ? 'Swapped' : primary?.incoming ? 'Received' : primary?.outgoing ? 'Sent' : formatActivityType(props.item.type);
+  const counterpart = primary?.incoming ? primary.action.sender : primary?.outgoing ? primary.action.recipient : null;
+  const description = counterpart ? (primary?.incoming ? 'From: ' : 'To: ') + formatAddress(counterpart)
+    : primary?.symbol || props.item.protocolName || props.item.description;
 
   return (
     <div
@@ -1485,15 +1512,20 @@ function ActivityRow(props: {
       <div className="activity-row-summary">
         <div className="activity-leading">
           <span className={`activity-icon activity-status-${props.item.status}`.trim()} aria-hidden="true">
-            <ActivityTypeIcon item={props.item} />
+            {primary?.symbol ? <TokenAvatar token={{ symbol: primary.symbol, logoUri: primary.token?.logoUri }} sol={primary.native} /> : <ActivityTypeIcon item={props.item} />}
           </span>
           <div className="activity-copy">
-            <strong className="activity-title">{formatActivityType(props.item.type)}</strong>
-            <span className="activity-description">{props.item.description}</span>
+            <strong className="activity-title">{title}</strong>
+            <span className="activity-description">{description}</span>
           </div>
         </div>
         <div className="activity-meta">
-          <span className={`activity-status-pill activity-status-${props.item.status}`.trim()}>{statusLabel}</span>
+          {rows.filter(row => row.amount).map((row, index) => (
+            <span key={index} className={'activity-amount ' + (row.incoming && props.item.status === 'success' ? 'activity-status-success' : '')}>
+              {props.privacy ? '••••' : (row.incoming ? '+' : row.outgoing ? '−' : '') + row.amount + (row.symbol ? ' ' + row.symbol : '')}
+            </span>
+          ))}
+          {props.item.status !== 'success' ? <span className={'activity-status-pill activity-status-' + props.item.status}>{statusLabel}</span> : null}
           <span className="activity-time">{formatActivityTime(props.item.timestamp)}</span>
         </div>
       </div>
@@ -1501,6 +1533,10 @@ function ActivityRow(props: {
       {props.expanded ? (
         <div className="activity-details">
           <div className="activity-detail-grid">
+            <div className="activity-detail-item">
+              <span className="muted">Status</span>
+              <span>{statusLabel}</span>
+            </div>
             <div className="activity-detail-item">
               <span className="muted">Signature</span>
               <span className="mono">{formatAddress(props.item.signature)}</span>
@@ -1592,6 +1628,16 @@ function PopupPage() {
   const [copiedAddress, setCopiedAddress] = useState(false);
   const [receiveQr, setReceiveQr] = useState('');
   const [assetId, setAssetId] = useState(() => parseInitialAssetId());
+  const [inlineSwap, setInlineSwap] = useState(false);
+  const [wideTrading, setWideTrading] = useState(() => document.body.dataset.page === 'wallet' && window.matchMedia('(min-width: 1100px)').matches);
+  const swapSurfaceActive = view === 'swap' || (view === 'asset' && inlineSwap && wideTrading);
+  useEffect(() => {
+    const query = window.matchMedia('(min-width: 1100px)');
+    const update = () => setWideTrading(document.body.dataset.page === 'wallet' && query.matches);
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
+  }, []);
+  useEffect(() => { setInlineSwap(false); }, [state?.activeAccount?.publicKey, state?.wallet.selectedNetwork, state?.wallet.selectedChain]);
   const [sendPrivate, setSendPrivate] = useState(false);
   const [privateSendReview, setPrivateSendReview] = useState(false);
   const [houdiniDeposit, setHoudiniDeposit] = useState<{ entry: HoudiniOrder; assetId: string; owner: string } | null>(null);
@@ -1807,6 +1853,13 @@ function PopupPage() {
   const [securityReport, setSecurityReport] = useState<WalletSecurityReportResponse | null>(null);
   const [securityLoading, setSecurityLoading] = useState(false);
   const [securityError, setSecurityError] = useState<string | null>(null);
+  const securityRequestRef = useRef(0);
+  useEffect(() => {
+    securityRequestRef.current += 1;
+    setSecurityReport(null);
+    setSecurityError(null);
+    setSecurityLoading(false);
+  }, [state?.activeAccount?.publicKey, state?.wallet.selectedNetwork]);
   const [reclaimAccounts, setReclaimAccounts] = useState<ReclaimableTokenAccount[]>([]);
   const [selectedReclaimAccounts, setSelectedReclaimAccounts] = useState<Set<string>>(new Set());
   const [reclaimLoading, setReclaimLoading] = useState(false);
@@ -2107,7 +2160,7 @@ function PopupPage() {
     if (view === 'security' && state?.wallet.setup === 'ready' && !state.session.locked) {
       void refreshSecurityReport();
     }
-  }, [view, state?.wallet.setup, state?.session.locked]);
+  }, [view, state?.wallet.setup, state?.session.locked, state?.activeAccount?.publicKey, state?.wallet.selectedNetwork]);
 
   useEffect(() => {
     if (view === 'reclaim-rent' && state?.wallet.setup === 'ready' && !state.session.locked) {
@@ -2164,46 +2217,44 @@ function PopupPage() {
   }, [selectedChainValue]);
 
   useEffect(() => {
-    const source = DISCOVER_FEED_SOURCES[selectedChainValue];
-    if (!source || view !== 'discover') {
-      setDiscoverFeed([]);
-      setDiscoverFeedLoading(false);
-      return;
-    }
-
+    const sources = DISCOVER_FEED_SOURCES[selectedChainValue];
+    setDiscoverFeed([]);
+    setDiscoverFeedLoading(false);
+    if (!sources?.length || view !== 'discover') return;
     let cancelled = false;
-    const cacheKey = `grape:discover-feed:v1:${selectedChainValue}`;
-    let cachedAt = 0;
-    try {
-      const cached = JSON.parse(localStorage.getItem(cacheKey) ?? 'null') as { fetchedAt?: number; items?: DiscoverFeedItem[] } | null;
-      cachedAt = cached?.fetchedAt ?? 0;
-      if (cached?.items?.length && Date.now() - cachedAt < DISCOVER_FEED_CACHE_MAX_AGE_MS) {
-        setDiscoverFeed(cached.items);
-      } else {
-        setDiscoverFeed([]);
-      }
-    } catch {
-      setDiscoverFeed([]);
-    }
-
-    if (Date.now() - cachedAt < DISCOVER_FEED_CACHE_TTL_MS) return;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 12000);
     setDiscoverFeedLoading(true);
-    void fetch(source.feedUrl)
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`Feed returned HTTP ${response.status}`);
+    void Promise.allSettled(sources.map(async source => {
+      const cacheKey = 'grape:discover-feed:v2:' + source.feedUrl;
+      let cached: { fetchedAt: number; items: DiscoverFeedItem[] } | null = null;
+      try { cached = JSON.parse(localStorage.getItem(cacheKey) ?? 'null'); } catch { /* Cache is optional. */ }
+      const cachedItems = Array.isArray(cached?.items) && Date.now() - (cached?.fetchedAt ?? 0) < DISCOVER_FEED_CACHE_MAX_AGE_MS ? cached!.items : [];
+      if (cachedItems.length && Date.now() - cached!.fetchedAt < DISCOVER_FEED_CACHE_TTL_MS) return cachedItems;
+      try {
+        const response = await fetch(source.feedUrl, { signal: controller.signal });
+        if (!response.ok) throw new Error('Feed unavailable');
         const items = parseDiscoverFeed(await response.text(), source);
-        if (items.length === 0) throw new Error('Feed is empty');
-        localStorage.setItem(cacheKey, JSON.stringify({ fetchedAt: Date.now(), items }));
-        if (!cancelled) setDiscoverFeed(items);
-      })
-      .catch(() => {
-        // Discovery remains usable without a feed; retain any cached items silently.
-      })
-      .finally(() => {
-        if (!cancelled) setDiscoverFeedLoading(false);
-      });
-
-    return () => { cancelled = true; };
+        if (!items.length) throw new Error('Feed empty');
+        try { localStorage.setItem(cacheKey, JSON.stringify({ fetchedAt: Date.now(), items })); } catch { /* Storage can be full. */ }
+        return items;
+      } catch { return cachedItems; }
+    })).then(results => {
+      if (cancelled) return;
+      const unique = new Map<string, DiscoverFeedItem>();
+      for (const result of results) {
+        if (result.status !== 'fulfilled') continue;
+        for (const item of result.value) {
+          const key = item.url.split('#')[0].replace(/\/$/, '');
+          if (!unique.has(key)) unique.set(key, item);
+        }
+      }
+      setDiscoverFeed([...unique.values()].sort((a, b) => b.publishedAt - a.publishedAt).slice(0, 6));
+    }).finally(() => {
+      window.clearTimeout(timeout);
+      if (!cancelled) setDiscoverFeedLoading(false);
+    });
+    return () => { cancelled = true; controller.abort(); window.clearTimeout(timeout); };
   }, [selectedChainValue, view]);
 
   useEffect(() => {
@@ -2933,7 +2984,7 @@ function PopupPage() {
   }, [rebalanceAssets, rebalanceSelectedMints.size]);
 
   useEffect(() => {
-    if (view !== 'swap' || selectedChainValue !== 'solana' || rebalanceStockCatalog.length > 0) return;
+    if (!swapSurfaceActive || selectedChainValue !== 'solana' || rebalanceStockCatalog.length > 0) return;
     let cancelled = false;
     setRebalanceStockCatalogLoading(true);
     void fetchJupiterStockTokens()
@@ -2964,11 +3015,11 @@ function PopupPage() {
         if (!cancelled) setRebalanceStockCatalogLoading(false);
       });
     return () => { cancelled = true; };
-  }, [rebalanceStockCatalog.length, selectedChainValue, view]);
+  }, [rebalanceStockCatalog.length, selectedChainValue, view, swapSurfaceActive]);
 
   useEffect(() => {
     const query = swapStockSearch.trim();
-    if (view !== 'swap') return;
+    if (!swapSurfaceActive) return;
     if (query.length < 2) {
       setSwapTokenSearchResults([]);
       setSwapDiscoverySearching(false);
@@ -3030,7 +3081,7 @@ function PopupPage() {
       cancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, [assets.tokens, selectedChainValue, swapStockSearch, view]);
+  }, [assets.tokens, selectedChainValue, swapStockSearch, view, swapSurfaceActive]);
 
   const selectedAsset = sendAssetOptions.find((option) => option.id === assetId) ?? sendAssetOptions[0];
   const selectedTokenHolding =
@@ -3053,13 +3104,13 @@ function PopupPage() {
   const selectedSwapInputDecimals = getSwapAssetDecimals(selectedSwapInputAsset);
   const nativeSwapMint = selectedChainValue === 'solana' ? JUPITER_SOL_MINT : selectedChainValue === 'sui' ? '0x2::sui::SUI' : LIFI_NATIVE_TOKEN_ADDRESS[selectedChainValue];
   useEffect(() => {
-    if (view !== 'swap') return;
+    if (!swapSurfaceActive) return;
     const currentIsSolanaMint = COMMON_SWAP_TOKENS.some((token) => token.mint === swapOutputMint);
     if (selectedChainValue !== 'solana' && (currentIsSolanaMint || !swapOutputMint)) {
       const firstToken = assets.tokens[0]?.mint;
       setSwapOutputMint(firstToken && firstToken !== nativeSwapMint ? firstToken : nativeSwapMint);
     }
-  }, [assets.tokens, nativeSwapMint, selectedChainValue, swapOutputMint, view]);
+  }, [assets.tokens, nativeSwapMint, selectedChainValue, swapOutputMint, view, swapSurfaceActive]);
   const swapOutputOptions = useMemo<SwapOutputOption[]>(() => {
     const ownedTokens: SwapOutputOption[] = assets.tokens.map((token) => ({
       mint: token.mint,
@@ -3453,7 +3504,7 @@ function PopupPage() {
   }
 
   useEffect(() => {
-    if (view !== 'swap' || submittingSwap || Boolean(swapResult)) {
+    if (!swapSurfaceActive || submittingSwap || Boolean(swapResult)) {
       return;
     }
 
@@ -3492,6 +3543,7 @@ function PopupPage() {
     swapUseCustomOutputMint,
     submittingSwap,
     swapResult,
+    swapSurfaceActive,
     view,
     state?.wallet.selectedNetwork
   ]);
@@ -3791,6 +3843,7 @@ function PopupPage() {
     setBurnPassword('');
     setView('asset');
 
+    if (wideTrading) openSwapForAsset(`${nextToken.mint}:${nextToken.programId}`, '', null, undefined, true);
     void refreshAssetDetails(nextToken);
     void refreshTokenActivity(nextToken.accountAddress);
   }
@@ -3878,7 +3931,8 @@ function PopupPage() {
     nextAssetId: string,
     initialAmount = '',
     advisory: string | null = null,
-    preferredOutputMint?: string
+    preferredOutputMint?: string,
+    embed = view === 'asset' && wideTrading
   ) {
     const nextAsset =
       assetOptions.find((option) => option.id === nextAssetId) ??
@@ -3908,7 +3962,8 @@ function PopupPage() {
     setSwapResult(null);
     setSwapError(null);
     setSwapAdvisory(advisory);
-    setView('swap');
+    setInlineSwap(embed);
+    if (!embed) setView('swap');
   }
 
   async function handleOpenBurn() {
@@ -3954,17 +4009,18 @@ function PopupPage() {
   }
 
   async function refreshSecurityReport() {
+    const request = ++securityRequestRef.current;
     try {
       setSecurityLoading(true);
       setSecurityError(null);
       const nextReport = await sendRuntimeMessage<WalletSecurityReportResponse>({
         type: 'wallet_get_security_report'
       });
-      setSecurityReport(nextReport);
+      if (request === securityRequestRef.current) setSecurityReport(nextReport);
     } catch (error) {
-      setSecurityError(error instanceof Error ? error.message : 'Unable to load the security report.');
+      if (request === securityRequestRef.current) setSecurityError(error instanceof Error ? error.message : 'Unable to load the security report.');
     } finally {
-      setSecurityLoading(false);
+      if (request === securityRequestRef.current) setSecurityLoading(false);
     }
   }
 
@@ -4362,6 +4418,11 @@ function PopupPage() {
   ];
   const visibleGovernanceDaos = governance.daos.filter((dao) => [dao.communityVotingPower, dao.councilVotingPower, dao.delegateCommunityVotingPower, dao.delegateCouncilVotingPower].some(hasPositiveGovernancePower)).sort((a, b) => compareGovernancePower(governancePowerForSort(b), governancePowerForSort(a)) || a.realmName.localeCompare(b.realmName) || a.daoId.localeCompare(b.daoId));
   const visibleGovernanceDaoIds = new Set(visibleGovernanceDaos.map((dao) => dao.daoId));
+  const workspaceId = selectedCommunityId || selectedGovernanceDao || '';
+  const workspaceSpaces = communitySpaceIds(workspaceId, governance.daos.some(dao => dao.daoId === workspaceId));
+  const workspaceReputationId = workspaceSpaces.reputation && (workspaceSpaces.reputation === 'By2sVGZXwfQq6rAiAM3rNPJ9iQfb5e2QhnF4YjJ4Bip' || reputation.spaces.some(space => space.daoId === workspaceSpaces.reputation)) ? workspaceSpaces.reputation : null;
+  const workspaceVerificationId = workspaceSpaces.verification && (workspaceSpaces.verification === 'By2sVGZXwfQq6rAiAM3rNPJ9iQfb5e2QhnF4YjJ4Bip' || verification.trackedSpaces.includes(workspaceSpaces.verification) || verification.identities.some(identity => identity.daoId === workspaceSpaces.verification)) ? workspaceSpaces.verification : null;
+
   const visibleGovernanceProposals = governance.proposals.filter((proposal) => proposal.daoId === selectedGovernanceDao && visibleGovernanceDaoIds.has(proposal.daoId));
   const liveGovernanceProposalCount = visibleGovernanceProposals.filter((proposal) => {
     const timeMeta = getGovernanceProposalTimeMeta(proposal);
@@ -5756,27 +5817,23 @@ function PopupPage() {
                     : <RefreshCcw size={14} />}
               </button>
               {renderWalletSwitcher()}
+              {isPopupSurface ? <button type="button" className="mini-icon-button subtle" onClick={() => void handleOpenInTab()} aria-label="Expand wallet" title="Expand wallet"><Maximize2 size={18} /></button> : null}
               {renderWalletMenu()}
             </div>
           </div>
 
           <div className="portfolio-copy">
-            <div className="portfolio-label-row">
-              <div className="portfolio-label">Total Balance</div>
-              <button
-                type="button"
-                className={`mini-icon-button subtle privacy-toggle-button ${privacyMode ? 'active' : ''}`.trim()}
-                onClick={() => void setPrivacyMode(!privacyMode)}
-                aria-label={privacyMode ? 'Show balances' : 'Hide balances'}
-                title={privacyMode ? 'Show balances' : 'Hide balances'}
-              >
-                {privacyMode ? <EyeOff size={13} /> : <Eye size={13} />}
-              </button>
-            </div>
             {assetsLoading ? (
               <div className="skeleton-block skeleton-line skeleton-hero-balance" />
             ) : (
-              <div className="hero-balance">{maskSensitiveValue(portfolioValue, privacyMode)}</div>
+              <button type="button" className="hero-balance balance-visibility-toggle"
+                onClick={() => void setPrivacyMode(!privacyMode)}
+                aria-label={privacyMode ? 'Show balances' : 'Hide balances'}
+                aria-pressed={privacyMode}
+                title={privacyMode ? 'Show balances' : 'Hide balances'}>
+                <span>{maskSensitiveValue(portfolioValue, privacyMode)}</span>
+                <span className="balance-hover-icon" aria-hidden="true">{privacyMode ? <EyeOff size={18} /> : <Eye size={18} />}</span>
+              </button>
             )}
           </div>
 
@@ -6410,8 +6467,10 @@ function PopupPage() {
                 {selectedCommunityId || selectedGovernanceDao ? <CommunityWorkspace
                   id={(selectedCommunityId || selectedGovernanceDao)!}
                   dao={visibleGovernanceDaos.find(dao => dao.daoId === (selectedCommunityId || selectedGovernanceDao))}
-                  reputation={reputation.spaces.find(space => space.daoId === (selectedCommunityId || selectedGovernanceDao))}
-                  identities={verification.identities.filter(identity => identity.daoId === (selectedCommunityId || selectedGovernanceDao) && identity.currentWalletLinked)}
+                  reputation={reputation.spaces.find(space => space.daoId === workspaceReputationId)}
+                  reputationSpaceId={workspaceReputationId}
+                  verificationSpaceId={workspaceVerificationId}
+                  identities={verification.identities.filter(identity => identity.daoId === workspaceVerificationId && identity.currentWalletLinked)}
                   tokens={visibleHomeTokens.filter(token => { const dao = visibleGovernanceDaos.find(item => item.daoId === (selectedCommunityId || selectedGovernanceDao)); return dao && (token.mint === dao.communityMint || token.mint === dao.councilMint); })}
                   privacy={privacyMode}
                   loading={reputationLoading || verificationLoading}
@@ -6636,6 +6695,9 @@ function PopupPage() {
                           <ActivityRow
                             key={item.signature}
                             item={item}
+                            owner={activePublicKey ?? ""}
+                            tokens={assets.tokens}
+                            privacy={privacyMode}
                             expanded={expandedActivitySignature === item.signature}
                             network={wallet.selectedNetwork}
                             onToggle={() =>
@@ -7333,16 +7395,22 @@ function PopupPage() {
           ))}
         </div>
 
-        {discoverFeedLoading || discoverFeed.length > 0 ? (
+        {DISCOVER_FEED_SOURCES[selectedChainValue]?.length || selectedChainValue === 'monad' ? (
           <section className="discover-section discover-feed" aria-labelledby="discover-feed-title">
             <div className="discover-section-heading">
-              <h3 id="discover-feed-title">Latest updates</h3>
+              <h3 id="discover-feed-title">Ecosystem news</h3>
               <span>{chainLabel}</span>
             </div>
+            <div className="discover-news-sources">
+              {(DISCOVER_FEED_SOURCES[selectedChainValue] ?? [{ label: 'Monad News', siteUrl: 'https://monad.xyz/blog', feedUrl: '' }]).map(source => (
+                <a key={source.siteUrl} href={source.siteUrl} target="_blank" rel="noopener noreferrer">{source.label}<ExternalLink size={12} /></a>
+              ))}
+            </div>
+            {!discoverFeedLoading && discoverFeed.length === 0 ? <p className="muted">{selectedChainValue === 'monad' ? 'Read ecosystem announcements on the official Monad blog.' : 'Headlines are unavailable right now. Visit the sources above for the latest news.'}</p> : null}
             <div className="discover-feed-list">
               {discoverFeed.map((item) => (
                 <button key={item.id} type="button" className="discover-feed-row" onClick={() => openDapp(item.url)}>
-                  <DiscoverAppIcon name={item.source} url={DISCOVER_FEED_SOURCES[selectedChainValue]?.siteUrl ?? item.url} />
+                  <DiscoverAppIcon name={item.source} url={item.url} />
                   <span className="discover-feed-copy">
                     <span className="discover-feed-meta"><strong>{item.source}</strong><small>{formatFeedAge(item.publishedAt)}</small></span>
                     <span className="discover-feed-title">{item.title}</span>
@@ -7783,7 +7851,8 @@ function PopupPage() {
           />
         ) : null}
 
-        {!isCollectibleView ? <aside className="desktop-token-trade dashboard-panel">
+        {!isCollectibleView ? <aside className={inlineSwap ? "desktop-token-trade dashboard-panel inline-swap-panel" : "desktop-token-trade dashboard-panel"}>
+          {inlineSwap ? <><h2>Swap</h2>{renderSwap(true)}</> : <>
           <span className="dashboard-eyebrow">Trade this asset</span>
           <h2>Swap {assetDetails.symbol ?? 'token'}</h2>
           <div className="desktop-token-trade-balance">
@@ -7793,7 +7862,7 @@ function PopupPage() {
           <p className="dashboard-description">Choose an amount and destination token, then review your live quote before confirming.</p>
           <Button className="button-block" disabled={isWatchOnlyWallet} onClick={() => openSwapForAsset(assetId)}>Get swap quote <ArrowLeftRight size={16} /></Button>
           <Button tone="secondary" className="button-block" disabled={isWatchOnlyWallet} onClick={() => openSend(assetId)}>Send {assetDetails.symbol} <SendHorizontal size={16} /></Button>
-        </aside> : null}
+        </>}</aside> : null}
 
         {!isCollectibleView && assetJsonMetadata?.description ? <section className="desktop-token-about dashboard-panel"><h2>About {assetDetails.name ?? assetDetails.symbol}</h2><p>{assetJsonMetadata.description}</p></section> : null}
 
@@ -7904,6 +7973,9 @@ function PopupPage() {
                   <ActivityRow
                     key={item.signature}
                     item={item}
+                    owner={activePublicKey ?? ""}
+                    tokens={assets.tokens}
+                    privacy={privacyMode}
                     expanded={expandedActivitySignature === item.signature}
                     network={wallet.selectedNetwork}
                     onToggle={() =>
@@ -8091,8 +8163,8 @@ function PopupPage() {
       const isExpanded = expandedSettingsSections.has(props.section);
 
       return (
-        <Card className="settings-section-card">
-          <button type="button" className="settings-section-toggle" aria-expanded={isExpanded}
+        <Card className={`settings-section-card${isExpanded ? ' is-expanded' : ''}`}>
+          <button type="button" className="settings-section-toggle" aria-expanded={isExpanded} aria-controls={`settings-content-${props.section}`}
             ref={(node) => {
               if (node && pendingManageSection.current === props.section) {
                 pendingManageSection.current = null;
@@ -8103,13 +8175,14 @@ function PopupPage() {
               }
             }}
             onClick={() => toggleSettingsSection(props.section)}>
+            <span className="settings-section-icon" aria-hidden="true">{props.section === 'wallet' ? <Settings size={20} /> : props.section === 'governance' ? <Landmark size={20} /> : props.section === 'verification' ? <Fingerprint size={20} /> : props.section === 'reputation' ? <Globe2 size={20} /> : <ShieldAlert size={20} />}</span>
             <div className="settings-section-toggle-copy">
               <strong>{props.title}</strong>
               <span className="settings-section-summary">{props.summary}</span>
             </div>
             {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
           </button>
-          {isExpanded ? props.children : null}
+          {isExpanded ? <div id={`settings-content-${props.section}`} className="settings-section-content">{props.children}</div> : null}
           {props.error ? <p className="danger-box">{props.error}</p> : null}
         </Card>
       );
@@ -8578,7 +8651,8 @@ function PopupPage() {
                   <Input
                     value={reputationSpaceInput}
                     onChange={(event) => setReputationSpaceInput(event.target.value)}
-                    placeholder="Add reputation space DAO id"
+                    placeholder="Reputation space address"
+                    aria-label="Reputation space address"
                   />
                   <Button onClick={() => void handleAddReputationSpace()} disabled={reputationSpaceSaving || !reputationSpaceInput.trim()}>
                     {reputationSpaceSaving ? 'Saving...' : 'Add space'}
@@ -8589,7 +8663,7 @@ function PopupPage() {
                     {wallet.trackedReputationSpaceIds.map((daoId) => (
                       <div key={daoId} className="reputation-space-row">
                         <div className="stack compact-stack">
-                          <strong>{formatAddress(daoId)}</strong>
+                          <strong>{reputation.spaces.find(space => space.daoId === daoId)?.name || formatAddress(daoId)}</strong>
                           <span className="muted mono settings-inline-value">{daoId}</span>
                         </div>
                         <div className="reputation-space-actions">
@@ -8990,7 +9064,7 @@ function PopupPage() {
     return (
       <Card className="reclaim-rent-card">
         <div className="inline reclaim-rent-heading">
-          <button type="button" className="send-back-button" onClick={() => setView('settings')} aria-label="Back to settings"><ArrowLeft size={20} /></button>
+          <button type="button" className="send-back-button" onClick={() => setView(isPopupSurface ? 'settings' : 'security')} aria-label={isPopupSurface ? 'Back to settings' : 'Back to tools'}><ArrowLeft size={20} /></button>
           <div>
             <h2>Reclaim SOL rent</h2>
             <p className="muted">Close empty token accounts you no longer need and recover their rent deposit.</p>
@@ -9077,6 +9151,15 @@ function PopupPage() {
 
     return (
       <>
+        {!isPopupSurface ? <IdentityTools key={`${activePublicKey}:${wallet.selectedNetwork}`}
+          owner={activePublicKey ?? ''} report={securityReport} loading={securityLoading}
+          error={securityError} network={wallet.selectedNetwork}
+          onAction={(action) => {
+            if (action === 'rent') setView('reclaim-rent');
+            else if (action === 'send') openSend('sol');
+            else { setHomeTab(action === 'stake' ? 'staking' : action); setView('home'); }
+          }}
+        /> : null}
         <Card title="Delegation & authority scan">
           <div className="stack">
             <div className="inline security-actions">
@@ -9407,7 +9490,7 @@ function PopupPage() {
     );
   }
 
-  function renderSwap() {
+  function renderSwap(embedded = false) {
     if (isWatchOnlyWallet) {
       return (
         <Card title="Watch-only wallet">
@@ -9503,7 +9586,7 @@ function PopupPage() {
               >
                 Swap again
               </Button>
-              <Button onClick={() => setView('home')}>Done</Button>
+              <Button onClick={() => { if (embedded) { setSwapResult(null); setSwapQuote(null); setSwapAmount(''); } else setView('home'); }}>Done</Button>
             </div>
           </ActionStatusCard>
           {swapError ? <p className="danger-box">{swapError}</p> : null}
@@ -9570,13 +9653,14 @@ function PopupPage() {
                     className={`send-select-shell send-select-button swap-select-shell ${swapInputPickerOpen ? 'open' : ''}`.trim()}
                     aria-label="Select input asset"
                     aria-expanded={swapInputPickerOpen}
-                    onClick={() => setSwapInputPickerOpen((value) => !value)}
+                    onClick={() => { setSwapOutputPickerOpen(false); setSwapInputPickerOpen((value) => !value); }}
                   >
                     <SwapAssetSelectorSummary option={selectedSwapInputAsset} />
                     <ChevronDown className="send-select-chevron" size={18} />
                   </button>
                   {swapInputPickerOpen ? (
-                    <div className="send-asset-menu swap-asset-menu">
+                    <div className="send-asset-menu swap-asset-menu" onKeyDown={(event) => { if (event.key === 'Escape') { setSwapInputPickerOpen(false); event.stopPropagation(); (event.currentTarget.parentElement?.querySelector('.swap-select-shell') as HTMLButtonElement | null)?.focus(); } }}>
+                      <div className="swap-picker-heading"><strong>Select sell token</strong><button type="button" aria-label="Close sell token picker" onClick={() => setSwapInputPickerOpen(false)}><X size={18} /></button></div>
                       <label className="swap-asset-search">
                         <Search size={17} />
                         <input
@@ -9647,7 +9731,7 @@ function PopupPage() {
                     className={`send-select-shell send-select-button swap-select-shell ${swapOutputPickerOpen ? 'open' : ''}`.trim()}
                     aria-label="Select output asset"
                     aria-expanded={swapOutputPickerOpen}
-                    onClick={() => setSwapOutputPickerOpen((value) => !value)}
+                    onClick={() => { setSwapInputPickerOpen(false); setSwapOutputPickerOpen((value) => !value); }}
                   >
                     <SwapAssetSelectorSummary
                       option={{
@@ -9667,7 +9751,8 @@ function PopupPage() {
                     <ChevronDown className="send-select-chevron" size={18} />
                   </button>
                   {swapOutputPickerOpen ? (
-                    <div className="send-asset-menu swap-asset-menu">
+                    <div className="send-asset-menu swap-asset-menu" onKeyDown={(event) => { if (event.key === 'Escape') { setSwapOutputPickerOpen(false); event.stopPropagation(); (event.currentTarget.parentElement?.querySelector('.swap-select-shell') as HTMLButtonElement | null)?.focus(); } }}>
+                      <div className="swap-picker-heading"><strong>Select buy token</strong><button type="button" aria-label="Close buy token picker" onClick={() => setSwapOutputPickerOpen(false)}><X size={18} /></button></div>
                       <label className="swap-asset-search">
                         <Search size={17} />
                         <input
@@ -10297,7 +10382,7 @@ function PopupPage() {
                   : view === 'approval'
                     ? 'Review request'
                   : view === 'security'
-                    ? 'Security'
+                    ? (isPopupSurface ? 'Security' : 'Tools')
                     : view === 'reclaim-rent'
                       ? 'Reclaim rent'
                     : 'Settings'
@@ -10325,7 +10410,7 @@ function PopupPage() {
                       ? 'Recover SOL held by empty token accounts.'
                     : 'Manage your wallet and connections.'
       }
-      actions={view === 'home' || view === 'send' || view === 'bridge' ? undefined : <div className="inline popup-actions">{renderWalletMenu()}</div>}
+      actions={view === 'home' || view === 'send' || view === 'bridge' ? undefined : <div className="inline popup-actions">{isPopupSurface ? <button type="button" className="mini-icon-button subtle" onClick={() => void handleOpenInTab()} aria-label="Expand wallet" title="Expand wallet"><Maximize2 size={18} /></button> : null}{renderWalletMenu()}</div>}
     >
       {view === 'home' ? renderHome() : null}
       {view === 'discover' ? renderDiscover() : null}
@@ -10335,7 +10420,7 @@ function PopupPage() {
       {view === 'approval' ? renderApproval() : null}
       {view === 'security' ? renderSecurity() : null}
       {view === 'reclaim-rent' ? renderReclaimRent() : null}
-      {view === 'swap' ? renderSwap() : null}
+      {view === 'swap' ? <div className="standalone-swap"><button type="button" className="workspace-back" disabled={submittingSwap} onClick={() => setView(assetDetails ? 'asset' : 'home')}><ArrowLeft size={18} /> {assetDetails ? 'Back to token' : 'Back to wallet'}</button>{renderSwap()}</div> : null}
       {view === 'bridge' ? renderBridge() : null}
       {view === 'settings' ? renderSettings() : null}
       {surfaceError && view !== 'send' ? <p className="danger-box">{surfaceError}</p> : null}
@@ -10351,6 +10436,7 @@ function PopupPage() {
         >
           <Home size={20} /><span className="desktop-nav-label">Overview</span>
         </button>
+        {isSolanaChain ? <button type="button" className={`bottom-nav-item desktop-tools-nav ${view === 'security' || view === 'reclaim-rent' ? 'active' : ''}`} onClick={() => setView('security')} aria-label="Tools" title="Tools"><ShieldAlert size={20} /><span className="desktop-nav-label">Tools</span></button> : null}
         <div className="desktop-dashboard-navigation">
           <span className="dashboard-eyebrow">Your wallet</span>
           {([
