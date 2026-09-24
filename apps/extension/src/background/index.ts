@@ -1,3 +1,5 @@
+import { buildTensorTransaction, inspectTensorNft } from './tensor-marketplace';
+import { getBase58Decoder } from '@solana/web3-v2';
 import { describeGovernanceVote } from '../../../../packages/solana/src/governanceVote';
 import { fetchVerificationRpc } from '../../../../packages/solana/src/verificationRpc';
 import { createGovernanceRpcConnection, createGovernanceRpcReadSession } from '../../../../packages/solana/src/governanceRpc';
@@ -159,7 +161,7 @@ import {
 } from '@solana/spl-governance';
 import { sendEthereumTokenWithLedger, sendEthereumWithLedger } from '../../../../packages/ethereum/src/ledger';
 import { sendMonadTokenWithLedger, sendMonadWithLedger } from '../../../../packages/monad/src/ledger';
-import { signAndSendLedgerSerializedTransaction, signAndSendLedgerTransaction } from '../../../../packages/solana/src/ledger';
+import { signLedgerSerializedTransaction, signAndSendLedgerSerializedTransaction, signAndSendLedgerTransaction } from '../../../../packages/solana/src/ledger';
 import { sendSuiCoinWithLedger, sendSuiWithLedger, signSuiTransactionBytesWithLedger } from '../../../../packages/sui/src/ledger';
 import {
   createSuiClient,
@@ -5254,6 +5256,93 @@ class WalletController {
     };
   }
 
+  private readonly tensorPreviews = new Map<string, Awaited<ReturnType<typeof buildTensorTransaction>> & { owner: string; walletId: string; mint: string; action: 'list' | 'cancel'; expiresAt: number }>();
+  private readonly tensorBusy = new Set<string>();
+
+  private async tensorContext(expectedOwner: string) {
+    const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    const account = selectedWallet.accounts.find(account => account.id === selectedWallet.selectedAccountId);
+    if (selectedWallet.chain !== 'solana' || walletState.selectedNetwork !== 'mainnet-beta') throw new Error('Tensor trading is available on Solana mainnet only.');
+    if (!account || account.publicKey !== expectedOwner) throw new Error('Wallet changed. Reopen the NFT and review again.');
+    return { walletState, selectedWallet, account, connection: this.createConnection('mainnet-beta', walletState) };
+  }
+
+  async tensorStatus(mint: string, owner: string) {
+    const { connection } = await this.tensorContext(owner);
+    return (await inspectTensorNft(connection, owner, mint)).status;
+  }
+
+  async tensorListings(owner: string) {
+    const { connection } = await this.tensorContext(owner);
+    const key = 'grape:tensor:mainnet:' + owner;
+    const saved = (await chrome.storage.local.get(key))[key] ?? {};
+    const results = await Promise.allSettled(Object.keys(saved).map(mint => inspectTensorNft(connection, owner, mint)));
+    return results.flatMap((result, index) => result.status === 'fulfilled'
+      ? [result.value.status]
+      : [{ mint: Object.keys(saved)[index], owner, supported: false, listing: null, reason: 'Unable to refresh this listing. Try again or open Tensor.' }]);
+  }
+
+  async tensorPreview(input: { owner: string; mint: string; action: 'list' | 'cancel'; price?: string }) {
+    const { connection, selectedWallet } = await this.tensorContext(input.owner);
+    this.assertInteractiveWallet(selectedWallet);
+    const built = await buildTensorTransaction(connection, input.owner, input.mint, input.action, input.price);
+    for (const [id, preview] of this.tensorPreviews) if (preview.expiresAt < Date.now()) this.tensorPreviews.delete(id);
+    const id = crypto.randomUUID(), expiresAt = Date.now() + 45_000;
+    this.tensorPreviews.set(id, { ...built, owner: input.owner, walletId: selectedWallet.id, mint: input.mint, action: input.action, expiresAt });
+    return { id, mint: input.mint, owner: input.owner, action: input.action, priceLamports: built.priceLamports,
+      networkFeeLamports: built.networkFeeLamports, estimatedDebitLamports: built.estimatedDebitLamports, expiresAt };
+  }
+
+  async tensorExecute(input: { previewId: string; owner: string; password?: string }) {
+    const preview = this.tensorPreviews.get(input.previewId);
+    if (!preview || preview.expiresAt < Date.now() || preview.owner !== input.owner) throw new Error('Review expired. Review the transaction again.');
+    const busyKey = input.owner + ':' + preview.mint;
+    if (this.tensorBusy.has(busyKey)) throw new Error('A transaction for this NFT is already in progress.');
+    this.tensorBusy.add(busyKey);
+    this.tensorPreviews.delete(input.previewId);
+    try {
+      const { connection, selectedWallet, account } = await this.tensorContext(input.owner);
+      this.assertInteractiveWallet(selectedWallet);
+      if (selectedWallet.id !== preview.walletId) throw new Error('Wallet changed. Review again.');
+      const key = 'grape:tensor:mainnet:' + input.owner;
+      const saved = (await chrome.storage.local.get(key))[key] ?? {};
+      const pending = saved[preview.mint];
+      if (pending?.signature && pending?.lastValidBlockHeight) {
+        const status = (await connection.getSignatureStatuses([pending.signature], { searchTransactionHistory: true })).value[0];
+        if (status && !status.err && status.confirmationStatus !== 'confirmed' && status.confirmationStatus !== 'finalized') throw new Error('Previous transaction is still confirming. Refresh before trying again.');
+        if (!status && await connection.getBlockHeight('confirmed') <= pending.lastValidBlockHeight) throw new Error('Previous submission is still pending. Refresh before trying again.');
+      }
+      const fresh = await inspectTensorNft(connection, input.owner, preview.mint);
+      if (!fresh.status.supported || (preview.action === 'list' ? !!fresh.listing : !fresh.listing)) throw new Error('NFT listing state changed. Refresh and review again.');
+      const secret = selectedWallet.signer.kind === 'ledger' ? null : await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
+      await this.tensorContext(input.owner);
+      if (Date.now() > preview.expiresAt || await connection.getBlockHeight('confirmed') > preview.lifetime.lastValidBlockHeight) throw new Error('Review expired. Review again.');
+      let transaction = preview.transaction;
+      if (selectedWallet.signer.kind === 'ledger') {
+        const serialized = transaction.serialize({ requireAllSignatures: false }).toString('base64');
+        transaction = Transaction.from(Buffer.from(await signLedgerSerializedTransaction(serialized, account.publicKey, selectedWallet.signer.derivationPath), 'base64'));
+      } else {
+        transaction.sign(this.resolveSolanaSignerForWallet(secret as VaultSecret, selectedWallet, account.publicKey));
+      }
+      const bytes = transaction.serialize();
+      const signature = getBase58Decoder().decode(transaction.signature!);
+      // Persist the signature before sending: timeouts must not invite duplicate submissions.
+      const latest = (await chrome.storage.local.get(key))[key] ?? {};
+      await chrome.storage.local.set({ [key]: { ...latest, [preview.mint]: { signature, lastValidBlockHeight: preview.lifetime.lastValidBlockHeight } } });
+      try {
+        await connection.sendRawTransaction(bytes, { skipPreflight: false, maxRetries: 2 });
+        const confirmation = await connection.confirmTransaction({ signature, ...preview.lifetime }, 'confirmed');
+        if (confirmation.value.err) return { signature, confirmed: false, error: 'Transaction failed on chain. Refresh the listing before retrying.' };
+      } catch {
+        return { signature, confirmed: false, error: 'Submission is pending or uncertain. Check the transaction and refresh before trying again.' };
+      }
+      await this.invalidateAssetCache(this.getAssetCacheKey(selectedWallet.id, 'mainnet-beta', account.publicKey));
+      return { signature, confirmed: true };
+    } finally {
+      this.tensorBusy.delete(busyKey);
+    }
+  }
+
   async getReclaimableTokenAccounts() {
     const { walletState, selectedWallet } = await this.ensureReadyWallet();
     if (selectedWallet.chain !== 'solana') {
@@ -9486,6 +9575,17 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
             })
           );
           break;
+        case 'wallet_tensor_status':
+        case 'wallet_tensor_listings':
+        case 'wallet_tensor_preview':
+        case 'wallet_tensor_execute': {
+          if (_sender.id !== chrome.runtime.id || !_sender.url?.startsWith(chrome.runtime.getURL(''))) throw new Error('Tensor actions require the wallet interface.');
+          if (message.type === 'wallet_tensor_status') sendResponse(await controller.tensorStatus(message.mint, message.owner));
+          else if (message.type === 'wallet_tensor_listings') sendResponse(await controller.tensorListings(message.owner));
+          else if (message.type === 'wallet_tensor_preview') sendResponse(await controller.tensorPreview(message));
+          else sendResponse(await controller.tensorExecute(message));
+          break;
+        }
         case 'wallet_get_reclaimable_token_accounts':
           sendResponse(await controller.getReclaimableTokenAccounts());
           break;

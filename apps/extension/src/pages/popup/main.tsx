@@ -9,6 +9,8 @@ import { CommunityPanel } from './CommunityPanel';
 import { CommunityDashboard } from './CommunityDashboard';
 import { CommunityWorkspace } from './CommunityWorkspace';
 import { IdentityTools } from './IdentityTools';
+import { NftGallery } from './NftGallery';
+import { TensorMarketplace, TensorListings } from './TensorMarketplace';
 import { communitySpaceIds } from './communityAssociations';
 import type { FormEvent, ReactNode } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -1407,13 +1409,16 @@ function SwapAssetSelectorSummary(props: { option: AssetPickerDisplayOption }) {
 }
 
 function CollectibleCard(props: { item: CollectibleItem; onSelect: () => void }) {
+  const [imageFailed, setImageFailed] = useState(false);
+  useEffect(() => setImageFailed(false), [props.item.imageUri]);
   const title = props.item.name ?? props.item.collectionName ?? 'Collectible';
 
   return (
     <button type="button" className="collectible-card collectible-card-button" onClick={props.onSelect}>
       <div className="collectible-cover">
-        {props.item.imageUri ? (
+        {props.item.imageUri && !imageFailed ? (
           <img
+            onError={() => setImageFailed(true)}
             className="collectible-cover-image"
             src={props.item.imageUri}
             alt={title}
@@ -1421,7 +1426,7 @@ function CollectibleCard(props: { item: CollectibleItem; onSelect: () => void })
             referrerPolicy="no-referrer"
           />
         ) : (
-          <div className="collectible-cover-fallback">{title.slice(0, 1).toUpperCase()}</div>
+          <div className="collectible-cover-fallback"><span>{title.slice(0, 1).toUpperCase()}</span><small>Artwork unavailable</small></div>
         )}
       </div>
       <div className="collectible-copy">
@@ -6646,17 +6651,12 @@ function PopupPage() {
           ) : null}
 
           <Tabs.Content value="collectibles">
-              <Card className="asset-panel-card">
+              <Card className="asset-panel-card nft-gallery-panel">
+              {isSolanaChain && wallet.selectedNetwork === "mainnet-beta" && activePublicKey ? <TensorListings key={activePublicKey} owner={activePublicKey} unlocked={canUseUnlockedSigner || state?.activeWallet?.signerKind === "ledger"} watchOnly={isWatchOnlyWallet} /> : null}
               {collectibleItems.length > 0 ? (
-                <div className="collectible-grid">
-                  {collectibleItems.map((item) => (
-                    <CollectibleCard
-                      key={`${item.collectionId ?? 'collectible'}:${item.mint}`}
-                      item={item}
-                      onSelect={() => openCollectibleDetails(item)}
-                    />
-                  ))}
-                </div>
+                <NftGallery key={activePublicKey + ':' + wallet.selectedNetwork} items={collectibleItems} renderItem={(item) => (
+                  <CollectibleCard key={item.mint} item={item} onSelect={() => openCollectibleDetails(item)} />
+                )} />
               ) : (
                 <p className="muted">No NFT collections found for this wallet on {wallet.selectedNetwork}.</p>
               )}
@@ -7622,7 +7622,7 @@ function PopupPage() {
       !requiresValueConfirmation || burnConfirmation.trim().toUpperCase() === burnConfirmationPhrase;
 
     return (
-      <div className={isCollectibleView ? undefined : "asset-desktop-dashboard"}>
+      <div className={isCollectibleView ? "nft-detail-workspace" : "asset-desktop-dashboard"}>
         <Card className="asset-detail-card">
           <div className="send-flow-header asset-detail-topbar">
             <button type="button" className="send-back-button" onClick={() => setView('home')} aria-label="Back to wallet">
@@ -7841,6 +7841,8 @@ function PopupPage() {
             </div>
           ) : null}
         </Card>
+
+        {isCollectibleView && isSolanaChain && selectedCollectible ? <details className="tensor-marketplace-disclosure"><summary>Sell or manage on Tensor<ChevronDown size={16} /></summary><TensorMarketplace key={activePublicKey + selectedCollectible.mint} owner={activePublicKey ?? ""} unlocked={canUseUnlockedSigner || state?.activeWallet?.signerKind === "ledger"} onChanged={() => void refresh()} mint={selectedCollectible.mint} network={wallet.selectedNetwork} watchOnly={isWatchOnlyWallet} /></details> : null}
 
         {!isCollectibleView ? (
           <TokenPriceChart
