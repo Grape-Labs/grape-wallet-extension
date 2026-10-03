@@ -9712,7 +9712,11 @@ function PopupPage() {
                 </div>
                 <div className="swap-leg-meta muted">
                   <span>{inputValueUsd ?? '$0.00'}</span>
-                  <span>Balance: {selectedSwapInputAsset.balance}</span>
+                  <div className="swap-balance-shortcuts">
+                    <span title={selectedSwapInputAsset.balance}>Balance: {selectedSwapInputAsset.balance}</span>
+                    <button type="button" aria-label="Use half of available sell balance" onClick={() => setSwapAmountByRatio(0.5)}>Half</button>
+                    <button type="button" aria-label="Use maximum available sell balance" onClick={() => setSwapAmountByRatio(1)}>Max</button>
+                  </div>
                 </div>
               </div>
             </section>
@@ -9819,19 +9823,6 @@ function PopupPage() {
                 </div>
               </div>
             </section>
-          </div>
-
-          <div className="swap-quick-ratios">
-            {[0.25, 0.5, 0.75, 1].map((ratio) => (
-              <button
-                key={ratio}
-                type="button"
-                className="swap-ratio-chip"
-                onClick={() => setSwapAmountByRatio(ratio)}
-              >
-                {ratio === 1 ? 'Max' : `${Math.round(ratio * 100)}%`}
-              </button>
-            ))}
           </div>
 
           <div className="swap-settings-row">

@@ -1,3 +1,70 @@
+# Grape Wallet 0.5.257
+
+**Version 0.5.257** brings an expanded wallet dashboard, a community workspace, a redesigned NFT gallery, and native Tensor listing tools. This entry covers extension improvements since 0.5.238; the previous release notes are preserved below.
+
+## Highlights
+
+- Explore a more balanced desktop dashboard with sidebar navigation, portfolio allocation, asset details, and inline swap controls.
+- Browse collectibles in a searchable gallery with collection filters and adjustable card density.
+- List supported Solana NFTs on Tensor and cancel listings directly from Grape, without a Tensor API key.
+- Bring DAO participation, reputation, and verification together in the community workspace.
+- Read chain-specific ecosystem news in Discover.
+
+## NFTs and Tensor
+
+- Added artwork-focused gallery cards, collection counts, search by name or mint, collection filters, and roomy or compact layouts.
+- Improved missing-image placeholders and responsive gallery sizing.
+- Kept **View on Tensor** inside NFT details, removing repeated marketplace links from gallery cards.
+- Moved marketplace controls below the NFT header into a compact, collapsed **Sell or manage on Tensor** section.
+- Added fixed-price SOL listings with a seven-day expiry and listing cancellation for supported NFTs on Solana mainnet.
+- Added transaction simulation and a review of the listing price, network fee, and estimated wallet debit including account rent before signing.
+- Supports local wallet signing and Ledger signing; watch-only wallets cannot list or cancel.
+- Tracks listings submitted through Grape locally so they can still be managed after the NFT moves into Tensor escrow.
+- Hides the listings section when no listing accounts are found for the current wallet and removes **Not listed** entries.
+- Added transaction links and pending-confirmation handling to reduce accidental duplicate submissions.
+- Fixed the Tensor SDK browser build failure caused by a Node-only metadata dependency.
+
+## Dashboard and appearance
+
+- Refined the Grape theme with dark navy surfaces, subtle violet gradients, and coordinated borders and controls.
+- Improved expanded-view proportions, asset rows, hover states, Discover cards, and Settings spacing.
+- Added a dedicated expand icon to the extension popup and aligned header icon sizes.
+- Simplified the balance header: click the total to hide or reveal balances, with an inline eye icon shown on hover or keyboard focus.
+- Renamed **Identity & tools** to **Tools** and kept it in the expanded view, restoring the popup’s three-item bottom navigation.
+- Added **Reclaim rent** to Tools alongside wallet maintenance and permission inspection.
+
+## Swap and activity
+
+- Brought swap controls inline with the expanded asset dashboard and improved back navigation.
+- Widened token selectors with readable names, balances, search, and a close control.
+- Fixed dropdown stacking so token choices appear above the quote and swap buttons.
+- Simplified activity rows with token icons, transfer direction, counterparties, and signed amounts when transaction data provides them.
+- Preserved neutral labels when transfer details are unavailable and retained failed or uncertain transaction states.
+
+## Community and governance
+
+- Added a community workspace connecting DAO participation with explicitly associated reputation and verification spaces.
+- Uses Grape’s known shared realm address for its reputation and verification integrations; other DAOs are not assumed to share those addresses.
+- Improved Governance spacing and direct navigation to participation settings.
+- Added a fallback RPC path for native stake-account discovery when the configured provider rejects the query.
+
+## Discover news
+
+- Added Solana ecosystem news alongside developer changelogs.
+- Added feeds from the Ethereum Foundation, Sui, and Zcash Foundation for their respective chains.
+- Includes a direct Monad news link where a usable feed is unavailable.
+- Added per-source caching, deduplication, date ordering, and fallback source links when feeds fail.
+
+## Availability and validation
+
+- The dashboard, gallery, Tools, feed, and Tensor changes in this entry apply to the extension. Native mobile parity is not included in this update.
+- Native Tensor listing supports eligible original SPL-token NFTs and programmable NFTs without custom authorization rule sets. Unsupported assets can be opened on Tensor from their detail view.
+- Compressed NFTs, Token-2022 NFTs, and Metaplex Core assets are not supported by the native listing flow. Instant sales and offer discovery are not included.
+- The listings section tracks submissions made through this Grape installation; it does not discover every listing made elsewhere.
+- Extension TypeScript checks and production builds passed. The Tensor helper and URL tests passed (13 tests). A live NFT listing or cancellation has not been submitted during validation.
+
+---
+
 # Grape Wallet 0.5.238
 
 **Version 0.5.238** expands Bridge to external recipients, adds Zcash apps and tools, introduces soft color fades for the Grape theme, and makes mobile browsing more compact. This build also includes the governance, Community, private-send, and transparent Zcash improvements described below.
