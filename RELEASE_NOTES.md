@@ -1,3 +1,15 @@
+# Grape Wallet 0.5.258
+
+**Version 0.5.258** simplifies swap amount selection in the extension.
+
+## Swap controls
+
+- Added **Half** and **Max** shortcuts beside the sell-token balance, replacing the separate 25%, 50%, 75%, and Max button row.
+- Long balance values now truncate to fit the available space, with the full value available on hover.
+- Added hover styling and a visible keyboard-focus outline for the new shortcuts.
+
+---
+
 # Grape Wallet 0.5.257
 
 **Version 0.5.257** brings an expanded wallet dashboard, a community workspace, a redesigned NFT gallery, and native Tensor listing tools. This entry covers extension improvements since 0.5.238; the previous release notes are preserved below.

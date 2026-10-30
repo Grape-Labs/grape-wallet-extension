@@ -711,43 +711,17 @@ function formatVoteSourceCount(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? '' : 's'}`;
 }
 
-function getGovernanceVoteSourceStatusPills(summary: GovernanceVoteSourceSummary): Array<{
-  label: string;
-  tone: 'neutral' | 'success';
-}> {
-  const pills: Array<{ label: string; tone: 'neutral' | 'success' }> = [];
-  if (summary.directVoted > 0) {
-    pills.push({ label: 'Wallet voted', tone: 'success' });
-  }
-  if (summary.directAvailable > 0) {
-    pills.push({ label: 'Wallet vote open', tone: 'neutral' });
-  }
-  if (summary.delegatedVoted > 0) {
-    pills.push({
-      label: `${formatVoteSourceCount(summary.delegatedVoted, 'delegated vote')} cast`,
-      tone: 'success'
-    });
-  }
-  if (summary.delegatedAvailable > 0) {
-    pills.push({
-      label: `${formatVoteSourceCount(summary.delegatedAvailable, 'delegated vote')} open`,
-      tone: 'neutral'
-    });
-  }
-  return pills;
-}
-
 function getGovernanceVoteActionNote(summary: GovernanceVoteSourceSummary): string | null {
   if (summary.votedCount === 0 || summary.availableCount === 0) {
     return null;
   }
   if (summary.directVoted > 0 && summary.delegatedAvailable > 0 && summary.directAvailable === 0) {
-    return `Your wallet already voted. The actions below apply only to the remaining ${formatVoteSourceCount(summary.delegatedAvailable, 'delegated vote')}.`;
+    return `Vote with ${formatVoteSourceCount(summary.delegatedAvailable, 'remaining delegated vote')}.`;
   }
   if (summary.delegatedVoted > 0 && summary.directAvailable > 0 && summary.delegatedAvailable === 0) {
-    return 'A delegated vote source already voted. The actions below apply only to your wallet vote.';
+    return 'Vote with your wallet. Delegated votes are already recorded.';
   }
-  return `Some vote sources already voted. The actions below apply only to the remaining ${formatVoteSourceCount(summary.availableCount, 'vote source')}.`;
+  return `Vote with ${formatVoteSourceCount(summary.availableCount, 'remaining vote source')}.`;
 }
 
 function formatRelativeTimeFromNow(targetUnixSeconds: number, nowUnixSeconds = Math.floor(Date.now() / 1000)): string {
@@ -826,25 +800,13 @@ function getGovernanceProposalTimeMeta(
   };
 }
 
-function formatVotingPower(rawAmount: bigint, decimals: number, truncateFraction = false): string {
-  if (decimals === 0) return formatWholeNumberString(rawAmount.toString());
-  const divisor = BigInt(10 ** decimals);
-  const whole = rawAmount / divisor;
-  const remainder = rawAmount % divisor;
-  if (truncateFraction || remainder === BigInt(0)) return formatWholeNumberString(whole.toString());
-  const fracStr = remainder.toString().padStart(decimals, '0').replace(/0+$/, '').slice(0, 4);
-  return `${formatWholeNumberString(whole.toString())}.${fracStr}`;
-}
-
-function getGovernanceVoteDecimals(
-  proposal: WalletGovernanceResponse['proposals'][number],
-  daoSummary: WalletGovernanceResponse['daos'][number] | null
-): number {
-  if (!daoSummary) {
-    return 0;
+function formatVotingPower(rawAmount: bigint, decimals: number): string {
+  const amount = Number(rawAmount) / 10 ** decimals;
+  for (const [scale, suffix] of [[1e12, 't'], [1e9, 'b'], [1e6, 'm'], [1e3, 'k']] as const) {
+    if (Math.abs(amount) >= scale * 0.99995) return `${Number((amount / scale).toFixed(1))}${suffix}`;
   }
-
-  return proposal.governingTokenMint === daoSummary.communityMint ? daoSummary.communityTokenDecimals : 0;
+  if (amount > 0 && amount < 0.01) return '<0.01';
+  return amount.toLocaleString('en-US', { maximumFractionDigits: 2 });
 }
 
 function buildOgReputationSpaceUrl(daoId: string): string {
@@ -5075,22 +5037,17 @@ function PopupPage() {
     const availableVoteSources = proposalVoteSources.filter((source) => !source.hasVoted);
     const hasProposalVoteSources = proposalVoteSources.length > 0;
     const hasDelegatedProposalVoteSource = availableVoteSources.some((source) => source.isDelegate);
-    const voteSourceStatusPills = getGovernanceVoteSourceStatusPills(voteSourceSummary);
+    const directVote = proposal.recordedVotes?.find((vote) => !vote.isDelegate);
+    const results = [
+      ...proposal.choices.map((choice) => ({ label: choice.label, weight: BigInt(choice.voteWeight) })),
+      { label: 'Deny', weight: BigInt(proposal.denyVotes) + BigInt(proposal.noVotes) },
+      { label: 'Abstain', weight: BigInt(proposal.abstainVotes) }
+    ].filter((result, index) => index < proposal.choices.length || result.weight > 0n);
+    const totalWeight = results.reduce((total, result) => total + result.weight, 0n);
     const timeMeta = getGovernanceProposalTimeMeta(proposal, nowUnixSeconds);
     const canVoteNow = proposal.canVote && timeMeta.votingWindowOpen;
     const proposalUrl = buildGovernanceProposalUrl(proposal.daoId, proposal.proposalId);
-    const voteDecimals = getGovernanceVoteDecimals(proposal, daoSummary);
     const voteActionNote = canVoteNow ? getGovernanceVoteActionNote(voteSourceSummary) : null;
-    const hasCastVote = voteSourceSummary.votedCount > 0;
-    const participationMessage = canVoteNow
-      ? hasCastVote
-        ? `Vote recorded. ${formatVoteSourceCount(voteSourceSummary.availableCount, 'vote source')} still available.`
-        : 'Your vote is still open. Choose an option below to participate.'
-      : hasCastVote
-        ? voteSourceSummary.availableCount === 0
-          ? 'This wallet has voted on this proposal.'
-          : `This wallet has voted with ${formatVoteSourceCount(voteSourceSummary.votedCount, 'vote source')}.`
-        : null;
     const inactiveVotingPowerMessage =
       !timeMeta.votingWindowOpen && timeMeta.noteText
         ? timeMeta.noteText
@@ -5125,64 +5082,34 @@ function PopupPage() {
             <strong className="governance-proposal-title">{proposal.proposalName}</strong>
             <div className="governance-proposal-badges">
               <StatusPill tone="neutral">{formatGovernanceVotingPowerType(proposal.votingPowerType)}</StatusPill>
-              {proposal.isDelegate ? (
-                <StatusPill tone="neutral">Delegate</StatusPill>
-              ) : null}
               <StatusPill tone={timeMeta.badgeTone}>
                 {timeMeta.badgeLabel}
               </StatusPill>
-              {timeMeta.votingWindowOpen && timeMeta.metaText ? (
-                <StatusPill tone="neutral">{timeMeta.metaText}</StatusPill>
-              ) : null}
-              <button
-                type="button"
-                className="governance-proposal-link"
-                onClick={() => window.open(proposalUrl, '_blank', 'noopener,noreferrer')}
-                aria-label={`Open ${proposal.proposalName} on governance.so`}
-                title="Open on governance.so"
-              >
-                <span>Open</span>
-                <ExternalLink size={13} />
-              </button>
             </div>
-            <span className="governance-proposal-meta">
-              {proposal.realmName} • {proposal.state}
-              {proposal.votingEndsAt ? ` • ${new Date(proposal.votingEndsAt * 1000).toLocaleString()}` : ''}
-            </span>
+            {timeMeta.metaText ? <span className="governance-proposal-meta">{timeMeta.metaText}</span> : null}
           </div>
         </div>
-        {proposal.recordedVotes?.map((vote) => (
-          <div key={vote.governingTokenOwner} className="governance-participation-status governance-participation-status-voted">
-            <strong>{vote.isDelegate ? 'Delegated vote · ' + vote.governingTokenOwner.slice(0, 4) + '…' + vote.governingTokenOwner.slice(-4) : 'You voted'}</strong>
-            <span>{vote.choice}</span>
-          </div>
-        ))}
-        <div className="governance-proposal-metrics">
-          {proposal.choices.map((choice) => (
-            <span key={choice.rank}>{choice.label}: {formatVotingPower(BigInt(choice.voteWeight), voteDecimals, true)}</span>
-          ))}
-          {BigInt(proposal.abstainVotes) > 0n ? <span>Abstain {formatVotingPower(BigInt(proposal.abstainVotes), voteDecimals, true)}</span> : null}
-          {BigInt(proposal.noVotes) > BigInt(0) ? <span>No {formatVotingPower(BigInt(proposal.noVotes), voteDecimals, true)}</span> : null}
-          {BigInt(proposal.denyVotes) > BigInt(0) ? <span>Deny {formatVotingPower(BigInt(proposal.denyVotes), voteDecimals, true)}</span> : null}
+        <div className="governance-participation-summary" role="status">
+          <strong>{directVote ? `Your vote: ${directVote.choice}` : voteSourceSummary.directVoted > 0 ? 'Your vote is recorded' : voteSourceSummary.directAvailable > 0 ? 'Your vote is available' : 'Your participation'}</strong>
+          {voteSourceSummary.delegatedVoted + voteSourceSummary.delegatedAvailable > 0 ? (
+            <span className="muted">Delegated votes: {voteSourceSummary.delegatedVoted} cast{voteSourceSummary.delegatedAvailable > 0 ? ` · ${voteSourceSummary.delegatedAvailable} available` : ''}</span>
+          ) : null}
+          {!canVoteNow && (!proposal.hasVoted || !timeMeta.votingWindowOpen) ? <span className="muted">{inactiveVotingPowerMessage}</span> : null}
         </div>
-        {timeMeta.votingWindowOpen && participationMessage ? (
-          <div
-            className={`governance-participation-status ${canVoteNow ? 'governance-participation-status-action' : 'governance-participation-status-voted'}`}
-            role="status"
-          >
-            <strong>{canVoteNow ? (hasCastVote ? 'More voting power available' : 'Vote on this proposal') : 'Voted'}</strong>
-            <span>{participationMessage}</span>
+        {totalWeight > 0n ? (
+          <div className="governance-results">
+            <span className="muted">Current results · share of cast vote weight</span>
+            {results.map((result, index) => {
+              const percentage = Number((result.weight * 1000n + totalWeight / 2n) / totalWeight) / 10;
+              return (
+                <div key={index} className="governance-result-row">
+                  <div className="governance-result-labels"><span>{result.label}</span><span>{percentage}%</span></div>
+                  <div className="governance-result-track" aria-hidden="true"><div style={{ width: `${percentage}%` }} /></div>
+                </div>
+              );
+            })}
           </div>
-        ) : null}
-        {voteSourceStatusPills.length > 0 ? (
-          <div className="governance-vote-source-pills">
-            {voteSourceStatusPills.map((pill) => (
-              <StatusPill key={`${proposal.proposalId}:${pill.label}`} tone={pill.tone}>
-                {pill.label}
-              </StatusPill>
-            ))}
-          </div>
-        ) : null}
+        ) : <span className="muted">No votes cast yet</span>}
         {canVoteNow ? (
           <>
             {voteActionNote ? <p className="muted governance-proposal-note">{voteActionNote}</p> : null}
@@ -5237,11 +5164,20 @@ function PopupPage() {
               ) : null}
             </div>
           </>
-        ) : (
-          <p className="muted governance-proposal-note">
-            {inactiveVotingPowerMessage}
-          </p>
-        )}
+        ) : null}
+        <details className="governance-proposal-details">
+          <summary>More details</summary>
+          <div className="governance-results">
+            <span className="muted">{proposal.realmName} · {proposal.state}</span>
+            {proposal.votingEndsAt ? <span className="muted">Voting deadline: {new Date(proposal.votingEndsAt * 1000).toLocaleString()}</span> : null}
+            {proposal.recordedVotes?.filter((vote) => vote.isDelegate).map((vote) => (
+              <span key={vote.governingTokenOwner} className="muted" title={vote.governingTokenOwner}>Delegate {formatAddress(vote.governingTokenOwner)}: {vote.choice}</span>
+            ))}
+            <strong>Exact vote weights (raw units)</strong>
+            {results.map((result, index) => <span key={index} className="muted">{result.label}: {formatWholeNumberString(result.weight.toString())}</span>)}
+            <a className="governance-proposal-link" href={proposalUrl} target="_blank" rel="noopener noreferrer">Open full proposal <ExternalLink size={13} /></a>
+          </div>
+        </details>
       </div>
     );
   }
@@ -6488,7 +6424,7 @@ function PopupPage() {
                 {governanceLoading ? <p className="muted">{selectedGovernanceDao ? 'Loading selected DAO proposals…' : 'Loading DAO memberships…'}</p> : null}
                 {governanceError ? <p className="danger-box">{governanceError}</p> : null}
                 {governance.warnings?.length ? <div className="danger-box">{Array.from(new Set(governance.warnings)).map((warning) => <p key={warning}>{warning}</p>)}</div> : null}
-                {governance.discoveryWarnings?.length ? <details className="muted governance-discovery-note"><summary>Additional DAO discovery is limited</summary><p>The DAOs shown above were found. Some other programs could not be fully checked.</p>{Array.from(new Set(governance.discoveryWarnings)).map((warning) => <p key={warning}>{warning}</p>)}</details> : null}
+                {!selectedGovernanceDao && !selectedCommunityId && governance.discoveryWarnings?.length ? <details className="muted governance-discovery-note"><summary>Additional DAO discovery is limited</summary><p>The DAOs shown above were found. Some other programs could not be fully checked.</p>{Array.from(new Set(governance.discoveryWarnings)).map((warning) => <p key={warning}>{warning}</p>)}</details> : null}
                 {(() => {
                   if (!selectedGovernanceDao || governanceLoading || governanceError || (governance.warnings?.length && !visibleGovernanceProposals.length)) return null;
                   const nowUnixSeconds = Math.floor(Date.now() / 1000);

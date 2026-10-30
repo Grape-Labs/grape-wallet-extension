@@ -974,6 +974,18 @@ function getCredentialInvalidMessage(kind: MobileWalletState['credentialKind']) 
   return 'Use a password with at least 8 characters.';
 }
 
+// Display only: keep full precision in governance records and transactions.
+function formatGovernanceAmount(value: string | number) {
+  const amount = Number(String(value).replace(/,/g, ''));
+  if (!Number.isFinite(amount)) return String(value);
+  const magnitude = Math.abs(amount);
+  for (const [scale, suffix] of [[1e12, 't'], [1e9, 'b'], [1e6, 'm'], [1e3, 'k']] as const) {
+    if (magnitude >= scale * 0.99995) return `${Number((amount / scale).toFixed(1))}${suffix}`;
+  }
+  if (magnitude > 0 && magnitude < 0.01) return amount < 0 ? '>−0.01' : '<0.01';
+  return amount.toLocaleString('en-US', { maximumFractionDigits: 2 });
+}
+
 function formatWholeNumberString(value: string | null | undefined) {
   if (!value) {
     return '0';
@@ -1069,40 +1081,17 @@ function formatVoteSourceCount(count: number, noun: string) {
   return `${count} ${noun}${count === 1 ? '' : 's'}`;
 }
 
-function getGovernanceVoteSourceStatusPills(summary: GovernanceVoteSourceSummary) {
-  const pills: Array<{ label: string; tone: 'neutral' | 'success' }> = [];
-  if (summary.directVoted > 0) {
-    pills.push({ label: 'Wallet voted', tone: 'success' });
-  }
-  if (summary.directAvailable > 0) {
-    pills.push({ label: 'Wallet vote open', tone: 'neutral' });
-  }
-  if (summary.delegatedVoted > 0) {
-    pills.push({
-      label: `${formatVoteSourceCount(summary.delegatedVoted, 'delegated vote')} cast`,
-      tone: 'success'
-    });
-  }
-  if (summary.delegatedAvailable > 0) {
-    pills.push({
-      label: `${formatVoteSourceCount(summary.delegatedAvailable, 'delegated vote')} open`,
-      tone: 'neutral'
-    });
-  }
-  return pills;
-}
-
 function getGovernanceVoteActionNote(summary: GovernanceVoteSourceSummary) {
   if (summary.votedCount === 0 || summary.availableCount === 0) {
     return null;
   }
   if (summary.directVoted > 0 && summary.delegatedAvailable > 0 && summary.directAvailable === 0) {
-    return `Your wallet already voted. The actions below apply only to the remaining ${formatVoteSourceCount(summary.delegatedAvailable, 'delegated vote')}.`;
+    return `Vote with ${formatVoteSourceCount(summary.delegatedAvailable, 'remaining delegated vote')}.`;
   }
   if (summary.delegatedVoted > 0 && summary.directAvailable > 0 && summary.delegatedAvailable === 0) {
-    return 'A delegated vote source already voted. The actions below apply only to your wallet vote.';
+    return 'Vote with your wallet. Delegated votes are already recorded.';
   }
-  return `Some vote sources already voted. The actions below apply only to the remaining ${formatVoteSourceCount(summary.availableCount, 'vote source')}.`;
+  return `Vote with ${formatVoteSourceCount(summary.availableCount, 'remaining vote source')}.`;
 }
 
 function formatRelativeTimeFromNow(targetUnixSeconds: number, nowUnixSeconds = Math.floor(Date.now() / 1000)) {
@@ -1483,7 +1472,7 @@ function GrapeApp() {
   const [screen, setScreen] = useState<Screen>('loading');
   const [launchStatus, setLaunchStatus] = useState('Loading your wallet state');
   const [mainTab, setMainTab] = useState<MainTab>('home');
-  const [balanceUnit, setBalanceUnit] = useState<'USDC' | 'SOL'>('USDC');
+  const [balanceUnit, setBalanceUnit] = useState<'USD' | 'SOL'>('USD');
   const [walletState, setWalletState] = useState<MobileWalletState>(createEmptyMobileWalletState());
   const [error, setError] = useState<string | null>(null);
   const [setupMode, setSetupMode] = useState<SetupMode>('create');
@@ -1640,6 +1629,7 @@ function GrapeApp() {
   const [governanceVoteError, setGovernanceVoteError] = useState<string | null>(null);
   const [governanceVoteResult, setGovernanceVoteResult] = useState<MobileGovernanceVoteResponse | null>(null);
   const [governanceShowFinalizing, setGovernanceShowFinalizing] = useState(false);
+  const [expandedGovernanceProposal, setExpandedGovernanceProposal] = useState<string | null>(null);
   const [governanceEligibility, setGovernanceEligibility] = useState<MobileGovernanceEligibleDao[]>([]);
   const [governanceEligibilityLoading, setGovernanceEligibilityLoading] = useState(false);
   const [governanceEligibilityError, setGovernanceEligibilityError] = useState<string | null>(null);
@@ -2024,7 +2014,7 @@ function GrapeApp() {
   const holdingsSummary = pricedPortfolio.count > 0
     ? balanceUnit === 'SOL' && canShowSolBalance
       ? `${(pricedPortfolio.totalUsd / solPriceUsd).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })} SOL`
-      : `${pricedPortfolio.totalUsd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDC`
+      : `$${pricedPortfolio.totalUsd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
     : assets.length === 0
       ? '--'
       : headlineAsset ? formatMobileTokenQuantity(headlineAsset) : '--';
@@ -5306,7 +5296,14 @@ function GrapeApp() {
     const proposalVoteSources = proposal.voteSources ?? [];
     const voteSourceSummary = summarizeGovernanceVoteSources(proposalVoteSources);
     const availableVoteSources = proposalVoteSources.filter((source) => !source.hasVoted);
-    const voteSourceStatusPills = getGovernanceVoteSourceStatusPills(voteSourceSummary);
+    const detailsExpanded = expandedGovernanceProposal === proposal.proposalId;
+    const results = [
+      ...proposal.choices.map((choice) => ({ label: choice.label, weight: BigInt(choice.voteWeight) })),
+      { label: 'Deny', weight: BigInt(proposal.denyVotes) + BigInt(proposal.noVotes) },
+      { label: 'Abstain', weight: BigInt(proposal.abstainVotes) }
+    ].filter((result, index) => index < proposal.choices.length || result.weight > 0n);
+    const totalWeight = results.reduce((total, result) => total + result.weight, 0n);
+    const directVote = proposal.recordedVotes?.find((vote) => !vote.isDelegate);
     const hasProposalVoteSources = proposalVoteSources.length > 0;
     const hasDelegatedProposalVoteSource = availableVoteSources.some((source) => source.isDelegate);
     const proposalUrl = buildGovernanceProposalUrl(proposal.daoId, proposal.proposalId);
@@ -5335,11 +5332,6 @@ function GrapeApp() {
               <View style={styles.governanceStatusPill}>
                 <Text style={styles.governanceStatusPillText}>{formatGovernanceVotingPowerType(proposal.votingPowerType)}</Text>
               </View>
-              {proposal.isDelegate ? (
-                <View style={styles.governanceStatusPill}>
-                  <Text style={styles.governanceStatusPillText}>Delegate</Text>
-                </View>
-              ) : null}
               <View
                 style={[
                   styles.governanceStatusPill,
@@ -5357,67 +5349,41 @@ function GrapeApp() {
                   {timeMeta.badgeLabel}
                 </Text>
               </View>
-              {timeMeta.votingWindowOpen && timeMeta.metaText ? (
-                <View style={styles.governanceStatusPill}>
-                  <Text style={styles.governanceStatusPillText}>{timeMeta.metaText}</Text>
-                </View>
-              ) : null}
-              <Pressable
-                style={styles.governanceOpenButton}
-                onPress={() => void Linking.openURL(proposalUrl)}
-              >
-                <Text style={styles.governanceOpenButtonText}>Open</Text>
-                <Feather name="external-link" size={16} color={activeTheme.text} />
-              </Pressable>
             </View>
-            <Text style={styles.sectionHint}>
-              {proposal.realmName} • {proposal.state}
-              {timeMeta.metaText ? ` • ${timeMeta.metaText}` : ''}
-              {proposal.votingEndsAt ? ` • ${new Date(proposal.votingEndsAt * 1000).toLocaleString()}` : ''}
-            </Text>
+            {timeMeta.metaText ? <Text style={styles.reputationMeta}>{timeMeta.metaText}</Text> : null}
           </View>
         </View>
 
-        {proposal.recordedVotes?.map((vote) => (
-          <View key={vote.governingTokenOwner} style={styles.communityDetailCard}>
-            <Text style={styles.reputationName}>{vote.isDelegate ? 'Delegated vote · ' + shortenAddress(vote.governingTokenOwner) : 'You voted'}</Text>
-            <Text style={styles.reputationMeta}>{vote.choice}</Text>
-          </View>
-        ))}
-        <View style={styles.governanceMetricsRow}>
-          {proposal.choices.map((choice) => (
-            <Text key={choice.rank} style={styles.governanceMetricText}>{choice.label}: {formatWholeNumberString(choice.voteWeight)}</Text>
-          ))}
-          {BigInt(proposal.abstainVotes) > 0n ? <Text style={styles.governanceMetricText}>Abstain {formatWholeNumberString(proposal.abstainVotes)}</Text> : null}
-          {BigInt(proposal.noVotes) > BigInt(0) ? (
-            <Text style={styles.governanceMetricText}>No {formatWholeNumberString(proposal.noVotes)}</Text>
+        <View style={styles.governanceParticipation}>
+          <Text style={styles.governanceMetricText}>
+            {directVote ? `Your vote: ${directVote.choice}` : voteSourceSummary.directVoted > 0 ? 'Your vote is recorded' : voteSourceSummary.directAvailable > 0 ? 'Your vote is available' : 'Your participation'}
+          </Text>
+          {voteSourceSummary.delegatedVoted + voteSourceSummary.delegatedAvailable > 0 ? (
+            <Text style={styles.reputationMeta}>
+              Delegated votes: {voteSourceSummary.delegatedVoted} cast{voteSourceSummary.delegatedAvailable > 0 ? ` · ${voteSourceSummary.delegatedAvailable} available` : ''}
+            </Text>
           ) : null}
-          {BigInt(proposal.denyVotes) > BigInt(0) ? (
-            <Text style={styles.governanceMetricText}>Deny {formatWholeNumberString(proposal.denyVotes)}</Text>
-          ) : null}
+          {!canVoteNow && (!proposal.hasVoted || !timeMeta.votingWindowOpen) ? <Text style={styles.reputationMeta}>{inactiveVotingPowerMessage}</Text> : null}
         </View>
-        {voteSourceStatusPills.length > 0 ? (
-          <View style={styles.governanceVoteSourcePills}>
-            {voteSourceStatusPills.map((pill) => (
-              <View
-                key={`${proposal.proposalId}:${pill.label}`}
-                style={[
-                  styles.governanceStatusPill,
-                  pill.tone === 'success' ? styles.governanceStatusPillSuccess : null
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.governanceStatusPillText,
-                    pill.tone === 'success' ? styles.governanceStatusPillTextSuccess : null
-                  ]}
-                >
-                  {pill.label}
-                </Text>
-              </View>
-            ))}
+        {totalWeight > 0n ? (
+          <View style={styles.governanceResults}>
+            <Text style={styles.reputationMeta}>Current results · share of cast vote weight</Text>
+            {results.map((result, index) => {
+              const percentage = Number((result.weight * 1000n + totalWeight / 2n) / totalWeight) / 10;
+              return (
+                <View key={index} style={styles.governanceResultRow}>
+                  <View style={styles.governanceResultLabels}>
+                    <Text style={[styles.governanceMetricText, { flex: 1 }]}>{result.label}</Text>
+                    <Text style={styles.reputationMeta}>{percentage}%</Text>
+                  </View>
+                  <View style={styles.governanceResultTrack}>
+                    <View style={[styles.governanceResultFill, { width: `${percentage}%` }]} />
+                  </View>
+                </View>
+              );
+            })}
           </View>
-        ) : null}
+        ) : <Text style={styles.reputationMeta}>No votes cast yet</Text>}
 
         {canVoteNow ? (
           <>
@@ -5473,11 +5439,34 @@ function GrapeApp() {
               ) : null}
             </View>
           </>
-        ) : (
-          <Text style={styles.sectionHint}>
-            {inactiveVotingPowerMessage}
-          </Text>
-        )}
+        ) : null}
+        <Pressable
+          style={styles.governanceDetailsToggle}
+          accessibilityRole="button"
+          accessibilityState={{ expanded: detailsExpanded }}
+          accessibilityLabel={`${detailsExpanded ? 'Hide' : 'Show'} details for ${proposal.proposalName}`}
+          onPress={() => setExpandedGovernanceProposal(detailsExpanded ? null : proposal.proposalId)}
+        >
+          <Text style={styles.governanceOpenButtonText}>{detailsExpanded ? 'Fewer details' : 'More details'}</Text>
+          <Feather name={detailsExpanded ? 'chevron-up' : 'chevron-down'} size={16} color={activeTheme.muted} />
+        </Pressable>
+        {detailsExpanded ? (
+          <View style={styles.governanceResults}>
+            <Text style={styles.reputationMeta}>{proposal.realmName} · {proposal.state}</Text>
+            {proposal.votingEndsAt ? <Text style={styles.reputationMeta}>Voting deadline: {new Date(proposal.votingEndsAt * 1000).toLocaleString()}</Text> : null}
+            {proposal.recordedVotes?.filter((vote) => vote.isDelegate).map((vote) => (
+              <Text key={vote.governingTokenOwner} style={styles.reputationMeta}>Delegate {shortenAddress(vote.governingTokenOwner)}: {vote.choice}</Text>
+            ))}
+            <Text style={styles.governanceMetricText}>Exact vote weights (raw units)</Text>
+            {results.map((result, index) => (
+              <Text key={index} style={styles.reputationMeta}>{result.label}: {formatWholeNumberString(result.weight.toString())}</Text>
+            ))}
+            <Pressable accessibilityRole="link" accessibilityLabel={`Open proposal ${proposal.proposalName}`} style={styles.governanceOpenButton} onPress={() => void Linking.openURL(proposalUrl)}>
+              <Text style={styles.governanceOpenButtonText}>Open full proposal</Text>
+              <Feather name="external-link" size={16} color={activeTheme.text} />
+            </Pressable>
+          </View>
+        ) : null}
       </View>
     );
   }
@@ -7467,15 +7456,15 @@ function GrapeApp() {
             </View>
             <Pressable
               disabled={!canShowSolBalance}
-              onPress={() => setBalanceUnit((unit) => unit === 'USDC' ? 'SOL' : 'USDC')}
+              onPress={() => setBalanceUnit((unit) => unit === 'USD' ? 'SOL' : 'USD')}
               accessibilityRole="button"
-              accessibilityLabel={canShowSolBalance ? `Show balance in ${balanceUnit === 'USDC' ? 'SOL' : 'USDC'}` : 'Portfolio balance'}
+              accessibilityLabel={canShowSolBalance ? `Show balance in ${balanceUnit === 'USD' ? 'SOL' : 'US dollars'}` : 'Portfolio balance'}
             >
               <Text style={styles.cardBalance}>{maskValue(holdingsSummary, walletState.privacyMode)}</Text>
             </Pressable>
             <Text style={styles.cardSubtle}>
               {pricedPortfolio.count > 0
-                ? `${canShowSolBalance ? 'Tap balance to switch USDC / SOL · ' : ''}${pricedPortfolio.count} priced asset${pricedPortfolio.count === 1 ? '' : 's'}`
+                ? `${canShowSolBalance ? 'Tap balance to switch $ / SOL · ' : ''}${pricedPortfolio.count} priced asset${pricedPortfolio.count === 1 ? '' : 's'}`
                 : `${assets.length} asset${assets.length === 1 ? '' : 's'} in this wallet`}
             </Text>
           </View>
@@ -7696,8 +7685,8 @@ function GrapeApp() {
                       <Text numberOfLines={1} style={styles.reputationName}>{dao.realmName}</Text>
                       <View style={styles.governanceDaoPowerList}>
                         {positivePower.map((power) => (
-                          <Text key={power.mint + ':' + power.delegated} style={styles.governanceDaoPowerText}>
-                            <Text style={styles.governanceDaoPowerValue}>{power.amount}</Text>{' '}{power.delegated ? 'delegated ' : ''}{power.kind.toLowerCase()}
+                          <Text key={power.mint + ':' + power.delegated} accessibilityLabel={`${power.amount} ${power.delegated ? 'delegated ' : ''}${power.kind}`} style={styles.governanceDaoPowerText}>
+                            <Text style={styles.governanceDaoPowerValue}>{formatGovernanceAmount(power.amount)}</Text>{' '}{power.delegated ? 'delegated ' : ''}{power.kind.toLowerCase()}
                           </Text>
                         ))}
                       </View>
@@ -7716,7 +7705,7 @@ function GrapeApp() {
           )}
         </View>
 
-        <View style={styles.sectionCard}>
+        {!selectedGovernanceDao ? <View style={styles.sectionCard}>
           <View style={styles.sectionHeader}>
             <View style={styles.settingsCopy}>
               <Text style={styles.sectionTitle}>Scan wallet holdings</Text>
@@ -7775,9 +7764,9 @@ function GrapeApp() {
                         ) : null}
                       </View>
                       <Text style={styles.sectionHint}>
-                        {dao.communityHolding ? `Community: ${dao.communityHolding.amountLabel ?? dao.communityHolding.amountUi}` : null}
+                        {dao.communityHolding ? `Community: ${formatGovernanceAmount(dao.communityHolding.amountUi)}` : null}
                         {dao.communityHolding && dao.councilHolding ? ' • ' : ''}
-                        {dao.councilHolding ? `Council: ${dao.councilHolding.amountLabel ?? dao.councilHolding.amountUi}` : null}
+                        {dao.councilHolding ? `Council: ${formatGovernanceAmount(dao.councilHolding.amountUi)}` : null}
                       </Text>
                     </View>
                     <View style={styles.governanceEligibilityActions}>
@@ -7814,7 +7803,7 @@ function GrapeApp() {
                 : 'Scan this wallet to find DAOs whose community or council token is already in your holdings.'}
             </Text>
           ) : null}
-        </View>
+        </View> : null}
 
         {governanceVoteResult ? (
           <View style={styles.successBox}>
@@ -7823,7 +7812,7 @@ function GrapeApp() {
         ) : null}
         {governanceVoteError ? <Text style={styles.errorText}>{governanceVoteError}</Text> : null}
         {governance.warnings?.map((warning, index) => <Text key={index} style={styles.errorText}>{warning}</Text>)}
-        {governance.discoveryWarnings?.length ? <Text style={styles.sectionHint}>Additional DAO discovery is limited. The DAOs shown were found, but some other programs could not be checked.</Text> : null}
+        {!selectedGovernanceDao && governance.discoveryWarnings?.length ? <Text style={styles.sectionHint}>Additional DAO discovery is limited. The DAOs shown were found, but some other programs could not be checked.</Text> : null}
         {governanceLoading ? (
           <View style={styles.sectionCard}>
             <View style={styles.loadingRow}>
@@ -13922,6 +13911,37 @@ function createStyles(palette: MobileThemePalette) {
     fontWeight: '700',
     lineHeight: 20
   },
+  governanceParticipation: {
+    gap: 4
+  },
+  governanceResults: {
+    gap: 10
+  },
+  governanceResultRow: {
+    gap: 6
+  },
+  governanceResultLabels: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12
+  },
+  governanceResultTrack: {
+    height: 4,
+    borderRadius: 2,
+    overflow: 'hidden',
+    backgroundColor: palette.panelBorder
+  },
+  governanceResultFill: {
+    height: 4,
+    backgroundColor: palette.mint
+  },
+  governanceDetailsToggle: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12
+  },
   governanceProposalHeader: {
     gap: 10
   },
@@ -13966,16 +13986,6 @@ function createStyles(palette: MobileThemePalette) {
   },
   governanceStatusPillTextWarning: {
     color: palette.warning
-  },
-  governanceMetricsRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10
-  },
-  governanceVoteSourcePills: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8
   },
   governanceHubCard: {
     gap: 22,

@@ -4804,6 +4804,54 @@ body[data-surface='popup'] .asset-panel-card {
   border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
+.governance-participation-summary,
+.governance-results,
+.governance-result-row {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.governance-results { gap: 10px; }
+
+.governance-result-labels {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.governance-result-labels > :last-child { flex-shrink: 0; }
+
+.governance-result-track {
+  height: 4px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.governance-result-track > div {
+  height: 100%;
+  background: #8bf7c6;
+}
+
+.governance-proposal-details summary {
+  cursor: pointer;
+  padding: 12px 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.governance-proposal-details summary:focus-visible {
+  outline: 2px solid #8bf7c6;
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+.governance-proposal-details .governance-proposal-link { justify-self: start; }
+
 .governance-proposal-header {
   display: grid;
   gap: 10px;
