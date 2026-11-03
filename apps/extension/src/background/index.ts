@@ -1258,7 +1258,10 @@ class WalletController {
   ): Promise<WalletAssetsResponse> {
     const client = await this.createEthereumClient(network, walletState);
     const holdings = await getEthereumHoldings(client, publicKey);
-    const safeBaseUnits = holdings.totalWei > BigInt(Number.MAX_SAFE_INTEGER) ? null : Number(holdings.totalWei);
+    // This numeric balance is for UI display. Wei exceeds MAX_SAFE_INTEGER at
+    // just ~0.009 ETH; rounding the display value must not hide the balance.
+    // Signing and transaction amounts continue to use bigint / decimal strings.
+    const displayBaseUnits = Number(holdings.totalWei);
     let nativePricing: NativeUsdPriceQuote = {
       usdPrice: null,
       priceChange24h: null
@@ -1282,12 +1285,12 @@ class WalletController {
 
     const nativeUsdPrice = nativePricing.usdPrice;
     const nativeValueUsd =
-      nativeUsdPrice === null || safeBaseUnits === null ? null : (safeBaseUnits / 1_000_000_000_000_000_000) * nativeUsdPrice;
+      nativeUsdPrice === null ? null : Number(holdings.formatted) * nativeUsdPrice;
     const totalUsdValue = [nativeValueUsd, ...tokenHoldings.map((token) => token.valueUsd ?? null)]
       .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
       .reduce((sum, value) => sum + value, 0);
     const result: WalletAssetsResponse = {
-      lamports: safeBaseUnits,
+      lamports: displayBaseUnits,
       tokens: sortWalletTokens(tokenHoldings),
       collections,
       nativeName: 'Ethereum',
@@ -2692,7 +2695,8 @@ class WalletController {
     if (selectedWallet.chain === 'ethereum') {
       const client = await this.createEthereumClient(walletState.selectedNetwork, walletState);
       const balance = await getEthereumHoldings(client, activeAccount.publicKey);
-      return balance.totalWei > BigInt(Number.MAX_SAFE_INTEGER) ? null : Number(balance.totalWei);
+      // UI balance only; retain bigint for transaction arithmetic.
+      return Number(balance.totalWei);
     }
     const publicKey = tryParseSolanaPublicKey(activeAccount.publicKey);
     if (!publicKey) {
