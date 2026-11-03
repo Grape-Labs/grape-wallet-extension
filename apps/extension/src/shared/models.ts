@@ -430,6 +430,8 @@ export type WalletSwapQuoteResponse = {
     label: string;
     quoteResponse: JupiterQuoteResponse | Record<string, unknown>;
     outputAmountUi: string;
+    outputSymbol?: string;
+    minimumReceivedUi?: string | null;
     priceImpactPct: string | null;
     routeLabels: string[];
   }>;

@@ -1,5 +1,6 @@
 import { ZCASH_DISCOVER_APPS, ZCASH_DISCOVER_NOTE } from '@grape/core';
 import { isValidBridgeRecipient } from '@grape/core';
+import { useSwapQuoteRefresh } from './useSwapQuoteRefresh';
 import { SendPrivacyPicker } from './SendPrivacyPicker';
 import { HoudiniSwapPanel } from './HoudiniSwapPanel';
 import { HoudiniZcashBridgePanel } from './HoudiniZcashBridgePanel';
@@ -3181,7 +3182,7 @@ function PopupPage() {
   }
 
   async function handleExecuteSwap() {
-    if (!swapQuote) {
+    if (!swapQuote || quotingSwap || submittingSwap) {
       return;
     }
 
@@ -3208,6 +3209,8 @@ function PopupPage() {
         // Ignore refresh failures after a successful swap.
       });
     } catch (error) {
+      setSwapQuote(null);
+      setSwapSelectedRouteId(null);
       setSwapError(error instanceof Error ? error.message : 'Unable to execute swap.');
     } finally {
       setSubmittingSwap(false);
@@ -3470,50 +3473,29 @@ function PopupPage() {
     }
   }
 
-  useEffect(() => {
-    if (!swapSurfaceActive || submittingSwap || Boolean(swapResult)) {
-      return;
-    }
+  const normalizedQuoteAmount = normalizeDecimalInputForSubmit(swapAmount, selectedSwapInputDecimals);
+  const swapQuoteInputKey = swapSurfaceActive &&
+    state?.wallet.selectedNetwork === 'mainnet-beta' && selectedSwapInputAsset &&
+    normalizedQuoteAmount && effectiveSwapOutputMint.length >= 32 && Number.isFinite(Number(swapSlippageBps))
+    ? JSON.stringify({
+        network: state.wallet.selectedNetwork, chain: selectedChainValue,
+        owner: state.activeAccount?.publicKey, asset: selectedSwapInputAsset.asset,
+        amount: normalizedQuoteAmount, output: effectiveSwapOutputMint, slippage: Number(swapSlippageBps)
+      })
+    : null;
 
-    const slippage = Number(swapSlippageBps);
-    const normalizedSwapAmount = normalizeDecimalInputForSubmit(swapAmount, selectedSwapInputDecimals);
-    if (
-      state?.wallet.selectedNetwork !== 'mainnet-beta' ||
-      !selectedSwapInputAsset ||
-      !normalizedSwapAmount ||
-      !effectiveSwapOutputMint ||
-      effectiveSwapOutputMint.length < 32 ||
-      !Number.isFinite(slippage)
-    ) {
+  useSwapQuoteRefresh({
+    inputKey: swapQuoteInputKey,
+    paused: submittingSwap || Boolean(swapResult),
+    invalidate: () => {
       swapQuoteRequestRef.current = 0;
       setQuotingSwap(false);
-      return;
-    }
-
-    const requestId = Date.now();
-    swapQuoteRequestRef.current = requestId;
-    const timeoutId = window.setTimeout(() => {
-      void handleGetSwapQuote(requestId);
-    }, 350);
-
-    return () => {
-      window.clearTimeout(timeoutId);
-    };
-  }, [
-    effectiveSwapOutputMint,
-    selectedSwapInputAsset,
-    selectedSwapInputDecimals,
-    swapAmount,
-    swapInputAssetId,
-    swapOutputMint,
-    swapSlippageBps,
-    swapUseCustomOutputMint,
-    submittingSwap,
-    swapResult,
-    swapSurfaceActive,
-    view,
-    state?.wallet.selectedNetwork
-  ]);
+      setSwapQuote(null);
+      setSwapSelectedRouteId(null);
+      setSwapError(null);
+    },
+    request: () => { void handleGetSwapQuote(); }
+  });
 
   async function handleCreateStake() {
     try {
@@ -9469,7 +9451,7 @@ function PopupPage() {
       null;
     const quoteOutputValue = activeSwapRoute ? `${activeSwapRoute.outputAmountUi} ${outputAssetSymbol}` : '0';
     const inputAmountNumber = Number(swapAmount || '0');
-    const inputUnitPrice = selectedSwapInputAsset?.asset.kind === 'sol'
+    const inputUnitPrice = ['sol', 'eth', 'mon', 'sui', 'zec'].includes(selectedSwapInputAsset?.asset.kind ?? '')
       ? assets.nativePriceUsd ?? null
       : selectedSwapInputHolding?.priceUsd ?? null;
     const inputValueUsd = inputUnitPrice != null && Number.isFinite(inputAmountNumber)
@@ -9497,7 +9479,7 @@ function PopupPage() {
             title="Submitting swap"
             message="Grape is signing and broadcasting the swap transaction. Keep this window open until it completes."
           />
-          {swapError ? <p className="danger-box">{swapError}</p> : null}
+          {swapError ? <p className="danger-box" role="alert">{swapError}</p> : null}
         </>
       );
     }
@@ -9527,7 +9509,7 @@ function PopupPage() {
               <Button onClick={() => { if (embedded) { setSwapResult(null); setSwapQuote(null); setSwapAmount(''); } else setView('home'); }}>Done</Button>
             </div>
           </ActionStatusCard>
-          {swapError ? <p className="danger-box">{swapError}</p> : null}
+          {swapError ? <p className="danger-box" role="alert">{swapError}</p> : null}
         </>
       );
     }
@@ -9647,7 +9629,7 @@ function PopupPage() {
                   />
                 </div>
                 <div className="swap-leg-meta muted">
-                  <span>{inputValueUsd ?? '$0.00'}</span>
+                  <span>{inputValueUsd ?? 'Price unavailable'}</span>
                   <div className="swap-balance-shortcuts">
                     <span title={selectedSwapInputAsset.balance}>Balance: {selectedSwapInputAsset.balance}</span>
                     <button type="button" aria-label="Use half of available sell balance" onClick={() => setSwapAmountByRatio(0.5)}>Half</button>
@@ -9751,10 +9733,10 @@ function PopupPage() {
                 </div>
 
                 <div className="swap-leg-value-row">
-                  <div className="swap-leg-quote">{activeSwapRoute?.outputAmountUi ?? '0'}</div>
+                  <div className="swap-leg-quote" aria-live="polite">{quotingSwap ? 'Fetching quote…' : activeSwapRoute ? `${activeSwapRoute.outputAmountUi} ${activeSwapRoute.outputSymbol ?? outputAssetSymbol}` : '—'}</div>
                 </div>
                 <div className="swap-leg-meta muted">
-                  <span>&nbsp;</span>
+                  <span>Estimated received</span>
                   <span>Balance: {outputAssetBalance}</span>
                 </div>
               </div>
@@ -9810,12 +9792,16 @@ function PopupPage() {
                 </div>
               ) : null}
               <KeyValueRow label="Estimated output" value={`${activeSwapRoute?.outputAmountUi ?? '0'} ${outputAssetSymbol}`} />
+              {activeSwapRoute?.minimumReceivedUi ? <KeyValueRow label="Minimum received" value={`${activeSwapRoute.minimumReceivedUi} ${activeSwapRoute.outputSymbol ?? outputAssetSymbol}`} /> : null}
               <KeyValueRow label="Slippage" value={`${swapQuote.slippageBps} bps`} />
               <KeyValueRow label="Price impact" value={activeSwapRoute?.priceImpactPct ?? 'Unavailable'} />
               <KeyValueRow
                 label="Route"
                 value={activeSwapRoute?.routeLabels.length ? activeSwapRoute.routeLabels.join(' -> ') : 'Jupiter route'}
               />
+              {selectedChainValue === 'ethereum' ? (
+                <p className="muted">Keep some ETH for network fees. Selling an ERC-20 token may require an approval transaction before the swap.</p>
+              ) : null}
               {!canUseUnlockedSigner ? (
                 <label className="stack">
                   <span className="muted">Password</span>
@@ -9847,7 +9833,7 @@ function PopupPage() {
           </Card>
         ) : null}
 
-        {swapError ? <p className="danger-box">{swapError}</p> : null}
+        {swapError ? <p className="danger-box" role="alert">{swapError}</p> : null}
 
         <div className="inline wrap-actions send-flow-actions">
           {swapQuote ? (
@@ -9855,12 +9841,14 @@ function PopupPage() {
               className="button-block"
               disabled={
                 submittingSwap ||
+                quotingSwap ||
+                !activeSwapRoute ||
                 wallet.selectedNetwork !== 'mainnet-beta' ||
                 (!canUseUnlockedSigner && !swapPassword.trim())
               }
               onClick={() => void handleExecuteSwap()}
             >
-              Swap now
+              {submittingSwap ? 'Confirming swap…' : 'Swap now'}
             </Button>
           ) : swapError ? (
             <Button

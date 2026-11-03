@@ -72,11 +72,12 @@ type LifiStep = {
   };
 };
 
-type LifiQuoteResponse = {
+export type LifiQuoteResponse = {
   estimate?: {
     fromAmount?: string;
     toAmount?: string;
     toAmountMin?: string;
+    approvalAddress?: string;
     fromToken?: {
       symbol?: string;
       decimals?: number;
@@ -103,6 +104,11 @@ type LifiQuoteResponse = {
     }>;
   };
   action?: {
+    fromToken?: LifiToken;
+    toToken?: LifiToken;
+    fromAmount?: string;
+    fromAddress?: string;
+    toAddress?: string;
     fromChainId?: string | number;
     toChainId?: string | number;
   };
@@ -115,6 +121,9 @@ type LifiQuoteResponse = {
     to?: string;
     data?: string;
     value?: string;
+    gasLimit?: string;
+    gasPrice?: string;
+    chainId?: number;
   };
   [key: string]: unknown;
 };
@@ -348,4 +357,18 @@ function formatBaseUnits(rawAmount: string, decimals: number): string {
   const fraction = decimals > 0 ? padded.slice(-decimals).replace(/0+$/, '') : '';
   const result = fraction ? `${whole}.${fraction}` : whole;
   return negative ? `-${result}` : result;
+}
+
+export function summarizeLifiSwapQuote(quote: LifiQuoteResponse) {
+  const { action, estimate } = quote;
+  const decimals = action?.toToken?.decimals;
+  if (!Number.isInteger(decimals) || decimals! < 0 || decimals! > 255 ||
+      !estimate?.toAmount || !/^\d+$/.test(estimate.toAmount) || BigInt(estimate.toAmount) <= 0n) {
+    throw new Error('The swap provider returned an invalid output amount. Request a new quote.');
+  }
+  return {
+    outputAmountUi: formatBaseUnits(estimate.toAmount, decimals!),
+    minimumReceivedUi: estimate.toAmountMin ? formatBaseUnits(estimate.toAmountMin, decimals!) : null,
+    outputSymbol: action?.toToken?.symbol
+  };
 }

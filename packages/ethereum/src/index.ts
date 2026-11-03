@@ -35,7 +35,9 @@ const ERC20_ABI = parseAbi([
   'function decimals() view returns (uint8)',
   'function symbol() view returns (string)',
   'function name() view returns (string)',
-  'function transfer(address to, uint256 amount) returns (bool)'
+  'function transfer(address to, uint256 amount) returns (bool)',
+  'function allowance(address owner, address spender) view returns (uint256)',
+  'function approve(address spender, uint256 amount) returns (bool)'
 ]);
 
 export type DerivedEthereumAccount = {
@@ -241,6 +243,8 @@ export async function sendEthereumTransactionRequest(
     maxFeePerGas?: string;
     maxPriorityFeePerGas?: string;
     nonce?: string;
+    waitForReceipt?: boolean;
+    approval?: { tokenAddress: string; spender: string; amount: string };
     customRpcUrl?: string | null;
   }
 ): Promise<Hex> {
@@ -255,6 +259,30 @@ export async function sendEthereumTransactionRequest(
     chain,
     transport: http(getEthereumRpcUrl(network, input.customRpcUrl))
   });
+
+  if (input.approval) {
+    const { tokenAddress, spender, amount } = input.approval;
+    if (!isAddress(tokenAddress) || !isAddress(spender) || !/^\d+$/.test(amount) || BigInt(amount) <= 0n) {
+      throw new Error('Swap token approval details are invalid. Request a new quote.');
+    }
+    const publicClient = createEthereumPublicClient(network, input.customRpcUrl);
+    const allowance = await publicClient.readContract({
+      address: tokenAddress as Address, abi: ERC20_ABI, functionName: 'allowance',
+      args: [account.address, spender as Address]
+    });
+    const approve = async (value: bigint) => {
+      const hash = await walletClient.writeContract({
+        account, chain, address: tokenAddress as Address, abi: ERC20_ABI,
+        functionName: 'approve', args: [spender as Address, value]
+      });
+      const receipt = await publicClient.waitForTransactionReceipt({ hash });
+      if (receipt.status !== 'success') throw new Error('Token approval failed. The swap was not submitted.');
+    };
+    if (allowance < BigInt(amount)) {
+      if (allowance > 0n) await approve(0n);
+      await approve(BigInt(amount));
+    }
+  }
 
   const transactionRequest = {
     account,
@@ -290,7 +318,14 @@ export async function sendEthereumTransactionRequest(
     transactionRequest.maxPriorityFeePerGas = maxPriorityFeePerGas;
   }
 
-  return walletClient.sendTransaction(transactionRequest as never);
+  const hash = await walletClient.sendTransaction(transactionRequest as never);
+  if (input.waitForReceipt) {
+    const receipt = await createEthereumPublicClient(network, input.customRpcUrl).waitForTransactionReceipt({ hash });
+    if (receipt.status !== 'success') {
+      throw new Error(`Swap transaction reverted (${hash}). Refresh the quote before trying again.`);
+    }
+  }
+  return hash;
 }
 
 function normalizeHexPrivateKey(privateKey: string): Hex {

@@ -7682,7 +7682,8 @@ body[data-surface='popup'] .send-flow-amount-meta span {
 }
 
 .swap-leg-quote {
-  color: var(--theme-subtle);
+  color: var(--theme-text);
+  overflow-wrap: anywhere;
 }
 
 .swap-flip-button {

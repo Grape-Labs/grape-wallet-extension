@@ -243,7 +243,7 @@ import {
   JUPITER_SOL_MINT,
   type JupiterQuoteResponse
 } from '../shared/jupiter';
-import { fetchLifiSwapQuote, fetchLifiTokenCatalog, fetchNativeBridgeQuote, getSupportedBridgeDestinations, isBridgeRouteSupported, LIFI_NATIVE_DECIMALS, LIFI_NATIVE_SYMBOL, LIFI_NATIVE_TOKEN_ADDRESS } from '../shared/lifi';
+import { summarizeLifiSwapQuote, type LifiQuoteResponse, fetchLifiSwapQuote, fetchLifiTokenCatalog, fetchNativeBridgeQuote, getSupportedBridgeDestinations, isBridgeRouteSupported, LIFI_NATIVE_DECIMALS, LIFI_NATIVE_SYMBOL, LIFI_NATIVE_TOKEN_ADDRESS } from '../shared/lifi';
 import { getRpcEndpoint } from '../shared/rpc';
 import {
   fetchShyftCollections,
@@ -5760,9 +5760,15 @@ class WalletController {
       const decimals = input.inputAsset.kind === 'evm-token' ? input.inputAsset.decimals : 18;
       const amountRaw = parseDecimalAmount(input.amount, decimals).toString();
       const quote = await fetchLifiSwapQuote({ chain: selectedWallet.chain, fromToken, toToken: input.outputMint, amountRaw, walletAddress: activeAccount.publicKey, slippageBps: input.slippageBps });
-      const estimate = quote.estimate as { toAmount?: string; fromToken?: { symbol?: string }; toToken?: { symbol?: string; decimals?: number }; tool?: string } | undefined;
-      const outputDecimals = estimate?.toToken?.decimals ?? 18;
-      return { inputMint: fromToken, outputMint: input.outputMint, inputAmountUi: input.amount, slippageBps: input.slippageBps, selectedRouteId: 'best', routes: [{ id: 'best', label: 'Best route', quoteResponse: { ...quote, _grapeSwapChain: selectedWallet.chain }, outputAmountUi: formatUiAmount(estimate?.toAmount ?? '0', outputDecimals), priceImpactPct: null, routeLabels: [String((quote.toolDetails as { name?: string } | undefined)?.name ?? 'LI.FI')] }] };
+      const summary = summarizeLifiSwapQuote(quote);
+      return {
+        inputMint: fromToken, outputMint: input.outputMint, inputAmountUi: input.amount,
+        slippageBps: input.slippageBps, selectedRouteId: 'best',
+        routes: [{ id: 'best', label: 'Best route',
+          quoteResponse: { ...quote, _grapeSwapChain: selectedWallet.chain },
+          ...summary, priceImpactPct: null,
+          routeLabels: [quote.toolDetails?.name ?? 'LI.FI'] }]
+      };
     }
     if (selectedWallet.chain === 'sui') {
       const fromCoinType = input.inputAsset.kind === 'sui-coin' ? input.inputAsset.coinType : '0x2::sui::SUI';
@@ -5851,14 +5857,39 @@ class WalletController {
       if (selectedWallet.signer.kind === 'ledger') {
         throw new RpcError('LEDGER_UNSUPPORTED', 'Ledger swaps are not yet available for EVM wallets.');
       }
+      const quote = genericQuote as LifiQuoteResponse;
+      const summary = summarizeLifiSwapQuote(quote);
+      const chainId = selectedWallet.chain === 'ethereum' ? 1 : 143;
+      if (Number(quote.action?.fromChainId) !== chainId || Number(quote.action?.toChainId) !== chainId ||
+          quote.action?.fromAddress?.toLowerCase() !== activeAccount.publicKey.toLowerCase() ||
+          quote.action?.toAddress?.toLowerCase() !== activeAccount.publicKey.toLowerCase()) {
+        throw new RpcError('INVALID_SWAP', 'This quote belongs to a different account or network. Request a new quote.');
+      }
+      const transactionRequest = quote.transactionRequest;
+      if (!transactionRequest?.to || !transactionRequest.data) throw new RpcError('SWAP_UNSUPPORTED', 'This route did not include an executable transaction.');
+      if (transactionRequest.chainId !== undefined && transactionRequest.chainId !== chainId) {
+        throw new RpcError('INVALID_SWAP', 'Swap transaction network does not match the wallet.');
+      }
       const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
-      const transactionRequest = extractExecutableBridgeTransactionRequest(genericQuote, selectedWallet.chain);
-      if (!transactionRequest?.to) throw new RpcError('SWAP_UNSUPPORTED', 'This route did not include an executable transaction.');
       const signature = selectedWallet.chain === 'ethereum'
-        ? await sendEthereumTransactionRequest(this.resolveEthereumNetwork(walletState.selectedNetwork), secret, { to: transactionRequest.to, data: transactionRequest.data, value: transactionRequest.value, customRpcUrl: walletState.chainState.ethereum.customRpcUrl })
-        : await sendMonadTransactionRequest(this.resolveMonadNetwork(walletState.selectedNetwork), secret, { to: transactionRequest.to, data: transactionRequest.data, value: transactionRequest.value, customRpcUrl: walletState.chainState.monad.customRpcUrl });
-      const estimate = genericQuote.estimate as { fromAmount?: string; toAmount?: string; fromToken?: { address?: string; decimals?: number }; toToken?: { address?: string; decimals?: number } } | undefined;
-      return { signature, inputMint: estimate?.fromToken?.address ?? '', outputMint: estimate?.toToken?.address ?? '', inputAmountUi: formatUiAmount(estimate?.fromAmount ?? '0', estimate?.fromToken?.decimals ?? 18), outputAmountUi: formatUiAmount(estimate?.toAmount ?? '0', estimate?.toToken?.decimals ?? 18) };
+        ? await sendEthereumTransactionRequest(this.resolveEthereumNetwork(walletState.selectedNetwork), secret, {
+            ...transactionRequest, to: transactionRequest.to, gas: transactionRequest.gasLimit, waitForReceipt: true,
+            approval: quote.action?.fromToken?.address !== LIFI_NATIVE_TOKEN_ADDRESS.ethereum
+              ? { tokenAddress: quote.action?.fromToken?.address ?? '', spender: quote.estimate?.approvalAddress ?? '', amount: quote.action?.fromAmount ?? '' }
+              : undefined,
+            customRpcUrl: walletState.chainState.ethereum.customRpcUrl
+          })
+        : await sendMonadTransactionRequest(this.resolveMonadNetwork(walletState.selectedNetwork), secret, {
+            ...transactionRequest, to: transactionRequest.to, gas: transactionRequest.gasLimit,
+            customRpcUrl: walletState.chainState.monad.customRpcUrl
+          });
+      await this.setSessionState({ locked: false, lastActivityAt: Date.now() });
+      await this.invalidateAssetCache(this.getAssetCacheKey(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey));
+      return {
+        signature, inputMint: quote.action?.fromToken?.address ?? '', outputMint: quote.action?.toToken?.address ?? '',
+        inputAmountUi: formatUiAmount(quote.action?.fromAmount ?? '0', quote.action?.fromToken?.decimals ?? 18),
+        outputAmountUi: summary.outputAmountUi
+      };
     }
     if (selectedWallet.chain === 'sui') {
       if (selectedWallet.signer.kind === 'ledger') {
