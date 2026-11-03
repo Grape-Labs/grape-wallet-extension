@@ -159,7 +159,7 @@ import {
   VoteKind,
   withCastVote
 } from '@solana/spl-governance';
-import { sendEthereumTokenWithLedger, sendEthereumWithLedger } from '../../../../packages/ethereum/src/ledger';
+import { sendEthereumTransactionRequestWithLedger, sendEthereumTokenWithLedger, sendEthereumWithLedger } from '../../../../packages/ethereum/src/ledger';
 import { sendMonadTokenWithLedger, sendMonadWithLedger } from '../../../../packages/monad/src/ledger';
 import { signLedgerSerializedTransaction, signAndSendLedgerSerializedTransaction, signAndSendLedgerTransaction } from '../../../../packages/solana/src/ledger';
 import { sendSuiCoinWithLedger, sendSuiWithLedger, signSuiTransactionBytesWithLedger } from '../../../../packages/sui/src/ledger';
@@ -5854,8 +5854,8 @@ class WalletController {
 
     const genericQuote = input.quoteResponse as Record<string, unknown>;
     if (selectedWallet.chain === 'ethereum' || selectedWallet.chain === 'monad') {
-      if (selectedWallet.signer.kind === 'ledger') {
-        throw new RpcError('LEDGER_UNSUPPORTED', 'Ledger swaps are not yet available for EVM wallets.');
+      if (selectedWallet.signer.kind === 'ledger' && selectedWallet.chain === 'monad') {
+        throw new RpcError('LEDGER_UNSUPPORTED', 'Ledger swaps are not yet available for Monad wallets.');
       }
       const quote = genericQuote as LifiQuoteResponse;
       const summary = summarizeLifiSwapQuote(quote);
@@ -5870,19 +5870,32 @@ class WalletController {
       if (transactionRequest.chainId !== undefined && transactionRequest.chainId !== chainId) {
         throw new RpcError('INVALID_SWAP', 'Swap transaction network does not match the wallet.');
       }
-      const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
-      const signature = selectedWallet.chain === 'ethereum'
-        ? await sendEthereumTransactionRequest(this.resolveEthereumNetwork(walletState.selectedNetwork), secret, {
-            ...transactionRequest, to: transactionRequest.to, gas: transactionRequest.gasLimit, waitForReceipt: true,
-            approval: quote.action?.fromToken?.address !== LIFI_NATIVE_TOKEN_ADDRESS.ethereum
-              ? { tokenAddress: quote.action?.fromToken?.address ?? '', spender: quote.estimate?.approvalAddress ?? '', amount: quote.action?.fromAmount ?? '' }
-              : undefined,
-            customRpcUrl: walletState.chainState.ethereum.customRpcUrl
-          })
-        : await sendMonadTransactionRequest(this.resolveMonadNetwork(walletState.selectedNetwork), secret, {
-            ...transactionRequest, to: transactionRequest.to, gas: transactionRequest.gasLimit,
-            customRpcUrl: walletState.chainState.monad.customRpcUrl
-          });
+      let signature: string;
+      if (selectedWallet.chain === 'ethereum') {
+        const transaction = {
+          ...transactionRequest, to: transactionRequest.to, gas: transactionRequest.gasLimit, waitForReceipt: true,
+          approval: quote.action?.fromToken?.address !== LIFI_NATIVE_TOKEN_ADDRESS.ethereum
+            ? { tokenAddress: quote.action?.fromToken?.address ?? '', spender: quote.estimate?.approvalAddress ?? '', amount: quote.action?.fromAmount ?? '' }
+            : undefined,
+          customRpcUrl: walletState.chainState.ethereum.customRpcUrl
+        };
+        if (selectedWallet.signer.kind === 'ledger') {
+          signature = await sendEthereumTransactionRequestWithLedger(
+            this.resolveEthereumNetwork(walletState.selectedNetwork),
+            activeAccount.derivationPath ?? selectedWallet.signer.derivationPath,
+            { ...transaction, expectedAddress: activeAccount.publicKey }
+          );
+        } else {
+          const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
+          signature = await sendEthereumTransactionRequest(this.resolveEthereumNetwork(walletState.selectedNetwork), secret, transaction);
+        }
+      } else {
+        const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
+        signature = await sendMonadTransactionRequest(this.resolveMonadNetwork(walletState.selectedNetwork), secret, {
+          ...transactionRequest, to: transactionRequest.to, gas: transactionRequest.gasLimit,
+          customRpcUrl: walletState.chainState.monad.customRpcUrl
+        });
+      }
       await this.setSessionState({ locked: false, lastActivityAt: Date.now() });
       await this.invalidateAssetCache(this.getAssetCacheKey(selectedWallet.id, walletState.selectedNetwork, activeAccount.publicKey));
       return {

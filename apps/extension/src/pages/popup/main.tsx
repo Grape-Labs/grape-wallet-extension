@@ -3201,7 +3201,7 @@ function PopupPage() {
       const result = await sendRuntimeMessage<WalletSwapExecuteResponse>({
         type: 'wallet_execute_swap',
         quoteResponse: activeRoute.quoteResponse,
-        password: canUseUnlockedSigner ? undefined : swapPassword || undefined
+        password: state?.activeWallet?.signerKind === 'ledger' || canUseUnlockedSigner ? undefined : swapPassword || undefined
       });
       setSwapResult(result);
       setSwapPassword('');
@@ -9422,6 +9422,7 @@ function PopupPage() {
       );
     }
 
+    const isLedgerSwap = state?.activeWallet?.signerKind === 'ledger' && selectedChainValue === 'ethereum';
     const inputAssetSymbol =
       selectedSwapInputAsset?.asset.kind === 'sol' || selectedSwapInputAsset?.asset.kind === 'sui' || selectedSwapInputAsset?.asset.kind === 'mon' || selectedSwapInputAsset?.asset.kind === 'eth'
         ? selectedSwapInputAsset.symbol
@@ -9802,7 +9803,9 @@ function PopupPage() {
               {selectedChainValue === 'ethereum' ? (
                 <p className="muted">Keep some ETH for network fees. Selling an ERC-20 token may require an approval transaction before the swap.</p>
               ) : null}
-              {!canUseUnlockedSigner ? (
+              {isLedgerSwap ? (
+                <p className="muted">Connect and unlock your Ledger, open the Ethereum app, and approve the swap on the device. Token approvals require separate confirmation.</p>
+              ) : !canUseUnlockedSigner ? (
                 <label className="stack">
                   <span className="muted">Password</span>
                   <div className="send-input-shell send-input-shell-sign">
@@ -9844,11 +9847,11 @@ function PopupPage() {
                 quotingSwap ||
                 !activeSwapRoute ||
                 wallet.selectedNetwork !== 'mainnet-beta' ||
-                (!canUseUnlockedSigner && !swapPassword.trim())
+                (!isLedgerSwap && !canUseUnlockedSigner && !swapPassword.trim())
               }
               onClick={() => void handleExecuteSwap()}
             >
-              {submittingSwap ? 'Confirming swap…' : 'Swap now'}
+              {submittingSwap ? isLedgerSwap ? 'Approve on Ledger / confirming…' : 'Confirming swap…' : isLedgerSwap ? 'Swap with Ledger' : 'Swap now'}
             </Button>
           ) : swapError ? (
             <Button
