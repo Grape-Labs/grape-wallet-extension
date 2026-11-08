@@ -1,8 +1,11 @@
 import { ArrowLeft, ExternalLink, Landmark } from 'lucide-react';
+import { GovernanceEmbed } from './GovernanceEmbed';
 import type { GovernanceDaoSummary, TokenHolding, WalletReputationSpace, WalletVerificationIdentity } from '../../shared/models';
 
 type Props = {
   id: string;
+  governanceView: 'overview' | 'full';
+  onGovernanceView: (view: 'overview' | 'full') => void;
   dao?: GovernanceDaoSummary;
   reputation?: WalletReputationSpace;
   reputationSpaceId?: string | null;
@@ -29,9 +32,14 @@ export function CommunityWorkspace(props: Props) {
     { value: dao.delegateCouncilVotingPower, decimals: 0, label: 'Delegated council power' }
   ].filter(p => BigInt(p.value) > 0n) : [];
   const mask = (value: string) => props.privacy ? '••••' : value;
-  return <section className="community-workspace" aria-label={`${name} community workspace`}>
+  return <section className={`community-workspace ${dao && props.governanceView === 'full' ? 'community-workspace-full' : ''}`.trim()} aria-label={`${name} community workspace`}>
     <button type="button" className="workspace-back" onClick={props.onBack}><ArrowLeft size={17} /> All communities</button>
     <header className="workspace-header"><span className="workspace-avatar"><Landmark size={26} /></span><div><small>Community workspace</small><h2>{name}</h2><p>{dao ? 'Governance participant' : 'Tracked community'} · {props.id.slice(0, 6)}…{props.id.slice(-6)}</p></div></header>
+    {dao ? <div className="workspace-view-switch" role="group" aria-label="Governance view">
+      <button type="button" aria-pressed={props.governanceView === 'overview'} onClick={() => props.onGovernanceView('overview')}>Overview</button>
+      <button type="button" aria-pressed={props.governanceView === 'full'} onClick={() => props.onGovernanceView('full')}>Full governance</button>
+    </div> : null}
+    {dao && props.governanceView === 'full' ? <GovernanceEmbed key={dao.daoId} daoId={dao.daoId} name={name} /> : <>
     {props.loading ? <p className="community-dashboard-note" role="status">Refreshing participation data…</p> : null}
     {props.incomplete ? <p className="community-dashboard-note" role="status">Some data could not be refreshed. Participation details may be incomplete.</p> : null}
     <div className="workspace-grid">
@@ -58,5 +66,6 @@ export function CommunityWorkspace(props: Props) {
       {props.reputationSpaceId ? <a href={`https://reputation.governance.so/dao/${encodeURIComponent(props.reputationSpaceId)}`} target="_blank" rel="noopener noreferrer">OG Reputation <ExternalLink size={14} /></a> : null}
       {props.verificationSpaceId ? <a href={`https://verification.governance.so/?daoId=${encodeURIComponent(props.verificationSpaceId)}`} target="_blank" rel="noopener noreferrer">Grape Verification <ExternalLink size={14} /></a> : null}
     </div> : null}
+    </>}
   </section>;
 }

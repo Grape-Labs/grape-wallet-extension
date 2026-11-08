@@ -1,6 +1,6 @@
 {
   "name": "@grape/extension",
-  "version": "0.5.264",
+  "version": "0.5.267",
   "private": true,
   "type": "module",
   "scripts": {

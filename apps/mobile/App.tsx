@@ -243,7 +243,7 @@ const WALLET_FAQ = [
   { question: 'Can I use my own RPC?', answer: 'Yes. Custom RPC settings let you replace the default endpoint for a network. RPC providers can observe wallet addresses and requests, so only use a provider you trust and never paste secret keys into an RPC field.' }
 ] as const;
 
-const GRAPE_DISCOVER_DEFAULT_URL = 'https://governance.so';
+const GRAPE_DISCOVER_DEFAULT_URL = '';
 const OG_REPUTATION_DISCOVERY_URL = 'https://vine.governance.so';
 const SOLANA_SEND_FEE_RESERVE_SOL = 0.00001;
 const SOLANA_TOKEN_SEND_RESERVE_SOL = 0.0021;
@@ -449,7 +449,7 @@ function DiscoverSiteIcon(props: { uri?: string; fallbackColor: string; style: o
   return <Image source={{ uri: props.uri }} style={props.style} onError={() => setFailed(true)} />;
 }
 
-function createDiscoverTab(url = GRAPE_DISCOVER_DEFAULT_URL, title = 'Governance'):
+function createDiscoverTab(url = GRAPE_DISCOVER_DEFAULT_URL, title = 'New tab'):
   DiscoverTab {
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -1336,7 +1336,7 @@ function normalizeDiscoverUrlInput(input: string) {
   const trimmed = input.trim();
   if (!trimmed) {
     return {
-      url: GRAPE_DISCOVER_DEFAULT_URL,
+      url: null as string | null,
       error: null as string | null
     };
   }
@@ -1387,7 +1387,7 @@ function normalizeDiscoverUrlInput(input: string) {
 function formatDiscoverUrlDisplay(input: string) {
   const trimmed = input.trim();
   if (!trimmed) {
-    return 'grape.app';
+    return 'New tab';
   }
 
   try {
@@ -1662,13 +1662,14 @@ function GrapeApp() {
   const [discoverUrlInput, setDiscoverUrlInput] = useState(GRAPE_DISCOVER_DEFAULT_URL);
   const [discoverUrl, setDiscoverUrl] = useState(GRAPE_DISCOVER_DEFAULT_URL);
   const [discoverCurrentUrl, setDiscoverCurrentUrl] = useState(GRAPE_DISCOVER_DEFAULT_URL);
-  const [discoverTitle, setDiscoverTitle] = useState('Grape Discover');
+  const [discoverTitle, setDiscoverTitle] = useState('New tab');
   const [discoverSiteIconUrl, setDiscoverSiteIconUrl] = useState('');
   const [discoverCanGoBack, setDiscoverCanGoBack] = useState(false);
   const [discoverCanGoForward, setDiscoverCanGoForward] = useState(false);
   const [discoverLoading, setDiscoverLoading] = useState(false);
   const [discoverLoadError, setDiscoverLoadError] = useState<string | null>(null);
-  const [discoverControlsExpanded, setDiscoverControlsExpanded] = useState(false);
+  const [discoverControlsExpanded, setDiscoverControlsExpanded] = useState(true);
+  const [discoverMenuOpen, setDiscoverMenuOpen] = useState(false);
   const [discoverBookmarks, setDiscoverBookmarks] = useState<DiscoverBookmark[]>([]);
   const [discoverTabs, setDiscoverTabs] = useState<DiscoverTab[]>(() => [createDiscoverTab()]);
   const [activeDiscoverTabId, setActiveDiscoverTabId] = useState('');
@@ -1682,6 +1683,12 @@ function GrapeApp() {
   const [approvalTransactionLoading, setApprovalTransactionLoading] = useState(false);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const discoverWebViewRef = useRef<WebView>(null);
+  const discoverAddressRef = useRef<TextInput>(null);
+  useEffect(() => {
+    if (mainTab !== 'discover' || !discoverControlsExpanded || discoverUrl) return;
+    const frame = requestAnimationFrame(() => discoverAddressRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [mainTab, activeDiscoverTabId, discoverControlsExpanded, discoverUrl]);
   const activeDiscoverTab = useMemo(
     () => discoverTabs.find((tab) => tab.id === activeDiscoverTabId) ?? discoverTabs[0],
     [activeDiscoverTabId, discoverTabs]
@@ -1773,13 +1780,14 @@ function GrapeApp() {
       }
       try {
         const savedTabs = tabsRaw ? JSON.parse(tabsRaw) as DiscoverTab[] : [];
-        const validTabs = Array.isArray(savedTabs) ? savedTabs.filter((item) => item?.id && item?.url) : [];
+        const validTabs = Array.isArray(savedTabs) ? savedTabs.filter((item) => item?.id && typeof item.url === 'string') : [];
         if (validTabs.length > 0) {
           setDiscoverTabs(validTabs);
           setActiveDiscoverTabId(validTabs[0].id);
           setDiscoverUrl(validTabs[0].url);
           setDiscoverCurrentUrl(validTabs[0].url);
           setDiscoverUrlInput(validTabs[0].url);
+          setDiscoverControlsExpanded(!validTabs[0].url);
         }
       } catch {
         // Keep the default tab if older browser data is malformed.
@@ -1878,7 +1886,7 @@ function GrapeApp() {
   }, []);
   useEffect(() => {
     if (mainTab === 'discover') {
-      setDiscoverControlsExpanded(false);
+      setDiscoverControlsExpanded(!discoverUrl);
     }
   }, [mainTab]);
   const parsedRestorePayload = useMemo(() => {
@@ -3243,7 +3251,12 @@ function GrapeApp() {
   }
 
   function handleSelectDiscoverTab(tab: DiscoverTab) {
-    setDiscoverControlsExpanded(false);
+    setDiscoverControlsExpanded(!tab.url);
+    setDiscoverMenuOpen(false);
+    setDiscoverCanGoBack(false);
+    setDiscoverCanGoForward(false);
+    setDiscoverLoading(false);
+    setDiscoverSiteIconUrl('');
     Keyboard.dismiss();
     setActiveDiscoverTabId(tab.id);
     setDiscoverUrl(tab.url);
@@ -3278,6 +3291,7 @@ function GrapeApp() {
 
   function handleToggleDiscoverBookmark() {
     const url = discoverCurrentUrl || discoverUrl;
+    if (!url) return;
     const iconUrl = discoverSiteIconUrl || getDiscoverSiteIcon(url);
     if (iconUrl && !isSvgUri(iconUrl)) void Image.prefetch(iconUrl).catch(() => false);
     setDiscoverBookmarks((bookmarks) => {
@@ -6690,11 +6704,14 @@ function GrapeApp() {
               >
                 {discoverLoading ? <ActivityIndicator size="small" color={activeTheme.grape} /> : <Feather name="globe" size={14} color={activeTheme.muted} />}
                 <Text style={styles.discoverCompactAddressText} numberOfLines={1} ellipsizeMode="tail">
-                  {discoverCurrentUrl || discoverUrl}
+                  {discoverCurrentUrl || discoverUrl || 'Enter address'}
                 </Text>
                 <Feather name="chevron-down" size={14} color={activeTheme.muted} />
               </Pressable>
-              <Pressable style={styles.discoverControlButton} onPress={() => setDiscoverControlsExpanded(true)} accessibilityLabel="Show browser tabs and menu">
+              <Pressable style={styles.discoverControlButton} onPress={() => setDiscoverControlsExpanded(true)} accessibilityRole="button" accessibilityLabel={`${discoverTabs.length} open tabs. Show tabs`}>
+                <Text style={styles.discoverTabCount}>{discoverTabs.length}</Text>
+              </Pressable>
+              <Pressable style={styles.discoverControlButton} onPress={() => { setDiscoverControlsExpanded(true); setDiscoverMenuOpen(true); }} accessibilityLabel="Show browser menu">
                 <Feather name="more-vertical" size={18} color={activeTheme.text} />
               </Pressable>
             </View>
@@ -6740,9 +6757,10 @@ function GrapeApp() {
                 <View style={styles.discoverAddressBar}>
                   <Feather name="sliders" size={14} color={activeTheme.muted} />
                   <TextInput
+                    ref={discoverAddressRef}
                     value={discoverUrlInput}
                     onChangeText={setDiscoverUrlInput}
-                    placeholder="Search or enter address"
+                    placeholder="Enter address"
                     placeholderTextColor={activeTheme.muted}
                     autoCapitalize="none"
                     autoCorrect={false}
@@ -6751,14 +6769,17 @@ function GrapeApp() {
                     style={styles.discoverAddressTextInput}
                     onSubmitEditing={() => handleDiscoverNavigate()}
                   />
-                  <Pressable onPress={handleToggleDiscoverBookmark} hitSlop={8} accessibilityLabel={discoverIsBookmarked ? 'Remove bookmark' : 'Bookmark this page'}>
+                  <Pressable disabled={!discoverUrl} onPress={handleToggleDiscoverBookmark} hitSlop={8} accessibilityLabel={discoverIsBookmarked ? 'Remove bookmark' : 'Bookmark this page'}>
                     <Feather name={discoverIsBookmarked ? 'star' : 'bookmark'} size={16} color={discoverIsBookmarked ? activeTheme.grape : activeTheme.muted} />
                   </Pressable>
                 </View>
+                <Pressable style={styles.discoverControlButton} onPress={() => { setDiscoverControlsExpanded((value) => !value); setDiscoverMenuOpen(false); }} accessibilityRole="button" accessibilityLabel={`${discoverTabs.length} open tabs. Toggle tabs`}>
+                  <Text style={styles.discoverTabCount}>{discoverTabs.length}</Text>
+                </Pressable>
                 <Pressable
                   style={styles.discoverControlButton}
-                  onPress={() => setDiscoverControlsExpanded((currentValue) => !currentValue)}
-                  accessibilityLabel={discoverControlsExpanded ? 'Hide browser menu' : 'Show browser menu'}
+                  onPress={() => setDiscoverMenuOpen((value) => !value)}
+                  accessibilityLabel={discoverMenuOpen ? 'Hide browser menu' : 'Show browser menu'}
                 >
                   <Feather name="more-vertical" size={18} color={activeTheme.text} />
                 </Pressable>
@@ -6766,10 +6787,10 @@ function GrapeApp() {
 
           </>}
 
-          {discoverControlsExpanded ? (
+          {discoverControlsExpanded && discoverMenuOpen ? (
             <>
               <View style={styles.discoverMenuActions}>
-                <Pressable style={styles.discoverMenuAction} onPress={() => void Linking.openURL(discoverCurrentUrl || discoverUrl)}>
+                <Pressable disabled={!discoverUrl} style={styles.discoverMenuAction} onPress={() => void Linking.openURL(discoverCurrentUrl || discoverUrl)}>
                   <Feather name="external-link" size={16} color={activeTheme.text} />
                   <Text style={styles.discoverMenuActionText}>Open externally</Text>
                 </Pressable>
@@ -6846,7 +6867,7 @@ function GrapeApp() {
             </View>
           ) : null}
           <View style={styles.discoverWebviewFrame}>
-            <WebView
+            {discoverUrl ? <WebView
               key={activeDiscoverTab?.id ?? 'discover-default'}
               ref={discoverWebViewRef}
               source={{ uri: discoverUrl }}
@@ -6878,7 +6899,7 @@ function GrapeApp() {
               sharedCookiesEnabled
               thirdPartyCookiesEnabled
               style={styles.discoverWebview}
-            />
+            /> : null}
             {discoverLoading ? (
               <View style={styles.discoverLoadingOverlay} pointerEvents="none">
                 <View style={styles.discoverLoadingCard}>
@@ -11769,6 +11790,19 @@ function createStyles(palette: MobileThemePalette) {
     color: palette.text,
     fontSize: 11,
     fontWeight: '700'
+  },
+  discoverTabCount: {
+    borderWidth: 1.5,
+    borderColor: palette.text,
+    color: palette.text,
+    borderRadius: 5,
+    minWidth: 22,
+    height: 24,
+    textAlign: 'center',
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 21,
+    paddingHorizontal: 3
   },
   discoverTabsBar: {
     minHeight: 31,

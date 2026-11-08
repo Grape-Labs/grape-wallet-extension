@@ -1745,6 +1745,7 @@ function PopupPage() {
     refreshedAt: Date.now()
   });
   const [selectedCommunityId, setSelectedCommunityId] = useState<string | null>(null);
+  const [governanceWorkspaceView, setGovernanceWorkspaceView] = useState<{ id: string; view: 'overview' | 'full' }>({ id: '', view: 'overview' });
   const [selectedGovernanceDao, setSelectedGovernanceDao] = useState<string | null>(null);
   const [governanceRefreshNonce, setGovernanceRefreshNonce] = useState(0);
   useEffect(() => { setSelectedCommunityId(null); setSelectedGovernanceDao(null); setGovernance((current) => ({ ...current, daos: [], proposals: [] })); }, [state?.activeAccount?.publicKey, state?.wallet.selectedNetwork]);
@@ -4368,6 +4369,7 @@ function PopupPage() {
   const visibleGovernanceDaos = governance.daos.filter((dao) => [dao.communityVotingPower, dao.councilVotingPower, dao.delegateCommunityVotingPower, dao.delegateCouncilVotingPower].some(hasPositiveGovernancePower)).sort((a, b) => compareGovernancePower(governancePowerForSort(b), governancePowerForSort(a)) || a.realmName.localeCompare(b.realmName) || a.daoId.localeCompare(b.daoId));
   const visibleGovernanceDaoIds = new Set(visibleGovernanceDaos.map((dao) => dao.daoId));
   const workspaceId = selectedCommunityId || selectedGovernanceDao || '';
+  const fullGovernanceWorkspace = governanceWorkspaceView.id === workspaceId && governanceWorkspaceView.view === 'full' && visibleGovernanceDaoIds.has(workspaceId);
   const workspaceSpaces = communitySpaceIds(workspaceId, governance.daos.some(dao => dao.daoId === workspaceId));
   const workspaceReputationId = workspaceSpaces.reputation && (workspaceSpaces.reputation === 'By2sVGZXwfQq6rAiAM3rNPJ9iQfb5e2QhnF4YjJ4Bip' || reputation.spaces.some(space => space.daoId === workspaceSpaces.reputation)) ? workspaceSpaces.reputation : null;
   const workspaceVerificationId = workspaceSpaces.verification && (workspaceSpaces.verification === 'By2sVGZXwfQq6rAiAM3rNPJ9iQfb5e2QhnF4YjJ4Bip' || verification.trackedSpaces.includes(workspaceSpaces.verification) || verification.identities.some(identity => identity.daoId === workspaceSpaces.verification)) ? workspaceSpaces.verification : null;
@@ -6389,6 +6391,8 @@ function PopupPage() {
                 {governanceVoteError ? <p className="danger-box">{governanceVoteError}</p> : null}
                 {selectedCommunityId || selectedGovernanceDao ? <CommunityWorkspace
                   id={(selectedCommunityId || selectedGovernanceDao)!}
+                  governanceView={fullGovernanceWorkspace ? 'full' : 'overview'}
+                  onGovernanceView={view => setGovernanceWorkspaceView({ id: workspaceId, view })}
                   dao={visibleGovernanceDaos.find(dao => dao.daoId === (selectedCommunityId || selectedGovernanceDao))}
                   reputation={reputation.spaces.find(space => space.daoId === workspaceReputationId)}
                   reputationSpaceId={workspaceReputationId}
@@ -6399,7 +6403,7 @@ function PopupPage() {
                   loading={reputationLoading || verificationLoading}
                   incomplete={!!(reputationError || verificationError || governanceError)}
                   formatPower={formatVotingPower}
-                  onBack={() => { setSelectedCommunityId(null); setSelectedGovernanceDao(null); }}
+                  onBack={() => { setSelectedCommunityId(null); setSelectedGovernanceDao(null); setGovernanceWorkspaceView({ id: '', view: 'overview' }); }}
                   onManage={openCommunitySettings}
                   onToken={openAssetDetails}
                 /> : null}
@@ -6408,7 +6412,7 @@ function PopupPage() {
                 {governance.warnings?.length ? <div className="danger-box">{Array.from(new Set(governance.warnings)).map((warning) => <p key={warning}>{warning}</p>)}</div> : null}
                 {!selectedGovernanceDao && !selectedCommunityId && governance.discoveryWarnings?.length ? <details className="muted governance-discovery-note"><summary>Additional DAO discovery is limited</summary><p>The DAOs shown above were found. Some other programs could not be fully checked.</p>{Array.from(new Set(governance.discoveryWarnings)).map((warning) => <p key={warning}>{warning}</p>)}</details> : null}
                 {(() => {
-                  if (!selectedGovernanceDao || governanceLoading || governanceError || (governance.warnings?.length && !visibleGovernanceProposals.length)) return null;
+                  if (fullGovernanceWorkspace || !selectedGovernanceDao || governanceLoading || governanceError || (governance.warnings?.length && !visibleGovernanceProposals.length)) return null;
                   const nowUnixSeconds = Math.floor(Date.now() / 1000);
                   const activeProposals = visibleGovernanceProposals.filter((proposal) => {
                     const timeMeta = getGovernanceProposalTimeMeta(proposal, nowUnixSeconds);

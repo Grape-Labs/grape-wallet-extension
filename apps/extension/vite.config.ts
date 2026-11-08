@@ -169,6 +169,12 @@ function createManifestPlugin(
             matches: ['<all_urls>'],
             js: ['assets/content-script.js'],
             run_at: 'document_end'
+          },
+          {
+            matches: ['https://governance.so/*', 'https://www.governance.so/*'],
+            js: ['assets/content-script.js'],
+            run_at: 'document_start',
+            all_frames: true
           }
         ],
         web_accessible_resources: [
