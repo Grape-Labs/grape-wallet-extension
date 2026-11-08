@@ -1,3 +1,71 @@
+# Grape Wallet 0.5.271
+
+**Released November 8, 2026.** This entry covers extension changes since 0.5.258. Earlier release notes are preserved below.
+
+## Highlights
+
+- Open a DAO's full governance.so interface inside its Grape workspace, with an **Overview / Full governance** switch.
+- Give embedded governance more room with a compact desktop wallet strip and fewer repeated headers.
+- See collection floor prices, the NFT's last indexed sale, and its current Tensor listing price before choosing a listing price.
+- Correct ETH balance display and swap estimates, and keep swap failures visible instead of silently refreshing the form.
+- Keep successfully discovered stake accounts visible when an RPC provider cannot complete every authority lookup.
+
+## Governance and fullscreen layout
+
+- Full governance follows the selected DAO and provides **Reload** and **Open externally** controls.
+- Enabled wallet-provider injection inside governance.so frames so the embedded site can request connection and signing through Grape's existing approval flow.
+- Kept the native overview for voting power, community assets, reputation, verification, and proposal actions.
+- In desktop Full governance mode, condensed the wallet banner into a single strip, placed Back, DAO name, and the view switch on one row, and removed duplicate tabs and headings. The embedded page uses the remaining viewport height.
+
+## NFT prices and Tensor
+
+- Added collection floor price and the NFT's last indexed sale in SOL, with the sale date and a transaction link when available.
+- Floor and sale-history data comes from Magic Eden; the Tensor listing price comes from its on-chain listing account. Sources and refresh times are labelled.
+- Resolves collection pricing by the indexed mint's collection, rather than assuming the NFT's symbol identifies a collection.
+- Excludes listings, bids, transfers, other mints, and explicitly non-SOL payments from the last-sale figure.
+- Reads up to 300 recent indexed activities when searching for a sale. Unavailable prices and missing history remain explicitly unavailable; they are not displayed as zero.
+- Market-data failures do not block the existing Tensor listing and cancellation flow.
+
+## Ethereum balances and swaps
+
+- Fixed native ETH balances above approximately 0.009 ETH being incorrectly marked unavailable and omitted from the portfolio total.
+- Corrected LI.FI output-token decimals so estimates such as ETH to USDC display the actual amount instead of rounding to zero.
+- Added estimated output with its token symbol, minimum received, and native-token USD pricing in the swap form.
+- Preserves quoted gas settings, checks quote account/network consistency, handles exact-amount Ethereum token approvals, and checks confirmed transaction status.
+- Added the Ledger Ethereum swap signing path, including separate token-approval confirmations and connected-account matching. Ledger swaps use device confirmation rather than a wallet-password field.
+- Stopped submission-state changes from triggering a quote refresh that clears the error. Failed swaps retain their error and offer an explicit quote retry.
+
+## Solana staking
+
+- Staker and withdrawal-authority discovery now complete independently. One unavailable index no longer discards the successful lookup.
+- The configured Shyft RPC was verified to accept the staker lookup and reject the withdrawal-authority lookup as an unsupported index. RPC fallback remains in place.
+- Partial discovery shows an explicit warning and labels the displayed totals as loaded accounts and loaded delegation. Withdraw-only accounts may be missing while that lookup remains unavailable.
+- Fixed the Shyft API fallback to read its documented `result.data` response and correctly convert whole-SOL amounts to lamports.
+
+## Mobile source changes — separate app build
+
+- New browser tabs start blank with an empty address field ready for input.
+- Browser controls show the number of open tabs, and blank tabs survive restoration.
+- Moved app shortcuts behind the browser menu.
+- These mobile changes are not installed by the extension ZIP.
+
+## Validation and availability
+
+- Targeted automated tests, extension typechecks, and production packaging passed for these changes. The v0.5.271 ZIP's manifest version, archive integrity, and SHA-256 were verified.
+- Public market-data responses and the configured Shyft discovery filters were checked with read-only requests.
+- Physical Ledger execution has not been verified. Ledger support remains specific to the chain and action; this release does not enable every Ledger action.
+- Embedded governance wallet connection and signing still require an end-to-end browser test. Native governance and the external-page fallback remain available.
+- Market coverage depends on the source; collection floor is a reference listing price, not a guaranteed sale price for an individual NFT.
+
+## Build to share
+
+- **Extension:** `apps/extension/releases/grape_wallet_extension.0.5.271.zip`
+- **Checksum:** `apps/extension/releases/grape_wallet_extension.0.5.271.zip.sha256`
+- Update the existing extension installation and reload its wallet page to use the new build.
+- A shorter announcement is available in `RELEASE_NOTES_DISCORD.md`.
+
+---
+
 # Grape Wallet 0.5.258
 
 **Version 0.5.258** simplifies swap amount selection in the extension.
