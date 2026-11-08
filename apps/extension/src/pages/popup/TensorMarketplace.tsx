@@ -2,12 +2,15 @@ import { useEffect, useState } from 'react';
 import { ExternalLink, RefreshCcw, LoaderCircle } from 'lucide-react';
 import { tensorItemUrl } from '../../shared/tensor';
 import { sendRuntimeMessage } from '../../shared/chrome';
-import type { TensorStatus, TensorPreview, TensorResult } from '../../shared/tensor-types';
+import type { NftMarketData, TensorStatus, TensorPreview, TensorResult } from '../../shared/tensor-types';
 
 const sol = (lamports: string | number) => (Number(lamports) / 1e9).toLocaleString(undefined, { maximumFractionDigits: 9 });
 type Props = { mint: string; owner: string; network: 'mainnet-beta' | 'devnet'; watchOnly: boolean; unlocked: boolean; onChanged?: () => void };
 
 export function TensorMarketplace({ mint, owner, network, watchOnly, unlocked, onChanged }: Props) {
+  const [market, setMarket] = useState<NftMarketData | null>(null);
+  const [marketLoading, setMarketLoading] = useState(false);
+  const [marketError, setMarketError] = useState('');
   const [status, setStatus] = useState<TensorStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -19,10 +22,27 @@ export function TensorMarketplace({ mint, owner, network, watchOnly, unlocked, o
   const url = tensorItemUrl(mint, network);
   async function refresh() {
     setLoading(true); setError(''); setPreview(null);
+    void refreshMarket();
     try { setStatus(await sendRuntimeMessage<TensorStatus>({ type: 'wallet_tensor_status', mint, owner })); }
     catch (error) { setError(error instanceof Error ? error.message : 'Unable to load listing.'); }
     finally { setLoading(false); }
   }
+  async function refreshMarket() {
+    setMarketLoading(true); setMarketError('');
+    try { setMarket(await sendRuntimeMessage<NftMarketData>({ type: 'wallet_tensor_market_data', mint, owner, forceRefresh: true })); }
+    catch { setMarket(null); setMarketError('Market data is temporarily unavailable.'); }
+    finally { setMarketLoading(false); }
+  }
+  useEffect(() => {
+    if (!url || !owner) return;
+    let cancelled = false;
+    setMarket(null); setMarketError(''); setMarketLoading(true);
+    void sendRuntimeMessage<NftMarketData>({ type: 'wallet_tensor_market_data', mint, owner })
+      .then(value => { if (!cancelled) setMarket(value); })
+      .catch(() => { if (!cancelled) setMarketError('Market data is temporarily unavailable.'); })
+      .finally(() => { if (!cancelled) setMarketLoading(false); });
+    return () => { cancelled = true; };
+  }, [mint, owner, url]);
   useEffect(() => {
     if (!url || !owner) return;
     let cancelled = false;
@@ -55,6 +75,15 @@ export function TensorMarketplace({ mint, owner, network, watchOnly, unlocked, o
     <div className="tensor-marketplace-heading"><div><span className="dashboard-eyebrow">Tensor marketplace</span><h2>{status?.listing ? 'Manage listing' : 'List your NFT'}</h2></div>
       <button type="button" className="mini-icon-button subtle" title="Refresh listing" aria-label="Refresh listing" disabled={busy || loading} onClick={() => void refresh()}>{loading ? <LoaderCircle size={18} className="tensor-loading" /> : <RefreshCcw size={18} />}</button>
     </div>
+    <div className="nft-market-prices" aria-label="NFT market prices" aria-busy={marketLoading}>
+      <div><small>Collection floor</small><strong>{marketLoading ? 'Loading…' : market?.floorPriceSol != null ? `${market.floorPriceSol.toLocaleString(undefined, { maximumFractionDigits: 9 })} SOL` : 'Unavailable'}</strong><span>{market?.collectionName ?? 'Magic Eden listings'}</span></div>
+      <div><small>Last indexed sale · this NFT</small><strong>{marketLoading ? 'Loading…' : market?.lastSale ? `${market.lastSale.priceSol.toLocaleString(undefined, { maximumFractionDigits: 9 })} SOL` : 'Unavailable'}</strong>
+        {market?.lastSale ? <span>{new Date(market.lastSale.timestamp * 1000).toLocaleString()}{market.lastSale.signature ? <> · <a href={`https://explorer.solana.com/tx/${market.lastSale.signature}`} target="_blank" rel="noopener noreferrer">Transaction <ExternalLink size={11} /></a></> : null}</span> : <span>{marketLoading ? 'Checking indexed sales…' : 'Not found in available sale history'}</span>}
+      </div>
+      <div><small>Tensor listing</small><strong>{loading ? 'Loading…' : status?.listing ? status.listing.currency ? 'Non-SOL listing' : `${sol(status.listing.priceLamports)} SOL` : status?.supported ? 'Not listed' : 'Unavailable'}</strong><span>On-chain listing price</span></div>
+    </div>
+    <p className="nft-market-source muted">{marketLoading ? 'Fetching market prices…' : marketError || `Floor and indexed sale data: Magic Eden${market ? ' · Updated ' + new Date(market.fetchedAt).toLocaleTimeString() : ''}. Coverage varies by marketplace.`}</p>
+    {market?.warnings.map(warning => <p className="muted" key={warning}>{warning}</p>)}
     {loading ? <p role="status">Checking on-chain listing…</p> : null}
     {status?.listing ? <p>Listed for <strong>{status.listing.currency ? status.listing.priceLamports + ' base units' : sol(status.listing.priceLamports) + ' SOL'}</strong>{status.listing.expiry > 0 ? ' · Expires ' + new Date(status.listing.expiry * 1000).toLocaleString() : ''}</p> : null}
     {!loading && status && !status.supported ? <p>{status.reason}</p> : null}

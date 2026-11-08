@@ -8,3 +8,12 @@ export type TensorPreview = {
   expiresAt: number;
 };
 export type TensorResult = { signature: string; confirmed: boolean; error?: string };
+
+export type NftMarketData = {
+  source: 'Magic Eden';
+  fetchedAt: number;
+  collectionName?: string;
+  floorPriceSol: number | null;
+  lastSale: { priceSol: number; timestamp: number; signature: string | null } | null;
+  warnings: string[];
+};

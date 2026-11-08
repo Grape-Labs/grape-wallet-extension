@@ -563,7 +563,8 @@ function normalizeStakeAccount(account: Record<string, unknown>): ShyftStakeAcco
     return null;
   }
 
-  const rawBalance = account.lamports ?? account.balance ?? account.total_amount ?? 0;
+  const lamports = account.lamports != null ? parseNumberish(account.lamports)
+    : Math.round(parseNumberish(account.balance ?? account.total_amount ?? 0) * 1_000_000_000);
   const rawDelegated =
     account.delegated_lamports ??
     account.delegated_stake ??
@@ -574,12 +575,14 @@ function normalizeStakeAccount(account: Record<string, unknown>): ShyftStakeAcco
     typeof account.authorized === 'object' && account.authorized
       ? (account.authorized as { staker?: unknown; withdrawer?: unknown })
       : undefined;
-  const toLamports = (value: number) => (Number.isInteger(value) ? value : Math.round(value * 1_000_000_000));
+  const delegatedLamports = account.delegated_lamports != null
+    ? parseNumberish(account.delegated_lamports)
+    : Math.round(parseNumberish(rawDelegated) * 1_000_000_000);
 
   return {
     address,
-    lamports: toLamports(parseNumberish(rawBalance)),
-    delegatedLamports: toLamports(parseNumberish(rawDelegated)),
+    lamports,
+    delegatedLamports,
     state: normalizeString(account.state) ?? normalizeString(account.status) ?? 'unknown',
     voter:
       normalizeString(account.voter) ??
@@ -667,6 +670,8 @@ export async function fetchShyftStakeAccounts(
     });
     const pageItems = Array.isArray(payload.result)
       ? payload.result
+      : Array.isArray((payload.result as { data?: unknown } | undefined)?.data)
+        ? ((payload.result as { data: unknown[] }).data)
       : Array.isArray((payload.result as { stake_accounts?: unknown } | undefined)?.stake_accounts)
         ? ((payload.result as { stake_accounts?: unknown }).stake_accounts as unknown[])
         : [];

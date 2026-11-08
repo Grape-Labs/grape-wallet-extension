@@ -1784,6 +1784,7 @@ function PopupPage() {
   const [stakeWithdrawAmount, setStakeWithdrawAmount] = useState('');
   const [stakePassword, setStakePassword] = useState('');
   const [stakeSubmitting, setStakeSubmitting] = useState<'stake' | 'deactivate' | 'withdraw' | null>(null);
+  const [stakeWarnings, setStakeWarnings] = useState<string[]>([]);
   const [stakeError, setStakeError] = useState<string | null>(null);
   const [stakeResult, setStakeResult] = useState<WalletStakeActionResponse | null>(null);
   const [assetDetails, setAssetDetails] = useState<TokenDetailsResponse | null>(null);
@@ -2027,6 +2028,7 @@ function PopupPage() {
       setStakeAccounts([]);
       setStakeValidators([]);
       setStakeSource('none');
+      setStakeWarnings([]);
       return;
     }
 
@@ -2039,11 +2041,13 @@ function PopupPage() {
 
       if (stakeAccountsResult.status === 'fulfilled') {
         setStakeAccounts(stakeAccountsResult.value.accounts);
+        setStakeWarnings(stakeAccountsResult.value.warnings ?? []);
         setStakeSource(stakeAccountsResult.value.source);
         setStakeError(null);
       } else {
         setStakeAccounts([]);
         setStakeSource('none');
+        setStakeWarnings([]);
         setStakeError(stakeAccountsResult.reason instanceof Error ? stakeAccountsResult.reason.message : 'Unable to load stake accounts.');
       }
 
@@ -6656,6 +6660,7 @@ function PopupPage() {
               </div>
 
               {stakeError ? <p className="danger-box">{stakeError}</p> : null}
+              {stakeWarnings.length > 0 ? <div className="warning-box" role="status">{stakeWarnings.map(warning => <p key={warning}>{warning}</p>)}</div> : null}
               {stakeResult ? (
                 <div className="success-box staking-status-box">
                   <strong>{stakeResult.action === 'stake' ? 'Stake submitted' : stakeResult.action === 'deactivate' ? 'Harvest started' : 'Withdraw submitted'}</strong>
@@ -6665,11 +6670,11 @@ function PopupPage() {
 
               <div className="staking-summary-grid">
                 <div className="staking-summary-card">
-                  <span className="muted">Stake accounts</span>
+                  <span className="muted">{stakeWarnings.length ? 'Loaded stake accounts' : 'Stake accounts'}</span>
                   <strong>{stakeLoading ? '...' : stakeError ? 'Unavailable' : stakeAccounts.length}</strong>
                 </div>
                 <div className="staking-summary-card">
-                  <span className="muted">Delegated</span>
+                  <span className="muted">{stakeWarnings.length ? 'Loaded delegated' : 'Delegated'}</span>
                   <strong>
                     {stakeLoading
                       ? '...'
@@ -6697,7 +6702,7 @@ function PopupPage() {
                   ))}
                 </div>
               ) : (
-                <p className="muted">{stakeLoading ? 'Loading stake accounts...' : stakeError ? 'Stake balances could not be checked. Refresh to try again.' : 'No native stake accounts found yet.'}</p>
+                <p className="muted">{stakeLoading ? 'Loading stake accounts...' : stakeError ? 'Stake balances could not be checked. Refresh to try again.' : stakeWarnings.length ? 'No stake accounts found in the completed lookups. Discovery is incomplete.' : 'No native stake accounts found yet.'}</p>
               )}
 
               <div className="staking-form-grid">

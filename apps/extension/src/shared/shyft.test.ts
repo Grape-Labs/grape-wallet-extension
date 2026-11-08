@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { fetchShyftCollections, fetchShyftTransactionHistory } from './shyft';
+import { fetchShyftStakeAccounts, fetchShyftCollections, fetchShyftTransactionHistory } from './shyft';
 
 describe('shyft collections parsing', () => {
   afterEach(() => {
@@ -82,5 +82,34 @@ describe('activity transfer identity', () => {
     })));
     const items = await fetchShyftTransactionHistory('mainnet-beta', 'wallet');
     expect(items[0].actions[0]).toMatchObject({ amount: '50', mint: 'usdc-mint', sender: 'wallet', recipient: 'recipient' });
+  });
+});
+
+describe('Shyft stake account responses', () => {
+  afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
+  it('reads documented result.data and converts whole SOL amounts into lamports', async () => {
+    vi.stubEnv('VITE_GRAPE_SHYFT_API_KEY', 'test-key');
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true, json: async () => ({ success: true, result: { data: [{
+        stake_account_address: 'stake-1', total_amount: 2, delegated_amount: 1,
+        stake_authority_address: 'staker', withdraw_authority_address: 'withdrawer',
+        vote_account_address: 'validator', state: 'active'
+      }] } })
+    })));
+    expect(await fetchShyftStakeAccounts('mainnet-beta', 'wallet')).toEqual([{
+      address: 'stake-1', lamports: 2000000000, delegatedLamports: 1000000000,
+      staker: 'staker', withdrawer: 'withdrawer', voter: 'validator', state: 'active'
+    }]);
+  });
+  it('preserves explicit lamport units in legacy responses', async () => {
+    vi.stubEnv('VITE_GRAPE_SHYFT_API_KEY', 'test-key');
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true, json: async () => ({ success: true, result: [{
+        address: 'stake-1', lamports: 1234567890, delegated_lamports: 1000000000
+      }] })
+    })));
+    const accounts = await fetchShyftStakeAccounts('mainnet-beta', 'wallet');
+    expect(accounts[0].lamports).toBe(1234567890);
+    expect(accounts[0].delegatedLamports).toBe(1000000000);
   });
 });

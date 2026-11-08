@@ -770,6 +770,7 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     programId: z.string().min(32),
     password: z.string().min(1).optional()
   }),
+  z.object({ type: z.literal('wallet_tensor_market_data'), mint: z.string().min(32).max(44), owner: z.string().min(32).max(44), forceRefresh: z.boolean().optional() }),
   z.object({ type: z.literal('wallet_tensor_status'), mint: z.string().min(32).max(44), owner: z.string().min(32).max(44) }),
   z.object({ type: z.literal('wallet_tensor_listings'), owner: z.string().min(32).max(44) }),
   z.object({ type: z.literal('wallet_tensor_preview'), mint: z.string().min(32).max(44), owner: z.string().min(32).max(44), action: z.enum(['list', 'cancel']), price: z.string().max(24).optional() }),

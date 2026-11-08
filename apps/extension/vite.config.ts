@@ -140,6 +140,7 @@ function createManifestPlugin(
           'https://api.mainnet-beta.solana.com/*',
           'https://api.devnet.solana.com/*',
           'https://api.coingecko.com/*',
+          'https://api-mainnet.magiceden.dev/*',
           'https://api.geckoterminal.com/*',
           'https://solana.com/*',
           'https://blog.ethereum.org/*',

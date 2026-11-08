@@ -1,3 +1,5 @@
+import { fetchNftMarketData } from './nft-market-data';
+import { discoverStakeAccountsByAuthority } from './stake-discovery';
 import { buildTensorTransaction, inspectTensorNft } from './tensor-marketplace';
 import { getBase58Decoder } from '@solana/web3-v2';
 import { describeGovernanceVote } from '../../../../packages/solana/src/governanceVote';
@@ -3663,13 +3665,10 @@ class WalletController {
       throw lastError;
     };
 
-    const [asStaker, asWithdrawer] = await Promise.all([
-      getProgramAccountsByAuthority(12),
-      getProgramAccountsByAuthority(44)
-    ]);
+    const discovery = await discoverStakeAccountsByAuthority(getProgramAccountsByAuthority);
 
     const rowsByAddress = new Map<string, StakeAccountRow>();
-    [...asStaker, ...asWithdrawer].forEach((entry) => {
+    discovery.accounts.forEach((entry) => {
       const address = entry.pubkey.toBase58();
       const current = rowsByAddress.get(address);
       rowsByAddress.set(address, {
@@ -3747,6 +3746,7 @@ class WalletController {
     enrichedRows.sort((left, right) => right.lamports - left.lamports);
     return {
       accounts: enrichedRows,
+      warnings: discovery.warnings,
       source: enrichedRows.length > 0 ? ('rpc' as const) : ('none' as const),
       network: walletState.selectedNetwork,
       refreshedAt: Date.now()
@@ -5269,6 +5269,11 @@ class WalletController {
     if (selectedWallet.chain !== 'solana' || walletState.selectedNetwork !== 'mainnet-beta') throw new Error('Tensor trading is available on Solana mainnet only.');
     if (!account || account.publicKey !== expectedOwner) throw new Error('Wallet changed. Reopen the NFT and review again.');
     return { walletState, selectedWallet, account, connection: this.createConnection('mainnet-beta', walletState) };
+  }
+
+  async tensorMarketData(mint: string, owner: string, forceRefresh = false) {
+    await this.tensorContext(owner);
+    return fetchNftMarketData(mint, forceRefresh);
   }
 
   async tensorStatus(mint: string, owner: string) {
@@ -9623,12 +9628,15 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
             })
           );
           break;
+        case 'wallet_tensor_market_data':
         case 'wallet_tensor_status':
         case 'wallet_tensor_listings':
         case 'wallet_tensor_preview':
         case 'wallet_tensor_execute': {
           if (_sender.id !== chrome.runtime.id || !_sender.url?.startsWith(chrome.runtime.getURL(''))) throw new Error('Tensor actions require the wallet interface.');
-          if (message.type === 'wallet_tensor_status') sendResponse(await controller.tensorStatus(message.mint, message.owner));
+          if (message.type === 'wallet_tensor_market_data') {
+            sendResponse(await controller.tensorMarketData(message.mint, message.owner, message.forceRefresh));
+          } else if (message.type === 'wallet_tensor_status') sendResponse(await controller.tensorStatus(message.mint, message.owner));
           else if (message.type === 'wallet_tensor_listings') sendResponse(await controller.tensorListings(message.owner));
           else if (message.type === 'wallet_tensor_preview') sendResponse(await controller.tensorPreview(message));
           else sendResponse(await controller.tensorExecute(message));

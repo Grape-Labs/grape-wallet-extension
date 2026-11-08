@@ -485,6 +485,7 @@ export type StakeAccountRow = {
 };
 
 export type WalletStakeAccountsResponse = {
+  warnings?: string[];
   accounts: StakeAccountRow[];
   source: 'shyft' | 'rpc' | 'none';
   network: WalletState['selectedNetwork'];

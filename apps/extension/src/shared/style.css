@@ -12242,3 +12242,11 @@ body:has(.nft-detail-workspace) .page-shell { gap: 12px; }
   body[data-page='wallet'] .community-workspace-full .governance-embed-toolbar strong { display: none; }
   body[data-page='wallet'] .community-workspace-full .governance-embed-frame { height: calc(100dvh - 225px); min-height: 550px; }
 }
+
+.nft-market-prices { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 16px 0 8px; }
+.nft-market-prices > div { display: grid; align-content: start; gap: 8px; padding: 16px; border: 1px solid var(--theme-divider); border-radius: 14px; background: var(--theme-surface-soft); min-width: 0; }
+.nft-market-prices small, .nft-market-prices span { color: var(--theme-subtle); font-size: 12px; }
+.nft-market-prices strong { font-size: 20px; overflow-wrap: anywhere; }
+.nft-market-prices a { color: var(--theme-accent); }
+.nft-market-source { font-size: 12px; }
+@media (max-width: 600px) { .nft-market-prices { grid-template-columns: 1fr; } }
