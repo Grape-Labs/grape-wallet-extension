@@ -1,3 +1,20 @@
+import { normalizeDecimalSeparator, sanitizeDecimalInput, normalizeDecimalInputForSubmit } from './src/amountInput';
+import { BottomSheetModalProvider, BottomSheetScrollView } from '@gorhom/bottom-sheet';
+import { GestureHandlerRootView, ScrollView as GestureScrollView } from 'react-native-gesture-handler';
+import * as Haptics from 'expo-haptics';
+import { SelectionSheet, SheetSearchInput } from './src/SelectionSheet';
+import { GrapeStartupMark } from './src/GrapeStartupMark';
+import { rememberPickerSelection, prioritizeRecent, parsePickerRecents, type PickerRecents } from './src/pickerRecents';
+import { createDeferredWalletNavigation } from './src/walletNavigationPolicy';
+import { createNavigationContainerRef, StackActions } from '@react-navigation/native';
+import { NativeWalletNavigation, isWalletTab, type WalletStack, type WalletRoute } from './src/NativeWalletNavigation';
+import { createDraftWriteQueue, parseSendDraft, sendDraftKey, serializeSendDraft, type SendDraft } from './src/sendDraft';
+import { activityStatusLabel } from './src/activityDetails';
+import { createReviewConfirmation, type TransactionReview } from './src/transactionReview';
+import { fetchSubmissionStatus, recordSubmission } from './src/submissionTracking';
+import { normalizeDiscoverUrlInput } from './src/discoverNavigation';
+import { openDiscoverExternally } from './src/discoverExternal';
+import { getExactSendRatio } from './src/sendAmount';
 import { ZCASH_DISCOVER_APPS, ZCASH_DISCOVER_NOTE } from '@grape/core';
 import { isValidBridgeRecipient } from '@grape/core';
 import { SendPrivacyPicker } from './src/SendPrivacyPicker';
@@ -28,6 +45,9 @@ import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
 import WebView from 'react-native-webview';
 import type { WebViewMessageEvent, WebViewNavigation } from 'react-native-webview';
 import {
+  AccessibilityInfo,
+  findNodeHandle,
+  AppState,
   ActivityIndicator,
   Alert,
   Animated,
@@ -84,6 +104,12 @@ import {
   castWalletGovernanceVote,
   createMobileDeviceLinkSession,
   executeWalletBridge,
+  prepareWalletRoute,
+  getRouteNativeAmount,
+  getWalletSwapMaximum,
+  getWalletBridgeMaximum,
+  getZcashSubmissionStatus,
+  type PreparedMobileRoute,
   executeWalletSwap,
   exportMobileWalletPrivateKey,
   importMobileDeviceLink,
@@ -116,6 +142,7 @@ import {
   MOBILE_WALLET_PASSCODE_LENGTH,
   persistMobileWalletState,
   sendWalletAsset,
+  estimateWalletSend,
   updateTrackedGovernanceDaos,
   updateTrackedReputationSpaces,
   updateTrackedVerificationSpaces,
@@ -129,6 +156,8 @@ import {
   fetchMobileSolanaTokenMarket,
   fetchMobileJupiterStocks,
   getMobileSolanaRpcUrl,
+  getMobileEthereumRpcUrl,
+  getMobileMonadRpcUrl,
   getMobileSupportedBridgeDestinations,
   MOBILE_SOLANA_DEFAULT_RPC_URL,
   MOBILE_JUPITER_SOL_MINT,
@@ -155,7 +184,6 @@ import {
 import { entropyToWalletMnemonic, type WalletMnemonicLength } from '../../packages/solana/src/mnemonic';
 import { inspectTransaction, type TransactionSummary } from '../../packages/solana/src/transactions';
 
-const GRAPE_LOGO_IMAGE = require('./assets/grape_logo_white.png');
 const APP_VERSION = Constants.expoConfig?.version ?? 'unknown';
 const LEDGER_ACCOUNT_SCAN_BATCH_SIZE = 10;
 const SOLANA_TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
@@ -245,8 +273,6 @@ const WALLET_FAQ = [
 
 const GRAPE_DISCOVER_DEFAULT_URL = '';
 const OG_REPUTATION_DISCOVERY_URL = 'https://vine.governance.so';
-const SOLANA_SEND_FEE_RESERVE_SOL = 0.00001;
-const SOLANA_TOKEN_SEND_RESERVE_SOL = 0.0021;
 const MOBILE_SWAP_SLIPPAGE_BPS = 50;
 const MOBILE_REBALANCE_STABLE_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const MOBILE_POPULAR_SWAP_SYMBOLS = ['USDC', 'USDT', 'SOL', 'JUP', 'BONK'] as const;
@@ -1227,37 +1253,6 @@ function getMobileAssetAmountDecimals(asset: MobileAsset | null | undefined) {
   return asset.tokenType === 'spl' ? asset.decimals ?? 0 : 9;
 }
 
-function sanitizeDecimalInput(value: string, maxDecimals: number) {
-  const safeDecimals = Number.isFinite(maxDecimals) ? Math.max(0, Math.floor(maxDecimals)) : 0;
-  const digitsAndDots = value.replace(/[^\d.]/g, '');
-  if (!digitsAndDots) {
-    return '';
-  }
-
-  const firstDotIndex = digitsAndDots.indexOf('.');
-  const hasDot = firstDotIndex !== -1;
-  const normalized = hasDot
-    ? `${digitsAndDots.slice(0, firstDotIndex)}.${digitsAndDots.slice(firstDotIndex + 1).replace(/\./g, '')}`
-    : digitsAndDots.replace(/\./g, '');
-  let [wholePart = '', fractionPart = ''] = normalized.split('.');
-  wholePart = wholePart.replace(/^0+(?=\d)/, '');
-
-  if (!hasDot) {
-    return wholePart;
-  }
-
-  if (safeDecimals === 0) {
-    return wholePart || '0';
-  }
-
-  fractionPart = fractionPart.slice(0, safeDecimals);
-  return `${wholePart || '0'}.${fractionPart}`;
-}
-
-function normalizeDecimalInputForSubmit(value: string, maxDecimals: number) {
-  return sanitizeDecimalInput(value, maxDecimals).replace(/\.$/, '');
-}
-
 function formatSwapAmountInput(amount: number, maxDecimals: number) {
   if (!Number.isFinite(amount) || amount <= 0) {
     return '';
@@ -1332,57 +1327,6 @@ async function openVerificationSpace(daoId: string) {
   }
 }
 
-function normalizeDiscoverUrlInput(input: string) {
-  const trimmed = input.trim();
-  if (!trimmed) {
-    return {
-      url: null as string | null,
-      error: null as string | null
-    };
-  }
-
-  if (/\s/.test(trimmed)) {
-    return {
-      url: null as string | null,
-      error: 'URLs cannot contain spaces.'
-    };
-  }
-
-  const candidate = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
-
-  try {
-    const parsed = new URL(candidate);
-    if (!['https:', 'http:'].includes(parsed.protocol)) {
-      return {
-        url: null as string | null,
-        error: 'Only http and https URLs are supported in Grape Discover.'
-      };
-    }
-
-    if (!parsed.hostname) {
-      return {
-        url: null as string | null,
-        error: 'Enter a valid website address.'
-      };
-    }
-
-    const isLocalhost = parsed.hostname === 'localhost' || parsed.hostname.endsWith('.local');
-    const isIpAddress = /^\d{1,3}(?:\.\d{1,3}){3}$/.test(parsed.hostname);
-    if (parsed.protocol === 'http:' && !isLocalhost && !isIpAddress) {
-      parsed.protocol = 'https:';
-    }
-
-    return {
-      url: parsed.toString(),
-      error: null as string | null
-    };
-  } catch {
-    return {
-      url: null as string | null,
-      error: 'Enter a valid website address.'
-    };
-  }
-}
 
 function formatDiscoverUrlDisplay(input: string) {
   const trimmed = input.trim();
@@ -1468,10 +1412,21 @@ function isHexColor(value: string) {
 
 function GrapeApp() {
   const safeAreaInsets = useSafeAreaInsets();
-  const { width, height } = useWindowDimensions();
+  const { width } = useWindowDimensions();
   const [screen, setScreen] = useState<Screen>('loading');
   const [launchStatus, setLaunchStatus] = useState('Loading your wallet state');
-  const [mainTab, setMainTab] = useState<MainTab>('home');
+  const [mainTab, setMainTabState] = useState<MainTab>('home');
+  const navigationRef = useRef(createNavigationContainerRef<WalletStack>()).current;
+  const [nativeRoute, setNativeRoute] = useState<WalletRoute>('home');
+  const deferredNavigation = useRef(createDeferredWalletNavigation()).current;
+  const navigationBusy = useRef(false);
+  const assetSelectionId = useRef(0);
+  const assetActivitySelectionId = useRef(0);
+  const [reduceMotion, setReduceMotion] = useState(true);
+  const [submissionNotice, setSubmissionNotice] = useState<string | null>(null);
+  const [transactionReview, setTransactionReview] = useState<TransactionReview | null>(null);
+  const submissionBusy = useRef(false);
+  const [appVisibility, setAppVisibility] = useState(AppState.currentState);
   const [balanceUnit, setBalanceUnit] = useState<'USD' | 'SOL'>('USD');
   const [walletState, setWalletState] = useState<MobileWalletState>(createEmptyMobileWalletState());
   const [error, setError] = useState<string | null>(null);
@@ -1504,7 +1459,7 @@ function GrapeApp() {
   const [assets, setAssets] = useState<MobileAsset[]>([]);
   const [walletValueCache, setWalletValueCache] = useState<Record<string, { valueUsd: number; cachedAt: number }>>({});
   const [remoteActivity, setRemoteActivity] = useState<MobileActivity[]>([]);
-  const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
+  const [selectedAssetId, setSelectedAssetIdState] = useState<string | null>(null);
   const [assetPriceHistory, setAssetPriceHistory] = useState<MobileTokenPriceHistoryPoint[]>([]);
   const [assetMarketData, setAssetMarketData] = useState<MobileTokenMarketData | null>(null);
   const [assetPriceHistoryLoading, setAssetPriceHistoryLoading] = useState(false);
@@ -1515,7 +1470,7 @@ function GrapeApp() {
   const [assetBurnConfirmation, setAssetBurnConfirmation] = useState('');
   const [assetCleanupLoading, setAssetCleanupLoading] = useState(false);
   const [assetCleanupError, setAssetCleanupError] = useState<string | null>(null);
-  const [selectedAssetActivity, setSelectedAssetActivity] = useState<MobileActivity | null>(null);
+  const [selectedAssetActivity, setSelectedAssetActivityState] = useState<MobileActivity | null>(null);
   const [assetTokenActivity, setAssetTokenActivity] = useState<MobileActivity[]>([]);
   const [assetTokenActivityLoading, setAssetTokenActivityLoading] = useState(false);
   const [assetsLoading, setAssetsLoading] = useState(false);
@@ -1524,6 +1479,12 @@ function GrapeApp() {
   const [submitLoading, setSubmitLoading] = useState(false);
   const [submitStatus, setSubmitStatus] = useState<string | null>(null);
   const [sendRecipient, setSendRecipient] = useState('');
+  const [savedSendDraft, setSavedSendDraft] = useState<SendDraft | null>(null);
+  const [loadedDraftKey, setLoadedDraftKey] = useState<string | null>(null);
+  const [draftSaveFailed, setDraftSaveFailed] = useState(false);
+  const draftWriteQueue = useRef(createDraftWriteQueue()).current;
+  const [activityDetailId, setActivityDetailId] = useState<string | null>(null);
+  const [copiedActivityId, setCopiedActivityId] = useState(false);
   const [sendAmount, setSendAmount] = useState('');
   const [sendLoading, setSendLoading] = useState(false);
   const [unlocked, setUnlocked] = useState(false);
@@ -1532,7 +1493,17 @@ function GrapeApp() {
   const [labelWallet, setLabelWallet] = useState<MobileWallet | null>(null);
   const [walletLabelInput, setWalletLabelInput] = useState('');
   const [chainPickerVisible, setChainPickerVisible] = useState(false);
-  const [sendScreenVisible, setSendScreenVisible] = useState(false);
+  const [walletPickerSearch, setWalletPickerSearch] = useState('');
+  const [chainPickerSearch, setChainPickerSearch] = useState('');
+  const [pickerRecents, setPickerRecents] = useState<PickerRecents>({});
+  const pickerRecentsRef = useRef<PickerRecents>({});
+  const pickerWrites = useRef(createDraftWriteQueue()).current;
+  type PickerName = 'wallet' | 'chain' | 'send' | 'swapInput' | 'swapOutput';
+  const pickerTriggers = useRef<Record<PickerName, View | null>>({ wallet: null, chain: null, send: null, swapInput: null, swapOutput: null });
+  const pickerOrigin = useRef<{ name: PickerName; route: WalletRoute } | null>(null);
+
+  const sendScreenVisible = nativeRoute === 'send';
+  function setSendScreenVisible(visible: boolean) { setFlowVisible('send', visible); }
   const [sendAssetId, setSendAssetId] = useState<string | null>(null);
   const [sendAssetPickerVisible, setSendAssetPickerVisible] = useState(false);
   const [sendAssetSearch, setSendAssetSearch] = useState('');
@@ -1543,7 +1514,8 @@ function GrapeApp() {
   const [sendPrivate, setSendPrivate] = useState(false);
   const [privateSendReview, setPrivateSendReview] = useState(false);
   const [houdiniDeposit, setHoudiniDeposit] = useState<{ entry: HoudiniOrder; assetId: string; owner: string } | null>(null);
-  const [swapScreenVisible, setSwapScreenVisible] = useState(false);
+  const swapScreenVisible = nativeRoute === 'swap';
+  function setSwapScreenVisible(visible: boolean) { setFlowVisible('swap', visible); }
   const [swapInputAssetId, setSwapInputAssetId] = useState<string | null>(null);
   const [swapOutputAssetId, setSwapOutputAssetId] = useState<string | null>(null);
   const [swapInputPickerVisible, setSwapInputPickerVisible] = useState(false);
@@ -1557,7 +1529,8 @@ function GrapeApp() {
   const [swapQuoteLoading, setSwapQuoteLoading] = useState(false);
   const [swapExecuteLoading, setSwapExecuteLoading] = useState(false);
   const [swapError, setSwapError] = useState<string | null>(null);
-  const [rebalanceScreenVisible, setRebalanceScreenVisible] = useState(false);
+  const rebalanceScreenVisible = nativeRoute === 'rebalance';
+  function setRebalanceScreenVisible(visible: boolean) { setFlowVisible('rebalance', visible); }
   const [rebalanceAssetSearch, setRebalanceAssetSearch] = useState('');
   const [rebalanceSelectedMints, setRebalanceSelectedMints] = useState<Set<string>>(new Set());
   const [rebalanceWeights, setRebalanceWeights] = useState<Record<string, string>>({});
@@ -1567,13 +1540,16 @@ function GrapeApp() {
   const [rebalanceProgress, setRebalanceProgress] = useState<string | null>(null);
   const [rebalanceRiskAccepted, setRebalanceRiskAccepted] = useState(false);
   const [rebalanceEnablePrompt, setRebalanceEnablePrompt] = useState(false);
-  const [bridgeScreenVisible, setBridgeScreenVisible] = useState(false);
+  const bridgeScreenVisible = nativeRoute === 'bridge';
+  function setBridgeScreenVisible(visible: boolean) { setFlowVisible('bridge', visible); }
   const [bridgeAmount, setBridgeAmount] = useState('');
   const [bridgeToChain, setBridgeToChain] = useState<MobileWalletState['selectedChain']>('ethereum');
   const [bridgeDestinationWalletId, setBridgeDestinationWalletId] = useState<string | null>(null);
   const [bridgeExternalAddress, setBridgeExternalAddress] = useState('');
   const [bridgeZcashReview, setBridgeZcashReview] = useState(false);
   const bridgeRequestRef = useRef(0);
+  const swapRequestRef = useRef(0);
+  const sendRequestRef = useRef(0);
   const [bridgeQuote, setBridgeQuote] = useState<MobileBridgeQuoteSummary | null>(null);
   const [bridgeSelectedRouteId, setBridgeSelectedRouteId] = useState<string | null>(null);
   const [bridgeQuoteLoading, setBridgeQuoteLoading] = useState(false);
@@ -1900,7 +1876,214 @@ function GrapeApp() {
     }
   }, [restorePayload]);
 
+
+  useEffect(() => {
+    let mounted = true;
+    void AccessibilityInfo.isReduceMotionEnabled().then((enabled) => { if (mounted) setReduceMotion(enabled); }).catch(() => undefined);
+    const subscription = AccessibilityInfo.addEventListener('reduceMotionChanged', setReduceMotion);
+    return () => { mounted = false; subscription.remove(); };
+  }, []);
+
+  function requestNavigation(action: () => void) {
+    if (!navigationRef.isReady()) return;
+    deferredNavigation.request(action, navigationBusy.current);
+  }
+
+  function setMainTab(tab: MainTab) {
+    if (isWalletTab(tab)) {
+      if (!navigationRef.isReady()) setMainTabState(tab);
+      requestNavigation(() => {
+        const root = navigationRef.getRootState();
+        if (root && root.index > 0) navigationRef.dispatch({ ...StackActions.popToTop(), target: root.key });
+        navigationRef.navigate('tabs', { screen: tab });
+      });
+    } else {
+      requestNavigation(() => navigationRef.navigate(tab));
+    }
+  }
+
+  function setFlowVisible(route: 'send' | 'swap' | 'bridge' | 'rebalance', visible: boolean) {
+    if (visible) { dismissSelectionPickers(); requestNavigation(() => navigationRef.navigate(route)); }
+    else if (navigationRef.isReady() && navigationRef.getCurrentRoute()?.name === route) {
+      requestNavigation(() => { if (navigationRef.getCurrentRoute()?.name === route && navigationRef.canGoBack()) navigationRef.goBack(); });
+    }
+  }
+
+  function setSelectedAssetId(id: string | null) {
+    if (id) {
+      const selectionId = ++assetSelectionId.current;
+      setSelectedAssetIdState(id);
+      setSelectedAssetActivityState(null);
+      setAssetCleanupMode(null);
+      setAssetBurnConfirmation('');
+      requestNavigation(() => navigationRef.navigate('asset', { selectionId }));
+    } else if (['asset', 'assetActivity'].includes(navigationRef.getCurrentRoute()?.name ?? '')) {
+      requestNavigation(() => navigationRef.dispatch(StackActions.popToTop()));
+    } else setSelectedAssetIdState(null);
+  }
+
+  function setSelectedAssetActivity(activity: MobileActivity | null) {
+    if (activity) {
+      const selectionId = ++assetActivitySelectionId.current;
+      setSelectedAssetActivityState(activity);
+      requestNavigation(() => navigationRef.navigate('assetActivity', { selectionId }));
+    } else if (navigationRef.getCurrentRoute()?.name === 'assetActivity') requestNavigation(() => navigationRef.goBack());
+    else setSelectedAssetActivityState(null);
+  }
+
+  function handleNativeSceneClosed(route: string, selectionId?: number) {
+    const active = navigationRef.getCurrentRoute()?.name;
+    if (route === 'asset' && selectionId === assetSelectionId.current && active !== 'asset' && active !== 'assetActivity') setSelectedAssetIdState(null);
+    if (route === 'assetActivity' && selectionId === assetActivitySelectionId.current && active !== 'assetActivity') setSelectedAssetActivityState(null);
+  }
+
+  function handleNativeRouteChange() {
+    const route = navigationRef.getCurrentRoute()?.name as WalletRoute | undefined;
+    if (!route) return;
+    if (route !== nativeRoute) dismissSelectionPickers();
+    setNativeRoute(route);
+    if (isWalletTab(route)) setMainTabState(route);
+    Keyboard.dismiss();
+  }
+
+  function handleMainTabPress(tab: MainTab) {
+    Keyboard.dismiss();
+    if (tab === mainTab) {
+      mainScrollRef.current?.scrollTo({ y: 0, animated: !reduceMotion });
+      return;
+    }
+    setMainTab(tab);
+  }
+
+  useEffect(() => {
+    if (Platform.OS !== 'android' || screen !== 'ready') return;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      // Approval sheets must be explicitly approved or rejected, never silently dismissed.
+      if (sendLoading || swapExecuteLoading || bridgeExecuteLoading || submitLoading || biometricLoading || discoverApproval || mwaRequest) return true;
+      Keyboard.dismiss();
+      if (transactionReview) { setTransactionReview(null); return true; }
+      if (activityDetailId) { setActivityDetailId(null); return true; }
+      if (qrScannerVisible) { setQrScannerVisible(false); return true; }
+      if (sendAssetPickerVisible) { setSendAssetPickerVisible(false); return true; }
+      if (swapInputPickerVisible) { setSwapInputPickerVisible(false); return true; }
+      if (swapOutputPickerVisible) { setSwapOutputPickerVisible(false); return true; }
+      if (chainPickerVisible) { setChainPickerVisible(false); return true; }
+      if (homeWalletMenuExpanded) { setHomeWalletMenuExpanded(false); return true; }
+      if (walletComposerVisible) { setWalletComposerVisible(false); return true; }
+      if (privateSendReview) { setPrivateSendReview(false); return true; }
+      if (bridgeZcashReview) { setBridgeZcashReview(false); return true; }
+      if (nativeRoute === 'discover') {
+        if (discoverMenuOpen) { setDiscoverMenuOpen(false); return true; }
+        if (discoverControlsExpanded && discoverUrl) { setDiscoverControlsExpanded(false); return true; }
+        if (discoverCanGoBack) { discoverWebViewRef.current?.goBack(); return true; }
+      }
+      return false;
+    });
+    return () => subscription.remove();
+  }, [nativeRoute, activityDetailId, transactionReview, screen, mainTab, sendLoading, swapExecuteLoading, bridgeExecuteLoading, submitLoading, biometricLoading, discoverApproval, mwaRequest,
+    qrScannerVisible, sendAssetPickerVisible, swapInputPickerVisible, swapOutputPickerVisible, chainPickerVisible,
+    homeWalletMenuExpanded, walletComposerVisible, privateSendReview, bridgeZcashReview, sendScreenVisible,
+    swapScreenVisible, rebalanceScreenVisible, bridgeScreenVisible, discoverMenuOpen, discoverControlsExpanded,
+    discoverUrl, discoverCanGoBack, selectedAssetId, selectedAssetActivity]);
+
+  const stackSigningBusy = sendLoading || swapExecuteLoading || bridgeExecuteLoading || rebalanceExecuting || assetCleanupLoading || submitLoading || biometricLoading;
+  navigationBusy.current = stackSigningBusy;
+  const stackRemovalBlocked = stackSigningBusy || !!transactionReview || !!discoverApproval || !!mwaRequest || !!activityDetailId || qrScannerVisible || walletComposerVisible;
+  useEffect(() => {
+    deferredNavigation.flush(stackSigningBusy);
+  }, [deferredNavigation, stackSigningBusy]);
+
   const selectedWallet = useMemo(() => getSelectedWallet(walletState), [walletState]);
+  useEffect(() => { setSubmissionNotice(null); setTransactionReview(null); setActivityDetailId(null); }, [selectedWallet?.id, screen]);
+  useEffect(() => { deferredNavigation.clear(); if (navigationRef.isReady()) navigationRef.resetRoot({ index: 0, routes: [{ name: 'tabs' }] }); }, [selectedWallet?.id, walletState.selectedChain, navigationRef, deferredNavigation]);
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      setAppVisibility(state);
+      if (state !== 'active') setTransactionReview(null);
+    });
+    return () => subscription.remove();
+  }, []);
+  const approvalEpoch = useRef(0);
+  useEffect(() => { approvalEpoch.current += 1; }, [screen, appVisibility, selectedWallet?.id]);
+  const latestWalletState = useRef(walletState);
+  latestWalletState.current = walletState;
+
+  useEffect(() => {
+    if (screen !== 'ready' || appVisibility !== 'active' || !selectedWallet) return;
+    const pending = walletState.activities.filter((item) => walletState.wallets.some(wallet => wallet.id === item.walletId && wallet.chain === item.chain) && item.status === 'unknown' && item.signature && ['solana', 'ethereum', 'monad', 'zcash'].includes(item.chain)).slice(0, 20);
+    if (!pending.length) return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    async function reconcile() {
+      const results = await Promise.all(pending.map(async (item) => ({
+        item, status: item.chain === 'zcash' ? await getZcashSubmissionStatus(item.signature) : await fetchSubmissionStatus(item.chain, item.signature, item.chain === 'solana' ? getMobileSolanaRpcUrl() : item.chain === 'ethereum' ? getMobileEthereumRpcUrl() : getMobileMonadRpcUrl())
+      })));
+      if (!active) return;
+      const updates = results.filter(({ status }) => status !== 'unknown');
+      if (updates.length) {
+        const current = latestWalletState.current;
+        const next = { ...current, activities: current.activities.map((item) => {
+          const update = updates.find((entry) => entry.item.id === item.id && entry.item.walletId === item.walletId);
+          return update ? { ...item, status: update.status } : item;
+        }) };
+        latestWalletState.current = next;
+        setWalletState(next);
+        void persistMobileWalletState(next).catch(() => undefined);
+      } else {
+        timer = setTimeout(() => { void reconcile(); }, 15_000);
+      }
+    }
+    void reconcile();
+    return () => { active = false; clearTimeout(timer); };
+  }, [appVisibility, screen, selectedWallet, walletState.activities, walletState.wallets]);
+  const pickerAssetScope = selectedWallet ? `assets:${selectedWallet.chain}:${selectedWallet.id}` : 'assets:none';
+  useEffect(() => {
+    let mounted = true;
+    void AsyncStorage.getItem('grape:picker-recents').then((raw) => {
+      if (!mounted) return;
+      const next = { ...parsePickerRecents(raw), ...pickerRecentsRef.current };
+      pickerRecentsRef.current = next;
+      setPickerRecents(next);
+    }).catch(() => undefined);
+    return () => { mounted = false; };
+  }, []);
+  useEffect(() => {
+    if (!discoverApproval && !mwaRequest) return;
+    setHomeWalletMenuExpanded(false); setChainPickerVisible(false); setSendAssetPickerVisible(false);
+    setSwapInputPickerVisible(false); setSwapOutputPickerVisible(false);
+  }, [discoverApproval, mwaRequest]);
+  function rememberSelection(scope: string, id: string) {
+    const next = rememberPickerSelection(pickerRecentsRef.current, scope, id);
+    pickerRecentsRef.current = next;
+    setPickerRecents(next);
+    void pickerWrites(() => AsyncStorage.setItem('grape:picker-recents', JSON.stringify(next))).catch(() => undefined);
+    if (walletState.hapticsEnabled !== false && Platform.OS !== 'web') void Haptics.selectionAsync().catch(() => undefined);
+  }
+  function dismissSelectionPickers() {
+    setHomeWalletMenuExpanded(false); setChainPickerVisible(false); setSendAssetPickerVisible(false);
+    setSwapInputPickerVisible(false); setSwapOutputPickerVisible(false);
+  }
+  function openSelectionPicker(name: PickerName) {
+    Keyboard.dismiss();
+    pickerOrigin.current = { name, route: nativeRoute };
+    if (name === 'wallet') { setWalletPickerSearch(''); setHomeWalletMenuExpanded(true); }
+    if (name === 'chain') { setChainPickerSearch(''); setChainPickerVisible(true); }
+    if (name === 'send') { setSendAssetSearch(''); setSendAssetPickerVisible(true); }
+    if (name === 'swapInput') { setSwapAssetSearch(''); setSwapInputPickerVisible(true); }
+    if (name === 'swapOutput') { setSwapAssetSearch(''); setSwapOutputPickerVisible(true); }
+  }
+  function restorePickerFocus() {
+    const origin = pickerOrigin.current;
+    if (!origin || discoverApproval || mwaRequest) return;
+    requestAnimationFrame(() => {
+      if (navigationRef.getCurrentRoute()?.name !== origin.route) return;
+      const target = pickerTriggers.current[origin.name];
+      if (!target) return;
+      const handle = findNodeHandle(target);
+      if (handle) AccessibilityInfo.setAccessibilityFocus(handle);
+    });
+  }
+
   const discoverWallet = useMemo(
     () => (selectedWallet?.chain === 'solana' ? selectedWallet : walletState.wallets.find((wallet) => wallet.chain === 'solana') ?? null),
     [selectedWallet, walletState.wallets]
@@ -1952,9 +2135,6 @@ function GrapeApp() {
       }),
     [activeTheme]
   );
-  const launchFade = useRef(new Animated.Value(0)).current;
-  const launchLift = useRef(new Animated.Value(16)).current;
-  const launchScale = useRef(new Animated.Value(0.92)).current;
   const launchHalo = useRef(new Animated.Value(0.35)).current;
   const screenEnterOpacity = useRef(new Animated.Value(0)).current;
   const screenEnterLift = useRef(new Animated.Value(12)).current;
@@ -1973,8 +2153,6 @@ function GrapeApp() {
     () => chains.filter((item) => walletState.wallets.some((wallet) => wallet.chain === item.id)),
     [walletState.wallets]
   );
-  const walletPickerHeight = Math.min(height - 120, Math.max(340, Math.min(600, 210 + chainWallets.length * 62)));
-  const chainPickerHeight = Math.min(height - 160, Math.max(360, Math.min(580, 140 + availableChains.length * 88)));
   const walletGroups = useMemo(() => groupWalletsBySource(dedupeVisibleWallets(walletState.wallets)), [walletState.wallets]);
   const chainWalletGroups = useMemo(() => groupWalletsBySource(chainWallets), [chainWallets]);
   const cachedWalletValues = walletState.wallets
@@ -2009,6 +2187,7 @@ function GrapeApp() {
     },
     [remoteActivity, selectedWallet, walletState.activities]
   );
+  const activityDetail = filteredActivity.find((item) => (item.signature || item.id) === activityDetailId) ?? null;
   const headlineAsset = assets[0];
   const pricedPortfolio = useMemo(() => {
     const pricedAssets = assets.filter((asset) => /^\s*\$/.test(asset.valueLabel));
@@ -2104,7 +2283,7 @@ function GrapeApp() {
     setAssetMarketData(null);
     setAssetPriceRange(30);
     setAssetDetailsExpanded(false);
-    setSelectedAssetActivity(null);
+    setSelectedAssetActivityState(null);
     setAssetTokenActivity([]);
     if (!selectedAsset || selectedAsset.chain !== 'solana' || !selectedAsset.address) {
       setAssetPriceHistoryLoading(false);
@@ -2250,10 +2429,68 @@ function GrapeApp() {
       clearTimeout(timeout);
     };
   }, [monadTokenAddress, selectedWallet?.address, selectedWallet?.chain, sendScreenVisible]);
+  useEffect(() => {
+    if (screen !== 'ready' || !sendScreenVisible || !selectedWallet) return;
+    let active = true;
+    const key = sendDraftKey(selectedWallet.id, selectedWallet.chain);
+    setLoadedDraftKey(null);
+    setSavedSendDraft(null);
+    setDraftSaveFailed(false);
+    void draftWriteQueue(() => AsyncStorage.getItem(key)).then((raw) => {
+      if (!active) return;
+      setSavedSendDraft(parseSendDraft(raw, selectedWallet.id, selectedWallet.chain));
+      setLoadedDraftKey(key);
+    }).catch(() => { if (active) { setDraftSaveFailed(true); setLoadedDraftKey(null); } });
+    return () => { active = false; };
+  }, [screen, sendScreenVisible, selectedWallet, draftWriteQueue]);
+
+  useEffect(() => {
+    if (screen !== 'ready' || !sendScreenVisible || !selectedWallet || !selectedSendAsset || sendLoading || houdiniDeposit || privateSendReview || savedSendDraft) return;
+    const key = sendDraftKey(selectedWallet.id, selectedWallet.chain);
+    if (loadedDraftKey !== key || selectedSendAsset.tokenType === 'nft') return;
+    const draft: SendDraft = { version: 1, walletId: selectedWallet.id, chain: selectedWallet.chain, assetId: selectedSendAsset.id, symbol: selectedSendAsset.symbol, recipient: sendRecipient, amount: sendAmount, privateSend: sendPrivate, updatedAt: Date.now() };
+    void draftWriteQueue(() => sendRecipient.trim() || sendAmount.trim()
+      ? AsyncStorage.setItem(key, serializeSendDraft(draft)) : AsyncStorage.removeItem(key)
+    ).then(() => setDraftSaveFailed(false)).catch(() => setDraftSaveFailed(true));
+  }, [screen, sendScreenVisible, selectedWallet, selectedSendAsset, sendLoading, houdiniDeposit, privateSendReview, savedSendDraft, loadedDraftKey, sendRecipient, sendAmount, sendPrivate, draftWriteQueue]);
+
+  function clearSavedSendDraft(wallet: MobileWallet) {
+    setSavedSendDraft(null);
+    setLoadedDraftKey(null);
+    return draftWriteQueue(() => AsyncStorage.removeItem(sendDraftKey(wallet.id, wallet.chain)));
+  }
+
+  function resumeSavedSendDraft() {
+    if (!savedSendDraft || !selectedWallet || savedSendDraft.walletId !== selectedWallet.id || savedSendDraft.chain !== selectedWallet.chain) return;
+    if (!parseSendDraft(serializeSendDraft(savedSendDraft), selectedWallet.id, selectedWallet.chain)) {
+      void clearSavedSendDraft(selectedWallet).catch(() => setDraftSaveFailed(true));
+      setError('This draft expired. Start a new send.');
+      return;
+    }
+    const asset = sendAssets.find((item) => item.id === savedSendDraft.assetId && item.tokenType !== 'nft');
+    if (!asset) {
+      setError('The saved asset is not available. Refresh your balance or discard this draft.');
+      return;
+    }
+    if (savedSendDraft.privateSend && (!process.env.EXPO_PUBLIC_HOUDINI_API_URL || (asset.chain === 'sui' && asset.tokenType !== 'native'))) {
+      setError('Private send is unavailable for this draft. Discard it to start a new send.');
+      return;
+    }
+    setSendAssetId(savedSendDraft.assetId);
+    setSendRecipient(savedSendDraft.recipient);
+    setSendAmount(savedSendDraft.amount);
+    setSendPrivate(savedSendDraft.privateSend);
+    setPrivateSendReview(false);
+    setHoudiniDeposit(null);
+    setTransactionReview(null);
+    setSavedSendDraft(null);
+    setError(null);
+  }
+
   const filteredSendAssets = useMemo(() => {
     const query = sendAssetSearch.trim().toLowerCase();
     if (!query) {
-      return sendAssets;
+      return prioritizeRecent(sendAssets, pickerRecents[pickerAssetScope] ?? [], (asset) => asset.id);
     }
 
     return sendAssets.filter((asset) => {
@@ -2266,7 +2503,7 @@ function GrapeApp() {
 
       return haystacks.some((value) => value.toLowerCase().includes(query));
     });
-  }, [sendAssetSearch, sendAssets]);
+  }, [sendAssetSearch, sendAssets, pickerRecents, pickerAssetScope]);
   const swappableAssets = useMemo(
     () => selectedWallet ? assets.filter((asset) => asset.chain === selectedWallet.chain && asset.tokenType !== 'nft') : [],
     [assets, selectedWallet?.chain]
@@ -2299,19 +2536,20 @@ function GrapeApp() {
   const filteredSwapAssets = useMemo(() => {
     const query = swapAssetSearch.trim().toLowerCase();
     if (!query) {
-      return swappableAssets;
+      return prioritizeRecent(swappableAssets, pickerRecents[pickerAssetScope] ?? [], (asset) => asset.id);
     }
 
     return swappableAssets.filter((asset) =>
       [asset.name, asset.symbol, asset.address ?? '', asset.description ?? ''].some((value) => value.toLowerCase().includes(query))
     );
-  }, [swapAssetSearch, swappableAssets]);
+  }, [swapAssetSearch, swappableAssets, pickerRecents, pickerAssetScope]);
   const filteredSwapOutputAssets = useMemo(() => {
     const query = swapAssetSearch.trim().toLowerCase();
-    return swapOutputCandidates.filter((asset) =>
+    const matches = swapOutputCandidates.filter((asset) =>
       !query || [asset.name, asset.symbol, asset.address ?? '', asset.description ?? ''].some((value) => value.toLowerCase().includes(query))
     );
-  }, [swapAssetSearch, swapOutputCandidates]);
+    return query ? matches : prioritizeRecent(matches, pickerRecents[pickerAssetScope] ?? [], (asset) => asset.id);
+  }, [swapAssetSearch, swapOutputCandidates, pickerRecents, pickerAssetScope]);
   const popularSwapAssets = useMemo(
     () => MOBILE_POPULAR_SWAP_SYMBOLS
       .map((symbol) => swapSelectableAssets.find((asset) => asset.symbol.toUpperCase() === symbol))
@@ -2390,6 +2628,12 @@ function GrapeApp() {
     setBridgeError(null);
   }, [bridgeRecipient, bridgeToChain, bridgeAmount]);
 
+  useEffect(() => {
+    swapRequestRef.current += 1;
+    setSwapQuote(null); setSwapSelectedRouteId(null); setSwapQuoteLoading(false);
+  }, [selectedWallet?.id, swapInputAssetId, swapOutputAssetId, swapAmount, swapScreenVisible]);
+  useEffect(() => { sendRequestRef.current += 1; }, [selectedWallet?.id, sendAssetId, sendRecipient, sendAmount, sendScreenVisible]);
+
   function resetSwapDraft() {
     setSwapQuote(null);
     setSwapSelectedRouteId(null);
@@ -2411,14 +2655,37 @@ function GrapeApp() {
     resetSwapDraft();
   }
 
-  function setSwapAmountByRatio(ratio: number) {
-    const availableAmount = selectedSwapInputAsset?.amountUi ?? 0;
-    if (!(availableAmount > 0)) {
-      return;
-    }
+  async function setSwapAmountByRatio(ratio: number) {
+    if (!selectedWallet || !selectedSwapInputAsset || !selectedSwapOutputAsset || swapQuoteLoading || swapExecuteLoading) return;
+    const requestId = ++swapRequestRef.current;
+    setSwapQuoteLoading(true);
+    setSwapError(null);
+    try {
+      const result = selectedSwapInputAsset.tokenType === 'native'
+        ? await getWalletSwapMaximum({ wallet: selectedWallet, inputAsset: selectedSwapInputAsset, outputAsset: selectedSwapOutputAsset, slippageBps: MOBILE_SWAP_SLIPPAGE_BPS })
+        : { amount: (await estimateWalletSend({ wallet: selectedWallet, asset: selectedSwapInputAsset, recipient: selectedWallet.address, amount: '0', maximum: true })).amount, quote: null };
+      if (requestId !== swapRequestRef.current) return;
+      setSwapAmount(getExactSendRatio(result.amount, getMobileAssetAmountDecimals(selectedSwapInputAsset), ratio * 100 as 25 | 50 | 75 | 100));
+      setSwapQuote(null);
+      setSwapSelectedRouteId(null);
+    } catch (cause) { if (requestId === swapRequestRef.current) setSwapError(cause instanceof Error ? cause.message : 'Unable to calculate route-aware amount.'); }
+    finally { if (requestId === swapRequestRef.current) setSwapQuoteLoading(false); }
+  }
 
-    setSwapAmount(formatSwapAmountInput(availableAmount * ratio, getMobileAssetAmountDecimals(selectedSwapInputAsset)));
-    resetSwapDraft();
+  async function setBridgeMaximum() {
+    if (!selectedWallet || !bridgeRecipientValid || bridgeQuoteLoading || bridgeExecuteLoading) return;
+    const requestId = ++bridgeRequestRef.current;
+    setBridgeQuoteLoading(true);
+    setBridgeError(null);
+    try {
+      const result = await getWalletBridgeMaximum({ state: walletState, wallet: selectedWallet, amount: '0', toChain: bridgeToChain, destinationAddress: bridgeRecipient });
+      if (requestId !== bridgeRequestRef.current) return;
+      setBridgeAmount(result.amount);
+      // Amount changes invalidate routes; request a fresh route with this exact amount.
+      setBridgeQuote(null);
+      setBridgeSelectedRouteId(null);
+    } catch (cause) { if (requestId === bridgeRequestRef.current) setBridgeError(cause instanceof Error ? cause.message : 'Unable to calculate route-aware Max.'); }
+    finally { if (requestId === bridgeRequestRef.current) setBridgeQuoteLoading(false); }
   }
 
   useEffect(() => {
@@ -2570,64 +2837,31 @@ function GrapeApp() {
   }, []);
 
   useEffect(() => {
-    const settle = Animated.parallel([
-      Animated.timing(launchFade, {
-        toValue: 1,
-        duration: 560,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true
-      }),
-      Animated.timing(launchLift, {
-        toValue: 0,
-        duration: 560,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true
-      }),
-      Animated.spring(launchScale, {
-        toValue: 1,
-        damping: 16,
-        stiffness: 160,
-        mass: 0.9,
-        useNativeDriver: true
-      })
-    ]);
-
-    const pulse = Animated.loop(
-      Animated.sequence([
-        Animated.timing(launchHalo, {
-          toValue: 0.62,
-          duration: 1800,
-          easing: Easing.inOut(Easing.sin),
-          useNativeDriver: true
-        }),
-        Animated.timing(launchHalo, {
-          toValue: 0.28,
-          duration: 1800,
-          easing: Easing.inOut(Easing.sin),
-          useNativeDriver: true
-        })
-      ])
-    );
-
-    settle.start();
+    if (reduceMotion || screen !== 'setup' || !submitLoading) { launchHalo.setValue(0.28); return; }
+    const pulse = Animated.loop(Animated.sequence([
+      Animated.timing(launchHalo, { toValue: 0.62, duration: 1200, useNativeDriver: true }),
+      Animated.timing(launchHalo, { toValue: 0.28, duration: 1200, useNativeDriver: true })
+    ]));
     pulse.start();
-
-    return () => {
-      settle.stop();
-      pulse.stop();
-    };
-  }, [launchFade, launchHalo, launchLift, launchScale]);
+    return () => pulse.stop();
+  }, [launchHalo, reduceMotion, screen, submitLoading]);
 
   useEffect(() => {
     if (screen === 'loading') {
       return;
     }
 
+    if (reduceMotion) {
+      screenEnterOpacity.setValue(1);
+      screenEnterLift.setValue(0);
+      screenEnterScale.setValue(1);
+      return;
+    }
     screenEnterOpacity.setValue(0);
     screenEnterLift.setValue(12);
     screenEnterScale.setValue(0.98);
 
-    Animated.parallel([
+    const transition = Animated.parallel([
       Animated.timing(screenEnterOpacity, {
         toValue: 1,
         duration: 380,
@@ -2646,8 +2880,10 @@ function GrapeApp() {
         easing: Easing.out(Easing.cubic),
         useNativeDriver: true
       })
-    ]).start();
-  }, [screen, screenEnterLift, screenEnterOpacity, screenEnterScale]);
+    ]);
+    transition.start();
+    return () => transition.stop();
+  }, [screen, reduceMotion, screenEnterLift, screenEnterOpacity, screenEnterScale]);
 
   useEffect(() => {
     if (!assetsLoading) {
@@ -2679,7 +2915,7 @@ function GrapeApp() {
   }, [assetsLoading, refreshSpin]);
 
   useEffect(() => {
-    if (screen !== 'locked') {
+    if (screen !== 'locked' || reduceMotion) {
       lockBreathScale.stopAnimation();
       lockHaloPulse.stopAnimation();
       lockBreathScale.setValue(1);
@@ -2752,7 +2988,7 @@ function GrapeApp() {
       breathLoop.stop();
       pulseLoop.stop();
     };
-  }, [lockBreathScale, lockHaloPulse, screen]);
+  }, [reduceMotion, lockBreathScale, lockHaloPulse, screen]);
 
   useEffect(() => {
     setGeneratedMnemonic(createWalletMnemonic(mnemonicLength));
@@ -3028,7 +3264,7 @@ function GrapeApp() {
   }, [selectedWallet, unlocked, walletState.trackedGovernanceDaoIds, governanceRefreshNonce, selectedGovernanceDao]);
 
   useEffect(() => {
-    setSelectedAssetId(null);
+    setSelectedAssetIdState(null);
   }, [selectedWallet?.id, walletState.selectedChain]);
 
   useEffect(() => {
@@ -3042,7 +3278,6 @@ function GrapeApp() {
     setSendRecipient('');
     setSendAmount('');
     setSendAssetId(null);
-    setSendScreenVisible(false);
     setSendAssetPickerVisible(false);
     setSendAssetSearch('');
   }, [selectedWallet?.id, walletState.selectedChain]);
@@ -3056,7 +3291,6 @@ function GrapeApp() {
     setSwapAssetSearch('');
     setSwapInputPickerVisible(false);
     setSwapOutputPickerVisible(false);
-    setSwapScreenVisible(false);
     setSwapError(null);
   }, [selectedWallet?.id, walletState.selectedChain]);
 
@@ -3067,7 +3301,6 @@ function GrapeApp() {
     setBridgeDestinationWalletId(null);
     setBridgeQuote(null);
     setBridgeSelectedRouteId(null);
-    setBridgeScreenVisible(false);
     setBridgeError(null);
   }, [bridgeDestinationChains, selectedWallet?.id, walletState.selectedChain]);
 
@@ -3209,6 +3442,21 @@ function GrapeApp() {
       ...walletState,
       dappApprovalMode: mode
     });
+  }
+
+  async function handleDiscoverOpenExternally() {
+    Keyboard.dismiss();
+    try {
+      await openDiscoverExternally(discoverCurrentUrl, discoverUrl, (url) => Linking.openURL(url));
+      setDiscoverMenuOpen(false);
+      setDiscoverControlsExpanded(false);
+    } catch {
+      Alert.alert('Could not open browser', 'The device could not open this page externally. Try again or copy the page link.', [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Copy link', onPress: () => { void Clipboard.setStringAsync(discoverCurrentUrl || discoverUrl); } },
+        { text: 'Try again', onPress: () => { void handleDiscoverOpenExternally(); } }
+      ]);
+    }
   }
 
   function handleDiscoverNavigate(rawInput?: string) {
@@ -4691,7 +4939,38 @@ function GrapeApp() {
     );
   }
 
-  async function handleSend() {
+  async function saveSubmittedActivity(activity: MobileActivity) {
+    const current = latestWalletState.current;
+    const nextState = { ...current, activities: [activity, ...current.activities].slice(0, 100) };
+    latestWalletState.current = nextState;
+    setWalletState(nextState);
+    const saved = await recordSubmission(
+      () => AsyncStorage.setItem(`grape:submission:${activity.walletId}:${activity.signature}`, JSON.stringify(activity)),
+      () => persistMobileWalletState(latestWalletState.current)
+    );
+    return saved ? '' : ` Local history could not be saved. Keep this transaction ID and check it before retrying: ${activity.signature}`;
+  }
+
+  function showTransactionReview(title: string, items: TransactionReview['items'], execute: () => Promise<void>) {
+    Keyboard.dismiss();
+    const wallet = selectedWallet;
+    if (!wallet || AppState.currentState !== 'active') return;
+    const epoch = approvalEpoch.current;
+    setTransactionReview({ title, items: [
+      { label: 'From account', value: `${wallet.name} · ${wallet.address}` },
+      { label: 'Network', value: `${wallet.chain} · mainnet` },
+      ...items
+    ], confirm: createReviewConfirmation(async () => {
+      if (submissionBusy.current) return;
+      if (approvalEpoch.current !== epoch || AppState.currentState !== 'active') throw new Error('Wallet session changed. Review again after unlocking.');
+      if (getSelectedWallet(latestWalletState.current)?.id !== wallet.id) throw new Error('The selected account changed. Review the transaction again.');
+      submissionBusy.current = true;
+      setTransactionReview(null);
+      try { await execute(); } finally { submissionBusy.current = false; }
+    }) });
+  }
+
+  async function handleSend(reviewed = false, approvedReserve?: string) {
     if (sendPrivate && !houdiniDeposit) {
       if (!process.env.EXPO_PUBLIC_HOUDINI_API_URL || !selectedSendAsset || selectedSendAsset.tokenType === 'nft' || (selectedSendAsset.chain === 'sui' && selectedSendAsset.tokenType !== 'native')) { setError('Private send is not available for this asset.'); return; }
       if (!sendRecipient.trim() || !(Number(sendAmount) > 0)) { setError('Enter a recipient and amount.'); return; }
@@ -4705,6 +4984,25 @@ function GrapeApp() {
       return;
     }
 
+    if (!reviewed) {
+      if (!(Number(sendAmount) > 0) || !Number.isFinite(Number(sendAmount))) { setError('Enter a valid amount.'); return; }
+      const requestId = sendRequestRef.current;
+      const epoch = approvalEpoch.current;
+      setSendLoading(true);
+      try {
+        const estimate = await estimateWalletSend({ wallet: selectedWallet, asset: selectedSendAsset, recipient: sendRecipient.trim(), amount: sendAmount.trim() });
+        if (requestId !== sendRequestRef.current || epoch !== approvalEpoch.current) return;
+        showTransactionReview(houdiniDeposit ? 'Review deposit' : 'Review send', [
+        { label: 'You send', value: `${sendAmount.trim()} ${selectedSendAsset.symbol}` },
+        { label: 'Recipient', value: sendRecipient.trim() },
+        { label: 'Estimated network fee', value: `${estimate.fee} ${estimate.symbol}` },
+        { label: 'Fee and account reserve', value: `${estimate.reserve} ${estimate.symbol}` }
+      ], () => handleSend(true, estimate.reserve));
+      } catch (cause) { setError(cause instanceof Error ? cause.message : 'Unable to estimate network fee.'); }
+      finally { setSendLoading(false); }
+      return;
+    }
+    let submittedSignature: string | null = null;
     setSendLoading(true);
     try {
       if (houdiniDeposit && (depositProblem(houdiniDeposit.entry) || sendRecipient !== houdiniDeposit.entry.order.depositAddress || sendAmount !== depositAmount(houdiniDeposit.entry) || selectedSendAsset.id !== houdiniDeposit.assetId || selectedWallet.address !== houdiniDeposit.owner)) throw new Error('Houdini deposit details changed or expired. Return to Houdini and refresh the order.');
@@ -4712,8 +5010,11 @@ function GrapeApp() {
         wallet: selectedWallet,
         asset: selectedSendAsset,
         recipient: sendRecipient.trim(),
-        amount: sendAmount.trim()
+        amount: sendAmount.trim(),
+        approvedReserve
       });
+      submittedSignature = signature;
+      void clearSavedSendDraft(selectedWallet).catch(() => undefined);
 
       if (houdiniDeposit) {
         await recordHoudiniDeposit(AsyncStorage, process.env.EXPO_PUBLIC_HOUDINI_API_URL ?? '', houdiniDeposit.owner, houdiniDeposit.entry.order.houdiniId, signature).catch(() => {});
@@ -4726,23 +5027,24 @@ function GrapeApp() {
         amountLabel: `${sendAmount.trim()} ${selectedSendAsset.symbol}`,
         signature
       });
-      const nextState = {
-        ...walletState,
-        activities: [activity, ...walletState.activities].slice(0, 100)
-      };
-
-      await saveState(nextState);
+      const persistenceWarning = await saveSubmittedActivity(activity);
       setSendRecipient('');
       setSendAmount('');
       setSendAssetId(null);
       setSendScreenVisible(false);
       setError(null);
-      Alert.alert('Sent', `Transaction submitted.\n\n${signature}`);
-      const nextAssets = await loadWalletAssets(selectedWallet);
-      setAssets(nextAssets);
+      setSubmissionNotice('Transaction submitted. Network confirmation may take a moment.' + persistenceWarning);
       setMainTab('activity');
+      // A refresh failure must not make a submitted transfer look like a failed send.
+      void loadWalletAssets(selectedWallet).then(setAssets).catch(() => undefined);
     } catch (unknownError) {
-      setError(unknownError instanceof Error ? unknownError.message : 'Unable to send asset.');
+      if (submittedSignature) {
+        setSendScreenVisible(false); setSendAmount('');
+        setMainTab('activity');
+        setSubmissionNotice(`Transaction submitted, but local recording was interrupted. Do not resend before checking this transaction ID: ${submittedSignature}`);
+      } else {
+        setError(unknownError instanceof Error ? unknownError.message : 'Unable to send asset.');
+      }
     } finally {
       setSendLoading(false);
     }
@@ -4759,6 +5061,7 @@ function GrapeApp() {
       return;
     }
 
+    const requestId = ++swapRequestRef.current;
     setSwapQuoteLoading(true);
     setSwapError(null);
     try {
@@ -4769,18 +5072,20 @@ function GrapeApp() {
         amount: normalizedSwapAmount,
         slippageBps: MOBILE_SWAP_SLIPPAGE_BPS
       });
+      if (requestId !== swapRequestRef.current) return;
       setSwapQuote(nextQuote);
       setSwapSelectedRouteId(nextQuote.selectedRouteId);
     } catch (unknownError) {
+      if (requestId !== swapRequestRef.current) return;
       setSwapQuote(null);
       setSwapSelectedRouteId(null);
       setSwapError(unknownError instanceof Error ? unknownError.message : 'Unable to fetch a swap quote.');
     } finally {
-      setSwapQuoteLoading(false);
+      if (requestId === swapRequestRef.current) setSwapQuoteLoading(false);
     }
   }
 
-  async function handleExecuteSwap() {
+  async function handleExecuteSwap(reviewed = false, prepared?: PreparedMobileRoute) {
     if (!selectedWallet || !selectedSwapInputAsset || !selectedSwapOutputAsset || !swapQuote) {
       return;
     }
@@ -4791,13 +5096,30 @@ function GrapeApp() {
       return;
     }
 
+    if (!reviewed) {
+      const requestId = swapRequestRef.current;
+      const epoch = approvalEpoch.current;
+      setSwapExecuteLoading(true);
+      try {
+        const prepared = await prepareWalletRoute({ wallet: selectedWallet, quoteResponse: activeRoute.quoteResponse, swap: true,
+          nativeAmountRaw: selectedSwapInputAsset.tokenType === 'native' ? getRouteNativeAmount(swapQuote.inputAmountUi, selectedWallet.chain) : 0n });
+        if (requestId !== swapRequestRef.current || epoch !== approvalEpoch.current) return;
+        showTransactionReview('Review swap', [{ label: 'You send', value: `${swapQuote.inputAmountUi} ${selectedSwapInputAsset.symbol}` }, { label: 'Estimated receive', value: `${activeRoute.outputAmountUi} ${selectedSwapOutputAsset.symbol}` }, { label: 'Slippage', value: `${swapQuote.slippageBps} bps` }, { label: 'Route', value: activeRoute.label }, { label: 'Estimated network fee', value: `${prepared.fee} ${prepared.symbol}` }, { label: 'Fee and account reserve', value: `${prepared.reserve} ${prepared.symbol}` }], () => handleExecuteSwap(true, prepared));
+      } catch (cause) { if (requestId === swapRequestRef.current) setSwapError(cause instanceof Error ? cause.message : 'Unable to prepare route fees.'); }
+      finally { setSwapExecuteLoading(false); }
+      return;
+    }
+
+    let submittedSignature: string | null = null;
     setSwapExecuteLoading(true);
     setSwapError(null);
     try {
       const result = await executeWalletSwap({
         wallet: selectedWallet,
-        quoteResponse: activeRoute.quoteResponse
+        quoteResponse: activeRoute.quoteResponse,
+        prepared
       });
+      submittedSignature = result.signature;
       const activity = createSwapActivity({
         wallet: selectedWallet,
         inputAsset: selectedSwapInputAsset,
@@ -4806,26 +5128,23 @@ function GrapeApp() {
         outputAmountLabel: `${result.outputAmountUi} ${selectedSwapOutputAsset.symbol}`,
         signature: result.signature
       });
-      const nextState = {
-        ...walletState,
-        activities: [activity, ...walletState.activities].slice(0, 100)
-      };
-
-      await saveState(nextState);
+      const persistenceWarning = await saveSubmittedActivity(activity);
       setSwapAmount('');
       setSwapQuote(null);
       setSwapSelectedRouteId(null);
       setSwapScreenVisible(false);
-      Alert.alert('Swap submitted', `${result.inputAmountUi} ${selectedSwapInputAsset.symbol} -> ${result.outputAmountUi} ${selectedSwapOutputAsset.symbol}`);
-      const [nextAssets, nextActivity] = await Promise.all([
-        loadWalletAssets(selectedWallet),
-        loadWalletActivity(selectedWallet).catch(() => [])
-      ]);
-      setAssets(nextAssets);
-      setRemoteActivity(nextActivity);
+      setSubmissionNotice('Swap submitted. Network confirmation may take a moment.' + persistenceWarning);
       setMainTab('activity');
+      void loadWalletAssets(selectedWallet).then(setAssets).catch(() => undefined);
+      void loadWalletActivity(selectedWallet).then(setRemoteActivity).catch(() => undefined);
     } catch (unknownError) {
-      setSwapError(unknownError instanceof Error ? unknownError.message : 'Unable to execute the swap.');
+      if (submittedSignature) {
+        setSwapScreenVisible(false); setSwapQuote(null);
+        setMainTab('activity');
+        setSubmissionNotice(`Transaction submitted, but local recording was interrupted. Do not resend before checking this transaction ID: ${submittedSignature}`);
+      } else {
+        setSwapError(unknownError instanceof Error ? unknownError.message : 'Unable to execute the swap.');
+      }
     } finally {
       setSwapExecuteLoading(false);
     }
@@ -4865,7 +5184,7 @@ function GrapeApp() {
     }
   }
 
-  async function handleExecuteBridge() {
+  async function handleExecuteBridge(reviewed = false, prepared?: PreparedMobileRoute) {
     if (!selectedWallet || !bridgeRecipientValid || !bridgeQuote) {
       return;
     }
@@ -4876,6 +5195,21 @@ function GrapeApp() {
       return;
     }
 
+    if (!reviewed) {
+      const requestId = bridgeRequestRef.current;
+      const epoch = approvalEpoch.current;
+      setBridgeExecuteLoading(true);
+      try {
+        const prepared = await prepareWalletRoute({ wallet: selectedWallet, quoteResponse: activeRoute.quoteResponse,
+          nativeAmountRaw: getRouteNativeAmount(activeRoute.fromAmountUi, selectedWallet.chain) });
+        if (requestId !== bridgeRequestRef.current || epoch !== approvalEpoch.current) return;
+        showTransactionReview('Review bridge', [{ label: 'You send', value: `${activeRoute.fromAmountUi} ${activeRoute.fromSymbol}` }, { label: 'Estimated receive', value: `${activeRoute.toAmountUi} ${activeRoute.toSymbol}` }, { label: 'Recipient', value: bridgeRecipient }, { label: 'Destination network', value: bridgeToChain }, { label: 'Route', value: activeRoute.label }, { label: 'Provider fee estimate', value: activeRoute.feeUsd ? `$${activeRoute.feeUsd} (may include network costs)` : 'Not provided; check the quoted send/receive amounts' }, { label: 'Estimated source network fee', value: `${prepared.fee} ${prepared.symbol}` }, { label: 'Source fee and account reserve', value: `${prepared.reserve} ${prepared.symbol}` }], () => handleExecuteBridge(true, prepared));
+      } catch (cause) { if (requestId === bridgeRequestRef.current) setBridgeError(cause instanceof Error ? cause.message : 'Unable to prepare route fees.'); }
+      finally { setBridgeExecuteLoading(false); }
+      return;
+    }
+
+    let submittedSignature: string | null = null;
     setBridgeExecuteLoading(true);
     setBridgeError(null);
     try {
@@ -4884,8 +5218,10 @@ function GrapeApp() {
         wallet: selectedWallet,
         quoteResponse: activeRoute.quoteResponse,
         toChain: bridgeToChain,
-        destinationAddress: bridgeRecipient
+        destinationAddress: bridgeRecipient,
+        prepared
       });
+      submittedSignature = result.signature;
       const activity = createBridgeActivity({
         wallet: selectedWallet,
         destinationWallet: { chain: bridgeToChain, address: bridgeRecipient },
@@ -4893,26 +5229,23 @@ function GrapeApp() {
         toAmountLabel: `${result.toAmountUi} ${result.toSymbol}`,
         signature: result.signature
       });
-      const nextState = {
-        ...walletState,
-        activities: [activity, ...walletState.activities].slice(0, 100)
-      };
-
-      await saveState(nextState);
+      const persistenceWarning = await saveSubmittedActivity(activity);
       setBridgeAmount('');
       setBridgeQuote(null);
       setBridgeSelectedRouteId(null);
       setBridgeScreenVisible(false);
-      Alert.alert('Bridge submitted', `${result.fromAmountUi} ${result.fromSymbol} -> ${result.toAmountUi} ${result.toSymbol}`);
-      const [nextAssets, nextActivity] = await Promise.all([
-        loadWalletAssets(selectedWallet),
-        loadWalletActivity(selectedWallet).catch(() => [])
-      ]);
-      setAssets(nextAssets);
-      setRemoteActivity(nextActivity);
+      setSubmissionNotice('Bridge submitted. Delivery on the destination network may take longer.' + persistenceWarning);
       setMainTab('activity');
+      void loadWalletAssets(selectedWallet).then(setAssets).catch(() => undefined);
+      void loadWalletActivity(selectedWallet).then(setRemoteActivity).catch(() => undefined);
     } catch (unknownError) {
-      setBridgeError(unknownError instanceof Error ? unknownError.message : 'Unable to execute the bridge.');
+      if (submittedSignature) {
+        setBridgeScreenVisible(false); setBridgeQuote(null);
+        setMainTab('activity');
+        setSubmissionNotice(`Transaction submitted, but local recording was interrupted. Do not resend before checking this transaction ID: ${submittedSignature}`);
+      } else {
+        setBridgeError(unknownError instanceof Error ? unknownError.message : 'Unable to execute the bridge.');
+      }
     } finally {
       setBridgeExecuteLoading(false);
     }
@@ -5796,13 +6129,14 @@ function GrapeApp() {
   }
 
   function openSendScreen(assetId?: string | null) {
+    setLoadedDraftKey(null);
+    setSavedSendDraft(null);
     setSendPrivate(false); setPrivateSendReview(false);
     setHoudiniDeposit(null);
     setSwapScreenVisible(false);
     setRebalanceScreenVisible(false);
     setBridgeScreenVisible(false);
     setSendAssetId(assetId ?? null);
-    setSelectedAssetId(null);
     setSendRecipient('');
     setSendAmount('');
     setSendAssetSearch('');
@@ -5815,7 +6149,6 @@ function GrapeApp() {
     setSendScreenVisible(false);
     setBridgeScreenVisible(false);
     setRebalanceScreenVisible(false);
-    setSelectedAssetId(null);
     setSwapInputAssetId(inputAssetId ?? null);
     setSwapOutputAssetId(outputAssetId ?? null);
     setSwapAmount('');
@@ -5854,7 +6187,6 @@ function GrapeApp() {
     setSendScreenVisible(false);
     setSwapScreenVisible(false);
     setBridgeScreenVisible(false);
-    setSelectedAssetId(null);
     const initial = assets
       .filter((asset) => asset.chain === 'solana' && asset.address !== MOBILE_REBALANCE_STABLE_MINT && (asset.amountUi ?? 0) > 0)
       .slice(0, 3)
@@ -5946,9 +6278,11 @@ function GrapeApp() {
     if (!selectedWallet || rebalancePlan.length === 0) return;
     setRebalanceExecuting(true);
     setRebalanceError(null);
+    const epoch = approvalEpoch.current;
     const activities: MobileActivity[] = [];
     try {
       for (let index = 0; index < rebalancePlan.length; index += 1) {
+        if (approvalEpoch.current !== epoch || AppState.currentState !== 'active') throw new Error('Rebalance stopped after the wallet session changed.');
         const leg = rebalancePlan[index];
         setRebalanceProgress(`Executing swap ${index + 1} of ${rebalancePlan.length}: ${leg.side} ${leg.asset.symbol}`);
         const quote = await getWalletSwapQuote({
@@ -5960,25 +6294,32 @@ function GrapeApp() {
         });
         const route = quote.routes[0];
         if (!route) throw new Error(`No Jupiter route is available for ${leg.asset.symbol}.`);
-        const result = await executeWalletSwap({ wallet: selectedWallet, quoteResponse: route.quoteResponse });
-        activities.push(createSwapActivity({
+        const prepared = await prepareWalletRoute({ wallet: selectedWallet, quoteResponse: route.quoteResponse, swap: true, nativeAmountRaw: leg.inputAsset.tokenType === 'native' ? getRouteNativeAmount(leg.amount, selectedWallet.chain) : 0n });
+        if (approvalEpoch.current !== epoch || AppState.currentState !== 'active') throw new Error('Rebalance stopped after the wallet session changed.');
+        const approved = await new Promise<boolean>(resolve => Alert.alert('Review rebalance swap', `${leg.amount} ${leg.inputAsset.symbol} → ${route.outputAmountUi} ${leg.outputAsset.symbol}\nEstimated network fee: ${prepared.fee} ${prepared.symbol}\nFee/account reserve: ${prepared.reserve} ${prepared.symbol}`, [{ text: 'Cancel', style: 'cancel', onPress: () => resolve(false) }, { text: 'Confirm swap', onPress: () => resolve(true) }], { cancelable: false }));
+        if (!approved || approvalEpoch.current !== epoch || AppState.currentState !== 'active') throw new Error('Rebalance stopped. Previously submitted swaps remain in Activity.');
+        const result = await executeWalletSwap({ wallet: selectedWallet, quoteResponse: route.quoteResponse, prepared });
+        const activity = createSwapActivity({
           wallet: selectedWallet,
           inputAsset: leg.inputAsset,
           outputAsset: leg.outputAsset,
           inputAmountLabel: `${result.inputAmountUi} ${leg.inputAsset.symbol}`,
           outputAmountLabel: `${result.outputAmountUi} ${leg.outputAsset.symbol}`,
           signature: result.signature
-        }));
+        });
+        activities.push(activity);
+        const warning = await saveSubmittedActivity(activity);
+        setRebalancePlan(current => current.filter(item => item.id !== leg.id));
+        if (warning) throw new Error(warning);
       }
-      await saveState({ ...walletState, activities: [...activities.reverse(), ...walletState.activities].slice(0, 100) });
-      setRebalanceProgress(`Rebalance complete · ${rebalancePlan.length} swaps confirmed`);
+      setRebalanceProgress(`Rebalance submitted · ${activities.length} swaps pending confirmation`);
       setRebalancePlan([]);
       const [nextAssets, nextActivity] = await Promise.all([
-        loadWalletAssets(selectedWallet),
-        loadWalletActivity(selectedWallet).catch(() => [])
+        loadWalletAssets(selectedWallet).catch(() => null),
+        loadWalletActivity(selectedWallet).catch(() => null)
       ]);
-      setAssets(nextAssets);
-      setRemoteActivity(nextActivity);
+      if (nextAssets) setAssets(nextAssets);
+      if (nextActivity) setRemoteActivity(nextActivity);
     } catch (unknownError) {
       setRebalanceError(unknownError instanceof Error ? unknownError.message : 'Rebalance execution stopped.');
     } finally {
@@ -5990,7 +6331,6 @@ function GrapeApp() {
     setSendScreenVisible(false);
     setSwapScreenVisible(false);
     setRebalanceScreenVisible(false);
-    setSelectedAssetId(null);
     setBridgeAmount('');
     setBridgeQuote(null);
     setBridgeSelectedRouteId(null);
@@ -6023,12 +6363,7 @@ function GrapeApp() {
   }
 
   function renderBrandLogo(size = 42) {
-    return (
-      <Image
-        source={GRAPE_LOGO_IMAGE}
-        style={{ width: size, height: size, resizeMode: 'contain' }}
-      />
-    );
+    return <Image source={require('./assets/grape_logo_white.png')} style={{ width: size, height: size, resizeMode: 'contain' }} />;
   }
 
   function renderAssetGlyph(asset: MobileAsset, size: number, textStyle: object, imageStyle: object) {
@@ -6092,6 +6427,22 @@ function GrapeApp() {
       </View>
     );
   }
+
+  useEffect(() => {
+    if (nativeRoute !== 'settings' || !pendingManageSection.current) return;
+    const frame = requestAnimationFrame(() => {
+      const section = pendingManageSection.current;
+      const target = section ? settingsSectionRefs.current[section] : null;
+      const content = mainScreenContentRef.current;
+      if (!target || !content) return;
+      target.measureLayout(content, (_x, y) => {
+        if (pendingManageSection.current !== section) return;
+        mainScrollRef.current?.scrollTo({ y: Math.max(0, y), animated: false });
+        pendingManageSection.current = null;
+      }, () => {});
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [nativeRoute, expandedSettingsSections]);
 
   function openCommunitySettings(section: string) {
     pendingManageSection.current = section;
@@ -6306,7 +6657,7 @@ function GrapeApp() {
           ]}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="interactive"
+          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
         >
           <Animated.View
             style={[
@@ -6319,9 +6670,7 @@ function GrapeApp() {
             ]}
           >
             <View style={styles.heroBlock}>
-              <View style={styles.logoOrb}>
-                {renderBrandLogo(40)}
-              </View>
+              <GrapeStartupMark size={96} reduceMotion={reduceMotion}>{renderBrandLogo(60)}</GrapeStartupMark>
               <Text style={styles.brand}>GRAPE</Text>
               <Text style={[styles.heroTitle, isCompact ? styles.heroTitleCompact : null]}>Set up your wallet</Text>
               <Text style={styles.heroCopy}>
@@ -6577,7 +6926,7 @@ function GrapeApp() {
           ]}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="interactive"
+          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
         >
           <Animated.View
             style={[
@@ -6611,9 +6960,7 @@ function GrapeApp() {
                   }
                 ]}
               />
-              <View style={styles.logoOrb}>
-                {renderBrandLogo(40)}
-              </View>
+              <GrapeStartupMark size={96} reduceMotion={reduceMotion}>{renderBrandLogo(60)}</GrapeStartupMark>
             </Animated.View>
             <Text style={styles.brand}>GRAPE</Text>
             <Text style={[styles.lockedTitle, isCompact ? styles.lockedTitleCompact : null]}>Unlock your wallet</Text>
@@ -6760,7 +7107,7 @@ function GrapeApp() {
                     ref={discoverAddressRef}
                     value={discoverUrlInput}
                     onChangeText={setDiscoverUrlInput}
-                    placeholder="Enter address"
+                    placeholder="Search Brave or enter address"
                     placeholderTextColor={activeTheme.muted}
                     autoCapitalize="none"
                     autoCorrect={false}
@@ -6790,7 +7137,7 @@ function GrapeApp() {
           {discoverControlsExpanded && discoverMenuOpen ? (
             <>
               <View style={styles.discoverMenuActions}>
-                <Pressable disabled={!discoverUrl} style={styles.discoverMenuAction} onPress={() => void Linking.openURL(discoverCurrentUrl || discoverUrl)}>
+                <Pressable disabled={!discoverCurrentUrl && !discoverUrl} accessibilityRole="button" accessibilityLabel="Open current page externally" style={styles.discoverMenuAction} onPress={() => void handleDiscoverOpenExternally()}>
                   <Feather name="external-link" size={16} color={activeTheme.text} />
                   <Text style={styles.discoverMenuActionText}>Open externally</Text>
                 </Pressable>
@@ -6894,7 +7241,17 @@ function GrapeApp() {
               }}
               onLoadEnd={() => setDiscoverLoading(false)}
               setSupportMultipleWindows={false}
-              allowsBackForwardNavigationGestures={false}
+              allowsBackForwardNavigationGestures={Platform.OS === 'ios'}
+              renderError={() => (
+                <View style={[styles.sectionCard, { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12 }]}>
+                  <Feather name="wifi-off" size={32} color={activeTheme.muted} />
+                  <Text style={styles.sectionTitle}>Could not load this page</Text>
+                  <Text style={styles.sectionHint}>Check your connection or try opening the page in your browser.</Text>
+                  <PaperButton mode="contained" onPress={() => discoverWebViewRef.current?.reload()}>Try again</PaperButton>
+                  <PaperButton onPress={() => void handleDiscoverOpenExternally()}>Open externally</PaperButton>
+                  <PaperButton onPress={() => { setDiscoverControlsExpanded(true); requestAnimationFrame(() => discoverAddressRef.current?.focus()); }}>Edit address or search</PaperButton>
+                </View>
+              )}
               javaScriptEnabled
               sharedCookiesEnabled
               thirdPartyCookiesEnabled
@@ -6915,13 +7272,13 @@ function GrapeApp() {
     );
   }
 
-  function renderHomeTab() {
+  function renderHomeTab(mode: 'home' | 'asset' | 'assetActivity' = 'home') {
     const refreshRotation = refreshSpin.interpolate({
       inputRange: [0, 1],
       outputRange: ['0deg', '360deg']
     });
 
-    if (selectedAsset) {
+    if (selectedAsset && mode !== 'home') {
       const selectedAssetAddress = selectedAsset.address ?? '--';
       const canSwapSelectedAsset = swappableAssets.some((asset) => asset.id === selectedAsset.id);
       const isManageableSolanaToken =
@@ -6975,7 +7332,7 @@ function GrapeApp() {
             : 'Native';
       const tokenActivity = assetTokenActivity;
 
-      if (selectedAssetActivity) {
+      if (selectedAssetActivity && mode === 'assetActivity') {
         const activityDirection = selectedAssetActivity.type.toLowerCase().includes('receive')
           ? 'Received'
           : selectedAssetActivity.type.toLowerCase().includes('send') ||
@@ -7421,7 +7778,7 @@ function GrapeApp() {
             <View style={styles.walletIdentity}>
               <Pressable
                 style={[styles.walletAvatar, styles.walletAvatarButton, { borderColor: `${selectedChainMeta.accent}55`, backgroundColor: `${selectedChainMeta.accent}1f` }]}
-                onPress={() => setChainPickerVisible(true)}
+                testID="home-network-picker" accessibilityRole="button" accessibilityLabel={`Switch network. Current network: ${selectedChainMeta.label}`} hitSlop={8} ref={(node) => { pickerTriggers.current.chain = node; }} onPress={() => openSelectionPicker('chain')}
               >
                 <Text style={[styles.walletAvatarText, { color: selectedChainMeta.accent }]}>{selectedChainMeta.short}</Text>
                 <View style={styles.walletAvatarSwitchBadge}>
@@ -7439,7 +7796,7 @@ function GrapeApp() {
               {chainWallets.length > 1 ? (
                 <Pressable
                   style={styles.refreshChip}
-                  onPress={() => setHomeWalletMenuExpanded(true)}
+                  testID="home-wallet-picker" hitSlop={8} ref={(node) => { pickerTriggers.current.wallet = node; }} onPress={() => openSelectionPicker('wallet')}
                   accessibilityRole="button"
                   accessibilityLabel={`Switch wallet. ${chainWallets.length} wallets on ${selectedChainMeta.label}`}
                 >
@@ -7957,29 +8314,11 @@ function GrapeApp() {
     const selectedSendAssetSubtitle = selectedSendAsset
       ? getAssetSubtitle(selectedSendAsset, selectedChainMeta.label, selectedChainMeta.short)
       : null;
-    const nativeGasAsset =
-      selectedWallet?.chain === 'solana'
-        ? assets.find((asset) => asset.chain === 'solana' && asset.tokenType === 'native')
-        : null;
-    const nativeGasBalance = nativeGasAsset?.amountUi ?? 0;
-    const sendAmountNumber = Number(sendAmount || '0');
-    const gasWarning =
-      selectedWallet?.chain !== 'solana' || !selectedSendAsset
-        ? null
-        : selectedSendAsset.tokenType === 'spl'
-          ? nativeGasBalance < SOLANA_TOKEN_SEND_RESERVE_SOL
-            ? 'This wallet may not have enough SOL for network fees and recipient token account creation.'
-            : null
-          : selectedSendAsset.tokenType === 'native' && Number.isFinite(sendAmountNumber) && sendAmountNumber > 0
-            ? nativeGasBalance <= sendAmountNumber + SOLANA_SEND_FEE_RESERVE_SOL
-              ? 'Leave some SOL in the wallet for network fees.'
-              : null
-            : null;
 
     return (
       <View style={styles.stack}>
         <View style={styles.sectionCard}>
-          <Pressable style={styles.detailBackRow} onPress={() => setSendScreenVisible(false)}>
+          <Pressable testID="send-back" hitSlop={10} disabled={sendLoading} accessibilityRole="button" accessibilityLabel="Back to wallet" style={styles.detailBackRow} onPress={() => setSendScreenVisible(false)}>
             <Feather name="chevron-left" size={18} color={activeTheme.text} />
             <Text style={styles.detailBackText}>Back to wallet</Text>
           </Pressable>
@@ -7995,7 +8334,7 @@ function GrapeApp() {
             <Text style={styles.sectionTitle}>Asset</Text>
             <Text style={styles.sectionHint}>{assets.length} available</Text>
           </View>
-          <Pressable style={styles.sendAssetSelectButton} onPress={() => setSendAssetPickerVisible(true)}>
+          <Pressable style={styles.sendAssetSelectButton} testID="send-asset-picker" ref={(node) => { pickerTriggers.current.send = node; }} onPress={() => openSelectionPicker('send')}>
             {selectedSendAsset ? (
               <>
                 <View style={styles.sendSelectedAssetGlyph}>
@@ -8029,6 +8368,17 @@ function GrapeApp() {
 
         <View style={[styles.sectionCard, styles.formCard]}>
           <Text style={styles.sectionTitle}>Transfer details</Text>
+          {savedSendDraft && !houdiniDeposit ? (
+            <View style={styles.sectionCard}>
+              <Text style={styles.settingsTitle}>Resume unfinished send?</Text>
+              <Text style={styles.sectionHint}>{savedSendDraft.amount || 'Amount not entered'} {savedSendDraft.symbol} · Saved on this device for up to 24 hours.</Text>
+              <Text style={styles.sectionHint}>Resume or discard this draft to save a new one. Check the recipient, amount and current balance before confirming.</Text>
+              <PaperButton onPress={resumeSavedSendDraft}>Resume draft</PaperButton>
+              <PaperButton onPress={() => { if (selectedWallet) void clearSavedSendDraft(selectedWallet).then(() => setLoadedDraftKey(sendDraftKey(selectedWallet.id, selectedWallet.chain))).catch(() => setDraftSaveFailed(true)); }}>Discard draft</PaperButton>
+            </View>
+          ) : null}
+          {draftSaveFailed && !houdiniDeposit ? <Text style={styles.sectionHint}>Draft recovery is unavailable on this device right now.</Text> : null}
+
           {selectedWallet?.chain === 'monad' ? (
             <>
               <PaperTextInput
@@ -8088,7 +8438,7 @@ function GrapeApp() {
           ) : null}
           <PaperTextInput
             value={sendAmount}
-            onChangeText={setSendAmount}
+            onChangeText={value => setSendAmount(normalizeDecimalSeparator(value))}
             placeholder={selectedSendAsset ? `Amount in ${selectedSendAsset.symbol}` : 'Amount'}
             keyboardType="decimal-pad"
             mode="outlined"
@@ -8097,11 +8447,42 @@ function GrapeApp() {
             outlineStyle={styles.paperOutline}
             textColor={activeTheme.text}
           />
-          {selectedWallet?.chain === 'sui' && selectedSendAsset?.tokenType === 'sui-coin' ? (
-            <Text style={styles.sectionHint}>Sui fungible token send is not available on mobile yet. Native SUI only.</Text>
+          {selectedSendAsset && selectedSendAsset.tokenType !== 'nft' && !houdiniDeposit ? (
+            <View style={styles.swapQuickRatios}>
+              {([0.25, 0.5, 0.75, 1] as const).map((ratio) => {
+                const disabled = sendLoading || !(Number(selectedSendAsset.amountUi) > 0);
+                return (
+                  <Pressable
+                    key={ratio}
+                    accessibilityRole="button"
+                    accessibilityLabel={ratio === 1 ? 'Use maximum send amount' : `Use ${ratio * 100}% of balance`}
+                    style={[styles.swapRatioChip, disabled ? styles.swapRatioChipDisabled : null]}
+                    disabled={disabled}
+                    onPress={() => {
+                      if (!selectedWallet) return;
+                      const requestId = sendRequestRef.current;
+                      setSendLoading(true);
+                      void estimateWalletSend({ wallet: selectedWallet, asset: selectedSendAsset, recipient: sendRecipient.trim(), amount: '0', maximum: true })
+                        .then(estimate => { if (requestId !== sendRequestRef.current) return; setSendAmount(getExactSendRatio(estimate.amount, selectedSendAsset.decimals ?? (selectedSendAsset.chain === 'ethereum' || selectedSendAsset.chain === 'monad' ? 18 : selectedSendAsset.chain === 'zcash' ? 8 : 9), ratio * 100 as 25 | 50 | 75 | 100)); })
+                        .catch(cause => setError(cause instanceof Error ? cause.message : 'Unable to calculate Max.'))
+                        .finally(() => setSendLoading(false));
+                    }}
+                  >
+                    <Text style={[styles.swapRatioChipText, disabled ? styles.swapRatioChipTextDisabled : null]}>
+                      {ratio === 1 ? 'Max' : `${ratio * 100}%`}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          ) : null}
+          {selectedSendAsset?.tokenType === 'native' && selectedSendAsset.chain !== 'solana' ? (
+            <Text style={styles.sectionHint}>Max reserves the estimated network fee. Enter a recipient before using amount shortcuts.</Text>
+          ) : null}
+          {selectedWallet?.chain === 'sui' ? (
+            <Text style={styles.sectionHint}>Sui sends are not available in this build.</Text>
           ) : null}
           {houdiniDeposit ? <View style={styles.communityDetailCard}><Text style={styles.settingsTitle}>Confirm Houdini deposit</Text><Text style={styles.sectionHint}>You are about to deposit exactly {depositAmount(houdiniDeposit.entry)} {houdiniDeposit.entry.from.symbol}. This signed transfer starts the private send.</Text><Text selectable style={styles.sectionHint}>Houdini deposit: {houdiniDeposit.entry.order.depositAddress}</Text><Text selectable style={styles.sectionHint}>Final recipient: {houdiniDeposit.entry.recipient}</Text><Text style={styles.sectionHint}>Expected delivery: {houdiniDeposit.entry.order.outAmount} {houdiniDeposit.entry.to.symbol}. Only approve this deposit once.</Text></View> : privateSendAvailable ? <SendPrivacyPicker value={sendPrivate} onChange={setSendPrivate} theme={activeTheme} /> : null}
-          {gasWarning ? <Text style={styles.errorText}>{gasWarning}</Text> : null}
           {error ? <Text style={styles.errorText}>{error}</Text> : null}
           <PaperButton
             mode="contained"
@@ -8111,7 +8492,7 @@ function GrapeApp() {
             disabled={sendLoading || !selectedWallet || !selectedSendAsset}
             onPress={() => void handleSend()}
           >
-            {sendLoading ? 'Sending...' : sendPrivate && !houdiniDeposit ? 'Review private send' : houdiniDeposit ? `Deposit ${depositAmount(houdiniDeposit.entry)} ${houdiniDeposit.entry.from.symbol}` : `Send ${selectedSendAsset?.symbol ?? selectedChainMeta.short}`}
+            {sendLoading ? 'Preparing send...' : sendPrivate && !houdiniDeposit ? 'Review private send' : houdiniDeposit ? `Deposit ${depositAmount(houdiniDeposit.entry)} ${houdiniDeposit.entry.from.symbol}` : `Review send ${selectedSendAsset?.symbol ?? selectedChainMeta.short}`}
           </PaperButton>
         </View>
       </View>
@@ -8155,7 +8536,7 @@ function GrapeApp() {
     return (
       <View style={styles.stack}>
         <View style={styles.swapHeaderCard}>
-          <Pressable style={styles.swapHeaderBackButton} onPress={() => setSwapScreenVisible(false)} accessibilityLabel="Back to wallet">
+          <Pressable testID="swap-back" hitSlop={8} style={styles.swapHeaderBackButton} onPress={() => setSwapScreenVisible(false)} accessibilityLabel="Back to wallet">
             <Feather name="arrow-left" size={24} color={activeTheme.text} />
           </Pressable>
           <Text style={styles.sectionTitle}>Swap</Text>
@@ -8172,7 +8553,7 @@ function GrapeApp() {
               </View>
 
               <View style={styles.swapLegMain}>
-                <Pressable style={[styles.sendAssetSelectButton, styles.swapSelectShell]} onPress={() => setSwapInputPickerVisible(true)}>
+                <Pressable style={[styles.sendAssetSelectButton, styles.swapSelectShell]} testID="swap-input-picker" ref={(node) => { pickerTriggers.current.swapInput = node; }} onPress={() => openSelectionPicker('swapInput')}>
                   {selectedSwapInputAsset ? (
                     <>
                       <View style={styles.sendSelectedAssetGlyph}>
@@ -8220,7 +8601,7 @@ function GrapeApp() {
               </View>
 
               <View style={styles.swapLegMain}>
-                <Pressable style={[styles.sendAssetSelectButton, styles.swapSelectShell]} onPress={() => setSwapOutputPickerVisible(true)}>
+                <Pressable style={[styles.sendAssetSelectButton, styles.swapSelectShell]} testID="swap-output-picker" ref={(node) => { pickerTriggers.current.swapOutput = node; }} onPress={() => openSelectionPicker('swapOutput')}>
                   {selectedSwapOutputAsset ? (
                     <>
                       <View style={styles.sendSelectedAssetGlyph}>
@@ -8251,13 +8632,13 @@ function GrapeApp() {
 
           <View style={styles.swapQuickRatios}>
             {swapRatioOptions.map((ratio) => {
-              const disabled = availableInputAmount <= 0;
+              const disabled = availableInputAmount <= 0 || swapQuoteLoading || swapExecuteLoading;
               return (
                 <Pressable
                   key={ratio}
                   style={[styles.swapRatioChip, disabled ? styles.swapRatioChipDisabled : null]}
                   disabled={disabled}
-                  onPress={() => setSwapAmountByRatio(ratio)}
+                  accessibilityRole="button" accessibilityLabel={ratio === 1 ? 'Use maximum swap amount after fees' : `Use ${Math.round(ratio * 100)}% of spendable balance`} onPress={() => void setSwapAmountByRatio(ratio)}
                 >
                   <Text style={[styles.swapRatioChipText, disabled ? styles.swapRatioChipTextDisabled : null]}>
                     {ratio === 1 ? 'Max' : `${Math.round(ratio * 100)}%`}
@@ -8349,7 +8730,7 @@ function GrapeApp() {
               disabled={swapExecuteLoading}
               onPress={() => void handleExecuteSwap()}
             >
-              {swapExecuteLoading ? 'Submitting swap...' : `Swap ${selectedSwapInputAsset?.symbol ?? ''}`}
+              {swapExecuteLoading ? 'Submitting swap...' : `Review swap ${selectedSwapInputAsset?.symbol ?? ''}`}
             </PaperButton>
           </View>
         ) : null}
@@ -8621,7 +9002,7 @@ function GrapeApp() {
 
           <PaperTextInput
             value={bridgeAmount}
-            onChangeText={setBridgeAmount}
+            onChangeText={value => setBridgeAmount(normalizeDecimalSeparator(value))}
             placeholder={selectedWallet ? `Amount in ${selectedWallet.chain === 'solana' ? 'SOL' : selectedWallet.chain === 'ethereum' ? 'ETH' : selectedWallet.chain === 'monad' ? 'MON' : 'asset'}` : 'Amount'}
             keyboardType="decimal-pad"
             mode="outlined"
@@ -8630,6 +9011,7 @@ function GrapeApp() {
             outlineStyle={styles.paperOutline}
             textColor={activeTheme.text}
           />
+          {bridgeToChain !== 'zcash' ? <PaperButton accessibilityLabel="Use maximum bridge amount after fees" disabled={bridgeQuoteLoading || bridgeExecuteLoading || !bridgeRecipientValid} onPress={() => void setBridgeMaximum()}>Max after fees</PaperButton> : null}
           {bridgeError ? <Text style={styles.errorText}>{bridgeError}</Text> : null}
           <PaperButton
             mode="contained"
@@ -8656,7 +9038,7 @@ function GrapeApp() {
               disabled={bridgeExecuteLoading}
               onPress={() => void handleExecuteBridge()}
             >
-              {bridgeExecuteLoading ? 'Submitting bridge...' : 'Bridge now'}
+              {bridgeExecuteLoading ? 'Submitting bridge...' : 'Review bridge'}
             </PaperButton>
           </View>
         ) : null}
@@ -8665,9 +9047,7 @@ function GrapeApp() {
   }
 
   function renderActivityRow(activity: MobileActivity) {
-    const isFailed = activity.status === 'failed';
-    const isSuccess = activity.status === 'success';
-    const statusLabel = isFailed ? 'Failed' : isSuccess ? 'Success' : 'Pending';
+    const statusLabel = activityStatusLabel(activity.status, activity.type);
     const glyphName =
       activity.type.includes('send') || activity.type.includes('transfer')
         ? 'arrow-top-right'
@@ -8678,7 +9058,7 @@ function GrapeApp() {
             : 'clock-outline';
 
     return (
-      <View key={activity.id} style={styles.activityRow}>
+      <Pressable key={activity.id} style={styles.activityRow} accessibilityRole="button" accessibilityLabel={`${activity.title}, ${statusLabel}. View transaction details`} onPress={() => { setCopiedActivityId(false); setActivityDetailId(activity.signature || activity.id); }}>
         <View style={styles.activityGlyph}>
           <MaterialCommunityIcons name={glyphName as never} size={20} color={activeTheme.text} />
         </View>
@@ -8690,7 +9070,7 @@ function GrapeApp() {
         <View style={styles.activityStatus}>
           <Text style={styles.activityStatusText}>{statusLabel}</Text>
         </View>
-      </View>
+      </Pressable>
     );
   }
 
@@ -8701,6 +9081,13 @@ function GrapeApp() {
           <Text style={styles.sectionTitle}>Activity</Text>
           <Text style={styles.sectionHint}>{filteredActivity.length} item{filteredActivity.length === 1 ? '' : 's'}</Text>
         </View>
+        {submissionNotice ? (
+          <View style={styles.sectionCard} accessibilityLiveRegion="polite" accessibilityRole="alert">
+            <Text style={styles.sectionTitle}>Transaction submitted</Text>
+            <Text style={styles.sectionHint}>{submissionNotice}</Text>
+            <PaperButton compact onPress={() => setSubmissionNotice(null)}>Dismiss</PaperButton>
+          </View>
+        ) : null}
         <View style={styles.stack}>
           {filteredActivity.length === 0 ? (
             <View style={styles.sectionCard}>
@@ -8907,6 +9294,10 @@ function GrapeApp() {
                 trackColor={{ true: activeTheme.primaryButton, false: 'rgba(255,255,255,0.16)' }}
                 thumbColor={walletState.privacyMode ? '#f7f2ff' : '#d0c0df'}
               />
+            </View>
+            <View style={styles.settingsRow}>
+              <View style={styles.settingsCopy}><Text style={styles.settingsTitle}>Haptic feedback</Text><Text style={styles.sectionHint}>Subtle feedback when selecting wallets, networks and assets.</Text></View>
+              <Switch accessibilityLabel="Haptic feedback" value={walletState.hapticsEnabled !== false} onValueChange={(value) => { void saveState({ ...latestWalletState.current, hapticsEnabled: value }).catch(() => setError('Unable to save haptic preference.')); }} trackColor={{ true: activeTheme.primaryButton, false: 'rgba(255,255,255,0.16)' }} />
             </View>
             <View style={styles.settingsRow}>
               <View style={styles.settingsCopy}>
@@ -9890,120 +10281,120 @@ function GrapeApp() {
     );
   }
 
-  function renderReadyScreen() {
+  function renderNativeScene(route: WalletRoute) {
+    const discover = route === 'discover';
+    const attachMainRef = route === nativeRoute;
+    const content = route === 'home' ? renderHomeTab('home') : route === 'asset' ? renderHomeTab('asset')
+      : route === 'assetActivity' ? renderHomeTab('assetActivity') : route === 'send' ? renderSendTab()
+      : route === 'swap' ? renderSwapTab() : route === 'bridge' ? renderBridgeTab()
+      : route === 'rebalance' ? renderRebalanceTab() : route === 'receive' ? renderReceiveTab()
+      : route === 'governance' ? renderGovernanceTab() : route === 'activity' ? renderActivityTab()
+      : discover ? renderDiscoverTab() : renderSettingsTab();
+    return <KeyboardAvoidingView style={styles.screenFlex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}>
+      <ScrollView ref={attachMainRef ? mainScrollRef : undefined} contentContainerStyle={[styles.mainContent, { paddingHorizontal: discover ? 0 : screenPadding, paddingTop: (route === 'receive' || route === 'governance' ? 0 : safeAreaInsets.top) + (route === 'home' ? (Platform.OS === 'android' ? 20 : 12) : 18), paddingBottom: discover ? 0 : isWalletTab(route) ? 140 : 40 + safeAreaInsets.bottom, flexGrow: discover ? 1 : undefined }]} scrollEnabled={!discover} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}>
+        <View ref={attachMainRef ? mainScreenContentRef : undefined} collapsable={false} style={[styles.screenShell, { maxWidth: contentMaxWidth, flex: discover ? 1 : undefined }]}>
+          {error && attachMainRef ? <View style={styles.inlineErrorCard}><Text style={styles.errorText}>{error}</Text></View> : null}
+          {content}
+        </View>
+      </ScrollView>
+    </KeyboardAvoidingView>;
+  }
+
+  function renderNativeTabBar() {
     return (
-      <>
-        <KeyboardAvoidingView
-          style={styles.screenFlex}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
-        >
-        <ScrollView
-          ref={mainScrollRef}
-          contentContainerStyle={[
-            styles.mainContent,
-            {
-              paddingHorizontal: mainTab === 'discover' ? 0 : screenPadding,
-              paddingTop: mainTab === 'home' ? (Platform.OS === 'android' ? 20 : 12) : 18,
-              paddingBottom: mainTab === 'discover' ? 0 : sendScreenVisible || swapScreenVisible || rebalanceScreenVisible || bridgeScreenVisible ? 220 : 140,
-              flexGrow: mainTab === 'discover' ? 1 : undefined
-            }
-          ]}
-          scrollEnabled={mainTab !== 'discover'}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="interactive"
-        >
-            <Animated.View
-              ref={mainScreenContentRef}
-              collapsable={false}
-              style={[
-                styles.screenShell,
-                {
-                  maxWidth: contentMaxWidth,
-                  flex: mainTab === 'discover' ? 1 : undefined,
-                  opacity: screenEnterOpacity,
-                  transform: [{ translateY: screenEnterLift }, { scale: screenEnterScale }]
-                }
-              ]}
-            >
-            {error ? (
-              <View style={styles.inlineErrorCard}>
-                <Text style={styles.errorText}>{error}</Text>
-              </View>
-            ) : null}
-
-            {sendScreenVisible
-              ? renderSendTab()
-              : swapScreenVisible
-                ? renderSwapTab()
-                : rebalanceScreenVisible
-                  ? renderRebalanceTab()
-                : bridgeScreenVisible
-                  ? renderBridgeTab()
-                  : mainTab === 'home'
-                    ? renderHomeTab()
-                    : mainTab === 'receive'
-                      ? renderReceiveTab()
-                      : mainTab === 'discover'
-                        ? renderDiscoverTab()
-                      : mainTab === 'governance'
-                        ? renderGovernanceTab()
-                        : mainTab === 'activity'
-                          ? renderActivityTab()
-                          : renderSettingsTab()}
-          </Animated.View>
-        </ScrollView>
-        </KeyboardAvoidingView>
-
-        {sendScreenVisible || swapScreenVisible || rebalanceScreenVisible || bridgeScreenVisible ? null : (
         <View style={[styles.footerShell, { left: 0, right: 0, bottom: 0, paddingBottom: footerSafeInset + 6 }]}>
           <Pressable
             style={[styles.footerButton, mainTab === 'home' ? styles.footerButtonActive : null]}
-            onPress={() => setMainTab('home')}
+            accessibilityRole="tab"
+            accessibilityLabel="Home"
+            accessibilityState={{ selected: mainTab === 'home' }}
+            onPress={() => handleMainTabPress('home')}
           >
             <MaterialCommunityIcons name="home-variant-outline" size={24} color={mainTab === 'home' ? activeTheme.grape : activeTheme.muted} />
             <Text style={[styles.footerLabel, mainTab === 'home' ? styles.footerLabelActive : null]}>Home</Text>
           </Pressable>
           <Pressable
             style={[styles.footerButton, mainTab === 'activity' ? styles.footerButtonActive : null]}
-            onPress={() => setMainTab('activity')}
+            accessibilityRole="tab"
+            accessibilityLabel="Activity"
+            accessibilityState={{ selected: mainTab === 'activity' }}
+            onPress={() => handleMainTabPress('activity')}
           >
             <MaterialCommunityIcons name="history" size={24} color={mainTab === 'activity' ? activeTheme.grape : activeTheme.muted} />
             <Text style={[styles.footerLabel, mainTab === 'activity' ? styles.footerLabelActive : null]}>Activity</Text>
           </Pressable>
           <Pressable
             style={[styles.footerButton, mainTab === 'discover' ? styles.footerButtonActive : null]}
-            onPress={() => setMainTab('discover')}
+            accessibilityRole="tab"
+            accessibilityLabel="Discover"
+            accessibilityState={{ selected: mainTab === 'discover' }}
+            onPress={() => handleMainTabPress('discover')}
           >
             <MaterialCommunityIcons name="compass-outline" size={24} color={mainTab === 'discover' ? activeTheme.grape : activeTheme.muted} />
             <Text style={[styles.footerLabel, mainTab === 'discover' ? styles.footerLabelActive : null]}>Discover</Text>
           </Pressable>
           <Pressable
             style={[styles.footerButton, mainTab === 'settings' ? styles.footerButtonActive : null]}
-            onPress={() => setMainTab('settings')}
+            accessibilityRole="tab"
+            accessibilityLabel="Settings"
+            accessibilityState={{ selected: mainTab === 'settings' }}
+            onPress={() => handleMainTabPress('settings')}
           >
             <MaterialCommunityIcons name="cog-outline" size={24} color={mainTab === 'settings' ? activeTheme.grape : activeTheme.muted} />
             <Text style={[styles.footerLabel, mainTab === 'settings' ? styles.footerLabelActive : null]}>Settings</Text>
           </Pressable>
         </View>
-        )}
+    );
+  }
+
+  function renderReadyScreen() {
+    const visibleWalletGroups = chainWalletGroups.map((group) => ({ ...group, wallets: prioritizeRecent(group.wallets.filter((wallet) => `${wallet.name} ${wallet.address}`.toLowerCase().includes(walletPickerSearch.trim().toLowerCase())), pickerRecents.wallets ?? [], (wallet) => wallet.id) })).filter((group) => group.wallets.length);
+    const visibleChains = prioritizeRecent(availableChains.filter((chain) => `${chain.id} ${chainMeta(chain.id).label}`.toLowerCase().includes(chainPickerSearch.trim().toLowerCase())), pickerRecents.chains ?? [], (chain) => chain.id);
+    return (
+      <>
+        <NativeWalletNavigation navigationRef={navigationRef} render={renderNativeScene} footer={renderNativeTabBar} blocked={stackRemovalBlocked} background={activeTheme.bg} reduceMotion={reduceMotion} onRouteChange={handleNativeRouteChange} onSceneClosed={handleNativeSceneClosed} />
         <Portal>
-          <PaperModal
+          <PaperModal style={{ justifyContent: 'flex-end' }} visible={!!activityDetail} onDismiss={() => setActivityDetailId(null)} contentContainerStyle={[styles.sendAssetPickerModal, { marginBottom: footerSafeInset + 12 }]}>
+            <ScrollView contentContainerStyle={{ gap: 14 }}>
+              <Text accessibilityRole="header" style={styles.sectionTitle}>Transaction details</Text>
+              <Text style={styles.settingsTitle}>{activityDetail?.title}</Text>
+              <Text style={styles.sectionHint}>{activityDetail ? activityStatusLabel(activityDetail.status, activityDetail.type) : ''} · {activityDetail?.chain}</Text>
+              <Text selectable style={styles.settingsTitle}>{activityDetail?.amountLabel}</Text>
+              <Text selectable style={styles.sectionHint}>{activityDetail?.subtitle}</Text>
+              {activityDetail?.fromAddress ? <Text selectable style={styles.sectionHint}>From: {activityDetail.fromAddress}</Text> : null}
+              {activityDetail?.toAddress ? <Text selectable style={styles.sectionHint}>To: {activityDetail.toAddress}</Text> : null}
+              <Text style={styles.sectionHint}>{activityDetail ? new Date(activityDetail.timestamp).toLocaleString() : ''}</Text>
+              <Text style={styles.settingsTitle}>Transaction ID</Text>
+              <Text selectable style={styles.sectionHint}>{activityDetail?.signature || 'Not available'}</Text>
+              {activityDetail?.type === 'bridge' ? <Text style={styles.sectionHint}>Source confirmation does not confirm delivery on the destination network.</Text> : null}
+              {activityDetail?.status === 'unknown' ? <Text style={styles.sectionHint}>Confirmation is pending or unavailable. Check this transaction before sending again.</Text> : null}
+              <PaperButton disabled={!activityDetail?.signature} onPress={() => { if (activityDetail?.signature) void Clipboard.setStringAsync(activityDetail.signature).then(() => setCopiedActivityId(true)).catch(() => Alert.alert('Could not copy', 'Select the transaction ID above to copy it.')); }}>{copiedActivityId ? 'Copied' : 'Copy transaction ID'}</PaperButton>
+              <PaperButton onPress={() => setActivityDetailId(null)}>Done</PaperButton>
+            </ScrollView>
+          </PaperModal>
+          <PaperModal style={{ justifyContent: 'flex-end' }} visible={!!transactionReview} onDismiss={() => setTransactionReview(null)} contentContainerStyle={[styles.sendAssetPickerModal, { marginBottom: footerSafeInset + 12 }]}>
+            <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: 16 }}>
+              <Text accessibilityRole="header" style={styles.sectionTitle}>{transactionReview?.title}</Text>
+              {transactionReview?.items.map((item) => <View key={item.label} style={{ gap: 4 }}><Text style={styles.sectionHint}>{item.label}</Text><Text selectable style={styles.settingsTitle}>{item.value}</Text></View>)}
+              <Text style={styles.sectionHint}>Confirming authorizes this transaction. Estimated output may change within the quoted limits.</Text>
+              <PaperButton mode="contained" onPress={() => { void transactionReview?.confirm().catch((error) => { setTransactionReview(null); Alert.alert('Review again', error instanceof Error ? error.message : 'Unable to confirm transaction.'); }); }}>Confirm transaction</PaperButton>
+              <PaperButton onPress={() => setTransactionReview(null)}>Back to edit</PaperButton>
+            </ScrollView>
+          </PaperModal>
+          <SelectionSheet
             visible={homeWalletMenuExpanded}
             onDismiss={() => setHomeWalletMenuExpanded(false)}
-            contentContainerStyle={[styles.sendAssetPickerModal, styles.walletPickerModal, { height: walletPickerHeight }]}
+            background={activeTheme.panel} color={activeTheme.text} muted={activeTheme.muted} reduceMotion={reduceMotion} onClosed={restorePickerFocus}
           >
             <View style={styles.modalSheetHeader}>
               <View style={styles.modalSheetHeaderCopy}>
-                <Text style={styles.sectionTitle}>Switch wallet</Text>
+                <Text accessibilityRole="header" style={styles.sectionTitle}>Switch wallet</Text>
                 <Text style={styles.sectionHint}>{chainWallets.length} wallets on {selectedChainMeta.label}</Text>
               </View>
-              <Pressable style={styles.modalSheetClose} onPress={() => setHomeWalletMenuExpanded(false)} accessibilityLabel="Close wallet menu">
-                <Feather name="x" size={20} color={activeTheme.text} />
-              </Pressable>
             </View>
-            <ScrollView style={styles.modalSheetScroll} contentContainerStyle={styles.homeWalletMenu} showsVerticalScrollIndicator={false}>
+            <SheetSearchInput value={walletPickerSearch} onChangeText={setWalletPickerSearch} placeholder="Search wallets" color={activeTheme.text} borderColor={activeTheme.panelBorder} placeholderTextColor={activeTheme.muted} />
+            <Text style={styles.sectionHint}>Recent selections appear first within each group.</Text>
+            <BottomSheetScrollView keyboardShouldPersistTaps="handled" style={styles.modalSheetScroll} contentContainerStyle={styles.homeWalletMenu} showsVerticalScrollIndicator={false}>
               <View style={styles.walletValueSummary}>
                 <View>
                   <Text style={styles.walletValueSummaryLabel}>All wallets</Text>
@@ -10018,16 +10409,19 @@ function GrapeApp() {
                   )}
                 </Text>
               </View>
-              {chainWalletGroups.map((group) => (
+              {visibleWalletGroups.length === 0 ? <Text style={styles.sectionHint}>No wallets match your search.</Text> : null}
+              {visibleWalletGroups.map((group) => (
                 <View key={group.source} style={styles.walletGroupSection}>
                   <Text style={styles.walletGroupTitle}>{group.label}</Text>
                   {group.wallets.map((wallet) => {
                     const active = wallet.id === selectedWallet?.id;
                     return (
                       <Pressable
+                        accessibilityRole="button" accessibilityState={{ selected: active }} accessibilityLabel={`${wallet.name}, ${shortenAddress(wallet.address)}`}
                         key={wallet.id}
                         style={[styles.homeWalletMenuItem, active ? styles.homeWalletMenuItemActive : null]}
                         onPress={() => {
+                          rememberSelection('wallets', wallet.id);
                           setHomeWalletMenuExpanded(false);
                           void handleSelectWallet(wallet.id, wallet.chain);
                         }}
@@ -10055,8 +10449,8 @@ function GrapeApp() {
                   })}
                 </View>
               ))}
-            </ScrollView>
-          </PaperModal>
+            </BottomSheetScrollView>
+          </SelectionSheet>
           <PaperModal
             visible={Boolean(labelWallet)}
             onDismiss={() => setLabelWallet(null)}
@@ -10093,22 +10487,21 @@ function GrapeApp() {
               Save label
             </PaperButton>
           </PaperModal>
-          <PaperModal
+          <SelectionSheet
             visible={chainPickerVisible}
             onDismiss={() => setChainPickerVisible(false)}
-            contentContainerStyle={[styles.sendAssetPickerModal, styles.chainPickerModal, { height: chainPickerHeight }]}
+            background={activeTheme.panel} color={activeTheme.text} muted={activeTheme.muted} reduceMotion={reduceMotion} onClosed={restorePickerFocus}
           >
             <View style={styles.modalSheetHeader}>
               <View style={styles.modalSheetHeaderCopy}>
-                <Text style={styles.sectionTitle}>Switch chain</Text>
+                <Text accessibilityRole="header" style={styles.sectionTitle}>Switch chain</Text>
                 <Text style={styles.sectionHint}>Choose which chain wallet to open.</Text>
               </View>
-              <Pressable style={styles.modalSheetClose} onPress={() => setChainPickerVisible(false)} accessibilityLabel="Close chain menu">
-                <Feather name="x" size={20} color={activeTheme.text} />
-              </Pressable>
             </View>
-            <ScrollView style={styles.modalSheetScroll} contentContainerStyle={styles.modalSheetList} showsVerticalScrollIndicator={false}>
-              {availableChains.map((chain) => {
+            <SheetSearchInput value={chainPickerSearch} onChangeText={setChainPickerSearch} placeholder="Search networks" color={activeTheme.text} borderColor={activeTheme.panelBorder} placeholderTextColor={activeTheme.muted} />
+            <BottomSheetScrollView keyboardShouldPersistTaps="handled" style={styles.modalSheetScroll} contentContainerStyle={styles.modalSheetList} showsVerticalScrollIndicator={false}>
+              {visibleChains.length === 0 ? <Text style={styles.sectionHint}>No networks match your search.</Text> : null}
+              {visibleChains.map((chain) => {
                 const meta = chainMeta(chain.id);
                 const chainOptionWallets = dedupeVisibleWallets(walletState.wallets.filter((wallet) => wallet.chain === chain.id));
                 const activeWallet = getSelectedWallet(walletState, chain.id);
@@ -10116,9 +10509,10 @@ function GrapeApp() {
 
                 return (
                   <Pressable
+                    accessibilityRole="button" accessibilityState={{ selected: active }} accessibilityLabel={meta.label}
                     key={chain.id}
                     style={[styles.chainPickerOption, active ? styles.chainPickerOptionActive : null]}
-                    onPress={() => void handleSelectChain(chain.id)}
+                    onPress={() => { rememberSelection('chains', chain.id); void handleSelectChain(chain.id); }}
                   >
                     <View style={[styles.chainPickerGlyph, { borderColor: `${meta.accent}55`, backgroundColor: `${meta.accent}18` }]}>
                       <Text style={[styles.chainPickerGlyphText, { color: meta.accent }]}>{meta.short}</Text>
@@ -10138,8 +10532,8 @@ function GrapeApp() {
                   </Pressable>
                 );
               })}
-            </ScrollView>
-          </PaperModal>
+            </BottomSheetScrollView>
+          </SelectionSheet>
           <PaperModal
             visible={Boolean(mwaRequest) && unlocked}
             onDismiss={rejectMwaRequest}
@@ -10406,28 +10800,22 @@ function GrapeApp() {
               Close scanner
             </PaperButton>
           </PaperModal>
-          <PaperModal
+          <SelectionSheet
             visible={sendAssetPickerVisible}
             onDismiss={() => setSendAssetPickerVisible(false)}
-            contentContainerStyle={styles.sendAssetPickerModal}
+            background={activeTheme.panel} color={activeTheme.text} muted={activeTheme.muted} reduceMotion={reduceMotion} onClosed={restorePickerFocus}
           >
             <View style={styles.sendAssetPickerHeader}>
-              <Text style={styles.sectionTitle}>Select asset</Text>
+              <Text accessibilityRole="header" style={styles.sectionTitle}>Select asset</Text>
               <Text style={styles.sectionHint}>{assets.length} available in this wallet</Text>
             </View>
-            <PaperTextInput
+            <SheetSearchInput
               value={sendAssetSearch}
               onChangeText={setSendAssetSearch}
               placeholder="Search by name, symbol, or address"
-              mode="outlined"
-              style={styles.paperInput}
-              contentStyle={styles.paperInputContent}
-              outlineStyle={styles.paperOutline}
-              textColor={activeTheme.text}
-              autoCapitalize="none"
-              autoCorrect={false}
+              color={activeTheme.text} borderColor={activeTheme.panelBorder} placeholderTextColor={activeTheme.muted}
             />
-            <ScrollView style={styles.sendAssetPickerList} keyboardShouldPersistTaps="handled">
+            <BottomSheetScrollView style={[styles.sendAssetPickerList, { flex: 1, minHeight: 0 }]} keyboardShouldPersistTaps="handled">
               <View style={styles.stack}>
                 {filteredSendAssets.length === 0 ? (
                   <Text style={styles.sectionHint}>No assets match your search.</Text>
@@ -10437,9 +10825,11 @@ function GrapeApp() {
                     const assetSubtitle = getAssetSubtitle(asset, selectedChainMeta.label, selectedChainMeta.short);
                     return (
                       <Pressable
+                        accessibilityRole="button" accessibilityState={{ selected: active }} accessibilityLabel={`${asset.name}, ${asset.symbol}`}
                         key={asset.id}
                         style={[styles.assetRow, styles.pickerAssetRow, active ? styles.assetRowActive : null, active ? styles.pickerAssetRowActive : null]}
                         onPress={() => {
+                          rememberSelection(pickerAssetScope, asset.id);
                           setSendAssetId(asset.id);
                           setSendAssetPickerVisible(false);
                           setSendAssetSearch('');
@@ -10464,30 +10854,24 @@ function GrapeApp() {
                   })
                 )}
               </View>
-            </ScrollView>
-          </PaperModal>
-          <PaperModal
+            </BottomSheetScrollView>
+          </SelectionSheet>
+          <SelectionSheet
             visible={swapInputPickerVisible}
             onDismiss={() => setSwapInputPickerVisible(false)}
-            contentContainerStyle={styles.sendAssetPickerModal}
+            background={activeTheme.panel} color={activeTheme.text} muted={activeTheme.muted} reduceMotion={reduceMotion} onClosed={restorePickerFocus}
           >
             <View style={styles.sendAssetPickerHeader}>
-              <Text style={styles.sectionTitle}>Swap from</Text>
+              <Text accessibilityRole="header" style={styles.sectionTitle}>Swap from</Text>
               <Text style={styles.sectionHint}>{swappableAssets.length} available in this wallet</Text>
             </View>
-            <PaperTextInput
+            <SheetSearchInput
               value={swapAssetSearch}
               onChangeText={setSwapAssetSearch}
               placeholder="Search by name, symbol, or address"
-              mode="outlined"
-              style={styles.paperInput}
-              contentStyle={styles.paperInputContent}
-              outlineStyle={styles.paperOutline}
-              textColor={activeTheme.text}
-              autoCapitalize="none"
-              autoCorrect={false}
+              color={activeTheme.text} borderColor={activeTheme.panelBorder} placeholderTextColor={activeTheme.muted}
             />
-            <ScrollView style={styles.sendAssetPickerList} keyboardShouldPersistTaps="handled">
+            <BottomSheetScrollView style={[styles.sendAssetPickerList, { flex: 1, minHeight: 0 }]} keyboardShouldPersistTaps="handled">
               <View style={styles.stack}>
                 {filteredSwapAssets.length === 0 ? (
                   <Text style={styles.sectionHint}>No assets match your search.</Text>
@@ -10497,9 +10881,11 @@ function GrapeApp() {
                     const assetSubtitle = getAssetSubtitle(asset, selectedChainMeta.label, selectedChainMeta.short);
                     return (
                       <Pressable
+                        accessibilityRole="button" accessibilityState={{ selected: active }} accessibilityLabel={`${asset.name}, ${asset.symbol}`}
                         key={asset.id}
                         style={[styles.assetRow, styles.pickerAssetRow, active ? styles.assetRowActive : null, active ? styles.pickerAssetRowActive : null]}
                         onPress={() => {
+                          rememberSelection(pickerAssetScope, asset.id);
                           setSwapInputAssetId(asset.id);
                           if (swapOutputAssetId === asset.id) {
                             setSwapOutputAssetId(null);
@@ -10527,30 +10913,24 @@ function GrapeApp() {
                   })
                 )}
               </View>
-            </ScrollView>
-          </PaperModal>
-          <PaperModal
+            </BottomSheetScrollView>
+          </SelectionSheet>
+          <SelectionSheet
             visible={swapOutputPickerVisible}
             onDismiss={() => setSwapOutputPickerVisible(false)}
-            contentContainerStyle={styles.sendAssetPickerModal}
+            background={activeTheme.panel} color={activeTheme.text} muted={activeTheme.muted} reduceMotion={reduceMotion} onClosed={restorePickerFocus}
           >
             <View style={styles.sendAssetPickerHeader}>
-              <Text style={styles.sectionTitle}>Swap to</Text>
+              <Text accessibilityRole="header" style={styles.sectionTitle}>Swap to</Text>
               <Text style={styles.sectionHint}>Search Jupiter tokens, stocks, ETFs, or paste a mint</Text>
             </View>
-            <PaperTextInput
+            <SheetSearchInput
               value={swapAssetSearch}
               onChangeText={setSwapAssetSearch}
               placeholder={swapDiscoveryLoading ? 'Searching Jupiter...' : 'Search by name or paste address'}
-              mode="outlined"
-              style={styles.paperInput}
-              contentStyle={styles.paperInputContent}
-              outlineStyle={styles.paperOutline}
-              textColor={activeTheme.text}
-              autoCapitalize="none"
-              autoCorrect={false}
+              color={activeTheme.text} borderColor={activeTheme.panelBorder} placeholderTextColor={activeTheme.muted}
             />
-            <ScrollView
+            <GestureScrollView
               horizontal
               style={styles.swapPopularScroller}
               showsHorizontalScrollIndicator={false}
@@ -10558,10 +10938,12 @@ function GrapeApp() {
             >
               {popularSwapAssets.map((asset) => (
                 <Pressable
+                  accessibilityRole="button" accessibilityState={{ selected: selectedSwapOutputAsset?.address === asset.address }} accessibilityLabel={asset.symbol}
                   key={asset.address ?? asset.id}
                   style={[styles.swapPopularPill, selectedSwapOutputAsset?.address === asset.address ? styles.swapPopularPillActive : null]}
                   onPress={() => {
-                    setSwapOutputAssetId(asset.id);
+                    rememberSelection(pickerAssetScope, asset.id);
+                          setSwapOutputAssetId(asset.id);
                     setSwapQuote(null);
                     setSwapSelectedRouteId(null);
                     setSwapOutputPickerVisible(false);
@@ -10572,9 +10954,9 @@ function GrapeApp() {
                   <Text style={styles.swapPopularPillText}>{asset.symbol}</Text>
                 </Pressable>
               ))}
-            </ScrollView>
+            </GestureScrollView>
             <Text style={styles.swapPickerSectionLabel}>{swapAssetSearch.trim() ? 'SEARCH RESULTS' : 'POPULAR ASSETS'}</Text>
-            <ScrollView style={styles.sendAssetPickerList} keyboardShouldPersistTaps="handled">
+            <BottomSheetScrollView style={[styles.sendAssetPickerList, { flex: 1, minHeight: 0 }]} keyboardShouldPersistTaps="handled">
               <View style={styles.stack}>
                 {filteredSwapOutputAssets.length === 0 ? (
                   <Text style={styles.sectionHint}>{swapDiscoveryLoading ? 'Searching Jupiter...' : 'No output assets match your search.'}</Text>
@@ -10586,10 +10968,12 @@ function GrapeApp() {
                       const assetSubtitle = getAssetSubtitle(asset, selectedChainMeta.label, selectedChainMeta.short);
                       return (
                         <Pressable
-                          key={asset.id}
+                          accessibilityRole="button" accessibilityState={{ selected: active }} accessibilityLabel={`${asset.name}, ${asset.symbol}`}
+                        key={asset.id}
                           style={[styles.assetRow, styles.pickerAssetRow, active ? styles.assetRowActive : null, active ? styles.pickerAssetRowActive : null]}
                           onPress={() => {
-                            setSwapOutputAssetId(asset.id);
+                            rememberSelection(pickerAssetScope, asset.id);
+                          setSwapOutputAssetId(asset.id);
                             setSwapQuote(null);
                             setSwapSelectedRouteId(null);
                             setSwapOutputPickerVisible(false);
@@ -10614,8 +10998,8 @@ function GrapeApp() {
                 )}
                 <Text style={styles.swapStockDisclosure}>Tokenized stocks provide economic exposure without shareholder voting rights. Availability and eligibility vary by jurisdiction.</Text>
               </View>
-            </ScrollView>
-          </PaperModal>
+            </BottomSheetScrollView>
+          </SelectionSheet>
         </Portal>
       </>
     );
@@ -10623,7 +11007,7 @@ function GrapeApp() {
 
   return (
     <PaperProvider theme={paperTheme}>
-    <SafeAreaView style={styles.safe} edges={['top', 'right', 'bottom', 'left']}>
+    <SafeAreaView style={styles.safe} edges={screen === 'ready' ? ['right', 'left'] : ['top', 'right', 'bottom', 'left']}>
       <StatusBar style={activeTheme.id === 'champagne' ? 'dark' : 'light'} />
       {activeTheme.id === 'grape' ? (
         <View style={StyleSheet.absoluteFill} pointerEvents="none" accessible={false} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
@@ -10666,34 +11050,11 @@ function GrapeApp() {
       {screen !== 'ready' ? <View style={styles.bgGlowBottom} pointerEvents="none" /> : null}
 
       {screen === 'loading' ? (
-        <View style={styles.centered}>
-          <Animated.View
-            style={[
-              styles.launchShell,
-              {
-                opacity: launchFade,
-                transform: [{ translateY: launchLift }, { scale: launchScale }]
-              }
-            ]}
-          >
-            <Animated.View style={[styles.launchHalo, { opacity: launchHalo }]} />
-            <View style={styles.launchBadgeRow}>
-              <Text style={styles.launchBadge}>GRAPE WALLET</Text>
-            </View>
-            <View style={styles.logoOrb}>
-              {renderBrandLogo(40)}
-            </View>
-            <View style={styles.launchWordmark}>{renderBrandWordmark()}</View>
-            <Text style={styles.launchTitle}>Opening Grape</Text>
-            <Text style={styles.launchCopy}>Preparing your wallet, communities, and connected accounts.</Text>
-            <View style={styles.launchStatusPill}>
-              <View style={styles.launchStatusDot} />
-              <Text style={styles.loadingText}>{launchStatus}</Text>
-            </View>
-            <View style={styles.launchProgressTrack}>
-              <View style={styles.launchProgressFill} />
-            </View>
-          </Animated.View>
+        <View style={styles.centered} accessibilityLiveRegion="polite">
+          <GrapeStartupMark size={156} reduceMotion={reduceMotion}>{renderBrandLogo(100)}</GrapeStartupMark>
+          <View style={{ marginTop: 22 }}>{renderBrandWordmark()}</View>
+          <Text style={[styles.launchBadge, { marginTop: 12 }]}>YOUR WALLET. YOUR WORLD.</Text>
+          <Text style={[styles.sectionHint, { marginTop: 28, textAlign: 'center' }]}>{launchStatus}</Text>
         </View>
       ) : null}
 
@@ -10707,9 +11068,11 @@ function GrapeApp() {
 
 export default function App() {
   return (
-    <SafeAreaProvider>
-      <GrapeApp />
-    </SafeAreaProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider>
+        <BottomSheetModalProvider><GrapeApp /></BottomSheetModalProvider>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }
 
@@ -11218,8 +11581,8 @@ function createStyles(palette: MobileThemePalette) {
     marginTop: -2,
     marginBottom: -2,
     marginLeft: -2,
-    width: 82,
-    height: 82,
+    width: 134,
+    height: 134,
     alignItems: 'center',
     justifyContent: 'center'
   },

@@ -238,7 +238,7 @@ export async function getMonadTokenPreview(
 export async function sendMonad(
   network: MonadNetwork,
   secret: VaultSecret,
-  input: { recipient: string; amountEther: string; customRpcUrl?: string | null }
+  input: { recipient: string; amountEther: string; gas?: bigint; gasPrice?: bigint; customRpcUrl?: string | null }
 ): Promise<Hex> {
   const account = resolveMonadVaultSecret(secret);
   const value = parseEther(input.amountEther);
@@ -261,6 +261,7 @@ export async function sendMonad(
   return walletClient.sendTransaction({
     account,
     chain: network === 'testnet' ? MONAD_TESTNET_CHAIN : MONAD_MAINNET_CHAIN,
+    gas: input.gas, gasPrice: input.gasPrice,
     to: input.recipient as Address,
     value
   });
@@ -274,7 +275,7 @@ export async function sendMonadToken(
     amount: string;
     tokenAddress: string;
     decimals: number;
-    customRpcUrl?: string | null;
+    gas?: bigint; gasPrice?: bigint; customRpcUrl?: string | null;
   }
 ): Promise<Hex> {
   const account = resolveMonadVaultSecret(secret);
@@ -304,6 +305,7 @@ export async function sendMonadToken(
   return walletClient.writeContract({
     account,
     chain,
+    gas: input.gas, gasPrice: input.gasPrice,
     address: input.tokenAddress as Address,
     abi: ERC20_ABI,
     functionName: 'transfer',

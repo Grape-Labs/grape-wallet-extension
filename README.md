@@ -207,7 +207,7 @@ Notes:
 - if you omit both key settings, `pnpm build` now fails to prevent shipping a zip that installs as a separate extension
 - extension builds also auto-bump the root and `apps/extension` package versions together before packaging
 
-## Load Unpacked In Chrome
+## Load Unpacked In Brave Or Chrome
 
 1. Run `pnpm build`
 2. Open `chrome://extensions`
@@ -223,7 +223,11 @@ If you make changes:
 
 If you are replacing an existing Chromium install and want it to stay the same extension, make sure the build still uses the same `GRAPE_EXTENSION_KEY_FILE` or `GRAPE_EXTENSION_KEY` value as the original install.
 
-If Chrome keeps stale icons or stale assets cached, remove the extension and load unpacked again from `apps/extension/dist`.
+For Brave, use `brave://extensions` in the steps above. Keep the unpacked extension in the same permanent folder (`apps/extension/dist` for local builds). For downloaded ZIP releases, extract each update over the contents of the same installed folder, then click **Reload** on the existing Grape Wallet entry.
+
+Do not remove and reinstall Grape Wallet to refresh assets: uninstalling clears the extension’s local wallet data. If assets look stale, close wallet tabs, reload the existing extension, then reopen the wallet. Keep the original Chromium key and browser profile when updating.
+
+The encrypted wallet persists across reloads and browser restarts. You may need to unlock it again with your password; that does not require importing your seed phrase again.
 
 ## First Run
 

@@ -12,3 +12,9 @@ coverage
 apps/extension/releases/
 .DS_Store
 .claude
+
+# Kotlin compiler session files from local Android builds.
+apps/mobile/android/.kotlin/
+
+# Generated native build intermediates for the local passkey module.
+packages/mobile-passkeys/android/build/

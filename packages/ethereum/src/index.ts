@@ -1,6 +1,7 @@
 import type { VaultSecret } from '@grape/core';
 import {
   createPublicClient,
+  encodeFunctionData,
   createWalletClient,
   formatEther,
   formatUnits,
@@ -184,7 +185,7 @@ export async function getEthereumTokenPreview(
 export async function sendEthereum(
   network: EthereumNetwork,
   secret: VaultSecret,
-  input: { recipient: string; amountEther: string; customRpcUrl?: string | null }
+  input: { recipient: string; amountEther: string; gas?: bigint; gasPrice?: bigint; customRpcUrl?: string | null }
 ): Promise<Hex> {
   const account = resolveEthereumVaultSecret(secret);
   const chain = network === 'sepolia' ? sepolia : mainnet;
@@ -197,6 +198,7 @@ export async function sendEthereum(
   return walletClient.sendTransaction({
     account,
     chain,
+    gas: input.gas, gasPrice: input.gasPrice,
     to: input.recipient as Address,
     value: parseEther(input.amountEther)
   });
@@ -210,7 +212,7 @@ export async function sendEthereumToken(
     amount: string;
     tokenAddress: string;
     decimals: number;
-    customRpcUrl?: string | null;
+    gas?: bigint; gasPrice?: bigint; customRpcUrl?: string | null;
   }
 ): Promise<Hex> {
   const account = resolveEthereumVaultSecret(secret);
@@ -224,6 +226,7 @@ export async function sendEthereumToken(
   return walletClient.writeContract({
     account,
     chain,
+    gas: input.gas, gasPrice: input.gasPrice,
     address: input.tokenAddress as Address,
     abi: ERC20_ABI,
     functionName: 'transfer',
@@ -353,4 +356,54 @@ function normalizeNumberValue(value?: string | null) {
   }
 
   return Number(BigInt(trimmed));
+}
+
+/** Read-only transfer estimate. Uses integer units and reserves a bounded gas budget. */
+export async function estimateEvmTransfer(client: ReturnType<typeof createEthereumPublicClient>, input: {
+  sender: string; recipient: string; amount: string; tokenAddress?: string; decimals: number; maximum?: boolean; chargeGasLimit?: boolean;
+}) {
+  if (!isAddress(input.sender) || !isAddress(input.recipient)) throw new Error('Enter a valid recipient address.');
+  if (!input.maximum && (!/^(?:\d+(?:\.\d+)?|\.\d+)$/.test(input.amount) || (input.amount.split('.')[1]?.length ?? 0) > input.decimals)) throw new Error('Amount has invalid precision.');
+  const account = input.sender as Address;
+  const recipient = input.recipient as Address;
+  const token = input.tokenAddress as Address | undefined;
+  const [balance, gasPrice, tokenBalance] = await Promise.all([
+    client.getBalance({ address: account, blockTag: 'pending' }), client.getGasPrice(),
+    token ? client.readContract({ address: token, abi: ERC20_ABI, functionName: 'balanceOf', args: [account] }) : Promise.resolve(0n)
+  ]);
+  let amount = input.maximum ? (token ? tokenBalance : 1n) : parseUnits(input.amount, input.decimals);
+  const request = () => ({ account, to: token ?? recipient, value: token ? 0n : amount,
+    data: token ? encodeFunctionData({ abi: ERC20_ABI, functionName: 'transfer', args: [recipient, amount] }) : undefined });
+  if (gasPrice <= 0n) throw new Error('Network fee unavailable. Try again.');
+  const price = gasPrice;
+  let estimatedGas = await client.estimateGas(request());
+  let gas = (estimatedGas * 120n + 99n) / 100n;
+  if (input.maximum && !token) {
+    amount = balance - gas * price;
+    if (amount <= 0n) throw new Error('Insufficient balance after network fees.');
+    estimatedGas = await client.estimateGas(request());
+    gas = (estimatedGas * 120n + 99n) / 100n;
+    amount = balance - gas * price;
+    if (amount <= 0n || await client.estimateGas(request()) > gas) throw new Error('Gas estimate changed. Try Max again.');
+  }
+  if (gas <= 0n || amount <= 0n || balance < (token ? 0n : amount) + gas * price || (token && tokenBalance < amount)) throw new Error('Insufficient balance for amount and network fees.');
+  return { amount: formatUnits(amount, input.decimals), fee: formatEther((input.chargeGasLimit ? gas : estimatedGas) * price), reserve: formatEther(gas * price), gas, gasPrice: price };
+}
+
+/** Estimate an executable route, including native value beyond its quoted input. */
+export async function estimateEvmRoute(client: ReturnType<typeof createEthereumPublicClient>, input: {
+  sender: string; to: string; data?: string; value?: string; nativeAmountRaw: bigint; chargeGasLimit?: boolean;
+}) {
+  if (!isAddress(input.sender) || !isAddress(input.to)) throw new Error('Invalid route address.');
+  const value = BigInt(input.value || '0');
+  if (value < 0n || input.nativeAmountRaw < 0n) throw new Error('Invalid route amount.');
+  const [balance, gasPrice, estimatedGas] = await Promise.all([
+    client.getBalance({ address: input.sender as Address, blockTag: 'pending' }), client.getGasPrice(),
+    client.estimateGas({ account: input.sender as Address, to: input.to as Address, data: input.data as Hex | undefined, value })
+  ]);
+  if (gasPrice <= 0n || estimatedGas <= 0n) throw new Error('Network fee unavailable.');
+  const gas = (estimatedGas * 120n + 99n) / 100n;
+  if (balance < value + gas * gasPrice) throw new Error('Insufficient native balance for route and network fees.');
+  const extraValue = value > input.nativeAmountRaw ? value - input.nativeAmountRaw : 0n;
+  return { gas, gasPrice, feeWei: (input.chargeGasLimit ? gas : estimatedGas) * gasPrice, reserveWei: gas * gasPrice + extraValue };
 }

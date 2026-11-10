@@ -32,6 +32,8 @@ PODS:
     - ExpoModulesCore
     - ZXingObjC/OneD
     - ZXingObjC/PDF417
+  - ExpoClipboard (8.0.8):
+    - ExpoModulesCore
   - ExpoCrypto (15.0.9):
     - ExpoModulesCore
   - ExpoFileSystem (19.0.23):
@@ -39,6 +41,8 @@ PODS:
   - ExpoFont (14.0.12):
     - ExpoModulesCore
   - ExpoGrapeMobilePasskeys (0.1.0):
+    - ExpoModulesCore
+  - ExpoHaptics (15.0.8):
     - ExpoModulesCore
   - ExpoKeepAwake (15.0.8):
     - ExpoModulesCore
@@ -75,6 +79,7 @@ PODS:
   - hermes-engine (0.81.5):
     - hermes-engine/Pre-built (= 0.81.5)
   - hermes-engine/Pre-built (0.81.5)
+  - MultiplatformBleAdapter (0.2.0)
   - RCTDeprecation (0.81.5)
   - RCTRequired (0.81.5)
   - RCTTypeSafety (0.81.5):
@@ -1354,6 +1359,29 @@ PODS:
     - React-RCTFBReactNativeSpec
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
+  - react-native-ble-plx (3.4.0):
+    - hermes-engine
+    - MultiplatformBleAdapter (= 0.2.0)
+    - RCTRequired
+    - RCTTypeSafety
+    - React-Core
+    - React-Core-prebuilt
+    - React-debug
+    - React-Fabric
+    - React-featureflags
+    - React-graphics
+    - React-ImageManager
+    - React-jsi
+    - React-NativeModulesApple
+    - React-RCTFabric
+    - React-renderercss
+    - React-rendererdebug
+    - React-utils
+    - ReactCodegen
+    - ReactCommon/turbomodule/bridging
+    - ReactCommon/turbomodule/core
+    - ReactNativeDependencies
+    - Yoga
   - react-native-get-random-values (1.11.0):
     - React-Core
   - react-native-safe-area-context (5.6.2):
@@ -1819,6 +1847,149 @@ PODS:
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
     - Yoga
+  - RNGestureHandler (2.28.0):
+    - hermes-engine
+    - RCTRequired
+    - RCTTypeSafety
+    - React-Core
+    - React-Core-prebuilt
+    - React-debug
+    - React-Fabric
+    - React-featureflags
+    - React-graphics
+    - React-ImageManager
+    - React-jsi
+    - React-NativeModulesApple
+    - React-RCTFabric
+    - React-renderercss
+    - React-rendererdebug
+    - React-utils
+    - ReactCodegen
+    - ReactCommon/turbomodule/bridging
+    - ReactCommon/turbomodule/core
+    - ReactNativeDependencies
+    - Yoga
+  - RNReanimated (4.1.7):
+    - hermes-engine
+    - RCTRequired
+    - RCTTypeSafety
+    - React-Core
+    - React-Core-prebuilt
+    - React-debug
+    - React-Fabric
+    - React-featureflags
+    - React-graphics
+    - React-hermes
+    - React-ImageManager
+    - React-jsi
+    - React-NativeModulesApple
+    - React-RCTFabric
+    - React-renderercss
+    - React-rendererdebug
+    - React-utils
+    - ReactCodegen
+    - ReactCommon/turbomodule/bridging
+    - ReactCommon/turbomodule/core
+    - ReactNativeDependencies
+    - RNReanimated/reanimated (= 4.1.7)
+    - RNWorklets
+    - Yoga
+  - RNReanimated/reanimated (4.1.7):
+    - hermes-engine
+    - RCTRequired
+    - RCTTypeSafety
+    - React-Core
+    - React-Core-prebuilt
+    - React-debug
+    - React-Fabric
+    - React-featureflags
+    - React-graphics
+    - React-hermes
+    - React-ImageManager
+    - React-jsi
+    - React-NativeModulesApple
+    - React-RCTFabric
+    - React-renderercss
+    - React-rendererdebug
+    - React-utils
+    - ReactCodegen
+    - ReactCommon/turbomodule/bridging
+    - ReactCommon/turbomodule/core
+    - ReactNativeDependencies
+    - RNReanimated/reanimated/apple (= 4.1.7)
+    - RNWorklets
+    - Yoga
+  - RNReanimated/reanimated/apple (4.1.7):
+    - hermes-engine
+    - RCTRequired
+    - RCTTypeSafety
+    - React-Core
+    - React-Core-prebuilt
+    - React-debug
+    - React-Fabric
+    - React-featureflags
+    - React-graphics
+    - React-hermes
+    - React-ImageManager
+    - React-jsi
+    - React-NativeModulesApple
+    - React-RCTFabric
+    - React-renderercss
+    - React-rendererdebug
+    - React-utils
+    - ReactCodegen
+    - ReactCommon/turbomodule/bridging
+    - ReactCommon/turbomodule/core
+    - ReactNativeDependencies
+    - RNWorklets
+    - Yoga
+  - RNScreens (4.16.0):
+    - hermes-engine
+    - RCTRequired
+    - RCTTypeSafety
+    - React-Core
+    - React-Core-prebuilt
+    - React-debug
+    - React-Fabric
+    - React-featureflags
+    - React-graphics
+    - React-ImageManager
+    - React-jsi
+    - React-NativeModulesApple
+    - React-RCTFabric
+    - React-RCTImage
+    - React-renderercss
+    - React-rendererdebug
+    - React-utils
+    - ReactCodegen
+    - ReactCommon/turbomodule/bridging
+    - ReactCommon/turbomodule/core
+    - ReactNativeDependencies
+    - RNScreens/common (= 4.16.0)
+    - Yoga
+  - RNScreens/common (4.16.0):
+    - hermes-engine
+    - RCTRequired
+    - RCTTypeSafety
+    - React-Core
+    - React-Core-prebuilt
+    - React-debug
+    - React-Fabric
+    - React-featureflags
+    - React-graphics
+    - React-ImageManager
+    - React-jsi
+    - React-NativeModulesApple
+    - React-RCTFabric
+    - React-RCTImage
+    - React-renderercss
+    - React-rendererdebug
+    - React-utils
+    - ReactCodegen
+    - ReactCommon/turbomodule/bridging
+    - ReactCommon/turbomodule/core
+    - ReactNativeDependencies
+    - Yoga
   - RNSVG (15.12.1):
     - hermes-engine
     - RCTRequired
@@ -1864,6 +2035,77 @@ PODS:
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
     - Yoga
+  - RNWorklets (0.5.1):
+    - hermes-engine
+    - RCTRequired
+    - RCTTypeSafety
+    - React-Core
+    - React-Core-prebuilt
+    - React-debug
+    - React-Fabric
+    - React-featureflags
+    - React-graphics
+    - React-hermes
+    - React-ImageManager
+    - React-jsi
+    - React-NativeModulesApple
+    - React-RCTFabric
+    - React-renderercss
+    - React-rendererdebug
+    - React-utils
+    - ReactCodegen
+    - ReactCommon/turbomodule/bridging
+    - ReactCommon/turbomodule/core
+    - ReactNativeDependencies
+    - RNWorklets/worklets (= 0.5.1)
+    - Yoga
+  - RNWorklets/worklets (0.5.1):
+    - hermes-engine
+    - RCTRequired
+    - RCTTypeSafety
+    - React-Core
+    - React-Core-prebuilt
+    - React-debug
+    - React-Fabric
+    - React-featureflags
+    - React-graphics
+    - React-hermes
+    - React-ImageManager
+    - React-jsi
+    - React-NativeModulesApple
+    - React-RCTFabric
+    - React-renderercss
+    - React-rendererdebug
+    - React-utils
+    - ReactCodegen
+    - ReactCommon/turbomodule/bridging
+    - ReactCommon/turbomodule/core
+    - ReactNativeDependencies
+    - RNWorklets/worklets/apple (= 0.5.1)
+    - Yoga
+  - RNWorklets/worklets/apple (0.5.1):
+    - hermes-engine
+    - RCTRequired
+    - RCTTypeSafety
+    - React-Core
+    - React-Core-prebuilt
+    - React-debug
+    - React-Fabric
+    - React-featureflags
+    - React-graphics
+    - React-hermes
+    - React-ImageManager
+    - React-jsi
+    - React-NativeModulesApple
+    - React-RCTFabric
+    - React-renderercss
+    - React-rendererdebug
+    - React-utils
+    - ReactCodegen
+    - ReactCommon/turbomodule/bridging
+    - ReactCommon/turbomodule/core
+    - ReactNativeDependencies
+    - Yoga
   - Yoga (0.0.0)
   - ZXingObjC/Core (3.6.9)
   - ZXingObjC/OneD (3.6.9):
@@ -1876,10 +2118,12 @@ DEPENDENCIES:
   - "Expo (from `../../../node_modules/.pnpm/expo@54.0.36_@babel+core@7.29.0_bufferutil@4.1.0_graphql@16.13.1_react-native-webview@1_5a97748e5b03f097fb989d9bdd8079dc/node_modules/expo`)"
   - "ExpoAsset (from `../../../node_modules/.pnpm/expo-asset@12.0.13_expo@54.0.36_@babel+core@7.29.0_bufferutil@4.1.0_graphql@16.13.1_rea_0065a03e84a3ba05968846d9b5830a6e/node_modules/expo-asset/ios`)"
   - "ExpoCamera (from `../../../node_modules/.pnpm/expo-camera@17.0.10_expo@54.0.36_@babel+core@7.29.0_bufferutil@4.1.0_graphql@16.13.1_re_fdd41182a2445359769a7f3dd20e5725/node_modules/expo-camera/ios`)"
+  - "ExpoClipboard (from `../../../node_modules/.pnpm/expo-clipboard@8.0.8_expo@54.0.36_@babel+core@7.29.0_bufferutil@4.1.0_graphql@16.13.1_r_864ff558321bf010c2ca4ed392e3593a/node_modules/expo-clipboard/ios`)"
   - "ExpoCrypto (from `../../../node_modules/.pnpm/expo-crypto@15.0.9_expo@54.0.36_@babel+core@7.29.0_bufferutil@4.1.0_graphql@16.13.1_rea_d56e323c96c31cbe6e997b9991602e84/node_modules/expo-crypto/ios`)"
   - "ExpoFileSystem (from `../../../node_modules/.pnpm/expo-file-system@19.0.23_expo@54.0.36_@babel+core@7.29.0_bufferutil@4.1.0_graphql@16.13_54edb12ebc549a3354b7c9b8cfafcdf0/node_modules/expo-file-system/ios`)"
   - "ExpoFont (from `../../../node_modules/.pnpm/expo-font@14.0.12_expo@54.0.36_@babel+core@7.29.0_bufferutil@4.1.0_graphql@16.13.1_reac_d9d343ebad61225147b3b6a7f1a508ca/node_modules/expo-font/ios`)"
   - ExpoGrapeMobilePasskeys (from `../../../packages/mobile-passkeys/ios`)
+  - "ExpoHaptics (from `../../../node_modules/.pnpm/expo-haptics@15.0.8_expo@54.0.36_@babel+core@7.29.0_bufferutil@4.1.0_graphql@16.13.1_re_1c71382dc091c1c99e902d0ec3ecbb57/node_modules/expo-haptics/ios`)"
   - "ExpoKeepAwake (from `../../../node_modules/.pnpm/expo-keep-awake@15.0.8_expo@54.0.36_@babel+core@7.29.0_bufferutil@4.1.0_graphql@16.13.1_b93f213a976dc7a1112c3da94d4e6d6b/node_modules/expo-keep-awake/ios`)"
   - "ExpoLocalAuthentication (from `../../../node_modules/.pnpm/expo-local-authentication@17.0.8_expo@54.0.36_@babel+core@7.29.0_bufferutil@4.1.0_graph_90b3aa6eedff70b65d42e7dd513c6936/node_modules/expo-local-authentication/ios`)"
   - "ExpoModulesCore (from `../../../node_modules/.pnpm/expo-modules-core@3.0.30_react-native@0.81.5_@babel+core@7.29.0_@types+react@19.2.14_bu_4a71b2fd42ffc2a3618efeeb17566d24/node_modules/expo-modules-core`)"
@@ -1921,6 +2165,7 @@ DEPENDENCIES:
   - "React-logger (from `../../../node_modules/.pnpm/react-native@0.81.5_@babel+core@7.29.0_@types+react@19.2.14_bufferutil@4.1.0_react@19.1.0_utf-8-validate@6.0.6/node_modules/react-native/ReactCommon/logger`)"
   - "React-Mapbuffer (from `../../../node_modules/.pnpm/react-native@0.81.5_@babel+core@7.29.0_@types+react@19.2.14_bufferutil@4.1.0_react@19.1.0_utf-8-validate@6.0.6/node_modules/react-native/ReactCommon`)"
   - "React-microtasksnativemodule (from `../../../node_modules/.pnpm/react-native@0.81.5_@babel+core@7.29.0_@types+react@19.2.14_bufferutil@4.1.0_react@19.1.0_utf-8-validate@6.0.6/node_modules/react-native/ReactCommon/react/nativemodule/microtasks`)"
+  - "react-native-ble-plx (from `../../../node_modules/.pnpm/react-native-ble-plx@3.4.0_react-native@0.81.5_@babel+core@7.29.0_@types+react@19.2.14__d283c0221248d584d0194cd7766b5cd0/node_modules/react-native-ble-plx`)"
   - "react-native-get-random-values (from `../../../node_modules/.pnpm/react-native-get-random-values@1.11.0_react-native@0.81.5_@babel+core@7.29.0_@types+rea_9c17d7dddb2cd2dbd684c1037d9f1023/node_modules/react-native-get-random-values`)"
   - "react-native-safe-area-context (from `../../../node_modules/.pnpm/react-native-safe-area-context@5.6.2_react-native@0.81.5_@babel+core@7.29.0_@types+reac_128453c02f9a7f6527bc0fb640dc191e/node_modules/react-native-safe-area-context`)"
   - "react-native-webview (from `../../../node_modules/.pnpm/react-native-webview@13.15.0_react-native@0.81.5_@babel+core@7.29.0_@types+react@19.2.1_5d219398ab5ca01f05631f498f6b909a/node_modules/react-native-webview`)"
@@ -1956,11 +2201,16 @@ DEPENDENCIES:
   - "ReactCommon/turbomodule/core (from `../../../node_modules/.pnpm/react-native@0.81.5_@babel+core@7.29.0_@types+react@19.2.14_bufferutil@4.1.0_react@19.1.0_utf-8-validate@6.0.6/node_modules/react-native/ReactCommon`)"
   - "ReactNativeDependencies (from `../../../node_modules/.pnpm/react-native@0.81.5_@babel+core@7.29.0_@types+react@19.2.14_bufferutil@4.1.0_react@19.1.0_utf-8-validate@6.0.6/node_modules/react-native/third-party-podspecs/ReactNativeDependencies.podspec`)"
   - "RNCAsyncStorage (from `../../../node_modules/.pnpm/@react-native-async-storage+async-storage@2.2.0_react-native@0.81.5_@babel+core@7.29.0__489e6c12381d746c51f840615472e0fb/node_modules/@react-native-async-storage/async-storage`)"
+  - "RNGestureHandler (from `../../../node_modules/.pnpm/react-native-gesture-handler@2.28.0_react-native@0.81.5_@babel+core@7.29.0_@types+react_f692ed042f9b14dd84f3c4875ad18543/node_modules/react-native-gesture-handler`)"
+  - "RNReanimated (from `../../../node_modules/.pnpm/react-native-reanimated@4.1.7_react-native-worklets@0.5.1_@babel+core@7.29.0_react-nati_b503421babe49c3dbe96658ea3ef42d1/node_modules/react-native-reanimated`)"
+  - "RNScreens (from `../../../node_modules/.pnpm/react-native-screens@4.16.0_react-native@0.81.5_@babel+core@7.29.0_@types+react@19.2.14_ca3a0987606df5f0331b2c6f9133a3ad/node_modules/react-native-screens`)"
   - "RNSVG (from `../../../node_modules/.pnpm/react-native-svg@15.12.1_react-native@0.81.5_@babel+core@7.29.0_@types+react@19.2.14_bu_d6b9d86050dfd67ea7128b8591ea4949/node_modules/react-native-svg`)"
+  - "RNWorklets (from `../../../node_modules/.pnpm/react-native-worklets@0.5.1_@babel+core@7.29.0_react-native@0.81.5_@babel+core@7.29.0_@_4d0de7ec7862ec4bc430fd452d09649a/node_modules/react-native-worklets`)"
   - "Yoga (from `../../../node_modules/.pnpm/react-native@0.81.5_@babel+core@7.29.0_@types+react@19.2.14_bufferutil@4.1.0_react@19.1.0_utf-8-validate@6.0.6/node_modules/react-native/ReactCommon/yoga`)"
 
 SPEC REPOS:
   trunk:
+    - MultiplatformBleAdapter
     - ZXingObjC
 
 EXTERNAL SOURCES:
@@ -1972,6 +2222,8 @@ EXTERNAL SOURCES:
     :path: "../../../node_modules/.pnpm/expo-asset@12.0.13_expo@54.0.36_@babel+core@7.29.0_bufferutil@4.1.0_graphql@16.13.1_rea_0065a03e84a3ba05968846d9b5830a6e/node_modules/expo-asset/ios"
   ExpoCamera:
     :path: "../../../node_modules/.pnpm/expo-camera@17.0.10_expo@54.0.36_@babel+core@7.29.0_bufferutil@4.1.0_graphql@16.13.1_re_fdd41182a2445359769a7f3dd20e5725/node_modules/expo-camera/ios"
+  ExpoClipboard:
+    :path: "../../../node_modules/.pnpm/expo-clipboard@8.0.8_expo@54.0.36_@babel+core@7.29.0_bufferutil@4.1.0_graphql@16.13.1_r_864ff558321bf010c2ca4ed392e3593a/node_modules/expo-clipboard/ios"
   ExpoCrypto:
     :path: "../../../node_modules/.pnpm/expo-crypto@15.0.9_expo@54.0.36_@babel+core@7.29.0_bufferutil@4.1.0_graphql@16.13.1_rea_d56e323c96c31cbe6e997b9991602e84/node_modules/expo-crypto/ios"
   ExpoFileSystem:
@@ -1980,6 +2232,8 @@ EXTERNAL SOURCES:
     :path: "../../../node_modules/.pnpm/expo-font@14.0.12_expo@54.0.36_@babel+core@7.29.0_bufferutil@4.1.0_graphql@16.13.1_reac_d9d343ebad61225147b3b6a7f1a508ca/node_modules/expo-font/ios"
   ExpoGrapeMobilePasskeys:
     :path: "../../../packages/mobile-passkeys/ios"
+  ExpoHaptics:
+    :path: "../../../node_modules/.pnpm/expo-haptics@15.0.8_expo@54.0.36_@babel+core@7.29.0_bufferutil@4.1.0_graphql@16.13.1_re_1c71382dc091c1c99e902d0ec3ecbb57/node_modules/expo-haptics/ios"
   ExpoKeepAwake:
     :path: "../../../node_modules/.pnpm/expo-keep-awake@15.0.8_expo@54.0.36_@babel+core@7.29.0_bufferutil@4.1.0_graphql@16.13.1_b93f213a976dc7a1112c3da94d4e6d6b/node_modules/expo-keep-awake/ios"
   ExpoLocalAuthentication:
@@ -2061,6 +2315,8 @@ EXTERNAL SOURCES:
     :path: "../../../node_modules/.pnpm/react-native@0.81.5_@babel+core@7.29.0_@types+react@19.2.14_bufferutil@4.1.0_react@19.1.0_utf-8-validate@6.0.6/node_modules/react-native/ReactCommon"
   React-microtasksnativemodule:
     :path: "../../../node_modules/.pnpm/react-native@0.81.5_@babel+core@7.29.0_@types+react@19.2.14_bufferutil@4.1.0_react@19.1.0_utf-8-validate@6.0.6/node_modules/react-native/ReactCommon/react/nativemodule/microtasks"
+  react-native-ble-plx:
+    :path: "../../../node_modules/.pnpm/react-native-ble-plx@3.4.0_react-native@0.81.5_@babel+core@7.29.0_@types+react@19.2.14__d283c0221248d584d0194cd7766b5cd0/node_modules/react-native-ble-plx"
   react-native-get-random-values:
     :path: "../../../node_modules/.pnpm/react-native-get-random-values@1.11.0_react-native@0.81.5_@babel+core@7.29.0_@types+rea_9c17d7dddb2cd2dbd684c1037d9f1023/node_modules/react-native-get-random-values"
   react-native-safe-area-context:
@@ -2131,8 +2387,16 @@ EXTERNAL SOURCES:
     :podspec: "../../../node_modules/.pnpm/react-native@0.81.5_@babel+core@7.29.0_@types+react@19.2.14_bufferutil@4.1.0_react@19.1.0_utf-8-validate@6.0.6/node_modules/react-native/third-party-podspecs/ReactNativeDependencies.podspec"
   RNCAsyncStorage:
     :path: "../../../node_modules/.pnpm/@react-native-async-storage+async-storage@2.2.0_react-native@0.81.5_@babel+core@7.29.0__489e6c12381d746c51f840615472e0fb/node_modules/@react-native-async-storage/async-storage"
+  RNGestureHandler:
+    :path: "../../../node_modules/.pnpm/react-native-gesture-handler@2.28.0_react-native@0.81.5_@babel+core@7.29.0_@types+react_f692ed042f9b14dd84f3c4875ad18543/node_modules/react-native-gesture-handler"
+  RNReanimated:
+    :path: "../../../node_modules/.pnpm/react-native-reanimated@4.1.7_react-native-worklets@0.5.1_@babel+core@7.29.0_react-nati_b503421babe49c3dbe96658ea3ef42d1/node_modules/react-native-reanimated"
+  RNScreens:
+    :path: "../../../node_modules/.pnpm/react-native-screens@4.16.0_react-native@0.81.5_@babel+core@7.29.0_@types+react@19.2.14_ca3a0987606df5f0331b2c6f9133a3ad/node_modules/react-native-screens"
   RNSVG:
     :path: "../../../node_modules/.pnpm/react-native-svg@15.12.1_react-native@0.81.5_@babel+core@7.29.0_@types+react@19.2.14_bu_d6b9d86050dfd67ea7128b8591ea4949/node_modules/react-native-svg"
+  RNWorklets:
+    :path: "../../../node_modules/.pnpm/react-native-worklets@0.5.1_@babel+core@7.29.0_react-native@0.81.5_@babel+core@7.29.0_@_4d0de7ec7862ec4bc430fd452d09649a/node_modules/react-native-worklets"
   Yoga:
     :path: "../../../node_modules/.pnpm/react-native@0.81.5_@babel+core@7.29.0_@types+react@19.2.14_bufferutil@4.1.0_react@19.1.0_utf-8-validate@6.0.6/node_modules/react-native/ReactCommon/yoga"
 
@@ -2141,10 +2405,12 @@ SPEC CHECKSUMS:
   Expo: 38ef0f0082a53f9604a48cbab2ab55289c658eaf
   ExpoAsset: 9e5a7c9c0a9fb83ad5b2bb365141f2bd7f289b66
   ExpoCamera: 6a326deb45ba840749652e4c15198317aa78497e
+  ExpoClipboard: b36b287d8356887844bb08ed5c84b5979bb4dd1e
   ExpoCrypto: e2a2c4c748aac8485e5675f027b7901f511d43ff
   ExpoFileSystem: a8e7fb1e958471764fb48d281cf9fa81a9e4d77c
   ExpoFont: dfb7c572372b610da45b41e3b436321fd6a97215
   ExpoGrapeMobilePasskeys: 05633efa873460c3318976a4ee72cf9df613d1a0
+  ExpoHaptics: d3a6375d8dcc3a1083d003bc2298ff654fafb536
   ExpoKeepAwake: 55f75eca6499bb9e4231ebad6f3e9cb8f99c0296
   ExpoLocalAuthentication: 8a31808565da7af926dd9b595e98594d8b1553b6
   ExpoModulesCore: 9e6a5514828e7dd5ded9e99d33557be2d284e660
@@ -2152,6 +2418,7 @@ SPEC CHECKSUMS:
   ExpoSplashScreen: bc3cffefca2716e5f22350ca109badd7e50ec14d
   FBLazyVector: e95a291ad2dadb88e42b06e0c5fb8262de53ec12
   hermes-engine: 9f4dfe93326146a1c99eb535b1cb0b857a3cd172
+  MultiplatformBleAdapter: b1fddd0d499b96b607e00f0faa8e60648343dc1d
   RCTDeprecation: 943572d4be82d480a48f4884f670135ae30bf990
   RCTRequired: 8f3cfc90cc25cf6e420ddb3e7caaaabc57df6043
   RCTTypeSafety: 16a4144ca3f959583ab019b57d5633df10b5e97c
@@ -2185,6 +2452,7 @@ SPEC CHECKSUMS:
   React-logger: 50fdb9a8236da90c0b1072da5c32ee03aeb5bf28
   React-Mapbuffer: 9050ee10c19f4f7fca8963d0211b2854d624973e
   React-microtasksnativemodule: f775db9e991c6f3b8ccbc02bfcde22770f96e23b
+  react-native-ble-plx: d2d2858e4a513b4906bad113fb536172e1f01079
   react-native-get-random-values: d16467cf726c618e9c7a8c3c39c31faa2244bbba
   react-native-safe-area-context: 37e680fc4cace3c0030ee46e8987d24f5d3bdab2
   react-native-webview: b29007f4723bca10872028067b07abacfa1cb35a
@@ -2220,10 +2488,14 @@ SPEC CHECKSUMS:
   ReactCommon: 08810150b1206cc44aecf5f6ae19af32f29151a8
   ReactNativeDependencies: 71ce9c28beb282aa720ea7b46980fff9669f428a
   RNCAsyncStorage: 3a4f5e2777dae1688b781a487923a08569e27fe4
+  RNGestureHandler: 2914750df066d89bf9d8f48a10ad5f0051108ac3
+  RNReanimated: 6ed56698da4419da9a3f245a1567656bcc131c01
+  RNScreens: d8d6f1792f6e7ac12b0190d33d8d390efc0c1845
   RNSVG: 31d6639663c249b7d5abc9728dde2041eb2a3c34
+  RNWorklets: c82169c1a201bc56e03ee31ed2af6d5f2ab95ebc
   Yoga: 5934998fbeaef7845dbf698f698518695ab4cd1a
   ZXingObjC: 8898711ab495761b2dbbdec76d90164a6d7e14c5
 
-PODFILE CHECKSUM: 0a5a37667f59783ae90e245843a89d23d2591af7
+PODFILE CHECKSUM: 6ed47953acff8c42a2e31d41eb3e684d88ba24f7
 
 COCOAPODS: 1.16.2

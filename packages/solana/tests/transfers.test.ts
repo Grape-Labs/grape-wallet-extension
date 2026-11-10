@@ -1,8 +1,10 @@
-import { PublicKey } from '@solana/web3.js';
-import { describe, expect, it } from 'vitest';
+import { PublicKey, Transaction, SystemProgram } from '@solana/web3.js';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   TOKEN_PROGRAM_ID,
+  estimateLegacyTransactionFee,
+  estimateTransferAccountRent,
   createBurnCheckedInstruction,
   createCloseAccountInstruction,
   createRevokeInstruction,
@@ -75,5 +77,28 @@ describe('transfer helpers', () => {
     expect(instruction.keys[0]?.pubkey.equals(sourceAta)).toBe(true);
     expect(instruction.keys[2]?.pubkey.equals(destinationAta)).toBe(true);
     expect(Array.from(instruction.data)).toEqual(Array.from(encodeTransferCheckedData(250_000_000n, 9)));
+  });
+});
+
+
+it('does not treat an unavailable Solana message fee as zero', async () => {
+  const connection = { getFeeForMessage: async () => ({ value: null }) } as unknown as import('@solana/web3.js').Connection;
+  const transaction = { compileMessage: () => ({}) } as unknown as import('@solana/web3.js').Transaction;
+  await expect(estimateLegacyTransactionFee(connection, transaction)).rejects.toThrow('fee unavailable');
+});
+
+
+describe('simulated token account costs', () => {
+  const payer = new PublicKey('11111111111111111111111111111111');
+  const transaction = new Transaction({ feePayer: payer, recentBlockhash: payer.toBase58() }).add(SystemProgram.transfer({ fromPubkey: payer, toPubkey: new PublicKey('So11111111111111111111111111111111111111112'), lamports: 1 }));
+  it('uses simulated extension-aware costs rather than legacy account size', async () => {
+    const simulateTransaction = vi.fn(async () => ({ value: { err: null, accounts: [{ lamports: 10_000_000 - 5000 - 3_456_789 }] } }));
+    const connection = { getBalanceAndContext: async () => ({ context: { slot: 123 }, value: 10_000_000 }), simulateTransaction } as unknown as import('@solana/web3.js').Connection;
+    expect(await estimateTransferAccountRent(connection, transaction, payer, 5000)).toBe(3_456_789);
+    expect(simulateTransaction.mock.calls[0]).toHaveLength(2);
+  });
+  it('blocks account creation when simulation fails', async () => {
+    const connection = { getBalanceAndContext: async () => ({ context: { slot: 123 }, value: 10_000_000 }), simulateTransaction: async () => ({ value: { err: { InstructionError: [0, 'Custom'] }, accounts: null } }) } as unknown as import('@solana/web3.js').Connection;
+    await expect(estimateTransferAccountRent(connection, transaction, payer, 5000)).rejects.toThrow('could not be simulated');
   });
 });

@@ -272,6 +272,16 @@ export class ZcashIndexerClient {
     }).filter((entry): entry is ZcashActivity => entry !== null);
   }
 
+  async getTransactionConfirmations(txid: string): Promise<number> {
+    if (!/^[0-9a-f]{64}$/i.test(txid)) throw new Error('Invalid Zcash transaction id.');
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+    try {
+      const transaction = await this.request<Record<string, unknown>>(`/api/v2/tx/${encodeURIComponent(txid)}`, { signal: controller.signal });
+      return safeInteger(transaction.confirmations) ?? 0;
+    } finally { clearTimeout(timeout); }
+  }
+
   async broadcast(rawTransactionHex: string): Promise<string> {
     const envelope = await this.request<Record<string, unknown>>('/api/v2/sendtx/', {
       method: 'POST',
@@ -354,6 +364,7 @@ export async function sendZcashTransparent(input: {
   account: ZcashAccount;
   recipient: string;
   amount: string;
+  maximumFeeZat?: number;
 }): Promise<{ txid: string; feeZat: number }> {
   const snapshot = await input.client.getAddress(input.account.address);
   if (snapshot.chainTipHeight === null) throw new Error('Zcash indexer did not provide a chain height.');
@@ -365,6 +376,15 @@ export async function sendZcashTransparent(input: {
     chainTipHeight: snapshot.chainTipHeight,
     network: input.client.network
   });
+  if (input.maximumFeeZat !== undefined && built.feeZat > input.maximumFeeZat) throw new Error('Network fee increased. Review again before sending.');
   const txid = await input.client.broadcast(built.rawTransactionHex);
   return { txid, feeZat: built.feeZat };
+}
+
+export function estimateZcashTransfer(utxos: ZcashUtxo[], amount: string, maximum = false) {
+  const total = utxos.reduce((sum, entry) => sum + entry.valueZat, 0);
+  const amountZat = maximum ? total - conventionalFee(utxos.length, 1) : parseZecAmount(amount);
+  if (!Number.isSafeInteger(total) || amountZat <= 0) throw new Error('Insufficient ZEC after network fees.');
+  const selection = selectUtxos(utxos, amountZat);
+  return { amount: (amountZat / 100_000_000).toFixed(8), fee: (selection.feeZat / 100_000_000).toFixed(8) };
 }

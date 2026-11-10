@@ -1,3 +1,4 @@
+import { requestRouteJson } from './routeRequest';
 import Constants from 'expo-constants';
 
 export const MOBILE_SOLANA_DEFAULT_RPC_URL = "https://rpc.shyft.to/?api_key=iMp59oPaEKIYBdmB";
@@ -397,15 +398,9 @@ export async function fetchMobileJupiterQuote(input: {
     url.searchParams.set('onlyDirectRoutes', 'true');
   }
 
-  const response = await fetch(url.toString(), {
+  return requestRouteJson<MobileJupiterQuoteResponse>(url.toString(), {
     headers: apiKey ? { 'x-api-key': apiKey } : undefined
   });
-
-  if (!response.ok) {
-    throw new Error(`Jupiter quote request failed with ${response.status}.`);
-  }
-
-  return (await response.json()) as MobileJupiterQuoteResponse;
 }
 
 export async function createMobileJupiterSwapTransaction(input: {
@@ -414,7 +409,7 @@ export async function createMobileJupiterSwapTransaction(input: {
 }) {
   const apiKey = getMobileJupiterApiKey();
   const baseUrl = apiKey ? 'https://api.jup.ag' : 'https://lite-api.jup.ag';
-  const response = await fetch(`${baseUrl}/swap/v1/swap`, {
+  return requestRouteJson<{ swapTransaction: string }>(`${baseUrl}/swap/v1/swap`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
@@ -424,15 +419,10 @@ export async function createMobileJupiterSwapTransaction(input: {
       quoteResponse: input.quoteResponse,
       userPublicKey: input.userPublicKey,
       dynamicComputeUnitLimit: true,
-      dynamicSlippage: true
+      dynamicSlippage: false
     })
   });
 
-  if (!response.ok) {
-    throw new Error(`Jupiter swap request failed with ${response.status}.`);
-  }
-
-  return (await response.json()) as { swapTransaction: string };
 }
 
 export async function fetchMobileShyftWalletTokens(wallet: string, network: 'mainnet-beta' | 'devnet' = 'mainnet-beta') {
@@ -680,20 +670,7 @@ function createMobileLifiHeaders(): Record<string, string> | undefined {
 
 async function fetchMobileLifiJson<T>(path: string, params?: URLSearchParams): Promise<T> {
   const url = `${MOBILE_LIFI_BASE_URL}${path}${params && params.toString() ? `?${params.toString()}` : ''}`;
-  const response = await fetch(url, {
-    headers: createMobileLifiHeaders()
-  });
-
-  if (!response.ok) {
-    const message = await response.text().catch(() => response.statusText);
-    if (message.includes('"code":1011') || message.includes('/toChain must be equal to one of the allowed values')) {
-      throw new Error('This bridge route is not supported yet.');
-    }
-
-    throw new Error(message || `LI.FI request failed with ${response.status}.`);
-  }
-
-  return (await response.json()) as T;
+  return requestRouteJson<T>(url, { headers: createMobileLifiHeaders() });
 }
 
 export function getMobileSupportedBridgeDestinations(fromChain: keyof typeof MOBILE_SUPPORTED_BRIDGE_DESTINATIONS) {

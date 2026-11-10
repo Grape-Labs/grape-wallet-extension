@@ -12250,3 +12250,17 @@ body:has(.nft-detail-workspace) .page-shell { gap: 12px; }
 .nft-market-prices a { color: var(--theme-accent); }
 .nft-market-source { font-size: 12px; }
 @media (max-width: 600px) { .nft-market-prices { grid-template-columns: 1fr; } }
+
+/* Hosted spending and cash-out services in Discover. */
+.discover-payment-group h4 {
+  margin: 14px 0 8px;
+  font-size: 13px;
+}
+a.discover-provider-link {
+  color: inherit;
+  text-decoration: none;
+}
+a.discover-provider-link:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}

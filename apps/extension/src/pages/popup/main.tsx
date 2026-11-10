@@ -232,11 +232,11 @@ const CHAIN_OPTIONS = [
   { id: 'zcash', label: 'Zcash', shortLabel: 'ZEC', enabled: true }
 ] as const;
 const VISIBLE_CHAIN_OPTIONS = CHAIN_OPTIONS.filter((chain) => chain.enabled);
-type DiscoverCategory = 'All' | 'DeFi' | 'Staking' | 'Collectibles' | 'Governance' | 'Community' | 'Analytics' | 'Explorer' | 'Tools';
+type DiscoverCategory = 'Spend & cash out' | 'All' | 'DeFi' | 'Staking' | 'Collectibles' | 'Governance' | 'Community' | 'Analytics' | 'Explorer' | 'Tools';
 type DiscoverDapp = {
   name: string;
   description: string;
-  category: Exclude<DiscoverCategory, 'All'>;
+  category: Exclude<DiscoverCategory, 'All' | 'Spend & cash out'>;
   url: string;
   featured?: boolean;
 };
@@ -337,7 +337,7 @@ const DISCOVER_DAPPS_BY_CHAIN: Record<WalletStateResponse['wallet']['selectedCha
   ethereum: ETHEREUM_DISCOVER_DAPPS,
   zcash: [...ZCASH_DISCOVER_APPS]
 };
-const DISCOVER_CATEGORIES: DiscoverCategory[] = ['All', 'DeFi', 'Staking', 'Collectibles', 'Governance', 'Community', 'Analytics', 'Explorer', 'Tools'];
+const DISCOVER_CATEGORIES: DiscoverCategory[] = ['All', 'DeFi', 'Staking', 'Collectibles', 'Governance', 'Community', 'Analytics', 'Explorer', 'Tools', 'Spend & cash out'];
 
 function getSiteFavicon(url: string): string | undefined {
   try {
@@ -7269,7 +7269,7 @@ function PopupPage() {
     const discoverDapps = DISCOVER_DAPPS_BY_CHAIN[selectedChainValue];
     const discoverOrigins = new Set(discoverDapps.map((dapp) => new URL(dapp.url).origin));
     const discoverCategories = DISCOVER_CATEGORIES.filter(
-      (category) => category === 'All' || discoverDapps.some((dapp) => dapp.category === category)
+      (category) => category === 'All' || category === 'Spend & cash out' || discoverDapps.some((dapp) => dapp.category === category)
     );
     const recentConnections = [...(state?.permissions ?? [])]
       .filter((connection) => {
@@ -7286,6 +7286,18 @@ function PopupPage() {
       (!query || `${dapp.name} ${dapp.description} ${dapp.category}`.toLowerCase().includes(query))
     );
     const chainLabel = CHAIN_OPTIONS.find((chain) => chain.id === selectedChainValue)?.label ?? 'Web3';
+    const paymentGroups = [
+            { title: 'Spend', providers: [
+              { name: 'Bitrefill', description: 'Gift cards, mobile top-ups and eSIMs', url: 'https://www.bitrefill.com/' },
+              { name: 'Zebec', description: 'Explore crypto payment cards', url: 'https://zebec.io/cards' }
+            ] },
+            { title: 'Cash out', providers: [
+              { name: 'MoonPay', description: 'Sell crypto for supported bank or card payouts', url: 'https://www.moonpay.com/sell' },
+              { name: 'Transak', description: 'Explore crypto-to-fiat withdrawals and availability', url: 'https://transak.com/off-ramp' }
+            ] }
+          ];
+    const matchesProvider = (provider: { name: string; description: string }, title: string) =>
+      !query || `${provider.name} ${provider.description} ${title}`.toLowerCase().includes(query);
     const openDapp = (url: string) => window.open(url, '_blank', 'noopener,noreferrer');
 
     return (
@@ -7304,8 +7316,8 @@ function PopupPage() {
             type="search"
             value={discoverQuery}
             onChange={(event) => setDiscoverQuery(event.target.value)}
-            placeholder="Search dApps"
-            aria-label="Search dApps"
+            placeholder={discoverCategory === 'Spend & cash out' ? 'Search providers' : 'Search dApps'}
+            aria-label={discoverCategory === 'Spend & cash out' ? 'Search providers' : 'Search dApps'}
           />
         </label>
 
@@ -7315,13 +7327,43 @@ function PopupPage() {
               key={category}
               type="button"
               className={discoverCategory === category ? 'active' : ''}
-              onClick={() => setDiscoverCategory(category)}
+              aria-pressed={discoverCategory === category}
+              onClick={() => { setDiscoverCategory(category); setDiscoverQuery(''); }}
             >
               {category}
             </button>
           ))}
         </div>
 
+        {discoverCategory === 'Spend & cash out' ? (
+        <section className="discover-section" aria-labelledby="spend-cash-out-title">
+          <div className="discover-section-heading">
+            <h3 id="spend-cash-out-title">Spend &amp; cash out</h3>
+            <span>External services</span>
+          </div>
+          <p className="muted">Put your crypto to use. Continue on the provider’s website in a new tab.</p>
+          {paymentGroups.filter((group) => group.providers.some((provider) => matchesProvider(provider, group.title))).map((group) => (
+            <div key={group.title} className="discover-payment-group">
+              <h4>{group.title}</h4>
+              <div className="discover-app-list">
+                {group.providers.filter((provider) => matchesProvider(provider, group.title)).map((provider) => (
+                  <a key={provider.name} className="discover-app-row discover-provider-link" href={provider.url} target="_blank" rel="noopener noreferrer" aria-label={`${provider.name}: ${provider.description}. Opens in a new tab`}>
+                    <DiscoverAppIcon name={provider.name} url={provider.url} />
+                    <span className="discover-app-copy">
+                      <strong>{provider.name}</strong>
+                      <small>{provider.description}</small>
+                    </span>
+                    <ExternalLink size={17} aria-hidden="true" />
+                  </a>
+                ))}
+              </div>
+            </div>
+          ))}
+          {query && !paymentGroups.some((group) => group.providers.some((provider) => matchesProvider(provider, group.title))) ? <p className="discover-empty">No providers match “{discoverQuery.trim()}”.</p> : null}
+          <p className="discover-disclaimer">Availability depends on your country, asset and network. Check fees, limits and identity requirements with the provider before sending funds.</p>
+        </section>
+
+        ) : (<>
         {DISCOVER_FEED_SOURCES[selectedChainValue]?.length || selectedChainValue === 'monad' ? (
           <section className="discover-section discover-feed" aria-labelledby="discover-feed-title">
             <div className="discover-section-heading">
@@ -7404,6 +7446,7 @@ function PopupPage() {
             {visibleDapps.length === 0 ? <p className="discover-empty">No dApps match “{discoverQuery.trim()}”.</p> : null}
           </div>
         </section>
+        </>)}
         <p className="discover-disclaimer">Third-party apps are not operated by Grape. Review each request before connecting or signing.</p>
       </div>
     );

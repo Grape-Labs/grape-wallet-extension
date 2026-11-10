@@ -1,3 +1,5 @@
+import { assertPreparedRoute, assertRouteBudget, findRouteMaximum } from './routeFees';
+import { recoverSubmissionJournal } from './submissionJournal';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Crypto from 'expo-crypto';
 import { deleteItemAsync, getItemAsync, setItemAsync } from 'expo-secure-store';
@@ -80,7 +82,8 @@ import {
   ZcashIndexerClient,
   deriveZcashAccount,
   importZcashPrivateKey,
-  sendZcashTransparent
+  sendZcashTransparent,
+  estimateZcashTransfer
 } from '@grape/zcash';
 
 export type MobileWalletSource = 'created' | 'imported-mnemonic' | 'imported-private-key' | 'ledger';
@@ -139,6 +142,7 @@ export type MobileWalletState = {
   hideLowValueTokens: boolean;
   rebalanceAddonEnabled: boolean;
   biometricEnabled: boolean;
+  hapticsEnabled?: boolean;
   activities: MobileActivity[];
 };
 
@@ -437,12 +441,22 @@ export async function loadMobileWalletState(): Promise<MobileWalletState> {
   if (parsed.communityTrackingDefaultsApplied !== true) {
     await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
   }
+  // Recover broadcast records if the main wallet-state write was interrupted.
+  try {
+    const keys = (await AsyncStorage.getAllKeys()).filter((key) => key.startsWith('grape:submission:'));
+    const entries = await AsyncStorage.multiGet(keys);
+    normalized = { ...normalized, activities: recoverSubmissionJournal(normalized.activities, entries, normalized.wallets) };
+  } catch { /* Main wallet state remains available if journal storage is unavailable. */ }
   return normalized;
 }
 
 export async function persistMobileWalletState(state: MobileWalletState) {
   const normalized = normalizeMobileWalletState(state);
   await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
+  // Journal records are only removed after their activity is durably in wallet state.
+  const journalKeys = normalized.activities.filter((item) => item.source === 'local' && item.signature)
+    .map((item) => `grape:submission:${item.walletId}:${item.signature}`);
+  if (journalKeys.length) await AsyncStorage.multiRemove(journalKeys).catch(() => undefined);
 }
 
 export async function updateMobileWalletLabel(
@@ -1176,21 +1190,118 @@ export async function getWalletSwapQuote(input: {
   };
 }
 
+export function getRouteNativeAmount(amount: string, chain: GrapeChain): bigint {
+  return parseDecimalAmount(amount, chain === 'solana' ? 9 : 18);
+}
+
+export async function getZcashSubmissionStatus(signature: string): Promise<'success' | 'unknown'> {
+  try { return await createMobileZcashClient().getTransactionConfirmations(signature) > 0 ? 'success' : 'unknown'; }
+  catch { return 'unknown'; }
+}
+
+export type PreparedMobileRoute = {
+  walletId: string; walletAddress: string; chain: GrapeChain; quoteKey: string; expiresAt: number; serialized?: string;
+  request?: { to: string; data?: string; value?: string; gas: string; gasPrice: string };
+  fee: string; reserve: string; symbol: string; reserveRaw: bigint; nativeAmountRaw: bigint;
+};
+
+export async function prepareWalletRoute(input: {
+  wallet: MobileWallet; quoteResponse: Record<string, unknown>; nativeAmountRaw: bigint; swap?: boolean;
+  serialized?: string;
+}): Promise<PreparedMobileRoute> {
+  if (input.wallet.source === 'ledger') throw new Error('Ledger route execution is not available on mobile yet.');
+  const chain = input.wallet.chain;
+  const base = { walletId: input.wallet.id, walletAddress: input.wallet.address, chain, quoteKey: JSON.stringify(input.quoteResponse), expiresAt: Date.now() + 45_000, nativeAmountRaw: input.nativeAmountRaw };
+  if (chain === 'solana') {
+    const web3 = loadSolanaWeb3Module();
+    const connection = new web3.Connection(getMobileSolanaRpcUrl(), 'confirmed');
+    const serialized = input.serialized ?? (input.swap
+      ? (await createMobileJupiterSwapTransaction({ quoteResponse: input.quoteResponse as MobileJupiterQuoteResponse, userPublicKey: input.wallet.address })).swapTransaction
+      : extractExecutableBridgeTransactionRequest(input.quoteResponse, chain)?.data);
+    if (!serialized) throw new Error('Route transaction is unavailable.');
+    const parsed = loadSolanaSigningModule().parseSerializedTransaction(serialized);
+    const transaction = parsed.kind === 'versioned' ? parsed.transaction : new web3.VersionedTransaction(parsed.transaction.compileMessage());
+    const message = transaction.message;
+    if (message.staticAccountKeys[0]?.toBase58() !== input.wallet.address) throw new Error('Route fee payer does not match this wallet.');
+    const balance = await connection.getBalanceAndContext(new web3.PublicKey(input.wallet.address), 'confirmed');
+    const [feeResult, simulation] = await Promise.all([
+      connection.getFeeForMessage(message, 'confirmed'),
+      connection.simulateTransaction(transaction, { sigVerify: false, commitment: 'confirmed', minContextSlot: balance.context.slot, accounts: { encoding: 'base64', addresses: [input.wallet.address] } })
+    ]);
+    if (feeResult.value === null || simulation.value.err) throw new Error('Route simulation failed or expired. Refresh the quote before approving.');
+    const postBalance = simulation.value.accounts?.[0]?.lamports;
+    if (postBalance === undefined) throw new Error('Route account costs could not be estimated.');
+    const fee = BigInt(feeResult.value);
+    const debit = BigInt(balance.value) - BigInt(postBalance);
+    const reserveRaw = debit - input.nativeAmountRaw > fee ? debit - input.nativeAmountRaw : fee;
+    if (BigInt(balance.value) < input.nativeAmountRaw + reserveRaw) throw new Error('Insufficient SOL for route and account costs.');
+    return { ...base, serialized, fee: formatBaseUnits(fee, 9), reserve: formatBaseUnits(reserveRaw, 9), reserveRaw, symbol: 'SOL' };
+  }
+  if (chain !== 'ethereum' && chain !== 'monad') throw new Error('Route execution is unavailable for this chain.');
+  const request = extractExecutableBridgeTransactionRequest(input.quoteResponse, chain);
+  if (!request?.to) throw new Error('Route transaction is unavailable.');
+  const client = chain === 'ethereum' ? loadEthereumModule().createEthereumPublicClient(DEFAULT_EVM_NETWORK, getMobileEthereumRpcUrl()) : loadMonadModule().createMonadPublicClient(DEFAULT_EVM_NETWORK, getMobileMonadRpcUrl());
+  const { gas, gasPrice, feeWei, reserveWei: reserveRaw } = await loadEthereumModule().estimateEvmRoute(client as ReturnType<ReturnType<typeof loadEthereumModule>['createEthereumPublicClient']>, {
+    sender: input.wallet.address, to: request.to, data: request.data, value: request.value,
+    nativeAmountRaw: input.nativeAmountRaw, chargeGasLimit: chain === 'monad'
+  });
+  return { ...base, request: { to: request.to, data: request.data, value: request.value, gas: gas.toString(), gasPrice: gasPrice.toString() },
+    fee: formatBaseUnits(feeWei, 18), reserve: formatBaseUnits(reserveRaw, 18), reserveRaw, symbol: chain === 'monad' ? 'MON' : 'ETH' };
+}
+
+async function validatePreparedWalletRoute(wallet: MobileWallet, quoteResponse: Record<string, unknown>, prepared: PreparedMobileRoute | undefined, swap: boolean) {
+  if (!prepared) throw new Error('Review route fees before signing.');
+  if (prepared.chain !== wallet.chain || prepared.walletAddress !== wallet.address) throw new Error('Route account changed. Review a fresh quote.');
+  assertPreparedRoute(prepared, wallet.id, JSON.stringify(quoteResponse));
+  const current = await prepareWalletRoute({ wallet, quoteResponse, nativeAmountRaw: prepared.nativeAmountRaw, swap, serialized: prepared.serialized });
+  assertRouteBudget(prepared, current);
+  return prepared;
+}
+
+async function getNativeWalletBalance(wallet: MobileWallet): Promise<bigint> {
+  if (wallet.chain === 'solana') {
+    const { Connection, PublicKey } = loadSolanaWeb3Module();
+    return BigInt(await new Connection(getMobileSolanaRpcUrl(), 'confirmed').getBalance(new PublicKey(wallet.address), 'confirmed'));
+  }
+  if (wallet.chain === 'ethereum') return loadEthereumModule().createEthereumPublicClient(DEFAULT_EVM_NETWORK, getMobileEthereumRpcUrl()).getBalance({ address: wallet.address as `0x${string}`, blockTag: 'pending' });
+  if (wallet.chain === 'monad') return loadMonadModule().createMonadPublicClient(DEFAULT_EVM_NETWORK, getMobileMonadRpcUrl()).getBalance({ address: wallet.address as `0x${string}`, blockTag: 'pending' });
+  throw new Error('Native routes are unavailable on this chain.');
+}
+
+export async function getWalletSwapMaximum(input: { wallet: MobileWallet; inputAsset: MobileAsset; outputAsset: MobileAsset; slippageBps: number }) {
+  if (input.inputAsset.tokenType !== 'native') throw new Error('Choose a native asset to calculate route-aware Max.');
+  const decimals = input.wallet.chain === 'solana' ? 9 : 18;
+  const result = await findRouteMaximum({ balance: await getNativeWalletBalance(input.wallet),
+    quote: amount => getWalletSwapQuote({ ...input, amount: formatBaseUnits(amount, decimals) }),
+    reserve: async (quote, amount) => (await prepareWalletRoute({ wallet: input.wallet, quoteResponse: quote.routes[0].quoteResponse, nativeAmountRaw: amount, swap: true })).reserveRaw });
+  return { amount: formatBaseUnits(result.amount, decimals), quote: result.quote };
+}
+
+export async function getWalletBridgeMaximum(input: Parameters<typeof getWalletBridgeQuote>[0]) {
+  const decimals = input.wallet.chain === 'solana' ? 9 : 18;
+  const result = await findRouteMaximum({ balance: await getNativeWalletBalance(input.wallet),
+    quote: amount => getWalletBridgeQuote({ ...input, amount: formatBaseUnits(amount, decimals) }),
+    reserve: async (quote, amount) => (await prepareWalletRoute({ wallet: input.wallet, quoteResponse: quote.routes[0].quoteResponse, nativeAmountRaw: amount })).reserveRaw });
+  return { amount: formatBaseUnits(result.amount, decimals), quote: result.quote };
+}
+
 export async function executeWalletSwap(input: {
   wallet: MobileWallet;
+  prepared?: PreparedMobileRoute;
   quoteResponse: MobileJupiterQuoteResponse | Record<string, unknown>;
 }): Promise<MobileSwapExecuteResponse> {
   if (input.wallet.source === 'ledger') {
     throw new Error('Ledger swaps are not available on mobile yet.');
   }
+  const prepared = await validatePreparedWalletRoute(input.wallet, input.quoteResponse as Record<string, unknown>, input.prepared, true);
   const secret = await loadWalletSecret(input.wallet.secretRef);
   const genericQuote = input.quoteResponse as Record<string, unknown>;
   if (input.wallet.chain === 'ethereum' || input.wallet.chain === 'monad') {
-    const transactionRequest = extractExecutableBridgeTransactionRequest(genericQuote, input.wallet.chain);
+    const transactionRequest = prepared.request;
     if (!transactionRequest?.to) throw new Error('This route is not executable.');
     const signature = input.wallet.chain === 'ethereum'
-      ? await loadEthereumModule().sendEthereumTransactionRequest(DEFAULT_EVM_NETWORK, secret as VaultSecret, { to: transactionRequest.to, data: transactionRequest.data, value: transactionRequest.value, customRpcUrl: getMobileEthereumRpcUrl(DEFAULT_EVM_NETWORK) })
-      : await loadMonadModule().sendMonadTransactionRequest(DEFAULT_EVM_NETWORK, secret as VaultSecret, { to: transactionRequest.to, data: transactionRequest.data, value: transactionRequest.value, customRpcUrl: getMobileMonadRpcUrl(DEFAULT_EVM_NETWORK) });
+      ? await loadEthereumModule().sendEthereumTransactionRequest(DEFAULT_EVM_NETWORK, secret as VaultSecret, { to: transactionRequest.to, data: transactionRequest.data, value: transactionRequest.value, gas: transactionRequest.gas, gasPrice: transactionRequest.gasPrice, customRpcUrl: getMobileEthereumRpcUrl(DEFAULT_EVM_NETWORK) })
+      : await loadMonadModule().sendMonadTransactionRequest(DEFAULT_EVM_NETWORK, secret as VaultSecret, { to: transactionRequest.to, data: transactionRequest.data, value: transactionRequest.value, gas: transactionRequest.gas, gasPrice: transactionRequest.gasPrice, customRpcUrl: getMobileMonadRpcUrl(DEFAULT_EVM_NETWORK) });
     const estimate = genericQuote.estimate as { fromAmount?: string; toAmount?: string; fromToken?: { address?: string; decimals?: number }; toToken?: { address?: string; decimals?: number } } | undefined;
     return { signature, inputMint: estimate?.fromToken?.address ?? '', outputMint: estimate?.toToken?.address ?? '', inputAmountUi: formatUiAmount(estimate?.fromAmount ?? '0', estimate?.fromToken?.decimals ?? 18), outputAmountUi: formatUiAmount(estimate?.toAmount ?? '0', estimate?.toToken?.decimals ?? 18) };
   }
@@ -1204,20 +1315,16 @@ export async function executeWalletSwap(input: {
     secret.kind === 'mnemonic'
       ? resolveSolanaVaultSecret({ kind: 'mnemonic', mnemonic: secret.mnemonic })
       : resolveSolanaVaultSecret({ kind: 'private-key', secretKey: secret.secretKey });
-  const swap = await createMobileJupiterSwapTransaction({
-    quoteResponse: solanaQuote,
-    userPublicKey: input.wallet.address
-  });
-  const signature = await signAndSendSerializedTransaction(
-    swap.swapTransaction,
-    keypair,
-    getMobileSolanaRpcUrl(DEFAULT_SOLANA_NETWORK)
-  );
-
   const [inputDecimals, outputDecimals] = await Promise.all([
     getSolanaMintDecimals(solanaQuote.inputMint),
     getSolanaMintDecimals(solanaQuote.outputMint)
   ]);
+
+  const signature = await signAndSendSerializedTransaction(
+    prepared.serialized!,
+    keypair,
+    getMobileSolanaRpcUrl(DEFAULT_SOLANA_NETWORK)
+  );
 
   return {
     signature,
@@ -1262,6 +1369,7 @@ export async function getWalletBridgeQuote(input: {
 }
 
 export async function executeWalletBridge(input: {
+  prepared?: PreparedMobileRoute;
   state: MobileWalletState;
   wallet: MobileWallet;
   quoteResponse: Record<string, unknown>;
@@ -1274,7 +1382,8 @@ export async function executeWalletBridge(input: {
   }
   const destinationWallet = resolveBridgeDestination(input.state, input.toChain, input.destinationWalletId, input.destinationAddress);
   assertBridgeRecipient(input.quoteResponse, input.toChain, destinationWallet.address);
-  const transactionRequest = extractExecutableBridgeTransactionRequest(input.quoteResponse, input.wallet.chain);
+  const prepared = await validatePreparedWalletRoute(input.wallet, input.quoteResponse, input.prepared, false);
+  const transactionRequest = prepared.request ?? { data: prepared.serialized, to: undefined, value: undefined, gas: undefined, gasPrice: undefined };
   if (!transactionRequest) {
     throw new Error('This bridge route requires an unsupported transaction format. Try a different route or amount.');
   }
@@ -1308,6 +1417,7 @@ export async function executeWalletBridge(input: {
         to: transactionRequest.to,
         data: transactionRequest.data,
         value: transactionRequest.value,
+        gas: transactionRequest.gas, gasPrice: transactionRequest.gasPrice,
         customRpcUrl: getMobileEthereumRpcUrl(DEFAULT_EVM_NETWORK)
       }
     );
@@ -1322,6 +1432,7 @@ export async function executeWalletBridge(input: {
         to: transactionRequest.to,
         data: transactionRequest.data,
         value: transactionRequest.value,
+        gas: transactionRequest.gas, gasPrice: transactionRequest.gasPrice,
         customRpcUrl: getMobileMonadRpcUrl(DEFAULT_EVM_NETWORK)
       }
     );
@@ -1671,12 +1782,77 @@ export async function sendNativeAsset(input: {
   });
 }
 
+export async function estimateWalletSend(input: {
+  wallet: MobileWallet; asset: MobileAsset; recipient: string; amount: string; maximum?: boolean;
+}): Promise<{ amount: string; fee: string; reserve: string; symbol: string; gas?: bigint; gasPrice?: bigint }> {
+  if (!['native', 'spl', 'erc20'].includes(input.asset.tokenType ?? 'native')) throw new Error('Fee preview is unavailable for this asset type.');
+  if (input.wallet.chain !== input.asset.chain) throw new Error('Asset does not belong to this network.');
+  if (input.wallet.chain === 'sui') throw new Error(getMobileSuiSendUnsupportedMessage());
+  if (!input.recipient.trim()) throw new Error('Enter a recipient before estimating fees or using Max.');
+  if (input.wallet.chain === 'ethereum' || input.wallet.chain === 'monad') {
+    if (input.asset.tokenType === 'erc20' && !input.asset.address) throw new Error('Token address unavailable.');
+    const ethereum = loadEthereumModule();
+    const client = input.wallet.chain === 'ethereum'
+      ? ethereum.createEthereumPublicClient(DEFAULT_EVM_NETWORK, getMobileEthereumRpcUrl(DEFAULT_EVM_NETWORK))
+      : loadMonadModule().createMonadPublicClient(DEFAULT_EVM_NETWORK, getMobileMonadRpcUrl(DEFAULT_EVM_NETWORK));
+    const estimate = await ethereum.estimateEvmTransfer(client as ReturnType<typeof ethereum.createEthereumPublicClient>, {
+      sender: input.wallet.address, recipient: input.recipient.trim(), amount: input.amount,
+      decimals: input.asset.decimals ?? 18, maximum: input.maximum, chargeGasLimit: input.wallet.chain === 'monad',
+      tokenAddress: input.asset.tokenType === 'erc20' ? input.asset.address : undefined
+    });
+    return { ...estimate, symbol: input.wallet.chain === 'ethereum' ? 'ETH' : 'MON' };
+  }
+  if (input.wallet.chain === 'zcash') {
+    const { isValidZcashTransparentAddress } = require('@grape/zcash') as typeof import('@grape/zcash');
+    if (!isValidZcashTransparentAddress(input.recipient.trim(), 'mainnet')) throw new Error('Enter a transparent Zcash address.');
+    const snapshot = await createMobileZcashClient().getAddress(input.wallet.address);
+    const estimate = estimateZcashTransfer(snapshot.utxos, input.amount, input.maximum);
+    return { ...estimate, reserve: estimate.fee, symbol: 'ZEC' };
+  }
+  const { Connection, PublicKey } = loadSolanaWeb3Module();
+  const transfers = loadSolanaTransfersModule();
+  const connection = new Connection(getMobileSolanaRpcUrl(DEFAULT_SOLANA_NETWORK), 'confirmed');
+  const owner = new PublicKey(input.wallet.address);
+  const spl = input.asset.tokenType === 'spl';
+  let amount = input.amount;
+  const balance = BigInt(await connection.getBalance(owner, 'confirmed'));
+  if (input.maximum) {
+    amount = spl
+      ? (await connection.getTokenAccountBalance(new PublicKey(input.asset.accountAddress ?? ''))).value.amount
+      : '1';
+    amount = formatBaseUnits(BigInt(amount), spl ? input.asset.decimals ?? 0 : 9);
+  }
+  const transaction = spl ? await transfers.buildSplTokenTransferTransaction(connection, owner, {
+    recipient: input.recipient, mint: input.asset.address ?? '', accountAddress: input.asset.accountAddress,
+    decimals: input.asset.decimals ?? 0, programId: input.asset.programId ?? SOLANA_LEGACY_TOKEN_PROGRAM, amount
+  }) : await transfers.buildSolTransferTransaction(connection, owner, { recipient: input.recipient, amount });
+  const fee = BigInt(await transfers.estimateLegacyTransactionFee(connection, transaction));
+  const createsAccount = transaction.instructions.some(instruction => instruction.programId.equals(transfers.ASSOCIATED_TOKEN_PROGRAM_ID));
+  const rent = createsAccount ? BigInt(await transfers.estimateTransferAccountRent(connection, transaction, owner, Number(fee))) : 0n;
+  const reserve = fee + rent;
+  if (input.maximum && !spl) amount = formatBaseUnits(balance - reserve, 9);
+  if (balance < reserve + (spl ? 0n : transfers.parseDecimalAmount(amount, 9))) throw new Error('Insufficient SOL for amount, fees and account creation.');
+  return { amount, fee: formatBaseUnits(fee, 9), reserve: formatBaseUnits(reserve, 9), symbol: 'SOL' };
+}
+
+function formatBaseUnits(amount: bigint, decimals: number): string {
+  if (amount < 0n) throw new Error('Insufficient balance after network fees.');
+  const scale = 10n ** BigInt(decimals);
+  return decimals ? `${amount / scale}.${(amount % scale).toString().padStart(decimals, '0')}` : amount.toString();
+}
+
 export async function sendWalletAsset(input: {
   wallet: MobileWallet;
   asset: MobileAsset;
   recipient: string;
   amount: string;
+  approvedReserve?: string;
 }): Promise<string> {
+  const feeEstimate = await estimateWalletSend(input);
+  const feeDecimals = input.wallet.chain === 'solana' ? 9 : input.wallet.chain === 'zcash' ? 8 : 18;
+  if (input.approvedReserve && loadSolanaTransfersModule().parseDecimalAmount(feeEstimate.reserve, feeDecimals) > loadSolanaTransfersModule().parseDecimalAmount(input.approvedReserve, feeDecimals)) {
+    throw new Error('Network fees increased. Review the updated fee before sending.');
+  }
   const secret = input.wallet.source === 'ledger' ? null : await loadWalletSecret(input.wallet.secretRef);
 
   if (input.wallet.chain !== 'solana' && /\.(?:sol|skr)$/i.test(input.recipient.trim())) {
@@ -1691,6 +1867,7 @@ export async function sendWalletAsset(input: {
         buildSolTransferTransaction,
         buildSplTokenTransferTransaction,
         estimateLegacyTransactionFee,
+        estimateTransferAccountRent,
         parseDecimalAmount
       } = loadSolanaTransfersModule();
       const web3 = loadSolanaWeb3Module();
@@ -1724,8 +1901,9 @@ export async function sendWalletAsset(input: {
         instruction.programId.equals(ASSOCIATED_TOKEN_PROGRAM_ID)
       );
       const ataRentLamports = createsRecipientTokenAccount
-        ? await connection.getMinimumBalanceForRentExemption(165)
+        ? await estimateTransferAccountRent(connection, transaction, owner, feeLamports)
         : 0;
+      if (input.approvedReserve && BigInt(feeLamports + ataRentLamports) > parseDecimalAmount(input.approvedReserve, 9)) throw new Error('Network fees increased. Review again before sending.');
       const requiredLamports =
         input.asset.tokenType === 'spl'
           ? BigInt(feeLamports + ataRentLamports)
@@ -1774,12 +1952,12 @@ export async function sendWalletAsset(input: {
             amount: input.amount,
             tokenAddress: input.asset.address,
             decimals: input.asset.decimals,
-            customRpcUrl: getMobileEthereumRpcUrl(DEFAULT_EVM_NETWORK)
+            gas: feeEstimate.gas, gasPrice: feeEstimate.gasPrice, customRpcUrl: getMobileEthereumRpcUrl(DEFAULT_EVM_NETWORK)
           })
         : sendEthereum(DEFAULT_EVM_NETWORK, vaultSecret, {
             recipient: input.recipient,
             amountEther: input.amount,
-            customRpcUrl: getMobileEthereumRpcUrl(DEFAULT_EVM_NETWORK)
+            gas: feeEstimate.gas, gasPrice: feeEstimate.gasPrice, customRpcUrl: getMobileEthereumRpcUrl(DEFAULT_EVM_NETWORK)
           });
     }
     case 'monad': {
@@ -1794,12 +1972,12 @@ export async function sendWalletAsset(input: {
             amount: input.amount,
             tokenAddress: input.asset.address,
             decimals: input.asset.decimals,
-            customRpcUrl: getMobileMonadRpcUrl(DEFAULT_EVM_NETWORK)
+            gas: feeEstimate.gas, gasPrice: feeEstimate.gasPrice, customRpcUrl: getMobileMonadRpcUrl(DEFAULT_EVM_NETWORK)
           })
         : sendMonad(DEFAULT_EVM_NETWORK, vaultSecret, {
             recipient: input.recipient,
             amountEther: input.amount,
-            customRpcUrl: getMobileMonadRpcUrl(DEFAULT_EVM_NETWORK)
+            gas: feeEstimate.gas, gasPrice: feeEstimate.gasPrice, customRpcUrl: getMobileMonadRpcUrl(DEFAULT_EVM_NETWORK)
           });
     }
     case 'zcash': {
@@ -1810,6 +1988,7 @@ export async function sendWalletAsset(input: {
       if (account.address !== input.wallet.address) throw new Error('The Zcash signing key does not match this wallet.');
       return (await sendZcashTransparent({
         client: createMobileZcashClient(),
+        maximumFeeZat: input.approvedReserve ? Number(loadSolanaTransfersModule().parseDecimalAmount(input.approvedReserve, 8)) : undefined,
         account,
         recipient: input.recipient.trim(),
         amount: input.amount
@@ -2276,13 +2455,15 @@ export function createSendActivity(input: {
     chain: input.wallet.chain,
     walletId: input.wallet.id,
     type: 'send',
-    title: `Sent ${input.asset.symbol}`,
+    title: `Send ${input.asset.symbol}`,
     subtitle: shortenAddress(input.recipient),
     amountLabel: input.amountLabel,
     timestamp: Date.now(),
     signature: input.signature,
-    status: 'success'
+    status: 'unknown'
     ,
+    fromAddress: input.wallet.address,
+    toAddress: input.recipient,
     source: 'local'
   };
 }
@@ -2300,12 +2481,12 @@ export function createSwapActivity(input: {
     chain: input.wallet.chain,
     walletId: input.wallet.id,
     type: 'swap',
-    title: `Swapped ${input.inputAsset.symbol} to ${input.outputAsset.symbol}`,
+    title: `Swap ${input.inputAsset.symbol} to ${input.outputAsset.symbol}`,
     subtitle: `${input.inputAmountLabel} -> ${input.outputAmountLabel}`,
     amountLabel: input.outputAmountLabel,
     timestamp: Date.now(),
     signature: input.signature,
-    status: 'success',
+    status: 'unknown',
     source: 'local'
   };
 }
@@ -2322,12 +2503,14 @@ export function createBridgeActivity(input: {
     chain: input.wallet.chain,
     walletId: input.wallet.id,
     type: 'bridge',
-    title: `Bridged to ${input.destinationWallet.chain}`,
+    title: `Bridge to ${input.destinationWallet.chain}`,
     subtitle: shortenAddress(input.destinationWallet.address),
     amountLabel: `${input.fromAmountLabel} -> ${input.toAmountLabel}`,
     timestamp: Date.now(),
     signature: input.signature,
-    status: 'success',
+    status: 'unknown',
+    fromAddress: input.wallet.address,
+    toAddress: input.destinationWallet.address,
     source: 'local'
   };
 }

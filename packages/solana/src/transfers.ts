@@ -10,7 +10,8 @@ import {
   SystemProgram,
   SYSVAR_RENT_PUBKEY,
   Transaction,
-  TransactionInstruction
+  TransactionInstruction,
+  VersionedTransaction
 } from '@solana/web3.js';
 
 export const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
@@ -61,7 +62,24 @@ export type CloseTokenAccountInput = {
 
 export async function estimateLegacyTransactionFee(connection: Connection, transaction: Transaction): Promise<number> {
   const fee = await connection.getFeeForMessage(transaction.compileMessage(), 'confirmed');
-  return fee.value ?? 0;
+  if (fee.value === null) throw new Error('Network fee unavailable. Please try again.');
+  return fee.value;
+}
+
+/** Simulate account creation instead of assuming the 165-byte legacy account size.
+ * This includes Token-2022 extension rent and fails closed on unsupported hooks.
+ */
+export async function estimateTransferAccountRent(connection: Connection, transaction: Transaction, payer: PublicKey, feeLamports: number): Promise<number> {
+  const balance = await connection.getBalanceAndContext(payer, 'confirmed');
+  const simulation = await connection.simulateTransaction(new VersionedTransaction(transaction.compileMessage()), {
+    sigVerify: false, replaceRecentBlockhash: true, commitment: 'confirmed', minContextSlot: balance.context.slot,
+    accounts: { encoding: 'base64', addresses: [payer.toBase58()] }
+  });
+  const postBalance = simulation.value.accounts?.[0]?.lamports;
+  if (simulation.value.err || postBalance === undefined) throw new Error('Recipient account costs could not be simulated. Refresh and try again.');
+  const rent = Math.max(0, balance.value - postBalance - feeLamports);
+  if (!Number.isSafeInteger(rent)) throw new Error('Recipient account cost is invalid.');
+  return rent;
 }
 
 export function parseDecimalAmount(value: string, decimals: number): bigint {

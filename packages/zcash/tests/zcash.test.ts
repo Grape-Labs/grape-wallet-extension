@@ -6,7 +6,8 @@ import {
   deriveZcashAccount,
   importZcashPrivateKey,
   isValidZcashTransparentAddress,
-  parseZecAmount
+  parseZecAmount,
+  estimateZcashTransfer
 } from '../src/index';
 
 const TEST_MNEMONIC = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
@@ -93,4 +94,29 @@ describe('Zcash transparent accounts', () => {
   it('requires an explicit testnet indexer instead of querying mainnet', () => {
     expect(() => new ZcashIndexerClient({ network: 'testnet' })).toThrow(/testnet Blockbook/);
   });
+});
+
+describe('Zcash fee previews', () => {
+  const utxos = [{ txid: '11'.repeat(32), outputIndex: 0, valueZat: 200_001, scriptHex: `76a914${'00'.repeat(20)}88ac`, height: 3_499_990 }];
+  it('matches the fee of the signed transaction and keeps every zatoshi in Max', () => {
+    const estimate = estimateZcashTransfer(utxos, '0', true);
+    expect(estimate).toEqual({ amount: '0.00190001', fee: '0.00010000' });
+    const built = buildZcashTransparentTransaction({ account: deriveZcashAccount(TEST_MNEMONIC), recipient: deriveZcashAccount(TEST_MNEMONIC).address, amountZat: parseZecAmount(estimate.amount), utxos, chainTipHeight: 3_500_000 });
+    expect(built.feeZat).toBe(parseZecAmount(estimate.fee));
+  });
+  it('does not offer a negative Max or spend nonexistent funds', () => {
+    expect(() => estimateZcashTransfer([], '0', true)).toThrow('Insufficient');
+    expect(() => estimateZcashTransfer(utxos, '1')).toThrow('Insufficient');
+  });
+});
+
+
+it('checks confirmations for a recovered Zcash broadcast', async () => {
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ confirmations: 2 }), { status: 200 }));
+  try {
+    const client = new ZcashIndexerClient({ baseUrl: 'https://indexer.example', network: 'mainnet' });
+    expect(await client.getTransactionConfirmations('aa'.repeat(32))).toBe(2);
+    expect(fetchMock.mock.calls[0][0]).toBe(`https://indexer.example/api/v2/tx/${'aa'.repeat(32)}`);
+    await expect(client.getTransactionConfirmations('invalid')).rejects.toThrow('Invalid');
+  } finally { fetchMock.mockRestore(); }
 });
