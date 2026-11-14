@@ -475,6 +475,8 @@ export type WalletBridgeExecuteResponse = {
 };
 
 export type StakeAccountRow = {
+  /** On-chain epoch marker; a finite value records an unstake request, not withdrawal readiness. */
+  deactivationEpoch?: string | null;
   address: string;
   lamports: number;
   state: string;

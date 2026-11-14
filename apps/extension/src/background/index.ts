@@ -1,3 +1,4 @@
+import { redactRpcDetails } from '@grape/core';
 import { fetchNftMarketData } from './nft-market-data';
 import { discoverStakeAccountsByAuthority } from './stake-discovery';
 import { buildTensorTransaction, inspectTensorNft } from './tensor-marketplace';
@@ -3713,13 +3714,14 @@ class WalletController {
           const parsedData = accountInfo.value.data as ParsedAccountData;
           const parsedInfo = parsedData.parsed.info as {
             meta?: { authorized?: { staker?: string; withdrawer?: string } };
-            stake?: { delegation?: { stake?: string; voter?: string } };
+            stake?: { delegation?: { stake?: string; voter?: string; deactivationEpoch?: string } };
           };
 
           return {
             address: row.address,
             state: parsedData.parsed.type ?? row.state,
             delegatedLamports: Number(parsedInfo.stake?.delegation?.stake ?? '0'),
+            deactivationEpoch: parsedInfo.stake?.delegation?.deactivationEpoch ?? null,
             voter: parsedInfo.stake?.delegation?.voter ?? null,
             staker: parsedInfo.meta?.authorized?.staker ?? null,
             withdrawer: parsedInfo.meta?.authorized?.withdrawer ?? null
@@ -3737,6 +3739,7 @@ class WalletController {
         }
         target.state = response.value.state;
         target.delegatedLamports = response.value.delegatedLamports;
+        target.deactivationEpoch = response.value.deactivationEpoch;
         target.voter = response.value.voter;
         target.staker = response.value.staker;
         target.withdrawer = response.value.withdrawer;
@@ -7151,10 +7154,10 @@ function arrayBufferToBase64(value: Uint8Array): string {
 
 function normalizeError(error: unknown) {
   if (error instanceof RpcError) {
-    return { code: error.code, message: error.message };
+    return { code: error.code, message: redactRpcDetails(error.message) };
   }
   if (error instanceof Error) {
-    return { code: 'INTERNAL_ERROR', message: error.message };
+    return { code: 'INTERNAL_ERROR', message: redactRpcDetails(error.message) };
   }
   return { code: 'INTERNAL_ERROR', message: 'An unknown error occurred.' };
 }

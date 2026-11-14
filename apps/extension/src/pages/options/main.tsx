@@ -1,3 +1,4 @@
+import { redactRpcDetails } from '@grape/core';
 import { useEffect, useState } from 'react';
 import { Fingerprint } from 'lucide-react';
 import QRCode from 'qrcode';
@@ -209,7 +210,7 @@ function OptionsPage() {
       <PageShell title="Settings" subtitle="Manage security and connected sites." actions={settingsActions}>
         <Card title="Unable to load settings">
           <div className="stack">
-            <p className="danger-box">{loadError}</p>
+            <p className="danger-box">{redactRpcDetails(loadError)}</p>
             <Button onClick={() => void refresh()}>Retry</Button>
           </div>
         </Card>
@@ -624,7 +625,8 @@ function OptionsPage() {
           {customRpcEnabled ? (
             <>
               <Input
-                type="url"
+                type="password"
+                autoComplete="off"
                 value={customRpcInput}
                 onChange={(event) => setCustomRpcInput(event.target.value)}
                 placeholder={`Custom ${state.wallet.selectedNetwork} RPC URL`}
@@ -663,12 +665,12 @@ function OptionsPage() {
           {state.wallet.customRpcUrls[state.wallet.selectedNetwork] ? (
             <KeyValueRow
               label="Current RPC"
-              value={<span className="mono transfer-signature">{state.wallet.customRpcUrls[state.wallet.selectedNetwork]}</span>}
+              value="Custom endpoint configured"
             />
           ) : (
             <p className="muted">Using the default RPC for {state.wallet.selectedNetwork}.</p>
           )}
-          {customRpcError ? <p className="danger-box">{customRpcError}</p> : null}
+          {customRpcError ? <p className="danger-box">{redactRpcDetails(customRpcError)}</p> : null}
         </div>
         <div className="stack">
           <KeyValueRow
@@ -710,7 +712,7 @@ function OptionsPage() {
           ) : (
             <p className="muted">This device or browser profile does not expose a supported platform authenticator.</p>
           )}
-          {biometricError ? <p className="danger-box">{biometricError}</p> : null}
+          {biometricError ? <p className="danger-box">{redactRpcDetails(biometricError)}</p> : null}
         </div>
       </Card>
 
@@ -776,7 +778,7 @@ function OptionsPage() {
               ) : null}
             </div>
 
-            {exportError ? <p className="danger-box">{exportError}</p> : null}
+            {exportError ? <p className="danger-box">{redactRpcDetails(exportError)}</p> : null}
 
             {exportedWallet ? (
               <div className="stack">
@@ -934,7 +936,7 @@ function OptionsPage() {
             <Button onClick={() => void handleCreateDeviceLink(deviceLinkPassword)} disabled={deviceLinkLoading || !deviceLinkPassword.trim()}>
               {deviceLinkLoading ? 'Creating link...' : 'Link new device'}
             </Button>
-            {deviceLinkError ? <p className="danger-box">{deviceLinkError}</p> : null}
+            {deviceLinkError ? <p className="danger-box">{redactRpcDetails(deviceLinkError)}</p> : null}
 
             {activeDeviceLinkSession ? (
               <div className="stack">

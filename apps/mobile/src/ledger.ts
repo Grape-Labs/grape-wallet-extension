@@ -102,14 +102,17 @@ export async function signAndSendMobileLedgerTransaction(input: {
   derivationPath: string;
   publicKey: string;
   transaction: Transaction;
+  beforeBroadcast?: () => void;
 }): Promise<string> {
   const transport = await TransportBLE.open(input.deviceId, 15_000);
   try {
+    input.beforeBroadcast?.();
     const ledger = new Solana(transport);
     const result = await ledger.signTransaction(input.derivationPath, Buffer.from(input.transaction.serializeMessage()));
     const web3 = await import('@solana/web3.js');
     input.transaction.addSignature(new web3.PublicKey(input.publicKey), result.signature);
     const connection = new web3.Connection(getMobileSolanaRpcUrl('mainnet-beta'), 'confirmed');
+    input.beforeBroadcast?.();
     return await connection.sendRawTransaction(input.transaction.serialize());
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

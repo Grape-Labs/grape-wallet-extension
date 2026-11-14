@@ -1,3 +1,4 @@
+import { getSolanaWireMessage, readSolanaSwapBalance, solanaSwapRpc } from './solanaSwapRpc';
 import { assertPreparedRoute, assertRouteBudget, findRouteMaximum } from './routeFees';
 import { recoverSubmissionJournal } from './submissionJournal';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -1213,24 +1214,21 @@ export async function prepareWalletRoute(input: {
   const chain = input.wallet.chain;
   const base = { walletId: input.wallet.id, walletAddress: input.wallet.address, chain, quoteKey: JSON.stringify(input.quoteResponse), expiresAt: Date.now() + 45_000, nativeAmountRaw: input.nativeAmountRaw };
   if (chain === 'solana') {
-    const web3 = loadSolanaWeb3Module();
-    const connection = new web3.Connection(getMobileSolanaRpcUrl(), 'confirmed');
+    const rpcUrl = getMobileSolanaRpcUrl();
     const serialized = input.serialized ?? (input.swap
       ? (await createMobileJupiterSwapTransaction({ quoteResponse: input.quoteResponse as MobileJupiterQuoteResponse, userPublicKey: input.wallet.address })).swapTransaction
       : extractExecutableBridgeTransactionRequest(input.quoteResponse, chain)?.data);
     if (!serialized) throw new Error('Route transaction is unavailable.');
-    const parsed = loadSolanaSigningModule().parseSerializedTransaction(serialized);
-    const transaction = parsed.kind === 'versioned' ? parsed.transaction : new web3.VersionedTransaction(parsed.transaction.compileMessage());
-    const message = transaction.message;
-    if (message.staticAccountKeys[0]?.toBase58() !== input.wallet.address) throw new Error('Route fee payer does not match this wallet.');
-    const balance = await connection.getBalanceAndContext(new web3.PublicKey(input.wallet.address), 'confirmed');
+    const message = getSolanaWireMessage(serialized, input.wallet.address);
+    const balance = await solanaSwapRpc<{ context: { slot: number }; value: number }>(rpcUrl, 'getBalance', [input.wallet.address, { commitment: 'confirmed' }]);
+    if (!Number.isSafeInteger(balance.value) || balance.value < 0) throw new Error('SOL balance is unavailable.');
     const [feeResult, simulation] = await Promise.all([
-      connection.getFeeForMessage(message, 'confirmed'),
-      connection.simulateTransaction(transaction, { sigVerify: false, commitment: 'confirmed', minContextSlot: balance.context.slot, accounts: { encoding: 'base64', addresses: [input.wallet.address] } })
+      solanaSwapRpc<{ value: number | null }>(rpcUrl, 'getFeeForMessage', [message, { commitment: 'confirmed' }]),
+      solanaSwapRpc<{ value: { err: unknown; accounts?: Array<{ lamports: number } | null> } }>(rpcUrl, 'simulateTransaction', [serialized, { encoding: 'base64', sigVerify: false, commitment: 'confirmed', minContextSlot: balance.context.slot, accounts: { encoding: 'base64', addresses: [input.wallet.address] } }])
     ]);
-    if (feeResult.value === null || simulation.value.err) throw new Error('Route simulation failed or expired. Refresh the quote before approving.');
+    if (feeResult.value === null || !Number.isSafeInteger(feeResult.value) || feeResult.value < 0 || simulation.value.err) throw new Error('Route simulation failed or expired. Refresh the quote before approving.');
     const postBalance = simulation.value.accounts?.[0]?.lamports;
-    if (postBalance === undefined) throw new Error('Route account costs could not be estimated.');
+    if (postBalance === undefined || !Number.isSafeInteger(postBalance) || postBalance < 0) throw new Error('Route account costs could not be estimated.');
     const fee = BigInt(feeResult.value);
     const debit = BigInt(balance.value) - BigInt(postBalance);
     const reserveRaw = debit - input.nativeAmountRaw > fee ? debit - input.nativeAmountRaw : fee;
@@ -1259,13 +1257,27 @@ async function validatePreparedWalletRoute(wallet: MobileWallet, quoteResponse: 
 }
 
 async function getNativeWalletBalance(wallet: MobileWallet): Promise<bigint> {
-  if (wallet.chain === 'solana') {
-    const { Connection, PublicKey } = loadSolanaWeb3Module();
-    return BigInt(await new Connection(getMobileSolanaRpcUrl(), 'confirmed').getBalance(new PublicKey(wallet.address), 'confirmed'));
-  }
+  if (wallet.chain === 'solana') return readSolanaSwapBalance(getMobileSolanaRpcUrl(), wallet.address);
   if (wallet.chain === 'ethereum') return loadEthereumModule().createEthereumPublicClient(DEFAULT_EVM_NETWORK, getMobileEthereumRpcUrl()).getBalance({ address: wallet.address as `0x${string}`, blockTag: 'pending' });
   if (wallet.chain === 'monad') return loadMonadModule().createMonadPublicClient(DEFAULT_EVM_NETWORK, getMobileMonadRpcUrl()).getBalance({ address: wallet.address as `0x${string}`, blockTag: 'pending' });
   throw new Error('Native routes are unavailable on this chain.');
+}
+
+export async function getWalletSwapBalance(wallet: MobileWallet, asset: MobileAsset): Promise<string> {
+  if (wallet.chain !== asset.chain) throw new Error('Choose an asset on the selected network.');
+  const decimals = asset.decimals ?? (wallet.chain === 'ethereum' || wallet.chain === 'monad' ? 18 : 9);
+  if (asset.tokenType === 'native') return formatBaseUnits(await getNativeWalletBalance(wallet), decimals);
+  if (!asset.address) throw new Error('Token mint or contract address is unavailable.');
+  if (wallet.chain === 'solana' && asset.tokenType === 'spl') return formatBaseUnits(await readSolanaSwapBalance(getMobileSolanaRpcUrl(), wallet.address, asset.address), decimals);
+  if (wallet.chain === 'ethereum' && asset.tokenType === 'erc20') {
+    const ethereum = loadEthereumModule();
+    return (await ethereum.getEthereumTokenPreview(ethereum.createEthereumPublicClient(DEFAULT_EVM_NETWORK, getMobileEthereumRpcUrl()), wallet.address, asset.address)).amount;
+  }
+  if (wallet.chain === 'monad' && asset.tokenType === 'erc20') {
+    const monad = loadMonadModule();
+    return (await monad.getMonadTokenPreview(monad.createMonadPublicClient(DEFAULT_EVM_NETWORK, getMobileMonadRpcUrl()), wallet.address, asset.address)).amount;
+  }
+  throw new Error('Swap balance is unavailable for this asset.');
 }
 
 export async function getWalletSwapMaximum(input: { wallet: MobileWallet; inputAsset: MobileAsset; outputAsset: MobileAsset; slippageBps: number }) {
@@ -2060,8 +2072,10 @@ export async function closeMobileSolanaTokenAccount(input: {
 async function signMobileSolanaTransaction(
   wallet: MobileWallet,
   transaction: import('@solana/web3.js').Transaction,
-  connection: import('@solana/web3.js').Connection
+  connection: import('@solana/web3.js').Connection,
+  authorize: () => void = () => {}
 ): Promise<string> {
+  authorize();
   if (wallet.source === 'ledger') {
     if (!wallet.ledgerDeviceId) throw new Error('This Ledger wallet is missing its paired device identifier.');
     const { signAndSendMobileLedgerTransaction } = await import('./ledger');
@@ -2069,16 +2083,19 @@ async function signMobileSolanaTransaction(
       deviceId: wallet.ledgerDeviceId,
       derivationPath: wallet.derivationPath,
       publicKey: wallet.address,
-      transaction
+      transaction, beforeBroadcast: authorize
     });
   }
 
   const secret = await loadWalletSecret(wallet.secretRef);
+  authorize();
   const { resolveSolanaVaultSecret } = loadSolanaDeriveModule();
   const keypair = secret.kind === 'mnemonic'
     ? resolveSolanaVaultSecret({ kind: 'mnemonic', mnemonic: secret.mnemonic })
     : resolveSolanaVaultSecret({ kind: 'private-key', secretKey: secret.secretKey });
-  transaction.sign(keypair);
+  if (keypair.publicKey.toBase58() !== wallet.address) throw new Error('The signing key does not match the selected wallet.');
+  transaction.partialSign(keypair);
+  authorize();
   return connection.sendRawTransaction(transaction.serialize());
 }
 
@@ -3487,4 +3504,13 @@ async function tryAddDerivedWallet(
   } catch (error) {
     console.warn(`[Grape mobile] Skipping ${chain} wallet derivation`, error);
   }
+}
+
+export async function submitMobileStake(wallet: MobileWallet, prepared: import('./solanaStaking').PreparedMobileStake, authorize: () => void): Promise<string> {
+  if (wallet.chain !== 'solana') throw new Error('Native SOL staking requires a Solana wallet.');
+  const { createMobileStakingService } = await import('./solanaStaking');
+  const rpcUrl = getMobileSolanaRpcUrl('mainnet-beta');
+  const { Connection } = loadSolanaWeb3Module();
+  return createMobileStakingService(rpcUrl).submit(wallet, prepared, authorize,
+    transaction => signMobileSolanaTransaction(wallet, transaction, new Connection(rpcUrl, 'confirmed'), authorize));
 }

@@ -48,3 +48,14 @@ it('does not replay an older deferred route after a newer navigation action', ()
   queue.request(old, true); queue.request(next, false); queue.flush(false);
   expect(old).not.toHaveBeenCalled(); expect(next).toHaveBeenCalledOnce();
 });
+
+it('opens staking from SOL details and returns to the same asset screen', () => {
+  const router = StackRouter({ initialRouteName: 'tabs' });
+  const options = { routeNames: [...WALLET_STACK_ROUTES], routeParamList: {}, routeGetIdList: {} };
+  const root = router.getInitialState(options);
+  const asset = router.getRehydratedState(router.getStateForAction(root, StackActions.push('asset', { selectionId: 42 }), options)!, options);
+  const staking = router.getRehydratedState(router.getStateForAction(asset, StackActions.push('staking'), options)!, options);
+  expect(staking.routes[staking.index].name).toBe('staking');
+  const back = router.getRehydratedState(router.getStateForAction(staking, CommonActions.goBack(), options)!, options);
+  expect(back.routes).toEqual(asset.routes);
+});

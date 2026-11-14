@@ -15,3 +15,6 @@ export * from './storage';
 export * from './vault';
 
 export * from './discover';
+
+export * from './rpc';
+export * from './staking';

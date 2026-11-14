@@ -7,7 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export function SelectionSheet(props: {
   visible: boolean; onDismiss: () => void; onClosed: () => void;
-  background: string; color: string; muted: string; reduceMotion: boolean; children: ReactNode;
+  background: string; color: string; muted: string; reduceMotion: boolean; children: ReactNode; horizontalMargin?: number;
 }) {
   const modal = useRef<BottomSheetModal>(null);
   const insets = useSafeAreaInsets();
@@ -17,11 +17,13 @@ export function SelectionSheet(props: {
   useEffect(() => { lifecycle.setVisible(props.visible); }, [lifecycle, props.visible]);
   const backdrop = useCallback((backdropProps: BottomSheetBackdropProps) =>
     <BottomSheetBackdrop {...backdropProps} appearsOnIndex={0} disappearsOnIndex={-1} pressBehavior="close" opacity={0.55} />, []);
-  return <BottomSheetModal ref={modal} index={0} snapPoints={['58%', '90%']} enableDynamicSizing={false}
+  return <BottomSheetModal ref={modal} index={0} snapPoints={props.horizontalMargin ? ['50%', '85%'] : ['58%', '90%']} enableDynamicSizing={false}
     enablePanDownToClose enableBlurKeyboardOnGesture keyboardBehavior="interactive" keyboardBlurBehavior="restore"
     android_keyboardInputMode="adjustResize" topInset={insets.top + 8}
+    style={props.horizontalMargin ? { marginHorizontal: props.horizontalMargin } : undefined}
+    detached={!!props.horizontalMargin} bottomInset={props.horizontalMargin ? Math.max(insets.bottom, 24) : 0}
     overrideReduceMotion={props.reduceMotion ? ReduceMotion.Always : ReduceMotion.System}
-    backgroundStyle={{ backgroundColor: props.background, borderTopLeftRadius: 28, borderTopRightRadius: 28 }}
+    backgroundStyle={{ backgroundColor: props.background, borderTopLeftRadius: 28, borderTopRightRadius: 28, borderBottomLeftRadius: props.horizontalMargin ? 28 : 0, borderBottomRightRadius: props.horizontalMargin ? 28 : 0 }}
     handleIndicatorStyle={{ backgroundColor: props.muted, width: 42 }} backdropComponent={backdrop}
     onChange={(index) => lifecycle.didChange(index)}
     onDismiss={() => {

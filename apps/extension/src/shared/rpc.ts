@@ -1,6 +1,6 @@
-import type { GrapeNetwork, WalletState } from '@grape/core';
+import { DEFAULT_SOLANA_MAINNET_RPC_URL, type GrapeNetwork, type WalletState } from '@grape/core';
 
-const DEFAULT_MAINNET_RPC_URL = "https://rpc.shyft.to/?api_key=iMp59oPaEKIYBdmB";
+const DEFAULT_MAINNET_RPC_URL = DEFAULT_SOLANA_MAINNET_RPC_URL;
 const DEFAULT_DEVNET_RPC_URL = 'https://api.devnet.solana.com';
 
 const mainnetRpcUrl = import.meta.env.VITE_GRAPE_MAINNET_RPC_URL?.trim() || DEFAULT_MAINNET_RPC_URL;

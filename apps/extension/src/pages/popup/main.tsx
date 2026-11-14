@@ -1,3 +1,5 @@
+import { StakingWorkspace } from './StakingWorkspace';
+import { redactRpcDetails } from '@grape/core';
 import { ZCASH_DISCOVER_APPS, ZCASH_DISCOVER_NOTE } from '@grape/core';
 import { isValidBridgeRecipient } from '@grape/core';
 import { useSwapQuoteRefresh } from './useSwapQuoteRefresh';
@@ -1773,15 +1775,13 @@ function PopupPage() {
   const [tokenActivity, setTokenActivity] = useState<WalletActivityItem[]>([]);
   const [tokenActivityLoading, setTokenActivityLoading] = useState(false);
   const [tokenActivityError, setTokenActivityError] = useState<string | null>(null);
+  const stakingContext = `${state?.activeAccount?.publicKey ?? ''}:${state?.wallet.selectedNetwork ?? ''}`;
+  const currentStakingContext = useRef(stakingContext);
+  currentStakingContext.current = stakingContext;
+  const stakeReadRequest = useRef(0);
   const [stakeAccounts, setStakeAccounts] = useState<StakeAccountRow[]>([]);
   const [stakeValidators, setStakeValidators] = useState<StakeValidatorRow[]>([]);
-  const [stakeSource, setStakeSource] = useState<'shyft' | 'rpc' | 'none'>('none');
   const [stakeLoading, setStakeLoading] = useState(false);
-  const [stakeAmount, setStakeAmount] = useState('');
-  const [stakeVoteAccount, setStakeVoteAccount] = useState('');
-  const [stakeDeactivateAccount, setStakeDeactivateAccount] = useState('');
-  const [stakeWithdrawAccount, setStakeWithdrawAccount] = useState('');
-  const [stakeWithdrawAmount, setStakeWithdrawAmount] = useState('');
   const [stakePassword, setStakePassword] = useState('');
   const [stakeSubmitting, setStakeSubmitting] = useState<'stake' | 'deactivate' | 'withdraw' | null>(null);
   const [stakeWarnings, setStakeWarnings] = useState<string[]>([]);
@@ -2024,10 +2024,12 @@ function PopupPage() {
   }
 
   const refreshStakeAccounts = async () => {
+    const requestId = ++stakeReadRequest.current;
+    const context = currentStakingContext.current;
     if (!state || state.wallet.setup !== 'ready') {
       setStakeAccounts([]);
       setStakeValidators([]);
-      setStakeSource('none');
+      setStakeLoading(false);
       setStakeWarnings([]);
       return;
     }
@@ -2039,14 +2041,13 @@ function PopupPage() {
         sendRuntimeMessage<WalletStakeValidatorsResponse>({ type: 'wallet_get_stake_validators' })
       ]);
 
+      if (requestId !== stakeReadRequest.current || context !== currentStakingContext.current) return;
       if (stakeAccountsResult.status === 'fulfilled') {
         setStakeAccounts(stakeAccountsResult.value.accounts);
         setStakeWarnings(stakeAccountsResult.value.warnings ?? []);
-        setStakeSource(stakeAccountsResult.value.source);
         setStakeError(null);
       } else {
         setStakeAccounts([]);
-        setStakeSource('none');
         setStakeWarnings([]);
         setStakeError(stakeAccountsResult.reason instanceof Error ? stakeAccountsResult.reason.message : 'Unable to load stake accounts.');
       }
@@ -2057,9 +2058,10 @@ function PopupPage() {
         setStakeValidators([]);
       }
     } catch (error) {
+      if (requestId !== stakeReadRequest.current || context !== currentStakingContext.current) return;
       setStakeError(error instanceof Error ? error.message : 'Unable to load stake accounts.');
     } finally {
-      setStakeLoading(false);
+      if (requestId === stakeReadRequest.current && context === currentStakingContext.current) setStakeLoading(false);
     }
   };
 
@@ -2312,6 +2314,12 @@ function PopupPage() {
   }, [assetId, customEvmTokenAddress, selectedChainValue]);
 
   useEffect(() => {
+    stakeReadRequest.current += 1;
+    setStakeAccounts([]); setStakeValidators([]); setStakeWarnings([]);
+    setStakeError(null); setStakeResult(null); setStakePassword(''); setStakeLoading(false);
+  }, [stakingContext]);
+
+  useEffect(() => {
     if (homeTab !== 'staking' || state?.wallet.setup !== 'ready' || view !== 'home') {
       return;
     }
@@ -2321,7 +2329,7 @@ function PopupPage() {
     }
 
     void refreshStakeAccounts();
-  }, [homeTab, view, state?.wallet.setup, state?.session.locked, state?.activeWallet?.signerKind, state?.wallet.selectedWalletId, state?.wallet.selectedNetwork]);
+  }, [stakingContext, homeTab, view, state?.wallet.setup, state?.session.locked, state?.activeWallet?.signerKind, state?.wallet.selectedWalletId, state?.wallet.selectedNetwork]);
 
   useEffect(() => {
     if (homeTab !== 'activity' || view !== 'home' || state?.wallet.setup !== 'ready') {
@@ -3502,65 +3510,77 @@ function PopupPage() {
     request: () => { void handleGetSwapQuote(); }
   });
 
-  async function handleCreateStake() {
+  async function handleCreateStake(amount: string, voteAccount: string) {
+    const context = currentStakingContext.current;
     try {
       setStakeSubmitting('stake');
       setStakeError(null);
       const result = await sendRuntimeMessage<WalletStakeActionResponse>({
         type: 'wallet_stake_create',
-        amount: stakeAmount,
-        voteAccount: stakeVoteAccount,
+        amount,
+        voteAccount,
         password: canUseUnlockedSigner ? undefined : stakePassword || undefined
       });
+      if (context !== currentStakingContext.current) return false;
       setStakeResult(result);
-      setStakeAmount('');
-      setStakeVoteAccount('');
       setStakePassword('');
       await refreshStakeAccounts();
       void refresh().catch(() => undefined);
+      return true;
     } catch (error) {
+      if (context !== currentStakingContext.current) return false;
       setStakeError(error instanceof Error ? error.message : 'Unable to create stake account.');
+      return false;
     } finally {
       setStakeSubmitting(null);
     }
   }
 
-  async function handleDeactivateStake() {
+  async function handleDeactivateStake(stakeAccount: string) {
+    const context = currentStakingContext.current;
     try {
       setStakeSubmitting('deactivate');
       setStakeError(null);
       const result = await sendRuntimeMessage<WalletStakeActionResponse>({
         type: 'wallet_stake_deactivate',
-        stakeAccount: stakeDeactivateAccount,
+        stakeAccount,
         password: canUseUnlockedSigner ? undefined : stakePassword || undefined
       });
+      if (context !== currentStakingContext.current) return false;
       setStakeResult(result);
       setStakePassword('');
       await refreshStakeAccounts();
+      return true;
     } catch (error) {
+      if (context !== currentStakingContext.current) return false;
       setStakeError(error instanceof Error ? error.message : 'Unable to deactivate stake account.');
+      return false;
     } finally {
       setStakeSubmitting(null);
     }
   }
 
-  async function handleWithdrawStake() {
+  async function handleWithdrawStake(stakeAccount: string, amount: string) {
+    const context = currentStakingContext.current;
     try {
       setStakeSubmitting('withdraw');
       setStakeError(null);
       const result = await sendRuntimeMessage<WalletStakeActionResponse>({
         type: 'wallet_stake_withdraw',
-        stakeAccount: stakeWithdrawAccount,
-        amount: stakeWithdrawAmount,
+        stakeAccount,
+        amount,
         password: canUseUnlockedSigner ? undefined : stakePassword || undefined
       });
+      if (context !== currentStakingContext.current) return false;
       setStakeResult(result);
-      setStakeWithdrawAmount('');
       setStakePassword('');
       await refreshStakeAccounts();
       void refresh().catch(() => undefined);
+      return true;
     } catch (error) {
+      if (context !== currentStakingContext.current) return false;
       setStakeError(error instanceof Error ? error.message : 'Unable to withdraw stake.');
+      return false;
     } finally {
       setStakeSubmitting(null);
     }
@@ -4318,7 +4338,6 @@ function PopupPage() {
   const permissions = state?.permissions ?? [];
   const canUseUnlockedSigner = state?.canUseUnlockedSigner ?? false;
   const activeWallet = state?.activeWallet;
-  const selectedStakeValidator = stakeValidators.find((validator) => validator.voteAccount === stakeVoteAccount.trim()) ?? null;
   const isWatchOnlyWallet = activeWallet?.signerKind === 'watch-only';
   const governanceVotingReady = !session.locked && !isWatchOnlyWallet;
   const governanceVotingFallbackReady = !isWatchOnlyWallet && (governanceVotingReady || !!governancePassword.trim());
@@ -5682,7 +5701,7 @@ function PopupPage() {
               ) : null}
             </div>
 
-            {unlockError ? <p className="danger-box">{unlockError}</p> : null}
+            {unlockError ? <p className="danger-box">{redactRpcDetails(unlockError)}</p> : null}
 
             <Button
               type="submit"
@@ -6283,7 +6302,7 @@ function PopupPage() {
                   ) : null}
                 </div>
 
-                {rebalanceError ? <p className="danger-box">{rebalanceError}</p> : null}
+                {rebalanceError ? <p className="danger-box">{redactRpcDetails(rebalanceError)}</p> : null}
                 {rebalanceProgress ? <p className={rebalanceExecuting ? 'warning-box' : 'success-box'}>{rebalanceProgress}</p> : null}
                 {rebalancePlan.length > 0 ? (
                   <div className="rebalance-plan">
@@ -6392,7 +6411,7 @@ function PopupPage() {
                     Vote submitted. Signature {formatAddress(governanceVoteResult.signature)}
                   </p>
                 ) : null}
-                {governanceVoteError ? <p className="danger-box">{governanceVoteError}</p> : null}
+                {governanceVoteError ? <p className="danger-box">{redactRpcDetails(governanceVoteError)}</p> : null}
                 {selectedCommunityId || selectedGovernanceDao ? <CommunityWorkspace
                   id={(selectedCommunityId || selectedGovernanceDao)!}
                   governanceView={fullGovernanceWorkspace ? 'full' : 'overview'}
@@ -6412,7 +6431,7 @@ function PopupPage() {
                   onToken={openAssetDetails}
                 /> : null}
                 {governanceLoading ? <p className="muted">{selectedGovernanceDao ? 'Loading selected DAO proposals…' : 'Loading DAO memberships…'}</p> : null}
-                {governanceError ? <p className="danger-box">{governanceError}</p> : null}
+                {governanceError ? <p className="danger-box">{redactRpcDetails(governanceError)}</p> : null}
                 {governance.warnings?.length ? <div className="danger-box">{Array.from(new Set(governance.warnings)).map((warning) => <p key={warning}>{warning}</p>)}</div> : null}
                 {!selectedGovernanceDao && !selectedCommunityId && governance.discoveryWarnings?.length ? <details className="muted governance-discovery-note"><summary>Additional DAO discovery is limited</summary><p>The DAOs shown above were found. Some other programs could not be fully checked.</p>{Array.from(new Set(governance.discoveryWarnings)).map((warning) => <p key={warning}>{warning}</p>)}</details> : null}
                 {(() => {
@@ -6600,7 +6619,7 @@ function PopupPage() {
                       : 'Ethereum activity is coming soon. For now, Grape supports holdings and native ETH send.'}
                 </p>
               ) : null}
-              {activityError ? <p className="danger-box">{activityError}</p> : null}
+              {activityError ? <p className="danger-box">{redactRpcDetails(activityError)}</p> : null}
               {!activityError && activityLoading ? <p className="muted">Loading recent activity...</p> : null}
               {isSolanaChain && !activityError && !activityLoading && activity.length === 0 ? (
                 <p className="muted">
@@ -6641,138 +6660,17 @@ function PopupPage() {
 
           {isSolanaChain ? (
           <Tabs.Content value="staking">
-            <Card className="asset-panel-card staking-panel-card">
-              {isWatchOnlyWallet ? (
-                <p className="warning-box">Watch-only wallets can view stake accounts but cannot submit stake, harvest, or withdraw transactions.</p>
-              ) : null}
-
-              <div className="staking-header">
-                <div>
-                  <strong>Native staking</strong>
-                  <p className="muted">Stake SOL, harvest by deactivating, and withdraw directly in Grape.</p>
-                </div>
-                <div className="staking-header-actions">
-                  <span className="staking-source-chip">Source: {stakeSource === 'none' ? '--' : stakeSource.toUpperCase()}</span>
-                  <button type="button" className="mini-icon-button subtle" onClick={() => void refreshStakeAccounts()} aria-label="Refresh staking" title="Refresh staking" disabled={stakeLoading}>
-                    <RefreshCcw size={13} />
-                  </button>
-                </div>
-              </div>
-
-              {stakeError ? <p className="danger-box">{stakeError}</p> : null}
-              {stakeWarnings.length > 0 ? <div className="warning-box" role="status">{stakeWarnings.map(warning => <p key={warning}>{warning}</p>)}</div> : null}
-              {stakeResult ? (
-                <div className="success-box staking-status-box">
-                  <strong>{stakeResult.action === 'stake' ? 'Stake submitted' : stakeResult.action === 'deactivate' ? 'Harvest started' : 'Withdraw submitted'}</strong>
-                  <span className="mono">{formatAddress(stakeResult.stakeAccount)}</span>
-                </div>
-              ) : null}
-
-              <div className="staking-summary-grid">
-                <div className="staking-summary-card">
-                  <span className="muted">{stakeWarnings.length ? 'Loaded stake accounts' : 'Stake accounts'}</span>
-                  <strong>{stakeLoading ? '...' : stakeError ? 'Unavailable' : stakeAccounts.length}</strong>
-                </div>
-                <div className="staking-summary-card">
-                  <span className="muted">{stakeWarnings.length ? 'Loaded delegated' : 'Delegated'}</span>
-                  <strong>
-                    {stakeLoading
-                      ? '...'
-                      : stakeError ? 'Unavailable' : `${formatSolAmountFromLamports(
-                          stakeAccounts.reduce((sum, account) => sum + account.delegatedLamports, 0)
-                        )} SOL`}
-                  </strong>
-                </div>
-              </div>
-
-              {stakeAccounts.length > 0 ? (
-                <div className="staking-list">
-                  {stakeAccounts.map((account) => (
-                    <div key={account.address} className="staking-row">
-                      <div className="staking-row-copy">
-                        <strong>{formatAddress(account.address)}</strong>
-                        <span className="muted">
-                          {formatSolAmountFromLamports(account.lamports)} SOL
-                          {account.delegatedLamports > 0 ? ` • ${formatSolAmountFromLamports(account.delegatedLamports)} delegated` : ''}
-                        </span>
-                        {account.voter ? <span className="staking-voter mono">{formatAddress(account.voter)}</span> : null}
-                      </div>
-                      <span className="staking-state-chip">{account.state}</span>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="muted">{stakeLoading ? 'Loading stake accounts...' : stakeError ? 'Stake balances could not be checked. Refresh to try again.' : stakeWarnings.length ? 'No stake accounts found in the completed lookups. Discovery is incomplete.' : 'No native stake accounts found yet.'}</p>
-              )}
-
-              <div className="staking-form-grid">
-                <div className="staking-form-card">
-                  <h3>Stake</h3>
-                  <Input value={stakeAmount} onChange={(event) => setStakeAmount(event.target.value)} placeholder="Amount (SOL)" />
-                  <select
-                    className="staking-select"
-                    value={selectedStakeValidator?.voteAccount ?? ''}
-                    onChange={(event) => setStakeVoteAccount(event.target.value)}
-                    disabled={stakeLoading || stakeValidators.length === 0}
-                  >
-                    <option value="">
-                      {stakeLoading ? 'Loading validators...' : stakeValidators.length > 0 ? 'Select validator' : 'No validators loaded'}
-                    </option>
-                    {stakeValidators.map((validator) => (
-                      <option key={validator.voteAccount} value={validator.voteAccount}>
-                        {`${validator.name ? `${validator.name} • ` : ''}${formatAddress(validator.voteAccount)} • ${formatSolAmountFromLamports(validator.activatedStakeLamports)} SOL • ${validator.commission}% commission`}
-                      </option>
-                    ))}
-                  </select>
-                  {selectedStakeValidator ? (
-                    <p className="muted">
-                      {selectedStakeValidator.name ? `${selectedStakeValidator.name} • ` : ''}
-                      Active stake {formatSolAmountFromLamports(selectedStakeValidator.activatedStakeLamports)} SOL • Commission {selectedStakeValidator.commission}% • Node {formatAddress(selectedStakeValidator.nodePubkey)}
-                    </p>
-                  ) : (
-                    <p className="muted">
-                      Choose a validator from the live Solana vote-account list, or paste a vote account manually.
-                    </p>
-                  )}
-                  <Input value={stakeVoteAccount} onChange={(event) => setStakeVoteAccount(event.target.value)} placeholder="Validator vote account" />
-                  <Button className="button-block" onClick={handleCreateStake} disabled={isWatchOnlyWallet || stakeSubmitting !== null || !stakeAmount.trim() || !stakeVoteAccount.trim()}>
-                    {stakeSubmitting === 'stake' ? 'Submitting...' : 'Stake SOL'}
-                  </Button>
-                </div>
-
-                <div className="staking-form-card">
-                  <h3>Harvest</h3>
-                  <select className="staking-select" value={stakeDeactivateAccount} onChange={(event) => setStakeDeactivateAccount(event.target.value)}>
-                    <option value="">Select stake account</option>
-                    {stakeAccounts.map((account) => (
-                      <option key={account.address} value={account.address}>
-                        {formatAddress(account.address)} ({account.state})
-                      </option>
-                    ))}
-                  </select>
-                  <Button className="button-block" tone="secondary" onClick={handleDeactivateStake} disabled={isWatchOnlyWallet || stakeSubmitting !== null || !stakeDeactivateAccount}>
-                    {stakeSubmitting === 'deactivate' ? 'Submitting...' : 'Harvest'}
-                  </Button>
-                </div>
-
-                <div className="staking-form-card">
-                  <h3>Withdraw</h3>
-                  <select className="staking-select" value={stakeWithdrawAccount} onChange={(event) => setStakeWithdrawAccount(event.target.value)}>
-                    <option value="">Select stake account</option>
-                    {stakeAccounts.map((account) => (
-                      <option key={account.address} value={account.address}>
-                        {formatAddress(account.address)} ({account.state})
-                      </option>
-                    ))}
-                  </select>
-                  <Input value={stakeWithdrawAmount} onChange={(event) => setStakeWithdrawAmount(event.target.value)} placeholder="Amount (SOL)" />
-                  <Button className="button-block" tone="secondary" onClick={handleWithdrawStake} disabled={isWatchOnlyWallet || stakeSubmitting !== null || !stakeWithdrawAccount || !stakeWithdrawAmount.trim()}>
-                    {stakeSubmitting === 'withdraw' ? 'Submitting...' : 'Withdraw'}
-                  </Button>
-                </div>
-              </div>
-
-              {!isWatchOnlyWallet && !state?.canUseUnlockedSigner ? (
+            <StakingWorkspace
+              key={`${activePublicKey ?? ''}:${wallet.selectedNetwork}`}
+              accounts={stakeAccounts} validators={stakeValidators} loading={stakeLoading}
+              error={stakeError} warnings={stakeWarnings} result={stakeResult} busy={stakeSubmitting}
+              balanceLamports={assets.lamports} solPrice={assets.nativePriceUsd ?? null}
+              owner={activePublicKey ?? ''} privacy={privacyMode} watchOnly={isWatchOnlyWallet}
+              network={wallet.selectedNetwork} signingReady={canUseUnlockedSigner || !!stakePassword.trim()}
+              onRefresh={() => void refreshStakeAccounts()}
+              onClearFeedback={() => { setStakeError(null); setStakeResult(null); setStakePassword(''); }}
+              onStake={handleCreateStake} onUnstake={handleDeactivateStake} onWithdraw={handleWithdrawStake}
+              signingControl={!isWatchOnlyWallet && !state?.canUseUnlockedSigner ? (
                 <div className="staking-password-shell">
                   <Input
                     type={showUnlockPassword ? 'text' : 'password'}
@@ -6802,7 +6700,7 @@ function PopupPage() {
                   ) : null}
                 </div>
               ) : null}
-            </Card>
+            />
           </Tabs.Content>
           ) : null}
         </Tabs.Root>
@@ -6925,7 +6823,7 @@ function PopupPage() {
             title="Sending transfer"
             message="Grape is signing and submitting the transfer. Keep this window open until it completes."
           />
-          {sendError ? <p className="danger-box">{sendError}</p> : null}
+          {sendError ? <p className="danger-box">{redactRpcDetails(sendError)}</p> : null}
         </>
       );
     }
@@ -6951,7 +6849,7 @@ function PopupPage() {
               <Button onClick={() => setView('home')}>Done</Button>
             </div>
           </ActionStatusCard>
-          {surfaceError ? <p className="danger-box">{surfaceError}</p> : null}
+          {surfaceError ? <p className="danger-box">{redactRpcDetails(surfaceError)}</p> : null}
         </>
       );
     }
@@ -7038,7 +6936,7 @@ function PopupPage() {
                     className="send-recipient-input"
                   />
                 </div>
-                {customEvmTokenError ? <p className="danger-box">{customEvmTokenError}</p> : null}
+                {customEvmTokenError ? <p className="danger-box">{redactRpcDetails(customEvmTokenError)}</p> : null}
               </div>
             ) : null}
 
@@ -7067,7 +6965,7 @@ function PopupPage() {
                   <p className="device-link-scanner-copy">
                     {recipientScannerLoading ? 'Opening camera...' : 'Point the camera at a wallet QR to fill the recipient.'}
                   </p>
-                  {recipientScannerError ? <p className="danger-box">{recipientScannerError}</p> : null}
+                  {recipientScannerError ? <p className="danger-box">{redactRpcDetails(recipientScannerError)}</p> : null}
                 </div>
               ) : null}
               {recipientResolutionLoading ? <p className="muted">Resolving domain...</p> : null}
@@ -7076,7 +6974,7 @@ function PopupPage() {
                   Resolves to <span className="mono">{recipientResolution.recipient}</span>
                 </p>
               ) : null}
-              {recipientResolutionError ? <p className="danger-box">{recipientResolutionError}</p> : null}
+              {recipientResolutionError ? <p className="danger-box">{redactRpcDetails(recipientResolutionError)}</p> : null}
               {recipient.trim() ? (
                 <div className="send-inline-actions">
                   <Button
@@ -7120,7 +7018,7 @@ function PopupPage() {
                   </div>
                 </div>
               ) : null}
-              {contactError ? <p className="danger-box">{contactError}</p> : null}
+              {contactError ? <p className="danger-box">{redactRpcDetails(contactError)}</p> : null}
             </div>
 
             {contacts.length > 0 ? (
@@ -7221,8 +7119,8 @@ function PopupPage() {
         </Card>
 
         {solanaGasWarning ? <p className="warning-box">{solanaGasWarning}</p> : null}
-        {sendError ? <p className="danger-box">{sendError}</p> : null}
-        {surfaceError ? <p className="danger-box">{surfaceError}</p> : null}
+        {sendError ? <p className="danger-box">{redactRpcDetails(sendError)}</p> : null}
+        {surfaceError ? <p className="danger-box">{redactRpcDetails(surfaceError)}</p> : null}
 
         <div className="inline wrap-actions send-flow-actions">
           <Button
@@ -7507,7 +7405,7 @@ function PopupPage() {
               <span>Loading market data, activity, and on-chain details…</span>
             </div>
           ) : (
-            <p className="danger-box">{assetDetailsError}</p>
+            <p className="danger-box">{redactRpcDetails(assetDetailsError)}</p>
           )}
         </Card>
       );
@@ -7547,7 +7445,7 @@ function PopupPage() {
       if (preliminaryDetails) return preliminaryDetails;
       return (
         <Card title={isCollectibleView ? 'NFT Details' : 'Token'}>
-          <p className="danger-box">{assetDetailsError}</p>
+          <p className="danger-box">{redactRpcDetails(assetDetailsError)}</p>
         </Card>
       );
     }
@@ -7763,7 +7661,7 @@ function PopupPage() {
                   <span><b>3</b><small>Send</small></span>
                 </div>
               ) : null}
-              {confidentialError ? <p className="error-text">{confidentialError}</p> : null}
+              {confidentialError ? <p className="error-text">{redactRpcDetails(confidentialError)}</p> : null}
               {confidentialResult?.action === 'balance' ? (
                 <div className="confidential-transfer-balances">
                   <span><small>Available</small>{confidentialResult.availableBalance} {assetDetails.symbol}</span>
@@ -7796,7 +7694,7 @@ function PopupPage() {
                   </div>
                 </div>
               )}
-              {makeConfidentialError ? <p className="error-text">{makeConfidentialError}</p> : null}
+              {makeConfidentialError ? <p className="error-text">{redactRpcDetails(makeConfidentialError)}</p> : null}
               {makeConfidentialResult ? <p>Created confidential mint {makeConfidentialResult.wrappedMint.slice(0, 4)}…{makeConfidentialResult.wrappedMint.slice(-4)}. It is now available in Assets.</p> : null}
             </div>
           ) : null}
@@ -8097,7 +7995,7 @@ function PopupPage() {
           </Card>
         ) : null}
 
-        {tokenActionError ? <p className="danger-box">{tokenActionError}</p> : null}
+        {tokenActionError ? <p className="danger-box">{redactRpcDetails(tokenActionError)}</p> : null}
       </div>
     );
   }
@@ -8229,7 +8127,8 @@ function PopupPage() {
               {customRpcEnabled ? (
                 <>
                   <Input
-                    type="url"
+                    type="password"
+                    autoComplete="off"
                     value={customRpcInput}
                     onChange={(event) => setCustomRpcInput(event.target.value)}
                     placeholder={
@@ -8295,11 +8194,11 @@ function PopupPage() {
                       </Button>
                     ) : null}
                   </div>
-                  {customRpcError ? <p className="danger-box">{customRpcError}</p> : null}
+                  {customRpcError ? <p className="danger-box">{redactRpcDetails(customRpcError)}</p> : null}
                 </>
               ) : selectedNetworkCustomRpc ? (
                 <div className="inline wrap-actions">
-                  <span className="muted mono settings-inline-value">{selectedNetworkCustomRpc}</span>
+                  <span className="muted settings-inline-value">Custom endpoint configured</span>
                   <Button
                     tone="secondary"
                     onClick={async () => {
@@ -8568,7 +8467,7 @@ function PopupPage() {
               ) : (
                 <p className="muted">Platform authenticator unavailable on this device.</p>
               )}
-              {biometricSettingsError ? <p className="danger-box">{biometricSettingsError}</p> : null}
+              {biometricSettingsError ? <p className="danger-box">{redactRpcDetails(biometricSettingsError)}</p> : null}
             </div>
             <div className="inline">
               {session.locked ? (
@@ -8791,7 +8690,7 @@ function PopupPage() {
                   ) : governanceEligibilityScanned && !governanceEligibilityLoading && !governanceEligibilityError ? (
                     <p className="muted">No eligible governance DAOs were found from this wallet&apos;s positive token balances.</p>
                   ) : null}
-                  {governanceEligibilityError ? <p className="danger-box">{governanceEligibilityError}</p> : null}
+                  {governanceEligibilityError ? <p className="danger-box">{redactRpcDetails(governanceEligibilityError)}</p> : null}
                 </div>
                 {governance.daos.length > 0 ? (
                   <div className="stack">
@@ -9098,7 +8997,7 @@ function PopupPage() {
         ) : null}
         {state?.activeWallet?.signerKind === 'ledger' ? <p className="muted">Keep your Ledger connected, unlock it, and open the Solana app. Each transaction requires device approval.</p> : null}
         {reclaimResult ? <p className="success-box">Closed {reclaimResult.closedAccounts} account{reclaimResult.closedAccounts === 1 ? '' : 's'} and reclaimed {(reclaimResult.reclaimedLamports / 1_000_000_000).toFixed(6)} SOL before fees.</p> : null}
-        {reclaimError ? <p className="danger-box">{reclaimError}</p> : null}
+        {reclaimError ? <p className="danger-box">{redactRpcDetails(reclaimError)}</p> : null}
         <div className="inline reclaim-actions">
           <Button tone="secondary" onClick={() => setView('settings')}>Cancel</Button>
           <Button
@@ -9429,7 +9328,7 @@ function PopupPage() {
               {incidentSubmitting ? 'Containing...' : 'Contain compromise'}
             </Button>
             {isWatchOnlyWallet ? <p className="warning-box">Incident response actions require a signing wallet. Watch-only wallets cannot execute them.</p> : null}
-            {incidentError ? <p className="danger-box">{incidentError}</p> : null}
+            {incidentError ? <p className="danger-box">{redactRpcDetails(incidentError)}</p> : null}
             {incidentResult?.warnings.length ? (
               <div className="stack">
                 {incidentResult.warnings.map((warning) => (
@@ -9457,7 +9356,7 @@ function PopupPage() {
           </Card>
         ) : null}
 
-        {securityError ? <p className="danger-box">{securityError}</p> : null}
+        {securityError ? <p className="danger-box">{redactRpcDetails(securityError)}</p> : null}
       </>
     );
   }
@@ -9532,7 +9431,7 @@ function PopupPage() {
             title="Submitting swap"
             message="Grape is signing and broadcasting the swap transaction. Keep this window open until it completes."
           />
-          {swapError ? <p className="danger-box" role="alert">{swapError}</p> : null}
+          {swapError ? <p className="danger-box" role="alert">{redactRpcDetails(swapError)}</p> : null}
         </>
       );
     }
@@ -9562,7 +9461,7 @@ function PopupPage() {
               <Button onClick={() => { if (embedded) { setSwapResult(null); setSwapQuote(null); setSwapAmount(''); } else setView('home'); }}>Done</Button>
             </div>
           </ActionStatusCard>
-          {swapError ? <p className="danger-box" role="alert">{swapError}</p> : null}
+          {swapError ? <p className="danger-box" role="alert">{redactRpcDetails(swapError)}</p> : null}
         </>
       );
     }
@@ -9888,7 +9787,7 @@ function PopupPage() {
           </Card>
         ) : null}
 
-        {swapError ? <p className="danger-box" role="alert">{swapError}</p> : null}
+        {swapError ? <p className="danger-box" role="alert">{redactRpcDetails(swapError)}</p> : null}
 
         <div className="inline wrap-actions send-flow-actions">
           {swapQuote ? (
@@ -10017,7 +9916,7 @@ function PopupPage() {
             title="Submitting bridge"
             message="Grape is signing the source-chain transaction and handing it off to the bridge route. Keep this window open until it completes."
           />
-          {bridgeError ? <p className="danger-box">{bridgeError}</p> : null}
+          {bridgeError ? <p className="danger-box">{redactRpcDetails(bridgeError)}</p> : null}
         </>
       );
     }
@@ -10046,7 +9945,7 @@ function PopupPage() {
               <Button onClick={() => setView('home')}>Done</Button>
             </div>
           </ActionStatusCard>
-          {bridgeError ? <p className="danger-box">{bridgeError}</p> : null}
+          {bridgeError ? <p className="danger-box">{redactRpcDetails(bridgeError)}</p> : null}
         </>
       );
     }
@@ -10228,7 +10127,7 @@ function PopupPage() {
             <Button disabled={!bridgeRecipientValid} onClick={() => setBridgeZcashReview(true)}>Continue to Zcash quotes</Button>
           </Card>
         ) : <Card title="Quote">
-          {bridgeError ? <p className="danger-box">{bridgeError}</p> : null}
+          {bridgeError ? <p className="danger-box">{redactRpcDetails(bridgeError)}</p> : null}
           {quotingBridge ? (
             <p className="muted">Fetching the best route…</p>
           ) : bridgeQuote ? (
@@ -10395,7 +10294,7 @@ function PopupPage() {
       {view === 'swap' ? <div className="standalone-swap"><button type="button" className="workspace-back" disabled={submittingSwap} onClick={() => setView(assetDetails ? 'asset' : 'home')}><ArrowLeft size={18} /> {assetDetails ? 'Back to token' : 'Back to wallet'}</button>{renderSwap()}</div> : null}
       {view === 'bridge' ? renderBridge() : null}
       {view === 'settings' ? renderSettings() : null}
-      {surfaceError && view !== 'send' ? <p className="danger-box">{surfaceError}</p> : null}
+      {surfaceError && view !== 'send' ? <p className="danger-box">{redactRpcDetails(surfaceError)}</p> : null}
 
       <nav className="bottom-nav" aria-label="Wallet navigation">
         <div className="desktop-nav-brand" aria-hidden="true"><img src="/icons/grape_logo_white.svg" alt="" /><span>Grape</span></div>

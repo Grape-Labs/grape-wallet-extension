@@ -1,7 +1,8 @@
+import { DEFAULT_SOLANA_MAINNET_RPC_URL } from '@grape/core';
 import { requestRouteJson } from './routeRequest';
 import Constants from 'expo-constants';
 
-export const MOBILE_SOLANA_DEFAULT_RPC_URL = "https://rpc.shyft.to/?api_key=iMp59oPaEKIYBdmB";
+export const MOBILE_SOLANA_DEFAULT_RPC_URL = DEFAULT_SOLANA_MAINNET_RPC_URL;
 export const MOBILE_SOLANA_DEVNET_RPC_URL = 'https://api.devnet.solana.com';
 export const MOBILE_SUI_MAINNET_RPC_URL = 'https://fullnode.mainnet.sui.io:443';
 export const MOBILE_SUI_DEVNET_RPC_URL = 'https://fullnode.devnet.sui.io:443';

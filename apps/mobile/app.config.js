@@ -6,7 +6,7 @@ const config = {
   slug: 'grape-wallet-mobile',
   version,
   icon: './assets/icon-app.png',
-  orientation: 'portrait',
+  orientation: 'default',
   userInterfaceStyle: 'dark',
   assetBundlePatterns: ['**/*'],
   plugins: [
@@ -48,6 +48,7 @@ const config = {
   },
   ios: {
     bundleIdentifier: 'xyz.grape.wallet',
+    supportsTablet: true,
     associatedDomains: ['webcredentials:wallet.grape.app'],
     infoPlist: {
       NSCameraUsageDescription: 'Allow Grape to use the camera to scan wallet restore QR codes.',
