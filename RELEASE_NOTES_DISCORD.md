@@ -1,22 +1,17 @@
-**🍇 Grape Wallet v0.5.271**
+**🍇 Grape Wallet v0.5.279**
 
-A new extension build is ready to try!
+**A better fit for tablets**
+Responsive iPad and Android tablet layouts, a persistent sidebar, and discreet **Assets / NFTs / Staking** tabs below the portfolio actions. Tabs adapt to the selected chain.
 
-**Governance inside Grape**
-Open your DAO and switch between **Overview** and **Full governance**. The full governance.so interface now sits inside the wallet, with a tighter fullscreen layout that gives proposals more space.
+**Mobile staking and NFT gallery**
+Stake SOL and manage stake accounts in the app, with a **Max** withdrawal shortcut. Browse NFTs with search and details, improved Solana indexing, and retained results when a refresh fails.
 
-**NFT pricing before you list**
-The Tensor panel now shows collection floor price, your NFT's last indexed sale with its date and transaction link, and its on-chain Tensor listing price. Floor and sale history are sourced from Magic Eden; unavailable data is clearly labelled.
+**Clearer approvals**
+One **Approve** button uses your enabled authentication method, with a separate password/passcode fallback. Red warnings now explain unknown programs and missing balance previews in plain language.
 
-**ETH balance and swap fixes**
-Fixed missing ETH balances and incorrect swap output estimates. Swaps now show minimum received, preserve failures onscreen, and handle Ethereum token approvals and quoted gas settings. Added the Ledger ETH swap flow with device confirmation.
+**Discover search fixes**
+A visible Go button, protection against typed text being overwritten, repeat-search reloads, and retry options when pages stall.
 
-**More resilient staking**
-A rejected RPC authority lookup no longer hides all stake accounts. Grape retains the accounts it can load and clearly flags incomplete discovery.
+The updated default Solana RPC remains hidden from the wallet interface.
 
-**Testing notes:** Physical Ledger execution and wallet signing inside embedded governance still need end-to-end verification. Withdraw-only stake accounts may be missing when the RPC's withdrawal-authority index is unavailable.
-
-📦 **Build:** `grape_wallet_extension.0.5.271.zip` (attached)
-Update your existing extension installation, then reload the wallet page.
-
-Please share any issues with the chain, action, and error message—never your seed phrase or private key.
+**Availability:** Mobile changes require an updated app build; an extension update does not update the mobile app. Physical-device authentication, browsing, and funded staking acceptance tests remain pending.

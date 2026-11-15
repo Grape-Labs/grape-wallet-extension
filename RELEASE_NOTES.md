@@ -1,3 +1,55 @@
+# Grape Wallet 0.5.279
+
+This entry covers extension and mobile changes since 0.5.271. Earlier release notes are preserved below.
+
+## Highlights
+
+- Enjoy responsive iPad and Android tablet layouts with a persistent sidebar and better use of larger screens.
+- Stake SOL, manage stake accounts, and withdraw directly in the mobile app, with a **Max** shortcut for withdrawals.
+- Find **Assets / NFTs / Staking** below the portfolio actions, with tabs that adapt to the selected chain.
+- Browse NFTs in a dedicated mobile gallery with search, collection details, and improved Solana discovery.
+- Approve requests with one clear **Approve** button using your enabled authentication method, with a separate password or passcode fallback.
+- Understand transaction risks through clearer red warnings and plain-language explanations.
+- Search more reliably in Discover with a visible Go button, repeat-search fixes, and retry options when pages stall.
+- Use the updated default Solana RPC without displaying its endpoint or API key in the wallet interface.
+
+## Tablet and portfolio navigation
+
+- Tablet layouts use a persistent sidebar, adaptive portfolio columns, and bounded forms rather than stretching the phone layout.
+- Portfolio section tabs sit beneath Send, Swap and Bridge, replacing the Assets heading with a discreet text selector.
+- Staking appears only for Solana. NFTs appears only for chains with supported discovery. Changing chains returns to Assets.
+
+## Staking and NFTs
+
+- Added native SOL staking overview, account details, searchable validators, and stake and withdrawal review flows to iOS and Android.
+- Added a Max shortcut to fill the full stake-account withdrawal amount in the extension and mobile app; network rules still determine availability.
+- Added a responsive NFT gallery with search, details, pagination, retry, and distinct empty and unavailable states.
+- Solana NFT indexing uses a dedicated mainnet indexer independently of the transaction RPC. Custom RPC credentials are not forwarded to that indexer.
+- NFTs already loaded with Assets remain visible if a gallery refresh fails, scoped to the selected wallet and chain.
+
+## Clearer approvals
+
+- Replaced competing authentication buttons with **Reject** and one primary **Approve** action.
+- When reauthentication is required, Approve uses enabled device authentication or the wallet's passkey flow. A separate password/passcode fallback remains available for supported wallets.
+- Warning panels use a red surface, readable text, and alert semantics rather than relying on the theme accent.
+- Unknown-program warnings explain that Grape may not be able to show every effect. Missing balance previews explicitly warn that funds may still move.
+- Verification errors remain visible, and competing actions are disabled during verification.
+
+## Discover search
+
+- Prevented background page updates from overwriting address-bar text while typing.
+- Repeating the same search now reloads the page, and the address bar includes a visible Go button.
+- Pages that take longer than 25 seconds show retry and external-browser options instead of an indefinite loading indicator.
+
+## Validation and availability
+
+- Mobile/shared regression tests, mobile and extension TypeScript checks, targeted lint, extension production build, and iOS/Android production Hermes exports passed during development.
+- The updated Solana NFT loader returned 24 unique NFTs for the public wallet supplied for read-only verification.
+- Physical-device biometric/passkey prompts, Discover browsing, and funded staking flows still require device acceptance testing. No real requests were signed or broadcast during these checks.
+- Mobile changes require an updated iOS/Android app build. Updating the extension does not update an installed mobile app.
+
+---
+
 # Grape Wallet 0.5.271
 
 **Released November 8, 2026.** This entry covers extension changes since 0.5.258. Earlier release notes are preserved below.
