@@ -45,3 +45,11 @@ export async function discoverStakeAccountsByAuthority<T>(lookup: (offset: numbe
   }
   return { accounts, warnings };
 }
+
+/** Full stake-account balance, in input-ready SOL without locale separators or rounding. */
+export function stakeWithdrawalMax(lamports: number): string | null {
+  if (!Number.isSafeInteger(lamports) || lamports <= 0) return null;
+  const value = BigInt(lamports);
+  const fraction = (value % 1_000_000_000n).toString().padStart(9, '0').replace(/0+$/, '');
+  return `${value / 1_000_000_000n}${fraction ? `.${fraction}` : ''}`;
+}

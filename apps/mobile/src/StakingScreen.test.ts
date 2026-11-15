@@ -20,7 +20,7 @@ vi.mock('./SelectionSheet', () => ({
   SelectionSheet: ({ children, visible }: { children: ReactNode; visible: boolean }) => visible ? createElement('section', null, children) : null,
   SheetSearchInput: ({ value, onChangeText }: { value: string; onChangeText: (value: string) => void }) => createElement('input', { value, onChange: (event: { target: { value: string } }) => onChangeText(event.target.value), 'aria-label': 'Search validators' })
 }));
-const fixtures = vi.hoisted(() => ({ owner: 'owner', accounts: [{ address: 'stake-account', lamports: 2360000000, delegatedLamports: 2358000000, state: 'delegated', voter: 'vote-account', staker: 'owner', withdrawer: 'owner' }], validators: [{ voteAccount: 'vote-account', nodePubkey: 'node', name: 'Grape validator', commission: 5, activatedStakeLamports: 1000000000000, lastVote: 1, rootSlot: 1 }] }));
+const fixtures = vi.hoisted(() => ({ owner: 'owner', accounts: [{ address: 'stake-account', lamports: 2360253072, delegatedLamports: 2358000000, state: 'delegated', voter: 'vote-account', staker: 'owner', withdrawer: 'owner' }], validators: [{ voteAccount: 'vote-account', nodePubkey: 'node', name: 'Grape validator', commission: 5, activatedStakeLamports: 1000000000000, lastVote: 1, rootSlot: 1 }] }));
 vi.mock('./solanaStaking', () => ({ createMobileStakingService: () => ({ accounts: async () => ({ accounts: fixtures.accounts, warnings: [] }), validators: async () => fixtures.validators }) }));
 import { StakingScreen } from './StakingScreen';
 import { basePalette, type MobileThemePalette } from './theme';
@@ -58,6 +58,13 @@ describe('native staking screens', () => {
     const props = defaults(); await act(async () => { root.render(createElement(StakingScreen, props)); });
     await click('Account details'); await click('Withdraw SOL'); await amount('0.5'); await click('Review withdrawal');
     expect(props.onReview).toHaveBeenCalledWith({ action: 'withdraw', amount: '0.5', stakeAccount: 'stake-account' });
+  });
+  it.each(['Use maximum withdrawal amount', 'Use full account balance'])('fills the exact full withdrawal via %s and waits for review', async label => {
+    const props = defaults(); await act(async () => { root.render(createElement(StakingScreen, props)); });
+    await click('Account details'); await click('Withdraw SOL'); await click(label);
+    expect((element.querySelector('input[aria-label="Amount in SOL"]') as HTMLInputElement).value).toBe('2.360253072');
+    expect(props.onReview).not.toHaveBeenCalled(); await click('Review withdrawal');
+    expect(props.onReview).toHaveBeenCalledWith({ action: 'withdraw', amount: '2.360253072', stakeAccount: 'stake-account' });
   });
   it('keeps privacy balances hidden and blocks back while signing', async () => {
     const props = { ...defaults(), privacy: true, busy: true };

@@ -1,3 +1,6 @@
+import { approvalAuthenticationMethod, approvalWarningCopy, UNAVAILABLE_BALANCE_PREVIEW } from '@grape/core';
+import { PortfolioSectionTabs, type PortfolioSection } from './src/PortfolioSectionTabs';
+import { NftsScreen } from './src/NftsScreen';
 import { StakingScreen, type MobileStakeNotice } from './src/StakingScreen';
 import { createMobileStakingService, type MobileStakeRequest } from './src/solanaStaking';
 import { redactRpcDetails } from '@grape/core';
@@ -218,7 +221,7 @@ type SetupMode = 'create' | 'passkey' | 'import';
 type SetupStep = 'choose' | 'details';
 type PasskeyRecoveryMode = 'passkey-phrase' | 'passkey-only' | 'trusted-recovery';
 type ImportKind = 'mnemonic' | 'private-key' | 'restore' | 'ledger';
-type MainTab = 'staking' | 'home' | 'receive' | 'discover' | 'governance' | 'activity' | 'settings';
+type MainTab = 'nfts' | 'staking' | 'home' | 'receive' | 'discover' | 'governance' | 'activity' | 'settings';
 
 type DiscoverProviderRequest = {
   id: string;
@@ -1465,6 +1468,7 @@ function GrapeApp() {
   const [confirmPasskeyOnlyAccess, setConfirmPasskeyOnlyAccess] = useState(false);
   const [unlockPassword, setUnlockPassword] = useState('');
   const [assets, setAssets] = useState<MobileAsset[]>([]);
+  const [assetsWalletId, setAssetsWalletId] = useState<string | null>(null);
   const [walletValueCache, setWalletValueCache] = useState<Record<string, { valueUsd: number; cachedAt: number }>>({});
   const [remoteActivity, setRemoteActivity] = useState<MobileActivity[]>([]);
   const [selectedAssetId, setSelectedAssetIdState] = useState<string | null>(null);
@@ -1665,6 +1669,7 @@ function GrapeApp() {
   const [discoverConnectedOrigins, setDiscoverConnectedOrigins] = useState<string[]>([]);
   const [discoverApproval, setDiscoverApproval] = useState<DiscoverApproval | null>(null);
   const [discoverApprovalPassword, setDiscoverApprovalPassword] = useState('');
+  const [discoverPasswordFallback, setDiscoverPasswordFallback] = useState(false);
   const [mwaRequest, setMwaRequest] = useState<MWARequest | null>(null);
   const [mwaStatus, setMwaStatus] = useState<string | null>(null);
   const [approvalTransactionSummary, setApprovalTransactionSummary] = useState<TransactionSummary | null>(null);
@@ -1672,6 +1677,17 @@ function GrapeApp() {
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const discoverWebViewRef = useRef<WebView>(null);
   const discoverAddressRef = useRef<TextInput>(null);
+  const discoverAddressEditing = useRef(false);
+  useEffect(() => {
+    if (!discoverLoading) return;
+    const timeout = setTimeout(() => {
+      discoverWebViewRef.current?.stopLoading();
+      setDiscoverLoading(false);
+      setDiscoverLoadError('This page is taking too long to respond. Try again or open it in your browser.');
+      setDiscoverControlsExpanded(true);
+    }, 25_000);
+    return () => clearTimeout(timeout);
+  }, [discoverLoading, discoverUrl, activeDiscoverTabId]);
   useEffect(() => {
     if (mainTab !== 'discover' || !discoverControlsExpanded || discoverUrl) return;
     const frame = requestAnimationFrame(() => discoverAddressRef.current?.focus());
@@ -2006,6 +2022,8 @@ function GrapeApp() {
   }, [deferredNavigation, stackSigningBusy]);
 
   const selectedWallet = useMemo(() => getSelectedWallet(walletState), [walletState]);
+  const portfolioStakingAvailable = selectedWallet?.chain === 'solana';
+  const portfolioNftsAvailable = !!selectedWallet && ['solana', 'ethereum', 'monad', 'sui'].includes(selectedWallet.chain);
   useEffect(() => { setSubmissionNotice(null); setTransactionReview(null); setActivityDetailId(null); setStakingError(null); setStakingNotice(null); }, [selectedWallet?.id, screen]);
   useEffect(() => { deferredNavigation.clear(); if (navigationRef.isReady()) navigationRef.resetRoot({ index: 0, routes: [{ name: 'tabs' }] }); }, [selectedWallet?.id, walletState.selectedChain, navigationRef, deferredNavigation]);
   useEffect(() => {
@@ -2221,8 +2239,9 @@ function GrapeApp() {
     : assets.length === 0
       ? '--'
       : headlineAsset ? formatMobileTokenQuantity(headlineAsset) : '--';
+  const portfolioAssets = useMemo(() => assets.filter(asset => asset.tokenType !== 'nft'), [assets]);
   const visibleSortedAssets = useMemo(() => {
-    return assets
+    return portfolioAssets
       .filter((asset) => asset.tokenType === 'native' || asset.tokenType === 'nft' || !walletState.hideZeroBalances || (asset.amountUi ?? 0) > 0)
       .filter((asset) => {
         if (!walletState.hideLowValueTokens || asset.tokenType === 'native' || asset.tokenType === 'nft') return true;
@@ -2240,7 +2259,7 @@ function GrapeApp() {
         if (Math.abs(amountDifference) > 0.000001) return amountDifference;
         return left.symbol.localeCompare(right.symbol);
       });
-  }, [assets, walletState.hideLowValueTokens, walletState.hideZeroBalances]);
+  }, [portfolioAssets, walletState.hideLowValueTokens, walletState.hideZeroBalances]);
   const selectedAsset = useMemo(
     () => assets.find((asset) => asset.id === selectedAssetId) ?? null,
     [assets, selectedAssetId]
@@ -2380,6 +2399,7 @@ function GrapeApp() {
   );
   const discoverApprovalRequiresReauth =
     !!discoverApproval && walletState.dappApprovalMode === 'strict' && !['connect', 'zcash_requestAccounts'].includes(discoverApproval.request.method);
+  const discoverAuthMethod = approvalAuthenticationMethod({ requiresReauth: discoverApprovalRequiresReauth, passkey: !!walletState.passkeyWallet, deviceAvailable: walletState.biometricEnabled && biometricAvailable, passwordFallback: discoverPasswordFallback });
   useEffect(() => { setSelectedGovernanceDao(null); setGovernance((current) => ({ ...current, daos: [], proposals: [] })); }, [selectedWallet?.address]);
   const visibleGovernanceDaos = useMemo(
     () => governance.daos.filter((dao) => dao.votingPower?.some((power) => hasPositiveGovernancePower(power.amount))).sort((a, b) => compareGovernancePower(b.votingPower ?? [], a.votingPower ?? []) || a.realmName.localeCompare(b.realmName) || a.daoId.localeCompare(b.daoId)),
@@ -3035,6 +3055,7 @@ function GrapeApp() {
               return;
             }
             setAssets(nextAssets);
+            setAssetsWalletId(selectedWallet.id);
           })
           .catch(() => {});
       }
@@ -3048,6 +3069,7 @@ function GrapeApp() {
         }
         fullAssetsApplied = true;
         setAssets(nextAssets);
+            setAssetsWalletId(selectedWallet.id);
         setRemoteActivity(nextActivity);
         setError(null);
       } catch (unknownError) {
@@ -3487,6 +3509,9 @@ function GrapeApp() {
     }
 
     const nextUrl = normalized.url;
+    discoverAddressEditing.current = false;
+    if (nextUrl === discoverUrl) discoverWebViewRef.current?.reload();
+    setDiscoverLoading(true);
     setDiscoverControlsExpanded(false);
     Keyboard.dismiss();
     setDiscoverUrlInput(nextUrl);
@@ -3500,14 +3525,13 @@ function GrapeApp() {
 
   function handleDiscoverNavigationStateChange(nextState: WebViewNavigation) {
     if (typeof nextState.url === 'string' && nextState.url.trim()) {
-      if (nextState.url !== discoverCurrentUrl) {
+      if (nextState.url !== discoverCurrentUrl && !discoverAddressEditing.current) {
         setDiscoverControlsExpanded(false);
         Keyboard.dismiss();
       }
       setDiscoverCurrentUrl(nextState.url);
       setDiscoverSiteIconUrl('');
-      setDiscoverUrlInput(nextState.url);
-      setDiscoverLoadError(null);
+      if (!discoverAddressEditing.current) setDiscoverUrlInput(nextState.url);
       setDiscoverTabs((tabs) => tabs.map((tab) => tab.id === activeDiscoverTabId
         ? { ...tab, url: nextState.url, title: nextState.title?.trim() || tab.title }
         : tab));
@@ -3736,6 +3760,7 @@ function GrapeApp() {
         rememberOrigin: request.method === 'connect' || request.method === 'zcash_requestAccounts'
       });
       setDiscoverApprovalPassword('');
+      setDiscoverPasswordFallback(false);
     } catch (unknownError) {
       setError(unknownError instanceof Error ? unknownError.message : 'Unable to handle Grape Discover request.');
     }
@@ -3894,7 +3919,7 @@ function GrapeApp() {
             ))}
           </View>
         ) : (
-          <Text style={styles.sectionHint}>No wallet balance changes could be decoded. Review this request carefully.</Text>
+          <View style={styles.approvalReviewWarning} accessibilityRole="alert"><MaterialCommunityIcons name="alert-outline" size={17} color="#ffb4ab" /><Text style={styles.approvalReviewWarningText}>{UNAVAILABLE_BALANCE_PREVIEW}</Text></View>
         )}
         {approvalTransactionSummary.estimatedFeeLamports != null ? (
           <View style={styles.approvalReviewFeeRow}>
@@ -3907,10 +3932,10 @@ function GrapeApp() {
             </View>
           </View>
         ) : null}
-        {approvalTransactionSummary.warnings.slice(0, 2).map((warning) => (
-          <View key={warning} style={styles.approvalReviewWarning}>
-            <MaterialCommunityIcons name="alert-outline" size={17} color={activeTheme.warning} />
-            <Text style={styles.approvalReviewWarningText}>{redactRpcDetails(warning)}</Text>
+        {approvalTransactionSummary.warnings.map((warning) => (
+          <View key={warning} style={styles.approvalReviewWarning} accessibilityRole="alert">
+            <MaterialCommunityIcons name="alert-outline" size={17} color="#ffb4ab" />
+            <Text style={styles.approvalReviewWarningText}>{approvalWarningCopy(redactRpcDetails(warning))}</Text>
           </View>
         ))}
       </View>
@@ -4049,6 +4074,7 @@ function GrapeApp() {
       await executeApprovedDiscoverRequest(discoverApproval);
       setDiscoverApproval(null);
       setDiscoverApprovalPassword('');
+      setDiscoverPasswordFallback(false);
     } catch (unknownError) {
       rejectDiscoverProviderRequest(
         discoverApproval.request,
@@ -4057,13 +4083,14 @@ function GrapeApp() {
       );
       setDiscoverApproval(null);
       setDiscoverApprovalPassword('');
+      setDiscoverPasswordFallback(false);
     } finally {
       setSubmitLoading(false);
     }
   }
 
   async function handleApproveDiscoverRequestWithPassword() {
-    if (!discoverApproval || !discoverApprovalWallet) {
+    if (!discoverApproval || !discoverApprovalWallet || submitLoading || biometricLoading) {
       return;
     }
 
@@ -4086,6 +4113,7 @@ function GrapeApp() {
       await executeApprovedDiscoverRequest(discoverApproval);
       setDiscoverApproval(null);
       setDiscoverApprovalPassword('');
+      setDiscoverPasswordFallback(false);
     } catch (unknownError) {
       rejectDiscoverProviderRequest(
         discoverApproval.request,
@@ -4094,6 +4122,7 @@ function GrapeApp() {
       );
       setDiscoverApproval(null);
       setDiscoverApprovalPassword('');
+      setDiscoverPasswordFallback(false);
     } finally {
       setSubmitLoading(false);
     }
@@ -4119,6 +4148,7 @@ function GrapeApp() {
         await executeApprovedDiscoverRequest(discoverApproval);
         setDiscoverApproval(null);
         setDiscoverApprovalPassword('');
+      setDiscoverPasswordFallback(false);
       } catch (unknownError) {
         rejectDiscoverProviderRequest(
           discoverApproval.request,
@@ -4127,6 +4157,7 @@ function GrapeApp() {
         );
         setDiscoverApproval(null);
         setDiscoverApprovalPassword('');
+      setDiscoverPasswordFallback(false);
       }
     } catch (unknownError) {
       setError(unknownError instanceof Error ? unknownError.message : 'Unable to approve this request with passkey.');
@@ -4161,6 +4192,7 @@ function GrapeApp() {
         await executeApprovedDiscoverRequest(discoverApproval);
         setDiscoverApproval(null);
         setDiscoverApprovalPassword('');
+      setDiscoverPasswordFallback(false);
       } catch (unknownError) {
         rejectDiscoverProviderRequest(
           discoverApproval.request,
@@ -4169,6 +4201,7 @@ function GrapeApp() {
         );
         setDiscoverApproval(null);
         setDiscoverApprovalPassword('');
+      setDiscoverPasswordFallback(false);
       }
     } catch (unknownError) {
       setError(unknownError instanceof Error ? unknownError.message : 'Unable to approve this request with biometrics.');
@@ -4179,7 +4212,7 @@ function GrapeApp() {
   }
 
   function handleRejectDiscoverRequest() {
-    if (!discoverApproval) {
+    if (!discoverApproval || submitLoading || biometricLoading) {
       return;
     }
 
@@ -7169,6 +7202,9 @@ function GrapeApp() {
                     ref={discoverAddressRef}
                     value={discoverUrlInput}
                     onChangeText={setDiscoverUrlInput}
+                    onFocus={() => { discoverAddressEditing.current = true; }}
+                    onBlur={() => { discoverAddressEditing.current = false; }}
+                    accessibilityLabel="Search the web or enter a website address"
                     placeholder="Search Brave or enter address"
                     placeholderTextColor={activeTheme.muted}
                     autoCapitalize="none"
@@ -7176,8 +7212,11 @@ function GrapeApp() {
                     returnKeyType="go"
                     selectTextOnFocus
                     style={styles.discoverAddressTextInput}
-                    onSubmitEditing={() => handleDiscoverNavigate()}
+                    onSubmitEditing={event => handleDiscoverNavigate(event.nativeEvent.text)}
                   />
+                  <Pressable accessibilityRole="button" accessibilityLabel="Go to address or search" disabled={!discoverUrlInput.trim()} onPress={() => handleDiscoverNavigate()} style={styles.discoverControlButton}>
+                    <Feather name="arrow-right" size={19} color={discoverUrlInput.trim() ? activeTheme.text : activeTheme.muted} />
+                  </Pressable>
                   <Pressable disabled={!discoverUrl} onPress={handleToggleDiscoverBookmark} hitSlop={8} accessibilityLabel={discoverIsBookmarked ? 'Remove bookmark' : 'Bookmark this page'}>
                     <Feather name={discoverIsBookmarked ? 'star' : 'bookmark'} size={16} color={discoverIsBookmarked ? activeTheme.grape : activeTheme.muted} />
                   </Pressable>
@@ -7272,7 +7311,8 @@ function GrapeApp() {
         <View style={styles.discoverWebviewShell}>
           {discoverLoadError ? (
             <View style={styles.discoverInlineError}>
-              <Text style={styles.errorText}>{redactRpcDetails(discoverLoadError)}</Text>
+              <Text accessibilityRole="alert" style={styles.errorText}>{redactRpcDetails(discoverLoadError)}</Text>
+              <View style={styles.walletToolsRow}><PaperButton onPress={() => handleDiscoverNavigate(discoverCurrentUrl || discoverUrl)}>Try again</PaperButton><PaperButton onPress={() => void handleDiscoverOpenExternally()}>Open in browser</PaperButton></View>
             </View>
           ) : null}
           <View style={styles.discoverWebviewFrame}>
@@ -7289,15 +7329,21 @@ function GrapeApp() {
               onError={(event) => {
                 const failingUrl = event.nativeEvent.url || discoverUrlInput || discoverUrl;
                 const description = event.nativeEvent.description || 'Unable to load the page.';
+                setDiscoverLoading(false);
+                setDiscoverControlsExpanded(true);
                 setDiscoverLoadError(`${description} (${failingUrl})`);
               }}
               onHttpError={(event) => {
                 const failingUrl = event.nativeEvent.url || discoverUrlInput || discoverUrl;
+                setDiscoverLoading(false);
+                setDiscoverControlsExpanded(true);
                 setDiscoverLoadError(`HTTP ${event.nativeEvent.statusCode} while loading ${failingUrl}`);
               }}
               onLoadStart={() => {
-                setDiscoverControlsExpanded(false);
-                Keyboard.dismiss();
+                if (!discoverAddressEditing.current) {
+                  setDiscoverControlsExpanded(false);
+                  Keyboard.dismiss();
+                }
                 setDiscoverLoadError(null);
                 setDiscoverLoading(true);
               }}
@@ -7334,7 +7380,7 @@ function GrapeApp() {
     );
   }
 
-  function renderHomeTab(mode: 'home' | 'asset' | 'assetActivity' = 'home') {
+  function renderHomeTab(mode: 'home' | 'asset' | 'assetActivity' = 'home', section: PortfolioSection = 'home') {
     const refreshRotation = refreshSpin.interpolate({
       inputRange: [0, 1],
       outputRange: ['0deg', '360deg']
@@ -7908,7 +7954,7 @@ function GrapeApp() {
             <Text style={styles.cardSubtle}>
               {pricedPortfolio.count > 0
                 ? `${canShowSolBalance ? 'Tap balance to switch $ / SOL · ' : ''}${pricedPortfolio.count} priced asset${pricedPortfolio.count === 1 ? '' : 's'}`
-                : `${assets.length} asset${assets.length === 1 ? '' : 's'} in this wallet`}
+                : `${portfolioAssets.length} asset${portfolioAssets.length === 1 ? '' : 's'} in this wallet`}
             </Text>
           </View>
 
@@ -7967,24 +8013,15 @@ function GrapeApp() {
           ) : null}
         </View>
 
-        {selectedWallet?.chain === 'solana' ? (
-          <Pressable accessibilityRole="button" accessibilityLabel="Staking. Stake SOL and manage stake accounts" style={styles.communityDetailCard} onPress={() => setMainTab('staking')}>
-            <View style={styles.communityDetailRow}>
-              <MaterialCommunityIcons name="sprout-outline" size={24} color={activeTheme.grape} />
-              <View style={styles.reputationCopy}><Text style={styles.reputationName}>Staking</Text><Text style={styles.reputationMeta}>Stake SOL and manage your accounts</Text></View>
-              <Feather name="chevron-right" size={19} color={activeTheme.muted} />
-            </View>
-          </Pressable>
-        ) : null}
-
         <View style={dashboardColumns ? tabletLayoutStyles.dashboard : styles.stack}>
         <View style={[styles.section, styles.homeSection, isWide && styles.tabletAssetsCard, dashboardColumns && tabletLayoutStyles.assets]}>
+          <PortfolioSectionTabs selected={section} onSelect={openPortfolioSection} palette={activeTheme} disabled={stackRemovalBlocked} stakingAvailable={portfolioStakingAvailable} nftsAvailable={portfolioNftsAvailable} />
+          {section === 'nfts' ? selectedWallet ? <NftsScreen knownAssets={assetsWalletId === selectedWallet?.id ? assets : undefined} key={`${selectedWallet.id}:${selectedWallet.address}`} wallet={selectedWallet} palette={activeTheme} active={nativeRoute === 'nfts'} reduceMotion={reduceMotion} onBack={() => openPortfolioSection('home')} /> : null : section === 'staking' ? renderStakingTab() : <>
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Assets</Text>
             <Text style={styles.sectionHint}>
               {assetsLoading
                 ? 'Refreshing'
-                : `${visibleSortedAssets.length} asset${visibleSortedAssets.length === 1 ? '' : 's'}${visibleSortedAssets.length !== assets.length ? ` · ${assets.length - visibleSortedAssets.length} hidden` : ''}`}
+                : `${visibleSortedAssets.length} asset${visibleSortedAssets.length === 1 ? '' : 's'}${visibleSortedAssets.length !== portfolioAssets.length ? ` · ${portfolioAssets.length - visibleSortedAssets.length} hidden` : ''}`}
             </Text>
           </View>
           {layout.marketColumns ? <View style={styles.tabletAssetHeading}>
@@ -8000,7 +8037,7 @@ function GrapeApp() {
               </View>
             ) : visibleSortedAssets.length === 0 ? (
               <Text style={styles.sectionHint}>
-                {(walletState.hideZeroBalances || walletState.hideLowValueTokens) && assets.length > 0
+                {(walletState.hideZeroBalances || walletState.hideLowValueTokens) && portfolioAssets.length > 0
                   ? 'All assets are hidden by your balance filters.'
                   : 'No assets found for this wallet.'}
               </Text>
@@ -8043,6 +8080,7 @@ function GrapeApp() {
               ))
             )}
           </View>
+          </>}
         </View>
 
         {isWide ? <View style={dashboardColumns ? tabletLayoutStyles.secondary : styles.stack}>
@@ -10377,18 +10415,28 @@ function GrapeApp() {
     );
   }
 
+  function openPortfolioSection(section: PortfolioSection) {
+    if ((section === 'staking' && !portfolioStakingAvailable) || (section === 'nfts' && !portfolioNftsAvailable)) return;
+    if (stackRemovalBlocked) return;
+    requestNavigation(() => {
+      if (navigationRef.canGoBack()) navigationRef.dispatch(StackActions.popToTop());
+      if (section === 'home') navigationRef.navigate('tabs', { screen: 'home' });
+      else navigationRef.navigate(section);
+    });
+  }
+
   function renderNativeScene(route: WalletRoute) {
     const discover = route === 'discover';
     const attachMainRef = route === nativeRoute;
-    const content = route === 'home' ? renderHomeTab('home') : route === 'asset' ? renderHomeTab('asset')
+    const content = route === 'home' || route === 'nfts' || route === 'staking' ? renderHomeTab('home', route) : route === 'asset' ? renderHomeTab('asset')
       : route === 'assetActivity' ? renderHomeTab('assetActivity') : route === 'send' ? renderSendTab()
       : route === 'swap' ? renderSwapTab() : route === 'bridge' ? renderBridgeTab()
       : route === 'rebalance' ? renderRebalanceTab() : route === 'receive' ? renderReceiveTab()
-      : route === 'staking' ? renderStakingTab() : route === 'governance' ? renderGovernanceTab() : route === 'activity' ? renderActivityTab()
+      : route === 'governance' ? renderGovernanceTab() : route === 'activity' ? renderActivityTab()
       : discover ? renderDiscoverTab() : renderSettingsTab();
     return <KeyboardAvoidingView style={styles.screenFlex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}>
-      <ScrollView ref={attachMainRef ? mainScrollRef : undefined} contentContainerStyle={[styles.mainContent, { paddingLeft: discover ? 0 : screenPadding + (isWide ? 0 : safeAreaInsets.left), paddingRight: discover ? 0 : screenPadding + safeAreaInsets.right, paddingTop: (route === 'receive' || route === 'governance' ? 0 : safeAreaInsets.top) + (route === 'home' ? (Platform.OS === 'android' ? 20 : 12) : 18), paddingBottom: discover ? 0 : isWalletTab(route) && !isWide ? 140 : 32 + safeAreaInsets.bottom, flexGrow: discover ? 1 : undefined }]} scrollEnabled={!discover} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}>
-        <View ref={attachMainRef ? mainScreenContentRef : undefined} collapsable={false} style={[styles.screenShell, { maxWidth: isWide && !['home', 'discover', 'staking'].includes(route) ? 760 : contentMaxWidth, flex: discover ? 1 : undefined }]}>
+      <ScrollView ref={attachMainRef ? mainScrollRef : undefined} contentContainerStyle={[styles.mainContent, { paddingLeft: discover ? 0 : screenPadding + (isWide ? 0 : safeAreaInsets.left), paddingRight: discover ? 0 : screenPadding + safeAreaInsets.right, paddingTop: (route === 'receive' || route === 'governance' ? 0 : safeAreaInsets.top) + 18, paddingBottom: discover ? 0 : isWalletTab(route) && !isWide ? 140 : 32 + safeAreaInsets.bottom, flexGrow: discover ? 1 : undefined }]} scrollEnabled={!discover} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}>
+        <View ref={attachMainRef ? mainScreenContentRef : undefined} collapsable={false} style={[styles.screenShell, { maxWidth: isWide && !['home', 'discover', 'staking', 'nfts'].includes(route) ? 760 : contentMaxWidth, flex: discover ? 1 : undefined }]}>
           {error && attachMainRef ? <View style={styles.inlineErrorCard}><Text style={styles.errorText}>{redactRpcDetails(error)}</Text></View> : null}
           {content}
         </View>
@@ -10448,7 +10496,7 @@ function GrapeApp() {
     const visibleChains = prioritizeRecent(availableChains.filter((chain) => `${chain.id} ${chainMeta(chain.id).label}`.toLowerCase().includes(chainPickerSearch.trim().toLowerCase())), pickerRecents.chains ?? [], (chain) => chain.id);
     return (
       <>
-        <NativeWalletNavigation navigationRef={navigationRef} render={renderNativeScene} footer={renderNativeTabBar} sidebar={isWide ? <TabletWalletSidebar palette={activeTheme} width={layout.sidebarWidth + safeAreaInsets.left} top={safeAreaInsets.top} bottom={safeAreaInsets.bottom} selected={isWalletTab(mainTab) ? mainTab : 'home'} onSelect={handleMainTabPress} logo={renderBrandLogo(30)} disabled={stackRemovalBlocked} /> : undefined} blocked={stackRemovalBlocked} background={activeTheme.bg} reduceMotion={reduceMotion} onRouteChange={handleNativeRouteChange} onSceneClosed={handleNativeSceneClosed} />
+        <NativeWalletNavigation navigationRef={navigationRef} render={renderNativeScene} footer={renderNativeTabBar} sidebar={isWide ? <TabletWalletSidebar stakingAvailable={portfolioStakingAvailable} nftsAvailable={portfolioNftsAvailable} palette={activeTheme} width={layout.sidebarWidth + safeAreaInsets.left} top={safeAreaInsets.top} bottom={safeAreaInsets.bottom} selected={nativeRoute === 'nfts' || nativeRoute === 'staking' ? nativeRoute : isWalletTab(mainTab) ? mainTab : 'home'} onSelect={tab => { if (tab === 'home' || tab === 'nfts' || tab === 'staking') openPortfolioSection(tab); else handleMainTabPress(tab); }} logo={renderBrandLogo(30)} disabled={stackRemovalBlocked} /> : undefined} blocked={stackRemovalBlocked} background={activeTheme.bg} reduceMotion={reduceMotion} onRouteChange={handleNativeRouteChange} onSceneClosed={handleNativeSceneClosed} />
         <Portal>
           <PaperModal style={{ justifyContent: isWide ? 'center' : 'flex-end' }} visible={!!activityDetail} onDismiss={() => setActivityDetailId(null)} contentContainerStyle={[styles.sendAssetPickerModal, { marginBottom: footerSafeInset + 12 }]}>
             <ScrollView contentContainerStyle={{ gap: 14 }}>
@@ -10746,7 +10794,7 @@ function GrapeApp() {
                   <View style={styles.exportSecretCard}>
                     <Text style={styles.exportSecretLabel}>Signing mode</Text>
                     <Text style={styles.sectionHint}>
-                      Safe mode is on. Verify this dApp request before Grape signs or sends anything from your wallet.
+                      Your approval is required before Grape signs this request. Check the site, amounts and warnings, then choose Approve to verify your identity.
                     </Text>
                   </View>
                 ) : null}
@@ -10763,7 +10811,7 @@ function GrapeApp() {
                     <Text style={styles.checkboxLabel}>Trust this site for future connects</Text>
                   </Pressable>
                 ) : null}
-                {discoverApprovalRequiresReauth && !walletState.passkeyWallet ? (
+                {discoverAuthMethod === 'password' ? (
                   <PaperTextInput
                     value={discoverApprovalPassword}
                     onChangeText={setDiscoverApprovalPassword}
@@ -10781,6 +10829,9 @@ function GrapeApp() {
                     onSubmitEditing={() => void handleApproveDiscoverRequestWithPassword()}
                   />
                 ) : null}
+                {error ? <Text accessibilityRole="alert" style={styles.errorText}>{redactRpcDetails(error)}</Text> : null}
+                {discoverApprovalRequiresReauth && !walletState.passkeyWallet && walletState.biometricEnabled && biometricAvailable ? <PaperButton icon={discoverPasswordFallback ? 'fingerprint' : 'key-outline'} disabled={submitLoading || biometricLoading} onPress={() => { setDiscoverPasswordFallback(value => !value); setDiscoverApprovalPassword(''); }}>{discoverPasswordFallback ? 'Use biometrics instead' : `Use ${walletCredentialLabel} instead`}</PaperButton> : null}
+                {discoverApprovalRequiresReauth ? <Text style={styles.sectionHint}>{discoverAuthMethod === 'device' ? 'Approve uses your device’s biometric verification.' : discoverAuthMethod === 'passkey' ? 'Approve uses your passkey.' : `Enter your wallet ${walletCredentialLabel}, then tap Approve.`}</Text> : null}
                 {discoverApprovalRequiresReauth && walletState.passkeyWallet && !passkeyAvailable && passkeyUnavailableMessage ? (
                   <Text style={styles.sectionHint}>{passkeyUnavailableMessage}</Text>
                     ) : null}
@@ -10790,45 +10841,18 @@ function GrapeApp() {
                   <PaperButton
                     mode="outlined"
                     style={[styles.paperSecondaryButton, styles.walletToolButton, styles.discoverApprovalButton]}
+                    disabled={submitLoading || biometricLoading}
                     onPress={handleRejectDiscoverRequest}
                   >
                     Reject
                   </PaperButton>
                   {discoverApprovalRequiresReauth ? (
-                    <>
-                      {walletState.biometricEnabled && biometricAvailable && !walletState.passkeyWallet ? (
-                        <PaperButton
-                          mode="outlined"
-                          style={[styles.paperSecondaryButton, styles.walletToolButton, styles.discoverApprovalButton]}
-                          disabled={submitLoading || biometricLoading}
-                          onPress={() => void handleApproveDiscoverRequestWithBiometric()}
-                        >
-                          {biometricLoading ? 'Checking...' : 'Approve with biometrics'}
-                        </PaperButton>
-                      ) : null}
-                      <PaperButton
-                        mode="contained"
-                        style={[styles.paperPrimaryButton, styles.walletToolButton, styles.discoverApprovalButton]}
-                        buttonColor={activeTheme.primaryButton}
-                        textColor={activeTheme.primaryButtonText}
-                        disabled={
-                          submitLoading ||
-                          biometricLoading ||
-                          (walletState.passkeyWallet ? !passkeyAvailable : !discoverApprovalPassword.trim())
-                        }
-                        onPress={() =>
-                          void (walletState.passkeyWallet
-                            ? handleApproveDiscoverRequestWithPasskey()
-                            : handleApproveDiscoverRequestWithPassword())
-                        }
-                      >
-                        {submitLoading || biometricLoading
-                          ? 'Approving...'
-                          : walletState.passkeyWallet
-                            ? 'Approve with passkey'
-                            : `Approve with ${walletCredentialLabel}`}
+                      <PaperButton mode="contained" style={[styles.paperPrimaryButton, styles.walletToolButton, styles.discoverApprovalButton]} contentStyle={{ minHeight: 48 }} buttonColor={activeTheme.primaryButton} textColor={activeTheme.primaryButtonText}
+                        disabled={submitLoading || biometricLoading || (discoverAuthMethod === 'passkey' ? !passkeyAvailable : discoverAuthMethod === 'password' && !discoverApprovalPassword.trim())}
+                        onPress={() => void (discoverAuthMethod === 'passkey' ? handleApproveDiscoverRequestWithPasskey() : discoverAuthMethod === 'device' ? handleApproveDiscoverRequestWithBiometric() : handleApproveDiscoverRequestWithPassword())}>
+                        {submitLoading || biometricLoading ? 'Approving…' : 'Approve'}
                       </PaperButton>
-                    </>
+
                   ) : (
                     <PaperButton
                       mode="contained"
@@ -12941,11 +12965,13 @@ function createStyles(palette: MobileThemePalette, tablet = false) {
     gap: 8,
     padding: 10,
     borderRadius: 12,
-    backgroundColor: palette.frost
+    backgroundColor: '#30151b',
+    borderWidth: 1,
+    borderColor: '#b84c59'
   },
   approvalReviewWarningText: {
     flex: 1,
-    color: palette.warning,
+    color: '#ffb4ab',
     fontSize: 12,
     lineHeight: 17
   },

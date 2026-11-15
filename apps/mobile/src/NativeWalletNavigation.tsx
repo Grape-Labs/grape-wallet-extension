@@ -10,7 +10,7 @@ export type WalletTabs = { home: undefined; activity: undefined; discover: undef
 export type WalletStack = {
   tabs: NavigatorScreenParams<WalletTabs> | undefined;
   asset: { selectionId: number }; assetActivity: { selectionId: number }; send: undefined; swap: undefined;
-  bridge: undefined; rebalance: undefined; receive: undefined; governance: undefined; staking: undefined;
+  bridge: undefined; rebalance: undefined; receive: undefined; governance: undefined; staking: undefined; nfts: undefined;
 };
 export type WalletRoute = keyof WalletTabs | Exclude<keyof WalletStack, 'tabs'>;
 const Stack = createNativeStackNavigator<WalletStack>();

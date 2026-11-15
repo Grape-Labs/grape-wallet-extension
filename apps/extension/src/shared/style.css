@@ -12264,3 +12264,27 @@ a.discover-provider-link:focus-visible {
   outline: 2px solid currentColor;
   outline-offset: 2px;
 }
+
+/* Approval risks must remain distinct from success colors in every theme. */
+.approval-risk-notice {
+  color: #ffb4ab;
+  background: #30151b;
+  border: 1px solid #e86a7580;
+  border-radius: 12px;
+  padding: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.approval-auth-fallback {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  justify-self: start;
+  min-height: 44px;
+  background: transparent;
+  border: 0;
+  color: var(--theme-text);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.approval-action-row > * { min-width: 0; white-space: normal; }

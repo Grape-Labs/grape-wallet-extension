@@ -59,3 +59,16 @@ it('opens staking from SOL details and returns to the same asset screen', () => 
   const back = router.getRehydratedState(router.getStateForAction(staking, CommonActions.goBack(), options)!, options);
   expect(back.routes).toEqual(asset.routes);
 });
+
+it('switches portfolio sections without accumulating stack screens', () => {
+  const router = StackRouter({ initialRouteName: 'tabs' });
+  const options = { routeNames: [...WALLET_STACK_ROUTES], routeParamList: {}, routeGetIdList: {} };
+  let state = router.getInitialState(options);
+  const homeKey = state.routes[0].key;
+  for (const section of ['nfts', 'staking', 'nfts'] as const) {
+    state = router.getRehydratedState(router.getStateForAction(state, StackActions.popToTop(), options) ?? state, options);
+    state = router.getRehydratedState(router.getStateForAction(state, CommonActions.navigate(section), options)!, options);
+    expect(state.routes.map(route => route.name)).toEqual(['tabs', section]);
+    expect(state.routes[0].key).toBe(homeKey);
+  }
+});

@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowDownToLine, ArrowLeft, ArrowUpRight, Check, ChevronDown, ChevronRight, Copy, ExternalLink, Info, MoreHorizontal, Plus, RefreshCcw, Search, Sprout, X } from 'lucide-react';
-import { redactRpcDetails } from '@grape/core';
+import { redactRpcDetails, stakeWithdrawalMax } from '@grape/core';
 import type { StakeAccountRow, StakeValidatorRow, WalletStakeActionResponse } from '../../shared/models';
 import { parseStakeAmount, stakeAccountStatus, stakeSol } from './stakingPresentation';
 import './staking.css';
@@ -40,6 +40,7 @@ export function StakingWorkspace(props: Props) {
   const accountValidator = props.validators.find(item => item.voteAccount === account?.voter);
   const status = account ? stakeAccountStatus(account) : null;
   const total = props.accounts.reduce((sum, item) => sum + item.delegatedLamports, 0);
+  const withdrawalMax = account ? stakeWithdrawalMax(account.lamports) : null;
   const amountLamports = parseStakeAmount(amount);
   const amountValid = amountLamports != null && (screen === 'withdraw' || action === 'withdraw' && screen === 'review'
     ? !!account && amountLamports <= BigInt(account.lamports)
@@ -47,6 +48,8 @@ export function StakingWorkspace(props: Props) {
   const voteValid = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(vote.trim());
   const canUnstake = !!account && account.staker === props.owner && account.delegatedLamports > 0 && !status?.coolingDown && status?.tone !== 'neutral';
   const canWithdraw = !!account && account.withdrawer === props.owner;
+  const maxDisabled = !withdrawalMax || !canWithdraw || props.watchOnly || !!props.busy;
+  const applyWithdrawalMax = () => { if (!maxDisabled && withdrawalMax) setAmount(withdrawalMax); };
   const visibleValidators = useMemo(() => {
     const query = search.trim().toLowerCase();
     return props.validators.filter(item => `${item.name ?? ''} ${item.voteAccount}`.toLowerCase().includes(query)).slice(0, 80);
@@ -116,8 +119,8 @@ export function StakingWorkspace(props: Props) {
     </div></div> : null}
 
     {screen === 'stake' || screen === 'withdraw' ? <form className="stake-compose" onSubmit={event => { event.preventDefault(); if (amountValid && (screen === 'withdraw' ? canWithdraw : voteValid)) review(screen === 'withdraw' ? 'withdraw' : 'stake'); }}>
-      <div className="stake-field-label"><label htmlFor={amountId}>Amount</label><span>{screen === 'stake' ? props.balanceLamports == null ? 'Balance unavailable' : `Available: ${sol(props.balanceLamports)}` : account ? `Account balance: ${sol(account.lamports)}` : ''}</span></div>
-      <div className="stake-amount-input"><span className="stake-sol-avatar" aria-hidden="true">≋</span><strong>SOL</strong><input id={amountId} inputMode="decimal" autoComplete="off" placeholder="0" value={amount} onChange={event => setAmount(event.target.value.replace(',', '.'))} aria-describedby="stake-amount-hint" /></div>
+      <div className="stake-field-label"><label htmlFor={amountId}>Amount</label>{screen === 'withdraw' && account ? <button type="button" className="stake-balance-shortcut" aria-label="Use full account balance" disabled={maxDisabled} onClick={applyWithdrawalMax}>Account balance: {sol(account.lamports)}</button> : <span>{props.balanceLamports == null ? 'Balance unavailable' : `Available: ${sol(props.balanceLamports)}`}</span>}</div>
+      <div className="stake-amount-input"><span className="stake-sol-avatar" aria-hidden="true">≋</span><strong>SOL</strong><input id={amountId} inputMode="decimal" autoComplete="off" placeholder="0" value={amount} onChange={event => setAmount(event.target.value.replace(',', '.'))} aria-describedby="stake-amount-hint" />{screen === 'withdraw' ? <button type="button" className="stake-max-button" aria-label="Use maximum withdrawal amount" disabled={maxDisabled} onClick={applyWithdrawalMax}>Max</button> : null}</div>
       <p className="stake-helper" id="stake-amount-hint">{amount && !amountValid ? 'Enter a valid SOL amount within the available balance (up to 9 decimals).' : screen === 'stake' ? 'Leave SOL in your wallet for network fees and the stake account deposit.' : 'The account balance may include SOL that is still staked. Availability is enforced by the network.'}</p>
       {screen === 'stake' ? <><span className="stake-field-label">Validator</span><button type="button" className="stake-validator-trigger" aria-haspopup="dialog" onClick={() => { setSearch(''); picker.current?.showModal(); }}>{avatar(validatorName(validator, vote || null))}<span><strong>{vote ? validatorName(validator, vote) : 'Choose a validator'}</strong><small>{validator ? `${validator.commission}% commission` : 'Search by name or vote account'}</small></span><ChevronDown size={19} /></button>
       {validator ? <dl className="stake-facts"><div><dt>Validator commission</dt><dd>{validator.commission}%</dd></div><div><dt>Total validator stake</dt><dd>{sol(validator.activatedStakeLamports)}</dd></div></dl> : null}

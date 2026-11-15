@@ -1,3 +1,4 @@
+import { approvalAuthenticationMethod, approvalWarningCopy, UNAVAILABLE_BALANCE_PREVIEW } from '@grape/core';
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 
 import { Fingerprint } from 'lucide-react';
@@ -130,6 +131,7 @@ export function ApprovalView(props: {
 }) {
   const { approval, approvalId, inline, onResolved } = props;
   const [password, setPassword] = useState('');
+  const [passwordFallback, setPasswordFallback] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [resolution, setResolution] = useState<'approved' | 'rejected' | null>(null);
@@ -153,6 +155,7 @@ export function ApprovalView(props: {
     (selectedWallet?.signer.kind === 'ledger'
       ? false
       : (approval.requiresPassword ?? (walletState ? !selectedWallet || !walletState.unlockedWalletIds.includes(selectedWallet.id) : true)));
+  const authMethod = approvalAuthenticationMethod({ requiresReauth: requiresPassword, passkey: false, deviceAvailable: biometricEnabled, passwordFallback });
   const successCopy = useMemo(() => {
     switch (approval.kind) {
       case 'connect':
@@ -359,6 +362,8 @@ export function ApprovalView(props: {
     return () => window.clearTimeout(timer);
   }, [resolution, inline, onResolved]);
 
+  useEffect(() => { setPassword(''); setPasswordFallback(false); setError(null); }, [approvalId]);
+
   useEffect(() => {
     void isBiometricUnlockSupported().then(setBiometricSupported).catch(() => setBiometricSupported(false));
     void sendRuntimeMessage<WalletStateResponse>({ type: 'wallet_get_state' })
@@ -412,10 +417,11 @@ export function ApprovalView(props: {
 
   async function handleApproveSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (submitting || (requiresPassword && !password.trim())) {
+    if (submitting || biometricUnlocking || (authMethod === 'password' && !password.trim())) {
       return;
     }
-    await approveRequest();
+    if (authMethod === 'device') await handleBiometricUnlock();
+    else await approveRequest();
   }
 
   if (submitting) {
@@ -504,7 +510,7 @@ export function ApprovalView(props: {
             ) : (
               <div className="stack approval-hero-summary">
                 <div className="approval-section-kicker">Request summary</div>
-                <p className="muted">Review the transaction details and decoded instructions before approving.</p>
+                <p className="approval-risk-notice" role="alert">{UNAVAILABLE_BALANCE_PREVIEW}</p>
               </div>
             )}
             {feePayerMatchesWallet && approval.transactionSummary.estimatedFeeLamports != null ? (
@@ -519,8 +525,8 @@ export function ApprovalView(props: {
               </div>
             ) : null}
             {approval.transactionSummary.warnings.slice(0, 2).map((warning) => (
-              <p key={warning} className="warning-box">
-                {warning}
+              <p key={warning} className="warning-box approval-risk-notice" role="alert">
+                {approvalWarningCopy(warning)}
               </p>
             ))}
           </Card>
@@ -650,7 +656,7 @@ export function ApprovalView(props: {
                   {instruction.details?.map((detail) => (
                     <KeyValueRow key={`${instruction.programId}-${index}-${detail.label}`} label={detail.label} value={renderInstructionValue(detail.value, detail.address)} />
                   ))}
-                  {instruction.warning ? <p className="warning-box">{instruction.warning}</p> : null}
+                  {instruction.warning ? <p className="warning-box approval-risk-notice" role="alert">{approvalWarningCopy(instruction.warning)}</p> : null}
                 </div>
               ))}
               {approval.transactionSummary.simulation ? (
@@ -662,7 +668,7 @@ export function ApprovalView(props: {
                     </StatusPill>
                   </div>
                   {approval.transactionSummary.simulation.error ? (
-                    <p className="warning-box">{approval.transactionSummary.simulation.error}</p>
+                    <p className="warning-box approval-risk-notice" role="alert">{approval.transactionSummary.simulation.error}</p>
                   ) : (
                     <p className="muted approval-simulation-copy">
                       Grape simulated this transaction on the selected RPC before approval.
@@ -700,8 +706,8 @@ export function ApprovalView(props: {
                 </div>
               ) : null}
               {approval.transactionSummary.warnings.slice(2).map((warning) => (
-                <p key={warning} className="warning-box">
-                  {warning}
+                <p key={warning} className="warning-box approval-risk-notice" role="alert">
+                  {approvalWarningCopy(warning)}
                 </p>
               ))}
             </div>
@@ -801,29 +807,10 @@ export function ApprovalView(props: {
 
       <form className="approval-form" onSubmit={(event) => void handleApproveSubmit(event)}>
         {requiresPassword ? (
-          <Card title="Confirm password">
+          <Card title="Confirm approval">
             <div className="stack">
-              <div className="send-input-shell send-input-shell-sign">
-                <Input
-                  type="password"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  placeholder="Enter password to sign"
-                />
-                {biometricEnabled ? (
-                  <button
-                    type="button"
-                    className="biometric-inline-button"
-                    onClick={() => void handleBiometricUnlock()}
-                    aria-label="Approve with device"
-                    title="Approve with device"
-                    disabled={biometricUnlocking || submitting}
-                  >
-                    <Fingerprint size={16} />
-                  </button>
-                ) : null}
-              </div>
-              <p className="muted">Approve this request with your password or device.</p>
+              {authMethod === 'password' ? <Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Enter wallet password" aria-label="Wallet password" /> : <p className="muted">Approve will ask you to verify with your device.</p>}
+              {biometricEnabled ? <button type="button" className="approval-auth-fallback" disabled={biometricUnlocking || submitting} onClick={() => { setPasswordFallback(value => !value); setPassword(''); }}>{passwordFallback ? <><Fingerprint size={16} />Use device authentication instead</> : 'Use password instead'}</button> : null}
             </div>
           </Card>
         ) : null}
@@ -834,7 +821,7 @@ export function ApprovalView(props: {
           <Button
             type="button"
             tone="danger"
-            disabled={submitting}
+            disabled={submitting || biometricUnlocking}
             onClick={async () => {
               try {
                 setSubmitting(true);
@@ -859,9 +846,9 @@ export function ApprovalView(props: {
           </Button>
           <Button
             type="submit"
-            disabled={submitting || (requiresPassword && !password.trim())}
+            disabled={submitting || biometricUnlocking || (authMethod === 'password' && !password.trim())}
           >
-            Approve
+            {biometricUnlocking ? 'Verifying…' : 'Approve'}
           </Button>
         </div>
       </form>

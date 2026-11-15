@@ -56,6 +56,7 @@ import {
   getMobileMonadRpcUrl,
   getMobileSuiRpcUrl,
   getMobileSolanaRpcUrl,
+  getMobileShyftApiKey,
   MOBILE_SOLANA_DEFAULT_RPC_URL,
   MOBILE_LIFI_NATIVE_TOKEN_ADDRESS,
   type MobileBridgeQuoteSummary,
@@ -3336,7 +3337,7 @@ async function loadEthereumAssets(address: string): Promise<MobileAsset[]> {
   const { createEthereumPublicClient, getEthereumHoldings } = loadEthereumModule();
   const client = createEthereumPublicClient(DEFAULT_EVM_NETWORK, getMobileEthereumRpcUrl(DEFAULT_EVM_NETWORK));
   const holdings = await getEthereumHoldings(client, address);
-  const nfts = await loadMobileEvmNfts('https://eth.blockscout.com/api/v2', 'ethereum', address).catch(() => []);
+  const nfts = await loadMobileEvmNfts('ethereum', address).catch(() => []);
   return [
     {
       id: 'eth',
@@ -3360,7 +3361,7 @@ async function loadMonadAssets(address: string): Promise<MobileAsset[]> {
   const holdings = await getMonadHoldings(client, address);
   const monPriceUsd = await fetchMobileLifiTokenPrice('monad', MOBILE_LIFI_NATIVE_TOKEN_ADDRESS.monad).catch(() => null);
   const monValueUsd = monPriceUsd === null ? null : Number(holdings.formatted) * monPriceUsd;
-  const nfts = await loadMobileEvmNfts('https://monadscan.com/api/v2', 'monad', address).catch(() => []);
+  const nfts = await loadMobileEvmNfts('monad', address).catch(() => []);
   return [
     {
       id: 'mon',
@@ -3406,22 +3407,11 @@ async function loadZcashAssets(address: string): Promise<MobileAsset[]> {
   }];
 }
 
-async function loadMobileEvmNfts(baseUrl: string, chain: 'ethereum' | 'monad', owner: string): Promise<MobileAsset[]> {
-  const response = await fetch(`${baseUrl}/addresses/${encodeURIComponent(owner)}/nft?type=ERC-721,ERC-1155`, { headers: { accept: 'application/json' } });
-  if (!response.ok) throw new Error(`NFT lookup failed with ${response.status}.`);
-  const payload = await response.json() as { items?: Array<Record<string, unknown>> };
-  return (payload.items ?? []).flatMap((entry) => {
-    const token = (entry.token && typeof entry.token === 'object' ? entry.token : {}) as Record<string, unknown>;
-    const metadata = (entry.metadata && typeof entry.metadata === 'object' ? entry.metadata : {}) as Record<string, unknown>;
-    const contract = String(token.address_hash ?? token.address ?? entry.token_contract_address_hash ?? '');
-    const tokenId = String(entry.id ?? entry.token_id ?? '');
-    if (!contract || !tokenId) return [];
-    const rawImage = metadata.image_url ?? metadata.image ?? entry.image_url;
-    const image = typeof rawImage === 'string' ? (rawImage.startsWith('ipfs://') ? `https://ipfs.io/ipfs/${rawImage.slice(7)}` : rawImage) : undefined;
-    const collection = typeof token.name === 'string' ? token.name : 'NFT';
-    const symbol = typeof token.symbol === 'string' ? token.symbol : 'NFT';
-    return [{ id: `${chain}-nft:${contract}:${tokenId}`, chain, name: typeof metadata.name === 'string' ? metadata.name : `${collection} #${tokenId}`, symbol, amountLabel: '1 NFT', valueLabel: '', address: contract, accountAddress: tokenId, programId: contract, logoUri: image, description: collection, metadataSource: 'rpc' as const, tokenType: 'nft' as const }];
-  });
+async function loadMobileEvmNfts(chain: 'ethereum' | 'monad', owner: string): Promise<MobileAsset[]> {
+  const { loadEvmCollectibles } = await import('./collectibles');
+  // Assets and the gallery share the same NFT endpoint, parsing and error handling.
+  const page = await loadEvmCollectibles(chain, owner);
+  return page.items.map(item => ({ id: `${chain}-nft:${item.id}`, chain, name: item.name, symbol: 'NFT', amountLabel: '1 NFT', valueLabel: '', address: item.contract, accountAddress: item.tokenId, programId: item.contract, logoUri: item.image, description: item.collection, metadataSource: 'rpc' as const, tokenType: 'nft' as const }));
 }
 
 export async function loadMobileMonadTokenAsset(owner: string, tokenAddress: string): Promise<MobileAsset> {
@@ -3513,4 +3503,18 @@ export async function submitMobileStake(wallet: MobileWallet, prepared: import('
   const { Connection } = loadSolanaWeb3Module();
   return createMobileStakingService(rpcUrl).submit(wallet, prepared, authorize,
     transaction => signMobileSolanaTransaction(wallet, transaction, new Connection(rpcUrl, 'confirmed'), authorize));
+}
+
+export async function loadWalletCollectibles(wallet: Pick<MobileWallet, 'chain' | 'address'>, cursor?: string): Promise<import('./collectibles').CollectiblePage> {
+  const { loadSolanaCollectibles, loadEvmCollectibles, solanaNftIndexerKey } = await import('./collectibles');
+  if (wallet.chain === 'solana') {
+    const rpcUrl = getMobileSolanaRpcUrl('mainnet-beta');
+    return loadSolanaCollectibles(rpcUrl, wallet.address, cursor, solanaNftIndexerKey(rpcUrl, MOBILE_SOLANA_DEFAULT_RPC_URL, getMobileShyftApiKey()));
+  }
+  if (wallet.chain === 'ethereum' || wallet.chain === 'monad') return loadEvmCollectibles(wallet.chain, wallet.address, cursor);
+  if (wallet.chain === 'sui') {
+    const collectibles = await getMobileSuiCollectibles(wallet.address, DEFAULT_SUI_NETWORK);
+    return { items: collectibles.map(item => ({ id: item.objectId, chain: 'sui', name: item.name, image: item.imageUrl, description: item.description, collection: item.objectType.split('::').slice(-2).join('::') })) };
+  }
+  return { items: [] };
 }

@@ -84,6 +84,7 @@ export function createMobileStakingService(rpcUrl: string, rpc: Rpc = solanaSwap
     if (now() - prepared.createdAt >= 60_000) throw new Error('This staking review expired. Review again.');
     if (prepared.transaction.serializeMessage().toString('base64') !== prepared.message) throw new Error('The staking transaction changed. Review again.');
     const checked = await check(prepared.transaction, prepared.owner);
+    if (now() - prepared.createdAt >= 60_000) throw new Error('This staking review expired. Review again.');
     if (checked.fee > prepared.feeLamports) throw new Error('The network fee increased. Review the updated staking fee again.');
     if (BigInt(checked.balance) < BigInt(prepared.debitLamports) + BigInt(checked.fee)) throw new Error('SOL balance changed. Review staking again.');
   }

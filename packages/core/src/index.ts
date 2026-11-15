@@ -18,3 +18,5 @@ export * from './discover';
 
 export * from './rpc';
 export * from './staking';
+
+export * from './approvalUx';

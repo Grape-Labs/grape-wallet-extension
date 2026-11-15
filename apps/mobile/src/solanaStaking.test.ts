@@ -7,7 +7,7 @@ const vote = Keypair.generate().publicKey.toBase58();
 const stake = Keypair.generate().publicKey.toBase58();
 const wallet = { id: 'wallet', address: owner };
 function harness() {
-  const state = { fee: 5000, balance: 10e9, simulationError: null as unknown, time: 1000, withdrawIndexFails: false };
+  const state = { fee: 5000, balance: 10e9, simulationError: null as unknown, time: 1000, withdrawIndexFails: false, expireDuringBalance: false };
   const calls: Array<{ method: string; params: unknown[] }> = [];
   const rpc: typeof solanaSwapRpc = async <T>(_url: string, method: string, params: unknown[]): Promise<T> => {
     calls.push({ method, params });
@@ -15,7 +15,7 @@ function harness() {
     if (method === 'getMinimumBalanceForRentExemption') result = 2282880;
     else if (method === 'getLatestBlockhash') result = { value: { blockhash: Keypair.generate().publicKey.toBase58() } };
     else if (method === 'getFeeForMessage') result = { value: state.fee };
-    else if (method === 'getBalance') result = { value: state.balance };
+    else if (method === 'getBalance') { if (state.expireDuringBalance) state.time += 60000; result = { value: state.balance }; }
     else if (method === 'simulateTransaction') result = { value: { err: state.simulationError } };
     else if (method === 'getVoteAccounts') result = { current: [{ votePubkey: vote, nodePubkey: owner, activatedStake: 2e12, commission: 5, lastVote: 123, rootSlot: 122 }] };
     else if (method === 'getProgramAccounts' && params[0] === 'Config1111111111111111111111111111111111111') result = [];
@@ -68,6 +68,13 @@ describe('native mobile staking preparation', () => {
       if (failure === 'fee') state.fee = null as unknown as number;
       await expect(service.prepare(wallet, { action: 'stake', amount: '1', voteAccount: vote })).rejects.toThrow();
     }
+  });
+  it('rejects approvals that expire during asynchronous fee validation', async () => {
+    const { service, state } = harness(); const signer = vi.fn(async () => 'signature');
+    const prepared = await service.prepare(wallet, { action: 'deactivate', stakeAccount: stake });
+    state.expireDuringBalance = true;
+    await expect(service.submit(wallet, prepared, () => {}, signer)).rejects.toThrow('expired');
+    expect(signer).not.toHaveBeenCalled();
   });
   it('rejects changed fees, expired approvals, changed account, mutated transaction and revoked authorization without signing', async () => {
     for (const failure of ['fee', 'expiry', 'account', 'mutation', 'authorization']) {

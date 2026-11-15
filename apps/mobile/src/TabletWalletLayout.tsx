@@ -6,6 +6,8 @@ import type { WalletTabs } from './NativeWalletNavigation';
 
 const destinations = [
   { name: 'home', label: 'Overview', icon: 'view-dashboard-outline' },
+  { name: 'nfts', label: 'NFTs', icon: 'image-multiple-outline' },
+  { name: 'staking', label: 'Staking', icon: 'sprout-outline' },
   { name: 'activity', label: 'Activity', icon: 'history' },
   { name: 'discover', label: 'Discover', icon: 'compass-outline' },
   { name: 'settings', label: 'Settings', icon: 'cog-outline' }
@@ -13,14 +15,14 @@ const destinations = [
 
 export function TabletWalletSidebar(props: {
   palette: MobileThemePalette; width: number; top: number; bottom: number;
-  selected: keyof WalletTabs; onSelect: (tab: keyof WalletTabs) => void; logo: ReactNode; disabled: boolean;
+  selected: keyof WalletTabs | 'nfts' | 'staking'; onSelect: (tab: keyof WalletTabs | 'nfts' | 'staking') => void; logo: ReactNode; disabled: boolean; stakingAvailable: boolean; nftsAvailable: boolean;
 }) {
   const { palette } = props;
   return <View style={[styles.sidebar, { width: props.width, paddingTop: props.top + 24, paddingBottom: props.bottom + 16, backgroundColor: palette.panel, borderRightColor: palette.panelBorder }]}>
     <ScrollView contentContainerStyle={styles.sidebarContent} showsVerticalScrollIndicator={false}>
       <View style={styles.brand}>{props.logo}<Text style={[styles.brandName, { color: palette.text }]}>Grape</Text></View>
       <Text style={[styles.caption, { color: palette.muted }]}>WORKSPACE</Text>
-      {destinations.map(({ name, label, icon }) => {
+      {destinations.filter(item => (item.name !== 'staking' || props.stakingAvailable) && (item.name !== 'nfts' || props.nftsAvailable)).map(({ name, label, icon }) => {
         const selected = props.selected === name;
         return <Pressable key={name} accessibilityRole="tab" accessibilityLabel={label} accessibilityState={{ selected, disabled: props.disabled }} disabled={props.disabled} onPress={() => props.onSelect(name)}
           style={({ pressed }) => [styles.destination, { backgroundColor: selected || pressed ? palette.frost : 'transparent', opacity: props.disabled ? 0.5 : 1 }]}>

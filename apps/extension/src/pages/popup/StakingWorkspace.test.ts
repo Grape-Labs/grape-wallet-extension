@@ -58,6 +58,16 @@ describe('focused staking journey', () => {
     await act(() => (element.querySelector('button[aria-label="Back"]') as HTMLButtonElement).click());
     expect((element.querySelector('.stake-amount-input input') as HTMLInputElement).value).toBe('0.25');
   });
+  it.each(['Use maximum withdrawal amount', 'Use full account balance'])('fills the exact full withdrawal via %s without submitting', async label => {
+    const props = { ...defaults(), accounts: [{ ...account, lamports: 2360253072 }] };
+    await act(() => root.render(createElement(StakingWorkspace, props))); await openAccount(); await click('Withdraw SOL');
+    await act(() => (element.querySelector(`button[aria-label="${label}"]`) as HTMLButtonElement).click());
+    expect((element.querySelector('.stake-amount-input input') as HTMLInputElement).value).toBe('2.360253072');
+    expect(props.onWithdraw).not.toHaveBeenCalled();
+    await act(() => element.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
+    await click('Confirm withdrawal');
+    expect(props.onWithdraw).toHaveBeenCalledWith(account.address, '2.360253072');
+  });
   it('prevents watch-only signing and respects account authorities', async () => {
     const props = { ...defaults(), watchOnly: true, accounts: [{ ...account, staker: 'another', withdrawer: 'another' }] };
     await act(() => root.render(createElement(StakingWorkspace, props))); await openAccount();
