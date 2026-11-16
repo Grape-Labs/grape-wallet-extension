@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
+  readonly VITE_GRAPE_PRIVACY_RINGS_ENABLED?: string;
   readonly VITE_GRAPE_MAINNET_RPC_URL?: string;
   readonly VITE_GRAPE_JUP_API_KEY?: string;
   readonly VITE_GRAPE_SHYFT_API_KEY?: string;

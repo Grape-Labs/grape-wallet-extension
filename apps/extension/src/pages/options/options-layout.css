@@ -1,0 +1,49 @@
+body[data-page='options'][data-surface='page'] .page-shell { max-width: 1500px; padding: 36px 32px 80px; }
+body[data-page='options'] .page-header { margin-bottom: 28px; }
+body[data-page='options'] .page-actions { flex-wrap: wrap; }
+body[data-page='options'] .page-actions .button { width: auto; min-width: 130px; }
+.options-workspace { display: grid; grid-template-columns: 210px minmax(0, 1fr); align-items: start; gap: 28px; }
+.options-nav { position: sticky; top: 24px; display: grid; gap: 5px; padding: 12px; border: 1px solid var(--theme-card-border); border-radius: 18px; background: var(--theme-card-bg); backdrop-filter: blur(20px); }
+.options-nav-label { padding: 10px; color: var(--theme-muted); font-size: 10px; text-transform: uppercase; letter-spacing: .1em; }
+.options-nav a { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 10px; border-radius: 10px; color: var(--theme-muted); text-decoration: none; font-size: 13px; }
+.options-nav a svg { flex-shrink: 0; color: var(--theme-accent); }
+.options-nav a:hover, .options-nav a:focus-visible { color: var(--theme-text); background: var(--theme-accent-soft); }
+.options-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 20px; min-width: 0; }
+.options-section { min-width: 0; scroll-margin-top: 24px; }
+.options-section > .card { margin: 0; padding: 24px; border-radius: 20px; }
+.options-section > .card > h2 { font-size: 20px; margin: 0 0 8px; line-height: 1.4; }
+.options-section .card-body { gap: 18px; min-width: 0; }
+.options-section .options-description { margin: 0 0 4px; font-size: 12px; line-height: 1.7; }
+.options-section .stack { gap: 9px; min-width: 0; }
+.options-section p { font-size: 12px; line-height: 1.7; margin: 0; overflow-wrap: anywhere; }
+.options-section label > .muted { font-size: 12px; }
+.options-section input:not([type='checkbox']), .options-section select { min-height: 44px; font-size: 14px; min-width: 0; width: 100%; }
+.options-section .button { min-height: 44px; font-size: 13px; }
+.options-section .checkbox-row { display: flex; align-items: flex-start; gap: 12px; border: 1px solid var(--theme-input-border); background: var(--theme-surface-soft); border-radius: 14px; padding: 14px; }
+.options-section .checkbox-row input { flex-shrink: 0; margin-top: 3px; accent-color: var(--theme-accent); }
+.options-section .checkbox-row > span { display: grid; gap: 6px; min-width: 0; }
+.options-section .checkbox-row strong { font-size: 13px; line-height: 1.5; }
+.options-section .checkbox-row small { font-size: 12px; line-height: 1.6; }
+.options-section .key-value-row { gap: 16px; font-size: 12px; }
+.options-section .key-value-row > span:last-child { min-width: 0; overflow-wrap: anywhere; }
+.options-section .receive-qr { max-width: 100%; height: auto; }
+.options-section-wide { grid-column: 1 / -1; }
+.options-sites-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.options-sites-grid > .card { min-width: 0; display: grid; gap: 16px; margin: 0; }
+.options-sites-grid .origin-box { min-width: 0; }
+.options-sites-grid .origin-box > div { min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 1100px) {
+  .options-workspace { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+  .options-nav { position: static; display: flex; flex-wrap: wrap; gap: 6px; }
+  .options-nav-label { display: none; }
+  .options-nav a { padding: 8px 12px; }
+}
+@media (max-width: 700px) {
+  body[data-page='options'][data-surface='page'] .page-shell { padding: 24px 16px 60px; }
+  .options-grid, .options-sites-grid { grid-template-columns: minmax(0, 1fr); }
+  .options-section > .card { padding: 20px; }
+  .options-nav { flex-wrap: nowrap; overflow-x: auto; }
+  .options-nav a { flex-shrink: 0; }
+}
+.options-section .checkbox-row { flex-wrap: nowrap; }
+.options-section select { appearance: none; padding: 12px 36px 12px 14px; border: 1px solid var(--theme-input-border); border-radius: 12px; background-color: var(--theme-surface-soft); color: var(--theme-text); background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23939ba9' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 14px center; }

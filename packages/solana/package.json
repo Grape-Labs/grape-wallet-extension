@@ -6,6 +6,10 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./privacy": {
+      "types": "./dist/privacy.d.ts",
+      "default": "./dist/privacy.js"
+    },
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
@@ -17,9 +21,11 @@
   },
   "dependencies": {
     "@grape/core": "workspace:*",
+    "@heliuslabs/spr": "0.9.0-alpha",
     "@ledgerhq/hw-app-solana": "^7.7.0",
     "@ledgerhq/hw-transport-webhid": "^6.31.0",
     "@scure/bip39": "^1.4.0",
+    "@solana/kit": "8.3.0",
     "@solana/wallet-standard-chains": "^1.1.1",
     "@solana/wallet-standard-features": "^1.3.0",
     "@solana/web3.js": "^1.98.0",

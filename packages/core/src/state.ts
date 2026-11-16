@@ -185,6 +185,7 @@ export type WalletState = {
   autoConnectEnabled: boolean;
   dappApprovalMode: DappApprovalMode;
   privacyMode: boolean;
+  hiddenPrivateBalances?: string[];
   hideLowValueTokens?: boolean;
   customRpcUrls: Partial<Record<GrapeNetwork, string>>;
   idleTimeoutMs: number;
@@ -211,6 +212,7 @@ export type LegacyWalletState = {
   autoConnectEnabled?: boolean;
   dappApprovalMode?: DappApprovalMode;
   privacyMode?: boolean;
+  hiddenPrivateBalances?: string[];
   hideLowValueTokens?: boolean;
   customRpcUrls?: Partial<Record<GrapeNetwork, string>>;
   idleTimeoutMs?: number;
@@ -350,6 +352,7 @@ export function createEmptyWalletState(): WalletState {
     autoConnectEnabled: DEFAULT_AUTO_CONNECT_ENABLED,
     dappApprovalMode: DEFAULT_DAPP_APPROVAL_MODE,
     privacyMode: false,
+    hiddenPrivateBalances: [],
     hideLowValueTokens: false,
     customRpcUrls: {},
     idleTimeoutMs: DEFAULT_IDLE_TIMEOUT_MS
@@ -537,6 +540,7 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
       autoConnectEnabled: input.autoConnectEnabled ?? DEFAULT_AUTO_CONNECT_ENABLED,
       dappApprovalMode: normalizeDappApprovalMode(input.dappApprovalMode),
       privacyMode: input.privacyMode ?? false,
+      hiddenPrivateBalances: input.hiddenPrivateBalances ?? [],
       hideLowValueTokens: input.hideLowValueTokens ?? false,
       customRpcUrls: chainState.solana.customRpcUrls,
       idleTimeoutMs: input.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS
@@ -597,6 +601,7 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
       autoConnectEnabled: input.autoConnectEnabled ?? DEFAULT_AUTO_CONNECT_ENABLED,
       dappApprovalMode: normalizeDappApprovalMode(input.dappApprovalMode),
       privacyMode: input.privacyMode ?? false,
+      hiddenPrivateBalances: input.hiddenPrivateBalances ?? [],
       hideLowValueTokens: input.hideLowValueTokens ?? false,
       customRpcUrls: normalizeCustomRpcUrls(input.customRpcUrls),
       idleTimeoutMs: input.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS
@@ -622,6 +627,7 @@ export function migrateWalletState(input: WalletState | LegacyWalletState | unde
     autoConnectEnabled: input.autoConnectEnabled ?? DEFAULT_AUTO_CONNECT_ENABLED,
     dappApprovalMode: normalizeDappApprovalMode(input.dappApprovalMode),
     privacyMode: input.privacyMode ?? false,
+    hiddenPrivateBalances: input.hiddenPrivateBalances ?? [],
     hideLowValueTokens: input.hideLowValueTokens ?? false,
     customRpcUrls: normalizeCustomRpcUrls(input.customRpcUrls),
     idleTimeoutMs: input.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS

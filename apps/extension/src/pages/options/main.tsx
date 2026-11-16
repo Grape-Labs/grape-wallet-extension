@@ -1,6 +1,7 @@
 import { redactRpcDetails } from '@grape/core';
 import { useEffect, useState } from 'react';
-import { Fingerprint } from 'lucide-react';
+import { Fingerprint, ShieldCheck, Palette, Eye, Cable, Globe, KeyRound, Smartphone, Link } from 'lucide-react';
+import './options-layout.css';
 import QRCode from 'qrcode';
 
 import { Button, Card, Input, KeyValueRow, PageShell, StatusPill, TextArea } from '@grape/ui';
@@ -445,7 +446,17 @@ function OptionsPage() {
 
   return (
     <PageShell title="Settings" subtitle="Manage security and connected sites." actions={settingsActions}>
-      <Card title="Security">
+      <div className="options-workspace">
+        <nav className="options-nav" aria-label="Settings sections">
+          <span className="options-nav-label">Preferences</span>
+          {[["security", "Session & locking", ShieldCheck], ["appearance", "Appearance", Palette], ["display", "Balance display", Eye], ["connections", "dApp connections", Cable], ["network", "Network", Globe], ["biometric", "Biometric unlock", Fingerprint], ["backup", "Backup & export", KeyRound], ["devices", "Link a device", Smartphone], ["sites", "Connected sites", Link]].map(([id, label, Icon]) => {
+            const SectionIcon = Icon as typeof ShieldCheck;
+            return <a key={String(id)} href={`#options-${id}`}><SectionIcon size={18} aria-hidden="true" /><span>{String(label)}</span></a>;
+          })}
+        </nav>
+        <div className="options-grid">
+      <div id="options-security" className="options-section"><Card title="Session & locking">
+        <p className="options-description muted">Control when your wallet locks.</p>
         <div className="space-between">
           <StatusPill tone={state.session.locked ? 'warning' : 'success'}>
             {state.session.locked ? 'Locked' : 'Unlocked'}
@@ -482,6 +493,10 @@ function OptionsPage() {
             <p className="muted">Non-strict mode keeps the unlocked session alive much longer. The manual lock button still locks immediately.</p>
           ) : null}
         </label>
+      </Card></div>
+
+      <div id="options-appearance" className="options-section"><Card title="Appearance">
+        <p className="options-description muted">Choose your theme, background, and motion.</p>
         <label className="stack">
           <span className="muted">Theme</span>
           <select
@@ -534,6 +549,10 @@ function OptionsPage() {
             ))}
           </select>
         </label>
+      </Card></div>
+
+      <div id="options-display" className="options-section"><Card title="Balance display">
+        <p className="options-description muted">Control the values and assets shown on screen.</p>
         <label className="inline checkbox-row">
           <input
             type="checkbox"
@@ -568,6 +587,10 @@ function OptionsPage() {
             <small className="muted">Hide tokens worth less than 0.10 USDC, including tokens without reliable pricing.</small>
           </span>
         </label>
+      </Card></div>
+
+      <div id="options-connections" className="options-section"><Card title="dApp connections">
+        <p className="options-description muted">Manage reconnection and signing preferences.</p>
         <label className="inline checkbox-row">
           <input
             type="checkbox"
@@ -605,6 +628,10 @@ function OptionsPage() {
             Non-strict mode reduces prompts further during an unlocked session.
           </p>
         </label>
+      </Card></div>
+
+      <div id="options-network" className="options-section"><Card title="Network connection">
+        <p className="options-description muted">Use the default provider or your own RPC.</p>
         <div className="stack">
           <label className="inline checkbox-row">
             <input
@@ -672,6 +699,10 @@ function OptionsPage() {
           )}
           {customRpcError ? <p className="danger-box">{redactRpcDetails(customRpcError)}</p> : null}
         </div>
+      </Card></div>
+
+      <div id="options-biometric" className="options-section"><Card title="Biometric unlock">
+        <p className="options-description muted">Use your device authenticator to unlock Grape.</p>
         <div className="stack">
           <KeyValueRow
             label="Biometric unlock"
@@ -714,9 +745,9 @@ function OptionsPage() {
           )}
           {biometricError ? <p className="danger-box">{redactRpcDetails(biometricError)}</p> : null}
         </div>
-      </Card>
+      </Card></div>
 
-      <Card title="Backup & export">
+      <div id="options-backup" className="options-section"><Card title="Backup & export">
         {!selectedWallet ? (
           <p className="muted">Create or import a wallet before exporting secrets.</p>
         ) : !exportIsAvailable ? (
@@ -891,9 +922,9 @@ function OptionsPage() {
             ) : null}
           </div>
         )}
-      </Card>
+      </Card></div>
 
-      <Card title="Link new device">
+      <div id="options-devices" className="options-section"><Card title="Link new device">
         {!selectedWallet ? (
           <p className="muted">Create or import a wallet before linking another device.</p>
         ) : !deviceLinkIsAvailable ? (
@@ -991,9 +1022,9 @@ function OptionsPage() {
             ) : null}
           </div>
         )}
-      </Card>
+      </Card></div>
 
-      <Card title="Connected sites">
+      <div id="options-sites" className="options-section options-section-wide"><Card title="Connected sites">
         {state.permissions.length === 0 ? (
           <p className="muted">No sites have been approved yet.</p>
         ) : (
@@ -1018,7 +1049,7 @@ function OptionsPage() {
                 Revoke all
               </Button>
             </div>
-            {state.permissions.map((permission) => (
+            <div className="options-sites-grid">{state.permissions.map((permission) => (
               <div key={permission.origin} className="card">
                 <div className="origin-box">
                   {permission.faviconUrl ? <img src={permission.faviconUrl} alt="" /> : null}
@@ -1043,10 +1074,12 @@ function OptionsPage() {
                   </Button>
                 </div>
               </div>
-            ))}
+            ))}</div>
           </>
         )}
-      </Card>
+      </Card></div>
+        </div>
+      </div>
       {deviceLinkQrExpanded && deviceLinkQr ? (
         <div className="qr-lightbox-backdrop" onClick={() => setDeviceLinkQrExpanded(false)} role="presentation">
           <div className="qr-lightbox" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Large device link QR code">

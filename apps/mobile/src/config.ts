@@ -1,3 +1,4 @@
+import { resolvePrivacyRpc } from '../privacy-rpc-config.cjs';
 import { DEFAULT_SOLANA_MAINNET_RPC_URL } from '@grape/core';
 import { requestRouteJson } from './routeRequest';
 import Constants from 'expo-constants';
@@ -124,6 +125,7 @@ function getShyftResultArray(payload: MobileShyftWalletTokenPayload) {
 }
 
 const inlineExpoPublicEnv = {
+  EXPO_PUBLIC_PRIVACY_RPC_URL: process.env.EXPO_PUBLIC_PRIVACY_RPC_URL,
   EXPO_PUBLIC_SOLANA_RPC_URL: process.env.EXPO_PUBLIC_SOLANA_RPC_URL,
   EXPO_PUBLIC_SUI_RPC_URL: process.env.EXPO_PUBLIC_SUI_RPC_URL,
   EXPO_PUBLIC_ETHEREUM_RPC_URL: process.env.EXPO_PUBLIC_ETHEREUM_RPC_URL,
@@ -133,27 +135,20 @@ const inlineExpoPublicEnv = {
   EXPO_PUBLIC_LIFI_API_KEY: process.env.EXPO_PUBLIC_LIFI_API_KEY
 } as const;
 
+function readManifestEnv(key: keyof typeof inlineExpoPublicEnv) {
+  const manifestExtra = Constants.manifest2?.extra as {
+    env?: Partial<Record<keyof typeof inlineExpoPublicEnv, string>>;
+    expoClient?: { extra?: { env?: Partial<Record<keyof typeof inlineExpoPublicEnv, string>> } };
+  } | undefined;
+  const value =
+    (Constants.expoConfig?.extra as { env?: Partial<Record<keyof typeof inlineExpoPublicEnv, string>> } | undefined)?.env?.[key] ||
+    manifestExtra?.expoClient?.extra?.env?.[key] || manifestExtra?.env?.[key];
+  return typeof value === 'string' ? value.trim() || undefined : undefined;
+}
+
 function readPublicEnv(key: keyof typeof inlineExpoPublicEnv) {
-  const inlineValue = inlineExpoPublicEnv[key];
-  if (typeof inlineValue === 'string') {
-    const trimmed = inlineValue.trim();
-    if (trimmed) {
-      return trimmed;
-    }
-  }
-
-  const expoEnv =
-    (Constants.expoConfig?.extra as { env?: Partial<Record<keyof typeof inlineExpoPublicEnv, string | undefined>> } | undefined)
-      ?.env?.[key] ??
-    (Constants.manifest2?.extra as { env?: Partial<Record<keyof typeof inlineExpoPublicEnv, string | undefined>> } | undefined)
-      ?.env?.[key];
-
-  if (typeof expoEnv !== 'string') {
-    return undefined;
-  }
-
-  const trimmed = expoEnv.trim();
-  return trimmed || undefined;
+  const value = inlineExpoPublicEnv[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : readManifestEnv(key);
 }
 
 export function getMobileShyftApiKey() {
@@ -166,6 +161,17 @@ export function getMobileJupiterApiKey() {
 
 export function getMobileLifiApiKey() {
   return readPublicEnv('EXPO_PUBLIC_LIFI_API_KEY');
+}
+
+/** Privacy needs Helius even when general balances and swaps use another RPC. */
+export function getMobilePrivacyRpcUrl(): string | undefined {
+  return resolvePrivacyRpc([
+    mobileSolanaCustomRpcUrl,
+    inlineExpoPublicEnv.EXPO_PUBLIC_PRIVACY_RPC_URL,
+    readManifestEnv('EXPO_PUBLIC_PRIVACY_RPC_URL'),
+    inlineExpoPublicEnv.EXPO_PUBLIC_SOLANA_RPC_URL,
+    readManifestEnv('EXPO_PUBLIC_SOLANA_RPC_URL'),
+  ]);
 }
 
 export function getMobileSolanaRpcUrl(network: 'mainnet-beta' | 'devnet' = 'mainnet-beta') {

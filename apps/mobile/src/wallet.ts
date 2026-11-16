@@ -143,6 +143,8 @@ export type MobileWalletState = {
   hideZeroBalances: boolean;
   hideLowValueTokens: boolean;
   rebalanceAddonEnabled: boolean;
+  privateBalanceAddonEnabled?: boolean;
+  hiddenPrivateBalances?: string[];
   biometricEnabled: boolean;
   hapticsEnabled?: boolean;
   activities: MobileActivity[];
@@ -3134,6 +3136,8 @@ function normalizeMobileWalletState(state: MobileWalletState): MobileWalletState
     autoConnectEnabled: state.autoConnectEnabled ?? DEFAULT_AUTO_CONNECT_ENABLED,
     dappApprovalMode: normalizeDappApprovalMode(state.dappApprovalMode),
     rebalanceAddonEnabled: state.rebalanceAddonEnabled === true,
+    privateBalanceAddonEnabled: state.privateBalanceAddonEnabled === true,
+    hiddenPrivateBalances: Array.isArray(state.hiddenPrivateBalances) ? state.hiddenPrivateBalances.filter((key): key is string => typeof key === 'string') : [],
     trustedDappOrigins: normalizeTrustedDappOrigins(state.trustedDappOrigins),
     communityTrackingDefaultsApplied: true,
     trackedReputationSpaceIds: seedGrapeCommunitySpaces(state.trackedReputationSpaceIds, state.communityTrackingDefaultsApplied === true),
@@ -3517,4 +3521,20 @@ export async function loadWalletCollectibles(wallet: Pick<MobileWallet, 'chain' 
     return { items: collectibles.map(item => ({ id: item.objectId, chain: 'sui', name: item.name, image: item.imageUrl, description: item.description, collection: item.objectType.split('::').slice(-2).join('::') })) };
   }
   return { items: [] };
+}
+
+/** Only the trusted local privacy engine receives this seed; never UI or dapp code. */
+export async function withMobilePrivacySeed<T>(state: MobileWalletState, wallet: MobileWallet, authorize: () => void, use: (seed: string) => Promise<T>): Promise<T> {
+  authorize();
+  if (wallet.chain !== 'solana' || wallet.source === 'ledger') throw new Error('Private balances require a Solana software wallet.');
+  const secret = await loadWalletSecretWithWalletFallback(state, wallet);
+  authorize();
+  const { resolveSolanaVaultSecret } = loadSolanaDeriveModule();
+  const signer = resolveSolanaVaultSecret(secret.kind === 'mnemonic' ? { kind: 'mnemonic', mnemonic: secret.mnemonic } : { kind: 'private-key', secretKey: secret.secretKey }, wallet.derivationPath === 'imported-private-key' ? undefined : wallet.derivationPath);
+  const seed = signer.secretKey.slice(0, 32);
+  try {
+    if (signer.publicKey.toBase58() !== wallet.address) throw new Error('Private balance signer does not match this wallet.');
+    authorize();
+    return await use(bytesToBase64(seed));
+  } finally { seed.fill(0); signer.secretKey.fill(0); }
 }

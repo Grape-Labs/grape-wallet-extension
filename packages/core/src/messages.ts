@@ -523,6 +523,12 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     enabled: z.boolean()
   }),
   z.object({
+    type: z.literal('wallet_set_private_balance_visibility'),
+    owner: z.string().min(32).max(44),
+    network: z.enum(['mainnet-beta', 'devnet']),
+    visible: z.boolean()
+  }),
+  z.object({
     type: z.literal('wallet_set_hide_low_value_tokens'),
     enabled: z.boolean()
   }),
@@ -693,6 +699,17 @@ export const runtimeMessageSchema = z.discriminatedUnion('type', [
     mint: z.string().min(32),
     accountAddress: z.string().min(32),
     programId: z.string().min(32)
+  }),
+  z.object({
+    type: z.literal('wallet_privacy'),
+    operation: z.enum(['sync', 'prepare', 'submit']),
+    owner: z.string().min(32).max(44),
+    network: z.enum(['devnet', 'mainnet-beta']),
+    endpoint: z.string().url().max(2048).optional(),
+    action: z.enum(['register', 'deposit', 'transfer', 'withdraw']).optional(),
+    amount: z.string().max(40).optional(),
+    recipient: z.string().max(44).optional(),
+    previewId: z.string().uuid().optional()
   }),
   z.object({
     type: z.literal('wallet_get_token_activity'),

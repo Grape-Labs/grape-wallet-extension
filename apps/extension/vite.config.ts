@@ -133,6 +133,9 @@ function createManifestPlugin(
         },
         permissions: ['storage', 'sidePanel', 'identity', 'scripting'],
         host_permissions: [
+          'https://mainnet.helius-rpc.com/*',
+          'https://devnet.helius-rpc.com/*',
+          'https://d3gbdb0egjwcw9.cloudfront.net/*',
           ...(houdiniUrl ? [toHostPermission(houdiniUrl)] : []),
           ...(zcashIndexerUrl ? [toHostPermission(zcashIndexerUrl)] : []),
           toHostPermission(mainnetRpcUrl),
@@ -172,7 +175,7 @@ function createManifestPlugin(
             run_at: 'document_end'
           },
           {
-            matches: ['https://governance.so/*', 'https://www.governance.so/*'],
+            matches: ['https://*.governance.so/*', 'https://round-trip.ai.studio/*'],
             js: ['assets/content-script.js'],
             run_at: 'document_start',
             all_frames: true
@@ -185,7 +188,7 @@ function createManifestPlugin(
           }
         ],
         content_security_policy: {
-          extension_pages: "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; base-uri 'self';"
+          extension_pages: "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; base-uri 'self'; frame-src 'self' https://governance.so https://*.governance.so https://round-trip.ai.studio;"
         }
       };
 
@@ -230,6 +233,7 @@ export default defineConfig(({ mode }) => {
         '@grape/ethereum/': `${resolve(extensionRoot, '../../packages/ethereum/src')}/`,
         '@grape/monad': resolve(extensionRoot, '../../packages/monad/src/index.ts'),
         '@grape/monad/': `${resolve(extensionRoot, '../../packages/monad/src')}/`,
+        '@grape/solana/privacy': resolve(extensionRoot, '../../packages/solana/src/privacy.ts'),
         '@grape/solana': resolve(extensionRoot, '../../packages/solana/src/index.ts'),
         '@grape/solana/': `${resolve(extensionRoot, '../../packages/solana/src')}/`,
         '@grape/sui': resolve(extensionRoot, '../../packages/sui/src/index.ts'),
@@ -253,6 +257,7 @@ export default defineConfig(({ mode }) => {
           unlock: resolve(extensionRoot, 'unlock.html'),
           approval: resolve(extensionRoot, 'approval.html'),
           options: resolve(extensionRoot, 'options.html'),
+          dapp: resolve(extensionRoot, 'dapp.html'),
           send: resolve(extensionRoot, 'send.html'),
           background: resolve(extensionRoot, 'src/background/bootstrap.ts'),
           'content-script': resolve(extensionRoot, 'src/content-script/index.ts'),

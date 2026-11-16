@@ -1,0 +1,23 @@
+.grape-flow { margin: 0; padding: 14px 14px 16px; border: 1px solid var(--theme-input-border); border-radius: 20px; overflow: hidden; background: radial-gradient(ellipse at 50% 60%, color-mix(in srgb, var(--theme-accent-soft) 80%, transparent), transparent 75%); }
+.grape-flow-eyebrow { display: flex; justify-content: center; align-items: center; gap: 7px; font-size: .68rem; color: var(--theme-muted); letter-spacing: .03em; }
+.grape-flow-dot { width: 5px; height: 5px; border-radius: 50%; background: #b58be9; box-shadow: 0 0 9px #b58be955; }
+.grape-flow > svg { display: block; width: 100%; max-width: 440px; height: auto; margin: -3px auto -8px; color: var(--theme-text); }
+.grape-flow-public-node { fill: var(--theme-surface-strong); stroke: var(--theme-input-border); stroke-width: 1.2; }
+.grape-flow-private-node { fill: var(--theme-surface-strong); stroke: #a56bdf; stroke-opacity: .6; stroke-width: 1.2; }
+.grape-flow-lock circle { fill: var(--theme-surface-strong); stroke: #b58be9; stroke-width: 1; }
+.grape-flow-lock path { fill: none; stroke: #c9adf4; stroke-width: 1.2; stroke-linejoin: round; }
+.grape-flow-veil { fill: var(--theme-surface-strong); stroke: #aa73df; stroke-width: .8; }
+.grape-flow-cluster { animation: grape-cluster-breathe 4.8s ease-in-out infinite; }
+.grape-flow-orbit { animation: grape-vine-turn 18s linear infinite; }
+.grape-flow-still { display: none; }
+.grape-flow figcaption { max-width: 440px; margin-inline: auto; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 8px; font-size: .74rem; color: var(--theme-muted); }
+.grape-flow figcaption > span:last-child { text-align: right; }
+.grape-flow figcaption > svg { color: #b58be9; }
+.grape-flow-transfer .grape-flow-public-node { stroke: #a56bdf; }
+@keyframes grape-vine-turn { to { transform: rotate(360deg); } }
+@keyframes grape-cluster-breathe { 0%, 100% { opacity: .72; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .grape-flow-moving { display: none; }
+  .grape-flow-still { display: block; }
+  .grape-flow-cluster, .grape-flow-orbit { animation: none; }
+}

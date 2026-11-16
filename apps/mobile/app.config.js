@@ -1,4 +1,21 @@
 const { version } = require('../../package.json');
+const { resolvePrivacyRpc } = require('./privacy-rpc-config.cjs');
+// Reuse the workspace RPC for local native builds; EAS can supply EXPO_PUBLIC_SOLANA_RPC_URL.
+const workspaceEnv = require('vite').loadEnv(process.env.NODE_ENV || 'production', require('node:path').resolve(__dirname, '../..'), '');
+
+const mobileEnv = require('vite').loadEnv(process.env.NODE_ENV || 'production', __dirname, '');
+const privacyRpcUrl = resolvePrivacyRpc([
+  process.env.EXPO_PUBLIC_PRIVACY_RPC_URL,
+  mobileEnv.EXPO_PUBLIC_PRIVACY_RPC_URL,
+  workspaceEnv.EXPO_PUBLIC_PRIVACY_RPC_URL,
+  process.env.EXPO_PUBLIC_SOLANA_RPC_URL,
+  mobileEnv.EXPO_PUBLIC_SOLANA_RPC_URL,
+  workspaceEnv.EXPO_PUBLIC_SOLANA_RPC_URL,
+  workspaceEnv.VITE_GRAPE_MAINNET_RPC_URL,
+]);
+if (process.env.EAS_BUILD === 'true' && !privacyRpcUrl) {
+  throw new Error('Missing Helius mainnet privacy RPC. Configure EXPO_PUBLIC_PRIVACY_RPC_URL for this EAS build environment.');
+}
 
 /** @type {import('expo/config').ExpoConfig} */
 const config = {
@@ -60,7 +77,8 @@ const config = {
       projectId: '8cdfc344-97a9-4f7b-8852-2363c9c34a98'
     },
     env: {
-      EXPO_PUBLIC_SOLANA_RPC_URL: process.env.EXPO_PUBLIC_SOLANA_RPC_URL ?? '',
+      EXPO_PUBLIC_PRIVACY_RPC_URL: privacyRpcUrl || '',
+      EXPO_PUBLIC_SOLANA_RPC_URL: process.env.EXPO_PUBLIC_SOLANA_RPC_URL || workspaceEnv.EXPO_PUBLIC_SOLANA_RPC_URL || workspaceEnv.VITE_GRAPE_MAINNET_RPC_URL || '',
       EXPO_PUBLIC_SUI_RPC_URL: process.env.EXPO_PUBLIC_SUI_RPC_URL ?? '',
       EXPO_PUBLIC_ETHEREUM_RPC_URL: process.env.EXPO_PUBLIC_ETHEREUM_RPC_URL ?? '',
       EXPO_PUBLIC_MONAD_RPC_URL: process.env.EXPO_PUBLIC_MONAD_RPC_URL ?? '',

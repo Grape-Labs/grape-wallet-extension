@@ -1,3 +1,7 @@
+import { DiscoverAppIcon } from './DiscoverAppIcon';
+import { openDapp as launchDapp, getEmbeddedDappUrl, preferEmbeddedDapps, setPreferEmbeddedDapps } from '../../shared/dapp-launch';
+import { PrivateBalanceExplainer } from './PrivateBalanceExplainer';
+import { SettingsNavigation, SettingsPanel, SETTINGS_CATEGORIES, type SettingsCategory } from './SettingsLayout';
 import { StakingWorkspace } from './StakingWorkspace';
 import { redactRpcDetails } from '@grape/core';
 import { ZCASH_DISCOVER_APPS, ZCASH_DISCOVER_NOTE } from '@grape/core';
@@ -5,6 +9,8 @@ import { isValidBridgeRecipient } from '@grape/core';
 import { useSwapQuoteRefresh } from './useSwapQuoteRefresh';
 import { SendPrivacyPicker } from './SendPrivacyPicker';
 import { HoudiniSwapPanel } from './HoudiniSwapPanel';
+import { PrivateBalanceHome } from './PrivateBalanceHome';
+import { getPrivacyRpcEndpoint } from '../../shared/rpc';
 import { HoudiniZcashBridgePanel } from './HoudiniZcashBridgePanel';
 import { depositAmount, depositProblem, recordHoudiniDeposit, type HoudiniOrder } from '../../../../../packages/houdini/src/client';
 import { hasPositiveGovernancePower, compareGovernancePower } from '../../../../../packages/solana/src/governancePower';
@@ -16,7 +22,7 @@ import { NftGallery } from './NftGallery';
 import { TensorMarketplace, TensorListings } from './TensorMarketplace';
 import { communitySpaceIds } from './communityAssociations';
 import type { FormEvent, ReactNode } from 'react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import * as Tabs from '@radix-ui/react-tabs';
@@ -226,6 +232,7 @@ const GRAPE_LOGO_URL = chrome.runtime.getURL('icons/grape_logo_white.png');
 const ASSET_CACHE_STORAGE_KEY = 'grape:asset-cache';
 type AssetValueCache = Record<string, { cachedAt: number; data: WalletAssetsResponse }>;
 const REBALANCE_ADDON_STORAGE_KEY = 'grape:experimental-rebalancer-enabled:v1';
+const PRIVATE_BALANCE_ADDON_STORAGE_KEY = 'grape:private-balance-addon-enabled:v1';
 const CHAIN_OPTIONS = [
   { id: 'solana', label: 'Solana', shortLabel: 'SOL', enabled: true },
   { id: 'sui', label: 'Sui', shortLabel: 'SUI', enabled: true },
@@ -340,31 +347,6 @@ const DISCOVER_DAPPS_BY_CHAIN: Record<WalletStateResponse['wallet']['selectedCha
   zcash: [...ZCASH_DISCOVER_APPS]
 };
 const DISCOVER_CATEGORIES: DiscoverCategory[] = ['All', 'DeFi', 'Staking', 'Collectibles', 'Governance', 'Community', 'Analytics', 'Explorer', 'Tools', 'Spend & cash out'];
-
-function getSiteFavicon(url: string): string | undefined {
-  try {
-    return `${new URL(url).origin}/favicon.ico`;
-  } catch {
-    return undefined;
-  }
-}
-
-function DiscoverAppIcon(props: { name: string; url: string; faviconUrl?: string }) {
-  const [failed, setFailed] = useState(false);
-  const faviconUrl = props.faviconUrl?.trim() || getSiteFavicon(props.url);
-
-  useEffect(() => setFailed(false), [faviconUrl]);
-
-  return (
-    <span className="discover-app-icon" aria-hidden="true">
-      {faviconUrl && !failed ? (
-        <img src={faviconUrl} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(true)} />
-      ) : (
-        props.name.slice(0, 1).toUpperCase()
-      )}
-    </span>
-  );
-}
 
 function parseDiscoverFeed(xml: string, source: DiscoverFeedSource): DiscoverFeedItem[] {
   const document = new DOMParser().parseFromString(xml, 'text/xml');
@@ -1589,9 +1571,16 @@ function PopupPage() {
     lamports: null,
     tokens: []
   });
+  const [privateVisibilityBusy, setPrivateVisibilityBusy] = useState(false);
+  const [privateVisibilityError, setPrivateVisibilityError] = useState('');
+  const [homePrivateValue, setHomePrivateValue] = useState<{ identity: string; usd: number | null } | null>(null);
+  const onHomePrivateValue = useCallback((identity: string, usd: number | null) => {
+    setHomePrivateValue(previous => previous?.identity === identity && previous.usd === usd ? previous : { identity, usd });
+  }, []);
   const [view, setView] = useState<PopupView>(() => parseInitialView());
   const [homeTab, setHomeTab] = useState<HomeTab>('tokens');
   const [discoverQuery, setDiscoverQuery] = useState('');
+  const [embedGrapeApps, setEmbedGrapeApps] = useState(preferEmbeddedDapps);
   const [discoverCategory, setDiscoverCategory] = useState<DiscoverCategory>('All');
   const [discoverFeed, setDiscoverFeed] = useState<DiscoverFeedItem[]>([]);
   const [discoverFeedLoading, setDiscoverFeedLoading] = useState(false);
@@ -1599,6 +1588,14 @@ function PopupPage() {
   const [receiveQr, setReceiveQr] = useState('');
   const [assetId, setAssetId] = useState(() => parseInitialAssetId());
   const [inlineSwap, setInlineSwap] = useState(false);
+  const [wideSettings, setWideSettings] = useState(() => document.body.dataset.page === 'wallet' && window.matchMedia('(min-width: 760px)').matches);
+  const [activeSettingsCategory, setActiveSettingsCategory] = useState<SettingsCategory>('wallet');
+  useEffect(() => {
+    const query = window.matchMedia('(min-width: 760px)');
+    const update = () => setWideSettings(document.body.dataset.page === 'wallet' && query.matches);
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
+  }, []);
   const [wideTrading, setWideTrading] = useState(() => document.body.dataset.page === 'wallet' && window.matchMedia('(min-width: 1100px)').matches);
   const swapSurfaceActive = view === 'swap' || (view === 'asset' && inlineSwap && wideTrading);
   useEffect(() => {
@@ -1671,6 +1668,7 @@ function PopupPage() {
   const [submittingSwap, setSubmittingSwap] = useState(false);
   const [rebalanceSelectedMints, setRebalanceSelectedMints] = useState<Set<string>>(new Set());
   const [rebalanceTargetWeights, setRebalanceTargetWeights] = useState<Record<string, string>>({});
+  const [privateBalanceAddonEnabled, setPrivateBalanceAddonEnabled] = useState(false);
   const [rebalanceAddonEnabled, setRebalanceAddonEnabled] = useState(false);
   const [rebalanceAddonLoaded, setRebalanceAddonLoaded] = useState(false);
   const [rebalanceEnablePrompt, setRebalanceEnablePrompt] = useState(false);
@@ -1764,7 +1762,7 @@ function PopupPage() {
   const [governancePassword, setGovernancePassword] = useState('');
   const [governanceShowFinalizing, setGovernanceShowFinalizing] = useState(false);
   const pendingManageSection = useRef<string | null>(null);
-  const [expandedSettingsSections, setExpandedSettingsSections] = useState<Set<'wallet' | 'reputation' | 'verification' | 'governance' | 'help'>>(
+  const [expandedSettingsSections, setExpandedSettingsSections] = useState<Set<SettingsCategory>>(
     new Set(['wallet'])
   );
   const [pendingHomeScrollTarget, setPendingHomeScrollTarget] = useState<'community' | 'verification' | 'governance' | null>(null);
@@ -1939,6 +1937,18 @@ function PopupPage() {
     await refresh();
   };
 
+  const setPrivateBalanceVisible = async (visible: boolean) => {
+    if (!state?.activeAccount || privateVisibilityBusy) return;
+    setPrivateVisibilityBusy(true); setPrivateVisibilityError('');
+    try {
+      setState(await sendRuntimeMessage<WalletStateResponse>({ type: 'wallet_set_private_balance_visibility',
+        owner: state.activeAccount.publicKey, network: state.wallet.selectedNetwork, visible }));
+    } catch (error) {
+      setPrivateVisibilityError(error instanceof Error ? error.message : 'Unable to change private balance visibility.');
+      throw error;
+    } finally { setPrivateVisibilityBusy(false); }
+  };
+
   const setHideLowValueTokens = async (enabled: boolean) => {
     const nextState = await sendRuntimeMessage<WalletStateResponse>({
       type: 'wallet_set_hide_low_value_tokens',
@@ -1996,9 +2006,10 @@ function PopupPage() {
 
   useEffect(() => {
     let cancelled = false;
-    void chrome.storage.local.get(REBALANCE_ADDON_STORAGE_KEY).then((stored) => {
+    void chrome.storage.local.get([REBALANCE_ADDON_STORAGE_KEY, PRIVATE_BALANCE_ADDON_STORAGE_KEY]).then((stored) => {
       if (cancelled) return;
       setRebalanceAddonEnabled(stored[REBALANCE_ADDON_STORAGE_KEY] === true);
+      setPrivateBalanceAddonEnabled(stored[PRIVATE_BALANCE_ADDON_STORAGE_KEY] === true);
       setRebalanceAddonLoaded(true);
     });
     return () => { cancelled = true; };
@@ -2009,6 +2020,17 @@ function PopupPage() {
       setHomeTab('tokens');
     }
   }, [homeTab, rebalanceAddonEnabled, rebalanceAddonLoaded]);
+
+  async function setPrivateBalanceAddon(enabled: boolean) {
+    setPrivateVisibilityBusy(true); setPrivateVisibilityError('');
+    try {
+      await chrome.storage.local.set({ [PRIVATE_BALANCE_ADDON_STORAGE_KEY]: enabled });
+      setPrivateBalanceAddonEnabled(enabled);
+      if (!enabled) setHomePrivateValue(null);
+    } catch (error) {
+      setPrivateVisibilityError(error instanceof Error ? error.message : 'Unable to change private balance settings.');
+    } finally { setPrivateVisibilityBusy(false); }
+  }
 
   async function setRebalanceAddon(enabled: boolean) {
     await chrome.storage.local.set({ [REBALANCE_ADDON_STORAGE_KEY]: enabled });
@@ -5182,7 +5204,7 @@ function PopupPage() {
             ))}
             <strong>Exact vote weights (raw units)</strong>
             {results.map((result, index) => <span key={index} className="muted">{result.label}: {formatWholeNumberString(result.weight.toString())}</span>)}
-            <a className="governance-proposal-link" href={proposalUrl} target="_blank" rel="noopener noreferrer">Open full proposal <ExternalLink size={13} /></a>
+            <a className="governance-proposal-link" href={proposalUrl} target="_blank" rel="noopener noreferrer" onClick={event => { event.preventDefault(); launchDapp(proposalUrl); }}>Open full proposal <ExternalLink size={13} /></a>
           </div>
         </details>
       </div>
@@ -5721,6 +5743,9 @@ function PopupPage() {
   }
 
   function renderHome() {
+    const showPrivateBalance = import.meta.env.VITE_GRAPE_PRIVACY_RINGS_ENABLED === 'true' && privateBalanceAddonEnabled && isSolanaChain && activeWallet?.signerKind === 'software' && !!activePublicKey && !wallet.hiddenPrivateBalances?.includes(`${activePublicKey}:${wallet.selectedNetwork}`);
+    const privateUsd = showPrivateBalance && homePrivateValue?.identity === `${activePublicKey}:${wallet.selectedNetwork}` ? homePrivateValue.usd : null;
+    const combinedPortfolioValue = privateUsd !== null && typeof assets.totalUsdValue === 'number' ? formatUsd(assets.totalUsdValue + privateUsd) ?? portfolioValue : portfolioValue;
     const nativeAssetName = assets.nativeName ?? (isZcashChain ? 'Zcash' : isEthereumChain ? 'Ethereum' : isSuiChain ? 'Sui' : isMonadChain ? 'Monad' : 'Solana');
     const nativeAssetSymbol = assets.nativeSymbol ?? (isZcashChain ? 'ZEC' : isEthereumChain ? 'ETH' : isSuiChain ? 'SUI' : isMonadChain ? 'MON' : 'SOL');
     const activeHomeTab =
@@ -5771,6 +5796,7 @@ function PopupPage() {
           </div>
 
           <div className="portfolio-copy">
+            <span className="portfolio-eyebrow">Portfolio balance</span>
             {assetsLoading ? (
               <div className="skeleton-block skeleton-line skeleton-hero-balance" />
             ) : (
@@ -5779,7 +5805,7 @@ function PopupPage() {
                 aria-label={privacyMode ? 'Show balances' : 'Hide balances'}
                 aria-pressed={privacyMode}
                 title={privacyMode ? 'Show balances' : 'Hide balances'}>
-                <span>{maskSensitiveValue(portfolioValue, privacyMode)}</span>
+                <span>{maskSensitiveValue(combinedPortfolioValue, privacyMode)}</span>
                 <span className="balance-hover-icon" aria-hidden="true">{privacyMode ? <EyeOff size={18} /> : <Eye size={18} />}</span>
               </button>
             )}
@@ -5852,6 +5878,15 @@ function PopupPage() {
               <span>Receive</span>
             </button>
           </div>
+
+          {showPrivateBalance && activePublicKey ? <PrivateBalanceHome
+            key={`${activePublicKey}:${wallet.selectedNetwork}`}
+            owner={activePublicKey} network={wallet.selectedNetwork}
+            configuredEndpoint={getPrivacyRpcEndpoint(wallet.selectedNetwork, wallet.customRpcUrls)}
+            publicUsd={assets.totalUsdValue ?? null} publicLabel={portfolioValue}
+            solPrice={assets.nativePriceUsd ?? null} hidden={privacyMode}
+            onPrivateValue={onHomePrivateValue} onHide={() => setPrivateBalanceVisible(false)}
+          /> : null}
 
           {isSolanaChain ? (
             <>
@@ -6067,7 +6102,7 @@ function PopupPage() {
               <div className="dashboard-section-title"><div><span className="dashboard-eyebrow">Your ecosystem</span><h2>Explore and participate</h2></div><button type="button" onClick={() => setView('discover')}>View all apps <ChevronRight size={16} /></button></div>
               <div className="dashboard-app-grid">
                 {[...DISCOVER_DAPPS_BY_CHAIN[selectedChainValue]].sort((a, b) => Number('featured' in b && b.featured) - Number('featured' in a && a.featured)).slice(0, 4).map((app) => (
-                  <button className="dashboard-app" type="button" key={app.url} onClick={() => window.open(app.url, '_blank', 'noopener,noreferrer')}>
+                  <button className="dashboard-app" type="button" key={app.url} onClick={() => launchDapp(app.url)}>
                     <DiscoverAppIcon name={app.name} url={app.url} />
                     <strong>{app.name}</strong><small>{app.category}</small><ExternalLink size={14} aria-hidden="true" />
                   </button>
@@ -6361,8 +6396,8 @@ function PopupPage() {
                 formatPoints={formatWholeNumberString} formatAddress={formatAddress} formatTime={formatRelativeTimeFromNow}
                 onManage={openCommunitySettings}
                 onRefreshVerification={() => setVerificationRefreshNonce((value) => value + 1)}
-                onOpenReputation={(daoId) => window.open(buildOgReputationSpaceUrl(daoId), '_blank', 'noopener,noreferrer')}
-                onOpenVerification={(daoId) => window.open(buildVerificationSpaceUrl(daoId), '_blank', 'noopener,noreferrer')}
+                onOpenReputation={(daoId) => launchDapp(buildOgReputationSpaceUrl(daoId))}
+                onOpenVerification={(daoId) => launchDapp(buildVerificationSpaceUrl(daoId))}
               />
               </div>
             </Tabs.Content>
@@ -6572,7 +6607,7 @@ function PopupPage() {
                                   type="button"
                                   className="governance-recent-row"
                                   key={proposal.proposalId}
-                                  onClick={() => window.open(proposalUrl, '_blank', 'noopener,noreferrer')}
+                                  onClick={() => launchDapp(proposalUrl)}
                                   aria-label={`Open recent proposal ${proposal.proposalName} on governance.so`}
                                 >
                                   <span className="governance-recent-copy">
@@ -7196,7 +7231,7 @@ function PopupPage() {
           ];
     const matchesProvider = (provider: { name: string; description: string }, title: string) =>
       !query || `${provider.name} ${provider.description} ${title}`.toLowerCase().includes(query);
-    const openDapp = (url: string) => window.open(url, '_blank', 'noopener,noreferrer');
+    const openDapp = (url: string) => launchDapp(url, embedGrapeApps);
 
     return (
       <div className="discover-page">
@@ -7207,6 +7242,8 @@ function PopupPage() {
             <p>{selectedChainValue === 'zcash' ? ZCASH_DISCOVER_NOTE : `Discover ${chainLabel} apps or return to connected sites.`}</p>
           </div>
         </section>
+
+        <label className="discover-open-preference"><input type="checkbox" checked={embedGrapeApps} onChange={event => { setEmbedGrapeApps(event.target.checked); setPreferEmbeddedDapps(event.target.checked); }} /><span><strong>Open Grape apps within the extension</strong><small>governance.so and its subdomains, plus round-trip.ai.studio. Other apps open in browser tabs.</small></span></label>
 
         <label className="discover-search">
           <Search size={17} aria-hidden="true" />
@@ -7336,6 +7373,7 @@ function PopupPage() {
                 </span>
                 <span className="discover-app-badges">
                   <span className="discover-app-category">{dapp.category}</span>
+                  {embedGrapeApps && getEmbeddedDappUrl(dapp.url) ? <span className="discover-featured">In Grape</span> : null}
                   {'featured' in dapp && dapp.featured ? <span className="discover-featured">Featured</span> : null}
                 </span>
                 <ChevronRight size={17} aria-hidden="true" />
@@ -8002,6 +8040,7 @@ function PopupPage() {
 
   function openCommunitySettings(section: 'reputation' | 'verification' | 'governance') {
     pendingManageSection.current = section;
+    setActiveSettingsCategory(section);
     setExpandedSettingsSections(new Set([section]));
     setView('settings');
   }
@@ -8011,7 +8050,7 @@ function PopupPage() {
     const trackedVerificationCount = wallet.trackedVerificationSpaceIds.length;
     const trackedGovernanceCount = wallet.trackedGovernanceDaoIds.length;
 
-    const toggleSettingsSection = (section: 'wallet' | 'reputation' | 'verification' | 'governance' | 'help') => {
+    const toggleSettingsSection = (section: SettingsCategory) => {
       setExpandedSettingsSections((previous) => {
         const next = new Set(previous);
         if (next.has(section)) {
@@ -8023,57 +8062,15 @@ function PopupPage() {
       });
     };
 
-    const renderSettingsSection = (props: {
-      section: 'wallet' | 'reputation' | 'verification' | 'governance' | 'help';
-      title: string;
-      summary: string;
-      error?: string | null;
-      children: ReactNode;
-    }) => {
-      const isExpanded = expandedSettingsSections.has(props.section);
-
-      return (
-        <Card className={`settings-section-card${isExpanded ? ' is-expanded' : ''}`}>
-          <button type="button" className="settings-section-toggle" aria-expanded={isExpanded} aria-controls={`settings-content-${props.section}`}
-            ref={(node) => {
-              if (node && pendingManageSection.current === props.section) {
-                pendingManageSection.current = null;
-                requestAnimationFrame(() => {
-                  node.scrollIntoView({ block: 'start', behavior: 'auto' });
-                  node.focus({ preventScroll: true });
-                });
-              }
-            }}
-            onClick={() => toggleSettingsSection(props.section)}>
-            <span className="settings-section-icon" aria-hidden="true">{props.section === 'wallet' ? <Settings size={20} /> : props.section === 'governance' ? <Landmark size={20} /> : props.section === 'verification' ? <Fingerprint size={20} /> : props.section === 'reputation' ? <Globe2 size={20} /> : <ShieldAlert size={20} />}</span>
-            <div className="settings-section-toggle-copy">
-              <strong>{props.title}</strong>
-              <span className="settings-section-summary">{props.summary}</span>
-            </div>
-            {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-          </button>
-          {isExpanded ? <div id={`settings-content-${props.section}`} className="settings-section-content">{props.children}</div> : null}
-          {props.error ? <p className="danger-box">{props.error}</p> : null}
-        </Card>
-      );
-    };
-
-    return (
-      <div className="settings-sections">
-        {renderSettingsSection({
-          section: 'wallet',
-          title: 'Wallet',
-          summary: selectedNetworkLabel,
-          children: (
-          <div className="stack">
-            <div className="settings-row">
+    const networkSettings = <SettingsPanel title='Network' description='Choose your chain and network.'>
+            <div className="settings-summary-grid"><div className="settings-row">
               <span className="muted">Connected sites</span>
               <strong>{permissions.length}</strong>
             </div>
             <div className="settings-row">
               <span className="muted">Version</span>
               <strong className="mono">{APP_VERSION}</strong>
-            </div>
+            </div></div>
             <label className="stack">
               <span className="muted">Chain</span>
               {renderChainSwitcher()}
@@ -8238,6 +8235,9 @@ function PopupPage() {
                 </div>
               ) : null}
             </div>
+
+    </SettingsPanel>;
+    const displaySettings = <SettingsPanel title='Balance visibility' description='Control what appears in your portfolio.'>
             <label className="incident-toggle compact-settings-toggle">
               <input
                 type="checkbox"
@@ -8260,6 +8260,23 @@ function PopupPage() {
                 <small className="muted">Hide tokens worth less than 0.10 USDC, including tokens without reliable pricing.</small>
               </span>
             </label>
+
+    </SettingsPanel>;
+    const addonSettings = <div className="settings-addons-grid">
+            {import.meta.env.VITE_GRAPE_PRIVACY_RINGS_ENABLED === 'true' && isSolanaChain ? (
+              <div className="stack experimental-addon-setting">
+                <label className="incident-toggle compact-settings-toggle">
+                  <input type="checkbox" checked={privateBalanceAddonEnabled} disabled={privateVisibilityBusy} onChange={event => { void setPrivateBalanceAddon(event.target.checked); }} />
+                  <span className="stack-tight"><strong>Private balances</strong><small className="muted">Opt in to encrypted SOL balances for your Solana software wallets. Enabling this does not move funds.</small></span>
+                </label>
+                <PrivateBalanceExplainer />
+                {privateBalanceAddonEnabled && activePublicKey && activeWallet?.signerKind === 'software' ? <label className="incident-toggle compact-settings-toggle">
+                  <input type="checkbox" checked={!wallet.hiddenPrivateBalances?.includes(`${activePublicKey}:${wallet.selectedNetwork}`)} disabled={privateVisibilityBusy} onChange={event => { void setPrivateBalanceVisible(event.target.checked).catch(() => {}); }} />
+                  <span className="stack-tight"><strong>Show for this wallet</strong><small className="muted">Show private balance on home for this account and network.</small></span>
+                </label> : null}
+                {privateVisibilityError ? <p className="danger-box" role="alert">{privateVisibilityError}</p> : null}
+              </div>
+            ) : null}
             {isSolanaChain ? (
               <div className="stack experimental-addon-setting">
                 <label className="incident-toggle compact-settings-toggle">
@@ -8318,6 +8335,9 @@ function PopupPage() {
                 ) : null}
               </div>
             ) : null}
+
+    </div>;
+    const connectionSettings = <SettingsPanel title='App approvals' description='Manage how approved apps connect and request signatures.'>
             <label className="incident-toggle compact-settings-toggle">
               <input
                 type="checkbox"
@@ -8376,6 +8396,9 @@ function PopupPage() {
               </div>
               <p className="muted">This controls dApp transaction approvals. Non-strict mode reuses the current unlocked session instead of asking again each time.</p>
             </div>
+
+    </SettingsPanel>;
+    const appearanceSettings = <SettingsPanel title='Look & feel' description='Choose a theme, background, and motion.' className="settings-panel-look">
             <label className="stack">
               <span className="muted">Theme</span>
               <select
@@ -8428,6 +8451,9 @@ function PopupPage() {
                 ))}
               </select>
             </label>
+
+    </SettingsPanel>;
+    const securitySettings = <SettingsPanel title='Wallet protection' description='Manage unlock methods and security tools.'>
             <div className="stack">
               <div className="settings-row">
                 <span className="muted">Grape Verification Gate</span>
@@ -8492,12 +8518,72 @@ function PopupPage() {
                 </Button>
               ) : null}
               <Button tone="secondary" onClick={() => openExtensionPage('options.html')}>
-                Full settings
+                {wideSettings ? 'Advanced settings' : 'Full settings'}
               </Button>
             </div>
+    </SettingsPanel>;
+
+    const renderSettingsSection = (props: {
+      section: SettingsCategory;
+      title: string;
+      summary: string;
+      error?: string | null;
+      children: ReactNode;
+    }) => {
+      if (wideSettings && activeSettingsCategory !== props.section) return null;
+      const isExpanded = wideSettings || expandedSettingsSections.has(props.section);
+      const category = SETTINGS_CATEGORIES.find(item => item.id === props.section)!;
+
+      return (
+        <Card className={`settings-section-card${isExpanded ? ' is-expanded' : ''}`}>
+          {wideSettings ? <header className="settings-category-heading" tabIndex={-1} ref={node => {
+            if (node && pendingManageSection.current === props.section) { pendingManageSection.current = null; requestAnimationFrame(() => { node.scrollIntoView({ block: 'start' }); node.focus({ preventScroll: true }); }); }
+          }}><span className="settings-section-icon"><category.icon size={22} /></span><div><h2>{category.label}</h2><p className="muted">{category.description}</p></div></header> : <button type="button" className="settings-section-toggle" aria-expanded={isExpanded} aria-controls={`settings-content-${props.section}`}
+            ref={(node) => {
+              if (node && pendingManageSection.current === props.section) {
+                pendingManageSection.current = null;
+                requestAnimationFrame(() => {
+                  node.scrollIntoView({ block: 'start', behavior: 'auto' });
+                  node.focus({ preventScroll: true });
+                });
+              }
+            }}
+            onClick={() => toggleSettingsSection(props.section)}>
+            <span className="settings-section-icon" aria-hidden="true">{props.section === 'wallet' ? <Settings size={20} /> : props.section === 'governance' ? <Landmark size={20} /> : props.section === 'verification' ? <Fingerprint size={20} /> : props.section === 'reputation' ? <Globe2 size={20} /> : <ShieldAlert size={20} />}</span>
+            <div className="settings-section-toggle-copy">
+              <strong>{props.title}</strong>
+              <span className="settings-section-summary">{props.summary}</span>
+            </div>
+            {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+          </button>}
+          {isExpanded ? <div id={`settings-content-${props.section}`} className="settings-section-content">{props.children}</div> : null}
+          {props.error ? <p className="danger-box">{props.error}</p> : null}
+        </Card>
+      );
+    };
+
+    return (
+      <div className={`settings-workspace${wideSettings ? ' settings-workspace-wide' : ''}`}>
+      {wideSettings ? <SettingsNavigation active={activeSettingsCategory} onSelect={category => { setActiveSettingsCategory(category); setExpandedSettingsSections(new Set([['appearance', 'addons', 'connections', 'wallet-security'].includes(category) ? 'wallet' : category])); window.scrollTo({ top: 0, behavior: 'auto' }); }} version={APP_VERSION} /> : null}
+      <div className="settings-sections">
+        {renderSettingsSection({
+          section: 'wallet',
+          title: 'Wallet',
+          summary: selectedNetworkLabel,
+          children: (
+          <div className="stack settings-panel-grid">
+            {networkSettings}
+            {displaySettings}
+            {!wideSettings ? <>{addonSettings}{connectionSettings}{appearanceSettings}{securitySettings}</> : null}
           </div>
           )
         })}
+        {wideSettings ? <>
+          {renderSettingsSection({ section: 'appearance', title: 'Appearance', summary: 'Themes and motion', children: appearanceSettings })}
+          {renderSettingsSection({ section: 'addons', title: 'Add-ons', summary: 'Optional wallet tools', children: addonSettings })}
+          {renderSettingsSection({ section: 'connections', title: 'Connections', summary: 'App approvals', children: <div className="stack settings-panel-grid">{connectionSettings}<SettingsPanel title="Connected sites" description="Review the apps this wallet has approved."><div className="settings-stat"><strong>{permissions.length}</strong><span className="muted">approved sites</span></div><Button tone="secondary" onClick={() => openExtensionPage('options.html')}>Manage connected sites</Button></SettingsPanel></div> })}
+          {renderSettingsSection({ section: 'wallet-security', title: 'Security', summary: 'Wallet protection', children: securitySettings })}
+        </> : null}
         {renderSettingsSection({
           section: 'reputation',
           title: 'OG Reputation Spaces',
@@ -8510,7 +8596,7 @@ function PopupPage() {
               space directly.
             </p>
             <div className="inline wrap-actions">
-              <Button tone="secondary" onClick={() => openExternal(OG_REPUTATION_DISCOVERY_URL)}>
+              <Button tone="secondary" onClick={() => launchDapp(OG_REPUTATION_DISCOVERY_URL)}>
                 Discover communities
               </Button>
             </div>
@@ -8538,7 +8624,7 @@ function PopupPage() {
                           <span className="muted mono settings-inline-value">{daoId}</span>
                         </div>
                         <div className="reputation-space-actions">
-                          <Button tone="secondary" onClick={() => window.open(buildOgReputationSpaceUrl(daoId), '_blank', 'noopener,noreferrer')}>
+                          <Button tone="secondary" onClick={() => launchDapp(buildOgReputationSpaceUrl(daoId))}>
                             Open
                           </Button>
                           <Button tone="secondary" onClick={() => void handleRemoveReputationSpace(daoId)} disabled={reputationSpaceSaving}>
@@ -8593,7 +8679,7 @@ function PopupPage() {
                           <span className="muted mono settings-inline-value">{daoId}</span>
                         </div>
                         <div className="reputation-space-actions">
-                          <Button tone="secondary" onClick={() => window.open(buildVerificationSpaceUrl(daoId), '_blank', 'noopener,noreferrer')}>
+                          <Button tone="secondary" onClick={() => launchDapp(buildVerificationSpaceUrl(daoId))}>
                             Open
                           </Button>
                           <Button tone="secondary" onClick={() => void handleRemoveVerificationSpace(daoId)} disabled={verificationSpaceSaving}>
@@ -8678,7 +8764,7 @@ function PopupPage() {
                               ) : null}
                               <Button
                                 tone="secondary"
-                                onClick={() => window.open(buildGovernanceDaoUrl(dao.daoId), '_blank', 'noopener,noreferrer')}
+                                onClick={() => launchDapp(buildGovernanceDaoUrl(dao.daoId))}
                               >
                                 Deposit
                               </Button>
@@ -8853,6 +8939,7 @@ function PopupPage() {
             </div>
           )
         })}
+      </div>
       </div>
     );
   }
@@ -10319,7 +10406,7 @@ function PopupPage() {
               { tab: 'collectibles', label: 'NFTs', icon: <QrCode size={20} /> }
             ] : [])
           ] as { tab: HomeTab; label: string; icon: ReactNode }[]).map((entry) => (
-            <button type="button" key={entry.tab} className={`bottom-nav-item ${view === 'home' && homeTab === entry.tab ? 'active' : ''}`} aria-current={view === 'home' && homeTab === entry.tab ? 'page' : undefined} onClick={() => { setHomeTab(entry.tab); setView('home'); }}>{entry.icon}<span className="desktop-nav-label">{entry.label}</span></button>
+            <button type="button" key={entry.tab} className={`bottom-nav-item ${view === 'home' && homeTab === entry.tab ? 'active' : ''}`} aria-current={view === 'home' && homeTab === entry.tab ? 'page' : undefined} title={entry.label} onClick={() => { setHomeTab(entry.tab); setView('home'); }}>{entry.icon}<span className="desktop-nav-label">{entry.label}</span></button>
           ))}
           <span className="dashboard-eyebrow">Explore</span>
         </div>

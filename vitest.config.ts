@@ -6,6 +6,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@grape/core': resolve(__dirname, 'packages/core/src/index.ts'),
+      '@grape/solana/privacy': resolve(__dirname, 'packages/solana/src/privacy.ts'),
       '@grape/solana': resolve(__dirname, 'packages/solana/src/index.ts'),
       '@grape/ui': resolve(__dirname, 'packages/ui/src/index.ts')
     }

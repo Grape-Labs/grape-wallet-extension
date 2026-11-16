@@ -18,3 +18,6 @@ apps/mobile/android/.kotlin/
 
 # Generated native build intermediates for the local passkey module.
 packages/mobile-passkeys/android/build/
+
+# Locally bundled mobile WebCrypto/WASM runtime (rebuilt by Metro).
+apps/mobile/src/generated/privacyRuntime.ts

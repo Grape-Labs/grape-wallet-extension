@@ -1,3 +1,8 @@
+import { NativePrivateBalanceGuide } from './src/NativePrivateBalanceGuide';
+import { NativeSettingsWorkspace, SettingsPanelGrid, MobileSettingsPanel, SettingsQrFrame } from './src/NativeSettingsWorkspace';
+import { settingsCategoryForSection, type MobileSettingsCategory } from './src/settingsLayout';
+import { MobilePrivateBalance } from './src/MobilePrivateBalance';
+import { privateWalletKey } from './src/solanaPrivacy';
 import { approvalAuthenticationMethod, approvalWarningCopy, UNAVAILABLE_BALANCE_PREVIEW } from '@grape/core';
 import { PortfolioSectionTabs, type PortfolioSection } from './src/PortfolioSectionTabs';
 import { NftsScreen } from './src/NftsScreen';
@@ -50,7 +55,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Clipboard from 'expo-clipboard';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { deleteItemAsync as deleteSecureItem, getItemAsync as getSecureItem, setItemAsync as setSecureItem } from 'expo-secure-store';
-import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import WebView from 'react-native-webview';
 import type { WebViewMessageEvent, WebViewNavigation } from 'react-native-webview';
 import {
@@ -168,6 +173,7 @@ import {
   fetchMobileSolanaTokenMarket,
   fetchMobileJupiterStocks,
   getMobileSolanaRpcUrl,
+  getMobilePrivacyRpcUrl,
   getMobileEthereumRpcUrl,
   getMobileMonadRpcUrl,
   getMobileSupportedBridgeDestinations,
@@ -1500,6 +1506,9 @@ function GrapeApp() {
   const [sendAmount, setSendAmount] = useState('');
   const [sendLoading, setSendLoading] = useState(false);
   const [stakingBusy, setStakingBusy] = useState(false);
+  const [privacyBusy, setPrivacyBusy] = useState(false);
+  const [homePrivateValue, setHomePrivateValue] = useState<{ walletId: string; usd: number | null } | null>(null);
+  const onPrivateValue = useCallback((walletId: string, usd: number | null) => setHomePrivateValue(current => current?.walletId === walletId && current.usd === usd ? current : { walletId, usd }), []);
   const [stakingError, setStakingError] = useState<string | null>(null);
   const [stakingNotice, setStakingNotice] = useState<MobileStakeNotice | null>(null);
   const [stakingReloadToken, setStakingReloadToken] = useState(0);
@@ -1645,6 +1654,7 @@ function GrapeApp() {
   const mainScreenContentRef = useRef<View>(null);
   const settingsSectionRefs = useRef<Record<string, View | null>>({});
   const pendingManageSection = useRef<string | null>(null);
+  const [activeSettingsCategory, setActiveSettingsCategory] = useState<MobileSettingsCategory>('wallet');
   const [expandedSettingsSections, setExpandedSettingsSections] = useState<Set<string>>(() => new Set(['current-wallet', 'backup']));
   const [solanaRpcInput, setSolanaRpcInput] = useState('');
   const [solanaRpcStatus, setSolanaRpcStatus] = useState<string | null>(null);
@@ -2014,7 +2024,7 @@ function GrapeApp() {
     swapScreenVisible, rebalanceScreenVisible, bridgeScreenVisible, discoverMenuOpen, discoverControlsExpanded,
     discoverUrl, discoverCanGoBack, selectedAssetId, selectedAssetActivity]);
 
-  const stackSigningBusy = stakingBusy || sendLoading || swapExecuteLoading || bridgeExecuteLoading || rebalanceExecuting || assetCleanupLoading || submitLoading || biometricLoading;
+  const stackSigningBusy = privacyBusy || stakingBusy || sendLoading || swapExecuteLoading || bridgeExecuteLoading || rebalanceExecuting || assetCleanupLoading || submitLoading || biometricLoading;
   navigationBusy.current = stackSigningBusy;
   const stackRemovalBlocked = stackSigningBusy || !!transactionReview || !!discoverApproval || !!mwaRequest || !!activityDetailId || qrScannerVisible || walletComposerVisible;
   useEffect(() => {
@@ -2148,7 +2158,6 @@ function GrapeApp() {
   const screenPadding = layout.padding;
   const footerSafeInset = Platform.OS === 'android' ? Math.max(safeAreaInsets.bottom, 12) : safeAreaInsets.bottom;
   const footerClearance = isWide ? safeAreaInsets.bottom + 12 : 74 + footerSafeInset;
-  const deviceLinkQrSize = Math.max(240, Math.min(width - 120, 320));
   const paperTheme = useMemo(
     () => ({
         ...MD3DarkTheme,
@@ -2232,13 +2241,20 @@ function GrapeApp() {
   }, [assets]);
   const solPriceUsd = getMobileAssetPriceUsd(assets.find((asset) => asset.symbol.toUpperCase() === 'SOL') ?? ({ valueLabel: '' } as MobileAsset));
   const canShowSolBalance = pricedPortfolio.count > 0 && solPriceUsd > 0;
-  const holdingsSummary = pricedPortfolio.count > 0
+  const publicHoldingsSummary = pricedPortfolio.count > 0
     ? balanceUnit === 'SOL' && canShowSolBalance
       ? `${(pricedPortfolio.totalUsd / solPriceUsd).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })} SOL`
       : `$${pricedPortfolio.totalUsd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
     : assets.length === 0
       ? '--'
       : headlineAsset ? formatMobileTokenQuantity(headlineAsset) : '--';
+  const privateHomeVisible = selectedWallet?.chain === 'solana' && selectedWallet.source !== 'ledger' && walletState.privateBalanceAddonEnabled && !walletState.hiddenPrivateBalances?.includes(privateWalletKey(selectedWallet));
+  const knownPrivateUsd = privateHomeVisible && homePrivateValue?.walletId === selectedWallet?.id ? homePrivateValue?.usd : null;
+  const holdingsSummary = knownPrivateUsd != null && pricedPortfolio.count > 0
+    ? balanceUnit === 'SOL' && canShowSolBalance
+      ? `${((pricedPortfolio.totalUsd + knownPrivateUsd) / solPriceUsd).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })} SOL`
+      : `$${(pricedPortfolio.totalUsd + knownPrivateUsd).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    : publicHoldingsSummary;
   const portfolioAssets = useMemo(() => assets.filter(asset => asset.tokenType !== 'nft'), [assets]);
   const visibleSortedAssets = useMemo(() => {
     return portfolioAssets
@@ -6537,10 +6553,11 @@ function GrapeApp() {
       }, () => {});
     });
     return () => cancelAnimationFrame(frame);
-  }, [nativeRoute, expandedSettingsSections]);
+  }, [nativeRoute, expandedSettingsSections, activeSettingsCategory]);
 
   function openCommunitySettings(section: string) {
     pendingManageSection.current = section;
+    setActiveSettingsCategory(settingsCategoryForSection(section));
     setExpandedSettingsSections(new Set([section]));
     setMainTab('settings');
   }
@@ -7996,6 +8013,23 @@ function GrapeApp() {
             </Pressable>
           </View>
           } />
+          {mode === 'home' && section === 'home' && nativeRoute === 'home' && selectedWallet?.chain === 'solana' && selectedWallet.source !== 'ledger' && walletState.privateBalanceAddonEnabled && !walletState.hiddenPrivateBalances?.includes(privateWalletKey(selectedWallet)) && unlocked && screen === 'ready' && appVisibility === 'active' ? (() => {
+            const wallet = selectedWallet;
+            const endpoint = getMobilePrivacyRpcUrl() ?? '';
+            const authorize = () => {
+              const current = latestWalletState.current;
+              if (AppState.currentState !== 'active' || getSelectedWallet(current)?.id !== wallet.id || !current.privateBalanceAddonEnabled || current.hiddenPrivateBalances?.includes(privateWalletKey(wallet)) || (getMobilePrivacyRpcUrl() ?? '') !== endpoint) throw new Error('Wallet session changed. Reopen Private balances after unlocking.');
+              return approvalEpoch.current;
+            };
+            return <MobilePrivateBalance key={`${wallet.id}:${endpoint}`} wallet={wallet} state={walletState} palette={activeTheme} reduceMotion={reduceMotion} endpoint={endpoint} authorize={authorize} publicValue={publicHoldingsSummary} solPrice={solPriceUsd} onValue={onPrivateValue} onBusy={setPrivacyBusy} onReview={showTransactionReview}
+              onHide={() => { void saveState({ ...latestWalletState.current, hiddenPrivateBalances: [...new Set([...(latestWalletState.current.hiddenPrivateBalances ?? []), privateWalletKey(wallet)])] }); }}
+              onSubmitted={async (signature, action, uncertain) => {
+                const title = action.action === 'register' ? 'Private balance setup' : action.action === 'deposit' ? 'Private balance deposit' : action.action === 'transfer' ? 'Private payment' : 'Private balance withdrawal';
+                const historyWarning = await saveSubmittedActivity({ id: signature, signature, chain: 'solana', walletId: wallet.id, type: `privacy-${action.action}`, title, subtitle: 'Solana Private balances', amountLabel: 'Private balance transaction', timestamp: Date.now(), status: 'unknown', source: 'local', fromAddress: wallet.address });
+                setSubmissionNotice(`${title} ${uncertain ? 'status is uncertain. Check the transaction before retrying' : 'submitted. Check Activity for confirmation'}.${historyWarning}`);
+                void handleRefreshAssets();
+              }} />;
+          })() : null}
           {selectedWallet?.chain === 'solana' && walletState.rebalanceAddonEnabled ? (
             <Pressable
               style={styles.rebalanceShortcut}
@@ -9261,10 +9295,10 @@ function GrapeApp() {
     };
 
     const renderSettingsSection = (key: string, title: string, summary: string, children: any) => {
-      const expanded = expandedSettingsSections.has(key);
+      if (settingsCategoryForSection(key) !== activeSettingsCategory) return null;
 
       return (
-        <View style={styles.sectionCard}
+        <View key={key} collapsable={false}
           ref={(node) => { settingsSectionRefs.current[key] = node; }}
           onLayout={() => {
             if (pendingManageSection.current !== key) return;
@@ -9279,33 +9313,23 @@ function GrapeApp() {
               }, () => {});
             });
           }}>
-          <Pressable accessibilityRole="button" accessibilityState={{ expanded }} style={styles.settingsSectionToggle} onPress={() => toggleSettingsSection(key)}>
-            <View style={styles.settingsSectionToggleCopy}>
-              <Text style={styles.sectionTitle}>{title}</Text>
-              <Text style={styles.settingsSectionSummary}>{summary}</Text>
-            </View>
-            <Feather name={expanded ? 'chevron-down' : 'chevron-right'} size={18} color={activeTheme.muted} />
-          </Pressable>
-          {expanded ? children : null}
+          <MobileSettingsPanel title={title} summary={summary}>{children}</MobileSettingsPanel>
         </View>
       );
     };
 
-    const renderSettingsGroupHeading = (eyebrow: string, title: string, summary: string) => (
-      <View style={styles.settingsGroupHeading}>
-        <Text style={styles.settingsGroupEyebrow}>{eyebrow}</Text>
-        <Text style={styles.sectionTitle}>{title}</Text>
-        <Text style={styles.sectionHint}>{summary}</Text>
-      </View>
-    );
-
     return (
-      <View style={styles.stack}>
-        {renderSettingsGroupHeading('Wallet', 'Wallet & appearance', 'Theme, privacy, biometric unlock, and the currently selected wallet.')}
+      <NativeSettingsWorkspace active={activeSettingsCategory} onSelect={category => {
+        pendingManageSection.current = null;
+        setActiveSettingsCategory(category);
+        if (category !== 'recovery') { setExportReveal(false); setExportPassword(''); }
+        mainScrollRef.current?.scrollTo({ y: 0, animated: false });
+      }} palette={activeTheme} version={APP_VERSION} reduceMotion={reduceMotion} activeScreen={nativeRoute === 'settings'} disabled={stackRemovalBlocked || exportLoading || deviceLinkLoading || solanaRpcSaving}>
+      <SettingsPanelGrid>
 
         {renderSettingsSection(
           'appearance',
-          'Appearance',
+          'Theme & colors',
           selectedThemeLabel,
           <>
             <Text style={styles.sectionHint}>Match the same visual families and background graphics as the extension.</Text>
@@ -9382,7 +9406,7 @@ function GrapeApp() {
               textColor={activeTheme.text}
             />
             {solanaRpcStatus ? <Text style={styles.sectionHint}>{redactRpcDetails(solanaRpcStatus)}</Text> : null}
-            <View style={styles.walletToolsRow}>
+            <View style={[styles.walletToolsRow, { flexWrap: 'wrap' }]}>
               <PaperButton
                 mode="contained"
                 style={[styles.paperPrimaryButton, styles.walletToolButton]}
@@ -9408,14 +9432,8 @@ function GrapeApp() {
 
         {renderSettingsSection(
           'privacy',
-          'Privacy & unlock',
-          `${walletState.privacyMode ? 'Privacy on' : 'Privacy off'} • ${
-            biometricAvailable
-              ? walletState.biometricEnabled
-                ? 'Biometric on'
-                : 'Biometric off'
-              : 'Biometric unavailable'
-          } • ${walletState.dappApprovalMode === 'non-strict' ? 'Non-strict mode' : 'Strict mode'}`,
+          'Balance visibility',
+          'Control what appears in your portfolio.',
           <>
             <View style={styles.settingsRow}>
               <View style={styles.settingsCopy}>
@@ -9428,10 +9446,6 @@ function GrapeApp() {
                 trackColor={{ true: activeTheme.primaryButton, false: 'rgba(255,255,255,0.16)' }}
                 thumbColor={walletState.privacyMode ? '#f7f2ff' : '#d0c0df'}
               />
-            </View>
-            <View style={styles.settingsRow}>
-              <View style={styles.settingsCopy}><Text style={styles.settingsTitle}>Haptic feedback</Text><Text style={styles.sectionHint}>Subtle feedback when selecting wallets, networks and assets.</Text></View>
-              <Switch accessibilityLabel="Haptic feedback" value={walletState.hapticsEnabled !== false} onValueChange={(value) => { void saveState({ ...latestWalletState.current, hapticsEnabled: value }).catch(() => setError('Unable to save haptic preference.')); }} trackColor={{ true: activeTheme.primaryButton, false: 'rgba(255,255,255,0.16)' }} />
             </View>
             <View style={styles.settingsRow}>
               <View style={styles.settingsCopy}>
@@ -9457,6 +9471,43 @@ function GrapeApp() {
                 thumbColor={walletState.hideLowValueTokens ? '#f7f2ff' : '#d0c0df'}
               />
             </View>
+          </>
+        )}
+
+        {renderSettingsSection(
+          'haptics',
+          'Feedback',
+          'Touch and motion preferences.',
+          <>
+            <View style={styles.settingsRow}>
+              <View style={styles.settingsCopy}><Text style={styles.settingsTitle}>Haptic feedback</Text><Text style={styles.sectionHint}>Subtle feedback when selecting wallets, networks and assets.</Text></View>
+              <Switch accessibilityLabel="Haptic feedback" value={walletState.hapticsEnabled !== false} onValueChange={(value) => { void saveState({ ...latestWalletState.current, hapticsEnabled: value }).catch(() => setError('Unable to save haptic preference.')); }} trackColor={{ true: activeTheme.primaryButton, false: 'rgba(255,255,255,0.16)' }} />
+            </View>
+            <View style={styles.settingsRow}><View style={styles.settingsCopy}><Text style={styles.settingsTitle}>Reduce motion</Text><Text style={styles.sectionHint}>Grape follows your device accessibility setting.</Text></View><Text style={styles.settingsMono}>{reduceMotion ? 'On' : 'Off'}</Text></View>
+          </>
+        )}
+
+        {selectedWallet?.chain === 'solana' && selectedWallet.source !== 'ledger' ? renderSettingsSection(
+          'private-balances',
+          'Private balances',
+          'Encrypted SOL balances through Helius Privacy Rings.',
+          <>
+            <View style={styles.stack}>
+              <View style={styles.settingsRow}><View style={styles.settingsCopy}><Text style={styles.settingsTitle}>Private balances</Text><Text style={styles.sectionHint}>Hold and send SOL with Helius Privacy Rings. Opt in for this installation.</Text></View><Switch accessibilityLabel="Enable private balances" value={walletState.privateBalanceAddonEnabled === true} onValueChange={value => { void saveState({ ...latestWalletState.current, privateBalanceAddonEnabled: value }); }} trackColor={{ true: activeTheme.primaryButton, false: 'rgba(255,255,255,0.16)' }} /></View>
+              <NativePrivateBalanceGuide palette={activeTheme} />
+              {walletState.privateBalanceAddonEnabled ? <View style={styles.settingsRow}><View style={styles.settingsCopy}><Text style={styles.settingsTitle}>Show for this wallet</Text><Text style={styles.sectionHint}>Hiding does not move funds, close setup, or refund rent.</Text></View><Switch accessibilityLabel="Show private balance for this wallet" value={!walletState.hiddenPrivateBalances?.includes(privateWalletKey(selectedWallet))} onValueChange={visible => {
+                const hidden = new Set(latestWalletState.current.hiddenPrivateBalances ?? []); const key = privateWalletKey(selectedWallet); if (visible) hidden.delete(key); else hidden.add(key);
+                void saveState({ ...latestWalletState.current, hiddenPrivateBalances: [...hidden] });
+              }} trackColor={{ true: activeTheme.primaryButton, false: 'rgba(255,255,255,0.16)' }} /></View> : null}
+            </View>
+          </>
+        ) : null}
+
+        {selectedWallet?.chain === 'solana' ? renderSettingsSection(
+          'rebalancer',
+          'Experimental rebalancer',
+          'Optional portfolio tools through Jupiter.',
+          <>
             {selectedWallet?.chain === 'solana' ? (
               <View style={styles.stack}>
                 <View style={styles.settingsRow}>
@@ -9500,7 +9551,7 @@ function GrapeApp() {
                         <Text style={styles.sectionHint}>I understand that execution is non-atomic and may stop after partial completion.</Text>
                       </Pressable>
                     </View>
-                    <View style={styles.walletToolsRow}>
+                    <View style={[styles.walletToolsRow, { flexWrap: 'wrap' }]}>
                       <PaperButton
                         mode="contained"
                         disabled={!rebalanceRiskAccepted}
@@ -9526,6 +9577,23 @@ function GrapeApp() {
                 ) : null}
               </View>
             ) : null}
+          </>
+        ) : null}
+
+        {selectedWallet?.chain !== 'solana' ? renderSettingsSection(
+          'addons-unavailable',
+          'Solana add-ons',
+          'Choose a Solana wallet to manage optional tools.',
+          <>
+            <Text style={styles.sectionHint}>Private balances and the rebalancer are available for supported Solana wallets.</Text>
+          </>
+        ) : null}
+
+        {renderSettingsSection(
+          'unlock',
+          'Biometric unlock',
+          'Use your device to unlock the wallet.',
+          <>
             <View style={styles.settingsRow}>
               <View style={styles.settingsCopy}>
                 <Text style={styles.settingsTitle}>Biometric unlock</Text>
@@ -9543,6 +9611,14 @@ function GrapeApp() {
                 thumbColor={walletState.biometricEnabled ? '#f7f2ff' : '#d0c0df'}
               />
             </View>
+          </>
+        )}
+
+        {renderSettingsSection(
+          'signing',
+          'App approvals',
+          'Choose how Discover requests signatures.',
+          <>
             <View style={styles.stack}>
               <View style={styles.settingsCopy}>
                 <Text style={styles.settingsTitle}>dApp signing mode</Text>
@@ -9550,7 +9626,7 @@ function GrapeApp() {
                   Strict mode re-verifies each Discover signature or transaction. Non-strict mode uses the unlocked session until you lock the app again.
                 </Text>
               </View>
-              <View style={styles.dappModeGrid}>
+              <View style={[styles.dappModeGrid, fontScale > 1.3 && { flexDirection: 'column' }]}>
                 {[
                   {
                     id: 'strict' as const,
@@ -9577,6 +9653,14 @@ function GrapeApp() {
                 })}
               </View>
             </View>
+          </>
+        )}
+
+        {renderSettingsSection(
+          'adapter',
+          'Mobile Wallet Adapter',
+          'Native Android dApp connections.',
+          <>
             <View style={styles.settingsRow}>
               <View style={styles.settingsCopy}>
                 <Text style={styles.settingsTitle}>Solana Mobile Wallet Adapter</Text>
@@ -9591,10 +9675,9 @@ function GrapeApp() {
           'current-wallet',
           'Current wallet',
           `${selectedWallet?.name ?? '--'} • ${selectedChainMeta.label}`,
-          <Text style={styles.settingsMono}>{selectedWallet?.address ?? '--'}</Text>
+          <View style={styles.settingsRow}><Text numberOfLines={1} style={[styles.settingsTitle, { flex: 1, minWidth: 0 }]}>{selectedWallet?.name ?? '--'}</Text><Text selectable style={styles.settingsMono}>{selectedWallet ? shortenAddress(selectedWallet.address) : '--'}</Text></View>
         )}
 
-        {renderSettingsGroupHeading('Recovery', 'Security & recovery', 'Export, device linking, and trusted app access.')}
 
         {renderSettingsSection(
           'backup',
@@ -9631,7 +9714,7 @@ function GrapeApp() {
               }
             />
           )}
-          <View style={styles.walletToolsRow}>
+          <View style={[styles.walletToolsRow, { flexWrap: 'wrap' }]}>
             <PaperButton
               mode="contained"
               style={[styles.paperPrimaryButton, styles.walletToolButton]}
@@ -9692,7 +9775,7 @@ function GrapeApp() {
             <Text style={styles.sectionHint}>
               Create a short-lived restore QR for another Grape device. The QR payload is encrypted, and the pairing code is required to unlock it.
             </Text>
-          <View style={styles.walletToolsRow}>
+          <View style={[styles.walletToolsRow, { flexWrap: 'wrap' }]}>
             <PaperButton
               mode="contained"
               style={[styles.paperPrimaryButton, styles.walletToolButton]}
@@ -9716,16 +9799,7 @@ function GrapeApp() {
           </View>
           {deviceLinkSession ? (
             <View style={styles.stack}>
-              <View style={styles.qrCard}>
-                <View style={[styles.qrSurface, { width: deviceLinkQrSize + 32, height: deviceLinkQrSize + 32 }]}>
-                  <QRCode
-                    value={deviceLinkSession.qrPayload}
-                    size={deviceLinkQrSize}
-                    color="#101114"
-                    backgroundColor="#ffffff"
-                  />
-                </View>
-              </View>
+              <SettingsQrFrame>{size => <QRCode value={deviceLinkSession.qrPayload} size={size} color="#101114" backgroundColor="#ffffff" />}</SettingsQrFrame>
               <View style={styles.exportSecretCard}>
                 <Text style={styles.exportSecretLabel}>Pairing code</Text>
                 <Text style={styles.settingsMono}>{deviceLinkSession.pairingCode}</Text>
@@ -9794,7 +9868,6 @@ function GrapeApp() {
           </>
         )}
 
-        {renderSettingsGroupHeading('Community', 'Community & tracking', 'Verification, governance, and OG reputation spaces for this wallet.')}
 
         {renderSettingsSection(
           'verification',
@@ -10016,7 +10089,6 @@ function GrapeApp() {
           </>
         )}
 
-        {renderSettingsGroupHeading('Manage', 'Wallet manager', 'Create, import, switch, remove, and lock wallets on this device.')}
 
         {renderSettingsSection(
           'all-wallets',
@@ -10164,7 +10236,7 @@ function GrapeApp() {
                   ) : importKind === 'restore' ? (
                     <>
                       <Text style={styles.sectionHint}>Scan the QR from another Grape device or paste the restore payload manually.</Text>
-                      <View style={styles.walletToolsRow}>
+                      <View style={[styles.walletToolsRow, { flexWrap: 'wrap' }]}>
                         <PaperButton
                           mode="outlined"
                           style={[styles.paperSecondaryButton, styles.walletToolButton]}
@@ -10377,7 +10449,7 @@ function GrapeApp() {
                 );
               })}
             </View>
-            <View style={styles.walletToolsRow}>
+            <View style={[styles.walletToolsRow, { flexWrap: 'wrap' }]}>
               <PaperButton
                 mode="outlined"
                 icon="book-open-outline"
@@ -10411,7 +10483,8 @@ function GrapeApp() {
             </Pressable>
           </>
         )}
-      </View>
+      </SettingsPanelGrid>
+      </NativeSettingsWorkspace>
     );
   }
 
@@ -10436,7 +10509,7 @@ function GrapeApp() {
       : discover ? renderDiscoverTab() : renderSettingsTab();
     return <KeyboardAvoidingView style={styles.screenFlex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}>
       <ScrollView ref={attachMainRef ? mainScrollRef : undefined} contentContainerStyle={[styles.mainContent, { paddingLeft: discover ? 0 : screenPadding + (isWide ? 0 : safeAreaInsets.left), paddingRight: discover ? 0 : screenPadding + safeAreaInsets.right, paddingTop: (route === 'receive' || route === 'governance' ? 0 : safeAreaInsets.top) + 18, paddingBottom: discover ? 0 : isWalletTab(route) && !isWide ? 140 : 32 + safeAreaInsets.bottom, flexGrow: discover ? 1 : undefined }]} scrollEnabled={!discover} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}>
-        <View ref={attachMainRef ? mainScreenContentRef : undefined} collapsable={false} style={[styles.screenShell, { maxWidth: isWide && !['home', 'discover', 'staking', 'nfts'].includes(route) ? 760 : contentMaxWidth, flex: discover ? 1 : undefined }]}>
+        <View ref={attachMainRef ? mainScreenContentRef : undefined} collapsable={false} style={[styles.screenShell, { maxWidth: isWide && !['home', 'discover', 'staking', 'nfts', 'settings'].includes(route) ? 760 : contentMaxWidth, flex: discover ? 1 : undefined }]}>
           {error && attachMainRef ? <View style={styles.inlineErrorCard}><Text style={styles.errorText}>{redactRpcDetails(error)}</Text></View> : null}
           {content}
         </View>
@@ -14146,6 +14219,8 @@ function createStyles(palette: MobileThemePalette, tablet = false) {
     gap: 10
   },
   themeChip: {
+    minHeight: 44,
+    justifyContent: 'center',
     paddingHorizontal: 12,
     paddingVertical: 9,
     borderRadius: 999,
@@ -14185,6 +14260,7 @@ function createStyles(palette: MobileThemePalette, tablet = false) {
   },
   settingsCopy: {
     flex: 1,
+    minWidth: 0,
     gap: 4
   },
   settingsTitle: {

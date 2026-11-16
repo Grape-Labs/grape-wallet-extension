@@ -11,7 +11,9 @@
     "aab": "eas build -p android --profile production",
     "ipa": "eas build -p ios --profile preview",
     "ios-prod": "eas build -p ios --profile production",
-    "ios-sim": "eas build -p ios --profile simulator"
+    "ios-sim": "eas build -p ios --profile simulator",
+    "privacy:build": "node privacy-runtime/build.mjs",
+    "privacy:check": "node privacy-runtime/build.mjs && node privacy-runtime/check.mjs"
   },
   "dependencies": {
     "@babel/runtime": "^7.20.0",

@@ -1,6 +1,6 @@
 {
   "name": "@grape/extension",
-  "version": "0.5.279",
+  "version": "0.5.301",
   "private": true,
   "type": "module",
   "scripts": {
@@ -27,6 +27,7 @@
     "@solana-program/token-wrap": "2.4.0",
     "@solana/kit": "^6.10.0",
     "@solana/spl-governance": "^0.3.28",
+    "@solana/sysvars": "6.10.0",
     "@solana/web3-v2": "npm:@solana/web3.js@2.0.0",
     "@solana/web3.js": "^1.98.0",
     "@solana/zk-sdk": "^0.4.2",

@@ -1,0 +1,11 @@
+body[data-page='dapp'] { margin: 0; min-width: 320px; }
+.dapp-viewer { height: 100dvh; display: flex; flex-direction: column; }
+.dapp-toolbar { display: flex; align-items: center; gap: 14px; padding: 12px 20px; background: var(--theme-card-bg); border-bottom: 1px solid var(--theme-card-border); }
+.dapp-toolbar a, .dapp-toolbar button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 8px 12px; border: 1px solid var(--theme-input-border); border-radius: 12px; font: inherit; font-size: 13px; color: var(--theme-text); background: var(--theme-surface-soft); text-decoration: none; cursor: pointer; }
+.dapp-location { display: grid; gap: 4px; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.dapp-location strong { font-size: 14px; }
+.dapp-location small, .dapp-help { font-size: 11px; color: var(--theme-muted); }
+.dapp-help { margin: 0; padding: 8px 20px; background: var(--theme-card-bg); }
+.dapp-viewer iframe { flex: 1; min-height: 0; width: 100%; border: 0; background: #fff; }
+.dapp-invalid { max-width: 600px; margin: 60px auto; padding: 24px; }
+@media (max-width: 600px) { .dapp-toolbar { gap: 8px; flex-wrap: wrap; padding: 10px 12px; } .dapp-location { min-width: 180px; } .dapp-help { padding-inline: 12px; } }

@@ -1,4 +1,6 @@
 import { redactRpcDetails } from '@grape/core';
+import { PrivacyRingsReviews } from './privacy-rings';
+import { privacyRpcUrl, readPrivacyWallet, signPrivacyTransaction, privacyRateLimitMessage } from '@grape/solana/privacy';
 import { fetchNftMarketData } from './nft-market-data';
 import { discoverStakeAccountsByAuthority } from './stake-discovery';
 import { buildTensorTransaction, inspectTensorNft } from './tensor-marketplace';
@@ -247,7 +249,7 @@ import {
   type JupiterQuoteResponse
 } from '../shared/jupiter';
 import { summarizeLifiSwapQuote, type LifiQuoteResponse, fetchLifiSwapQuote, fetchLifiTokenCatalog, fetchNativeBridgeQuote, getSupportedBridgeDestinations, isBridgeRouteSupported, LIFI_NATIVE_DECIMALS, LIFI_NATIVE_SYMBOL, LIFI_NATIVE_TOKEN_ADDRESS } from '../shared/lifi';
-import { getRpcEndpoint } from '../shared/rpc';
+import { getRpcEndpoint, getPrivacyRpcEndpoint } from '../shared/rpc';
 import {
   fetchShyftCollections,
   fetchShyftStakeAccounts,
@@ -508,6 +510,42 @@ function throwLedgerUnsupported(): never {
 }
 
 class WalletController {
+  private readonly privacyReviews = new PrivacyRingsReviews();
+
+  async privacyRings(input: Extract<RuntimeMessage, { type: 'wallet_privacy' }>) {
+    if (import.meta.env.VITE_GRAPE_PRIVACY_RINGS_ENABLED !== 'true') throw new Error('Privacy Rings preview is not enabled in this build.');
+    const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    this.assertInteractiveWallet(selectedWallet);
+    const account = selectedWallet.accounts.find(account => account.id === selectedWallet.selectedAccountId);
+    if (selectedWallet.chain !== 'solana' || selectedWallet.signer.kind !== 'software') throw new Error('Privacy Rings currently requires a Solana software wallet.');
+    if (!account || account.publicKey !== input.owner || walletState.selectedNetwork !== input.network) throw new Error('Wallet or network changed. Reopen Private Balance.');
+    const configuredEndpoint = input.endpoint ?? getPrivacyRpcEndpoint(input.network, walletState.customRpcUrls);
+    if (!configuredEndpoint) throw new Error('Configure a Helius wallet RPC or enter a Helius endpoint override for Private Balance.');
+    const endpoint = privacyRpcUrl(configuredEndpoint, input.network);
+    if ((await this.getSessionState()).locked) throw new RpcError('WALLET_LOCKED', 'Unlock your wallet to use Private Balance.');
+    const secret = await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault);
+    const signer = this.resolveSolanaSignerForWallet(secret, selectedWallet, account.publicKey);
+    const seed = signer.secretKey.slice(0, 32);
+    try {
+      if (input.operation === 'sync') {
+        const snapshot = await readPrivacyWallet({ endpoint, network: input.network, seed, owner: input.owner });
+        const pendingKey = `grape:privacy:${input.network}:pending:${input.owner}`;
+        const pending = (await chrome.storage.local.get(pendingKey))[pendingKey] as { signature: string } | undefined;
+        if (!pending) return snapshot;
+        const status = (await new Connection(endpoint, 'confirmed').getSignatureStatuses([pending.signature], { searchTransactionHistory: true })).value[0];
+        return { ...snapshot, submission: { signature: pending.signature, status: status?.err ? 'failed' : status?.confirmationStatus === 'confirmed' || status?.confirmationStatus === 'finalized' ? 'confirmed' : 'unknown' } };
+      }
+      if (input.operation === 'prepare') {
+        if (!input.action) throw new Error('Choose a privacy action.');
+        return await this.privacyReviews.prepare({ ...input, action: input.action, endpoint, seed, walletId: selectedWallet.id });
+      }
+      if (!input.previewId) throw new Error('Review the transaction first.');
+      return await this.privacyReviews.submit({ id: input.previewId, owner: input.owner, walletId: selectedWallet.id, endpoint, network: input.network, sign: transaction => signPrivacyTransaction(transaction, seed, input.owner) });
+    } finally {
+      seed.fill(0);
+    }
+  }
+
   private readonly pendingApprovals = new Map<string, PendingResolver>();
   private unlockedSecrets: UnlockedSecretCache = {};
   private readonly assetRefreshes = new Map<string, Promise<WalletAssetsResponse>>();
@@ -2422,6 +2460,17 @@ class WalletController {
       ...walletState,
       privacyMode: enabled
     });
+    return this.getStateResponse();
+  }
+
+  async setPrivateBalanceVisibility(owner: string, network: 'mainnet-beta' | 'devnet', visible: boolean) {
+    const { walletState, selectedWallet } = await this.ensureReadyWallet();
+    const account = selectedWallet.accounts.find(account => account.id === selectedWallet.selectedAccountId);
+    if (selectedWallet.chain !== 'solana' || account?.publicKey !== owner || walletState.selectedNetwork !== network) throw new Error('Wallet or network changed. Try again.');
+    const key = `${owner}:${network}`;
+    const hidden = new Set(walletState.hiddenPrivateBalances ?? []);
+    if (visible) hidden.delete(key); else hidden.add(key);
+    await walletStateStorage.set({ ...walletState, hiddenPrivateBalances: [...hidden] });
     return this.getStateResponse();
   }
 
@@ -9310,6 +9359,19 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
   void (async () => {
     try {
       switch (message.type) {
+        case 'wallet_privacy':
+          if (_sender.id !== chrome.runtime.id || !_sender.url?.startsWith(chrome.runtime.getURL(''))) throw new Error('Privacy actions require the wallet interface.');
+          try {
+            sendResponse(await controller.privacyRings(message));
+          } catch (error) {
+            const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : '';
+            // SDK transport errors can contain request data: never send their raw payloads to the UI.
+            const safe = privacyRateLimitMessage(error) ?? (code === 'WALLET_LOCKED' || code === 'PASSWORD_REQUIRED'
+              ? 'Unlock your wallet to use Private Balance.'
+              : error instanceof Error && !code ? redactRpcDetails(error.message) : `Privacy operation failed${code ? ` (${code})` : ''}. Check your connection and wallet registration.`);
+            throw new Error(safe);
+          }
+          break;
         case 'wallet_get_state':
           sendResponse(await controller.getStateResponse());
           break;
@@ -9419,6 +9481,9 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
           break;
         case 'wallet_set_privacy_mode':
           sendResponse(await controller.setPrivacyMode(message.enabled));
+          break;
+        case 'wallet_set_private_balance_visibility':
+          sendResponse(await controller.setPrivateBalanceVisibility(message.owner, message.network, message.visible));
           break;
         case 'wallet_set_hide_low_value_tokens':
           sendResponse(await controller.setHideLowValueTokens(message.enabled));

@@ -44,6 +44,7 @@ and use Expo public vars for mobile-safe configuration:
 
 ```bash
 EXPO_PUBLIC_SOLANA_RPC_URL=
+EXPO_PUBLIC_PRIVACY_RPC_URL=
 EXPO_PUBLIC_SUI_RPC_URL=
 EXPO_PUBLIC_ETHEREUM_RPC_URL=
 EXPO_PUBLIC_MONAD_RPC_URL=
@@ -120,3 +121,44 @@ Only public addresses, derivation paths, and the paired device identifier are st
 by Grape. Ledger private keys never leave the hardware device. Mobile Ledger support
 currently targets Solana over Bluetooth; USB-only devices and other chains are not yet
 supported.
+
+
+### Private balances
+
+Settings → Add-ons → Private balances opts into Helius Privacy Rings for Solana software
+wallets. Native setup, SOL deposits, private sends and withdrawals use the normal
+transaction review. The Helius URL comes from the configured mobile RPC (or the
+workspace mainnet RPC for local builds); no credential field is shown in the UI.
+
+Metro automatically bundles the local WebCrypto/WASM runtime before resolving
+the app. Run `pnpm --filter @grape/mobile privacy:check` to rebuild and check its
+offline startup. A new native build is required for installed apps. See
+[Privacy Rings](../../docs/PRIVACY_RINGS.md) for behavior and device-testing limits.
+
+
+### Settings layout
+
+Native Settings uses the same General, Appearance, Add-ons, Connections, Security,
+and community categories as the extension, plus Recovery and Wallet manager.
+Private balances are under **Settings → Add-ons**. Phone and split-view widths
+use a category picker; iPad layouts use a category row or sidebar with responsive
+cards. The Settings screen uses the full available tablet content width.
+
+See [Settings layout](../../docs/EXPANDED_SETTINGS.md) for responsive rules and
+validation limits. Installed apps need an updated native build to show this UI.
+
+
+### Helius routing for Private balances
+
+The general Solana RPC may remain Shyft or another provider. Private balances use
+`EXPO_PUBLIC_PRIVACY_RPC_URL`, or a valid Helius mainnet RPC already configured for
+the wallet. For local builds, Expo also reuses the workspace
+`VITE_GRAPE_MAINNET_RPC_URL` when it is Helius. Metro inlines the resolved privacy
+URL into the JS bundle, and Expo carries it in its manifest fallback. There is no
+endpoint or API-key input in the Private balances UI.
+
+For remote EAS builds, configure `EXPO_PUBLIC_PRIVACY_RPC_URL` in the selected EAS
+environment (a Helius HTTPS mainnet URL with `api-key`). EAS builds fail early if
+no usable Helius privacy endpoint is available, instead of shipping the add-on
+with a non-Helius RPC. Restart Metro or rebuild after changing build-time RPC
+configuration; installed bundles cannot acquire new build-time values by refresh.

@@ -1,0 +1,75 @@
+/* The popup retains its accordion; the expanded wallet has a settings workspace. */
+.settings-workspace { min-width: 0; }
+.settings-panel, .settings-panel > .settings-panel-controls, .settings-addons-grid, .settings-summary-grid { display: contents; }
+.settings-panel-heading { display: none; }
+.settings-navigation { display: none; }
+@media (min-width: 760px) {
+  body[data-page='wallet'] .page-shell:has(.settings-workspace-wide) .page-header { margin-bottom: 20px; }
+  body[data-page='wallet'] .page-shell:has(.settings-workspace-wide) .page-header h1 { font-size: 30px; margin-block: 6px 8px; }
+  body[data-page='wallet'] .settings-workspace-wide { display: grid; gap: 20px; align-items: start; width: 100%; }
+  body[data-page='wallet'] .settings-workspace-wide .settings-sections { width: 100%; max-width: none; margin: 0; gap: 0; }
+  body[data-page='wallet'] .settings-workspace-wide .settings-section-card { background: transparent; border: 0; border-radius: 0; overflow: visible; }
+  body[data-page='wallet'] .settings-workspace-wide .settings-section-card > .card-body { gap: 0; }
+  body[data-page='wallet'] .settings-category-heading { display: flex; align-items: center; gap: 14px; padding: 0 0 22px; scroll-margin-top: 24px; }
+  body[data-page='wallet'] .settings-category-heading h2 { font-size: 21px; margin: 0 0 6px; }
+  body[data-page='wallet'] .settings-category-heading p { font-size: 13px; margin: 0; line-height: 1.5; }
+  body[data-page='wallet'] .settings-workspace-wide .settings-section-content { padding: 0; border: 0; }
+  body[data-page='wallet'] .settings-navigation { display: block; min-width: 0; padding-bottom: 4px; }
+  body[data-page='wallet'] .settings-navigation nav { display: flex; gap: 6px; overflow-x: auto; max-width: 100%; padding: 4px 2px 10px; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; }
+  body[data-page='wallet'] .settings-nav-group { display: flex; gap: 6px; flex-shrink: 0; }
+  body[data-page='wallet'] .settings-nav-group + .settings-nav-group { border-left: 1px solid var(--theme-divider); padding-left: 8px; margin-left: 2px; }
+  body[data-page='wallet'] .settings-nav-group-label, body[data-page='wallet'] .settings-nav-footer { display: none; }
+  body[data-page='wallet'] .settings-nav-item { display: flex; align-items: center; justify-content: flex-start; gap: 9px; min-height: 46px; padding: 10px 14px; border: 1px solid transparent; border-radius: 12px; background: var(--theme-surface-soft); color: var(--theme-muted); font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap; }
+  body[data-page='wallet'] .settings-nav-item svg { flex-shrink: 0; }
+  body[data-page='wallet'] .settings-nav-item:hover { color: var(--theme-text); background: var(--theme-surface-soft-hover); }
+  body[data-page='wallet'] .settings-nav-item.active { color: var(--theme-nav-active-text); background: var(--theme-nav-active-bg); border-color: color-mix(in srgb, var(--theme-accent) 32%, transparent); font-weight: 700; }
+  body[data-page='wallet'] .settings-nav-item:focus-visible { outline: 2px solid var(--theme-accent); outline-offset: 2px; }
+  body[data-page='wallet'] .settings-workspace-wide .settings-panel-grid,
+  body[data-page='wallet'] .settings-workspace-wide .settings-addons-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; align-items: start; }
+  body[data-page='wallet'] .settings-workspace-wide .settings-panel,
+  body[data-page='wallet'] .settings-workspace-wide .settings-addons-grid > .experimental-addon-setting { display: grid; min-width: 0; gap: 20px; padding: 22px; border: 1px solid var(--theme-divider); border-radius: 18px; background: var(--theme-surface-strong); }
+  body[data-page='wallet'] .settings-panel-heading { display: grid; gap: 7px; }
+  body[data-page='wallet'] .settings-panel-heading h3 { font-size: 15px; margin: 0; }
+  body[data-page='wallet'] .settings-panel-heading p { margin: 0; font-size: 12px; line-height: 1.5; }
+  body[data-page='wallet'] .settings-workspace-wide .settings-panel-controls { display: grid; gap: 18px; min-width: 0; }
+  body[data-page='wallet'] .settings-workspace-wide .settings-panel-controls > .stack { gap: 12px; }
+  body[data-page='wallet'] .settings-workspace-wide .settings-row { justify-content: space-between; padding-block: 0; font-size: 12px; }
+  body[data-page='wallet'] .settings-summary-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding-bottom: 16px; border-bottom: 1px solid var(--theme-divider); }
+  body[data-page='wallet'] .settings-summary-grid .settings-row { display: grid; gap: 7px; }
+  body[data-page='wallet'] .settings-summary-grid strong { font-size: 15px; }
+  body[data-page='wallet'] .settings-workspace-wide label.stack { gap: 8px; min-width: 0; }
+  body[data-page='wallet'] .settings-workspace-wide label.stack > .muted { font-size: 12px; }
+  body[data-page='wallet'] .settings-workspace-wide .compact-settings-toggle { min-height: 64px; padding: 14px; border-radius: 12px; gap: 12px; margin: 0; cursor: pointer; }
+  body[data-page='wallet'] .settings-workspace-wide .compact-settings-toggle input { flex-shrink: 0; width: 18px; height: 18px; margin-top: 2px; accent-color: var(--theme-accent); }
+  body[data-page='wallet'] .settings-workspace-wide .compact-settings-toggle strong { font-size: 13px; line-height: 1.4; }
+  body[data-page='wallet'] .settings-workspace-wide .compact-settings-toggle small { font-size: 12px; line-height: 1.55; }
+  body[data-page='wallet'] .settings-workspace-wide .compact-settings-toggle:focus-within { outline: 2px solid var(--theme-accent); outline-offset: 3px; }
+  body[data-page='wallet'] .settings-workspace-wide .dapp-mode-card { padding: 16px; min-height: 100px; }
+  body[data-page='wallet'] .settings-workspace-wide .dapp-mode-card-header { gap: 8px; flex-wrap: wrap; }
+  body[data-page='wallet'] .settings-workspace-wide .dapp-mode-card-copy { font-size: 13px; line-height: 1.6; }
+  body[data-page='wallet'] .settings-workspace-wide .inline { flex-wrap: wrap; }
+  body[data-page='wallet'] .settings-workspace-wide .button { min-height: 44px; white-space: normal; }
+  body[data-page='wallet'] .settings-workspace-wide select { width: 100%; min-width: 0; }
+  body[data-page='wallet'] .settings-workspace-wide .chain-switcher { width: 100%; min-height: 46px; }
+  body[data-page='wallet'] .settings-stat { display: grid; gap: 8px; padding-block: 8px; }
+  body[data-page='wallet'] .settings-stat strong { font-size: 32px; }
+  body[data-page='wallet'] .settings-workspace-wide .settings-section-content > .stack:not(.settings-panel-grid),
+  body[data-page='wallet'] .settings-workspace-wide .faq-list { padding: 22px; border: 1px solid var(--theme-divider); border-radius: 18px; background: var(--theme-surface-strong); gap: 18px; }
+  body[data-page='wallet'] .settings-workspace-wide .settings-panel-look .settings-panel-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  body[data-page='wallet'] .settings-workspace-wide .settings-panel-look .custom-theme-editor { grid-column: 1 / -1; }
+  body[data-page='wallet'] .settings-workspace-wide .settings-panel-look { max-width: 100%; }
+}
+@media (min-width: 960px) {
+  body[data-page='wallet'] .settings-workspace-wide .settings-panel-grid,
+  body[data-page='wallet'] .settings-workspace-wide .settings-addons-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (min-width: 1280px) {
+  body[data-page='wallet'] .settings-workspace-wide { grid-template-columns: 184px minmax(0, 1fr); gap: 28px; }
+  body[data-page='wallet'] .settings-navigation { position: sticky; top: 24px; padding: 0; max-height: calc(100dvh - 48px); overflow-y: auto; }
+  body[data-page='wallet'] .settings-navigation nav { display: grid; padding: 0 4px 4px; overflow: visible; gap: 20px; }
+  body[data-page='wallet'] .settings-nav-group { display: grid; gap: 5px; }
+  body[data-page='wallet'] .settings-nav-group + .settings-nav-group { border: 0; padding: 0; margin: 0; }
+  body[data-page='wallet'] .settings-nav-group-label { display: block; padding: 0 12px 6px; color: var(--theme-subtle); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; }
+  body[data-page='wallet'] .settings-nav-item { background: transparent; white-space: normal; padding: 11px 12px; }
+  body[data-page='wallet'] .settings-nav-footer { display: grid; gap: 6px; margin: 24px 16px 0; padding-top: 18px; border-top: 1px solid var(--theme-divider); color: var(--theme-subtle); font-size: 11px; }
+}

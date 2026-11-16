@@ -20,3 +20,5 @@ export * from './rpc';
 export * from './staking';
 
 export * from './approvalUx';
+
+export * from './privacyGuide';

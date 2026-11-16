@@ -3,6 +3,7 @@ import './runtime-polyfills';
 import { base64ToBytes, bytesToBase64 } from '@grape/core';
 import { Connection, Keypair, Transaction, VersionedTransaction } from '@solana/web3.js';
 import nacl from 'tweetnacl';
+import { assertSafeSolanaMessage } from './privacySigning';
 
 export type ParsedSerializableTransaction =
   | { kind: 'legacy'; transaction: Transaction }
@@ -53,6 +54,7 @@ export function signSerializedTransactions(serializedTransactions: string[], key
 }
 
 export function signMessageBytes(message: Uint8Array, keypair: Keypair): Uint8Array {
+  assertSafeSolanaMessage(message);
   return nacl.sign.detached(message, keypair.secretKey);
 }
 

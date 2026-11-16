@@ -1,0 +1,531 @@
+[
+  {
+    "name": "Grape Governance",
+    "host": "www.governance.so",
+    "asset": "dapp-logos/www.governance.so.png",
+    "source": "https://www.governance.so/assets/touch-icon.png",
+    "page": "https://www.governance.so/dao/By2sVGZXwfQq6rAiAM3rNPJ9iQfb5e2QhnF4YjJ4Bip",
+    "bytes": 201716
+  },
+  {
+    "name": "Roundtrip AI",
+    "host": "round-trip.ai.studio",
+    "page": "https://round-trip.ai.studio/",
+    "asset": "dapp-logos/round-trip.ai.studio.svg",
+    "source": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='4' fill='%2310b981'/%3E%3Crect x='8' y='8' width='16' height='16' fill='none' stroke='%230f172a' stroke-width='2' transform='rotate(45 16 16)'/%3E%3C/svg%3E",
+    "bytes": 235
+  },
+  {
+    "name": "Jupiter",
+    "host": "jup.ag",
+    "asset": "dapp-logos/jup.ag.png",
+    "source": "https://jup.ag/apple-touch-icon.png",
+    "page": "https://jup.ag",
+    "bytes": 16875
+  },
+  {
+    "name": "Kamino",
+    "host": "app.kamino.finance",
+    "asset": "dapp-logos/app.kamino.finance.png",
+    "source": "https://kamino.com/apple-touch-icon.png",
+    "page": "https://app.kamino.finance",
+    "bytes": 1517
+  },
+  {
+    "name": "Sanctum",
+    "host": "app.sanctum.so",
+    "asset": "dapp-logos/app.sanctum.so.png",
+    "source": "https://app.sanctum.so/apple-icon.png?apple-icon.052brioepxmiw.png",
+    "page": "https://app.sanctum.so",
+    "bytes": 9045
+  },
+  {
+    "name": "Tensor",
+    "host": "www.tensor.trade",
+    "asset": "dapp-logos/www.tensor.trade.ico",
+    "source": "https://www.tensor.trade/favicons/favicon.ico",
+    "page": "https://www.tensor.trade",
+    "bytes": 15086
+  },
+  {
+    "name": "Raydium",
+    "host": "raydium.io",
+    "asset": "dapp-logos/raydium.io.ico",
+    "source": "https://raydium.io/favicon.ico",
+    "page": "https://raydium.io/swap",
+    "bytes": 25418
+  },
+  {
+    "name": "Orca",
+    "host": "www.orca.so",
+    "asset": "dapp-logos/www.orca.so.png",
+    "source": "https://www.orca.so/images/favicon.png",
+    "page": "https://www.orca.so",
+    "bytes": 3056
+  },
+  {
+    "name": "Drift",
+    "host": "app.drift.trade",
+    "asset": "dapp-logos/app.drift.trade.png",
+    "source": "https://app.drift.trade/apple-touch-icon.png",
+    "page": "https://app.drift.trade",
+    "bytes": 3774
+  },
+  {
+    "name": "Meteora",
+    "host": "app.meteora.ag",
+    "asset": "dapp-logos/app.meteora.ag.png",
+    "source": "https://app.meteora.ag/apple/apple-icon-57x57.png",
+    "page": "https://app.meteora.ag",
+    "bytes": 2915
+  },
+  {
+    "name": "marginfi",
+    "host": "app.marginfi.com",
+    "asset": "dapp-logos/app.marginfi.com.ico",
+    "source": "https://app.marginfi.com/favicon.ico",
+    "page": "https://app.marginfi.com",
+    "bytes": 4286
+  },
+  {
+    "name": "Marinade",
+    "host": "marinade.finance",
+    "asset": "dapp-logos/marinade.finance.png",
+    "source": "https://marinade.finance/favicon.png",
+    "page": "https://marinade.finance/app",
+    "bytes": 2801
+  },
+  {
+    "name": "Jito",
+    "host": "www.jito.network",
+    "page": "https://www.jito.network/staking",
+    "asset": "dapp-logos/www.jito.wtf.png",
+    "source": "https://www.jito.wtf/apple-touch-icon.png",
+    "bytes": 10994
+  },
+  {
+    "name": "Magic Eden",
+    "host": "magiceden.us",
+    "page": "https://magiceden.us",
+    "asset": "dapp-logos/magiceden.us.png",
+    "source": "https://avatars.githubusercontent.com/u/89287574?s=128&v=4",
+    "bytes": 3335,
+    "sourcePage": "https://github.com/magiceden"
+  },
+  {
+    "name": "Metaplex",
+    "host": "www.metaplex.com",
+    "asset": "dapp-logos/www.metaplex.com.png",
+    "source": "https://www.metaplex.com/favicon.png",
+    "page": "https://www.metaplex.com",
+    "bytes": 48180
+  },
+  {
+    "name": "Birdeye",
+    "host": "birdeye.so",
+    "asset": "dapp-logos/birdeye.so.ico",
+    "source": "https://birdeye.so/favicon.ico",
+    "page": "https://birdeye.so",
+    "bytes": 270398
+  },
+  {
+    "name": "Solscan",
+    "host": "solscan.io",
+    "asset": "dapp-logos/solscan.io.png",
+    "source": "https://solscan.io/favicon.png",
+    "page": "https://solscan.io",
+    "bytes": 7246
+  },
+  {
+    "name": "SolanaFM",
+    "host": "solana.fm",
+    "asset": "dapp-logos/solana.fm.png",
+    "source": "https://solana.fm/apple-touch-icon.png",
+    "page": "https://solana.fm",
+    "bytes": 10963
+  },
+  {
+    "name": "Squads",
+    "host": "v4.squads.so",
+    "page": "https://v4.squads.so",
+    "asset": "dapp-logos/squads.so.png",
+    "source": "https://framerusercontent.com/images/pBwgF4du4byUGDzFtqxnLoQwZqU.png",
+    "bytes": 2125
+  },
+  {
+    "name": "Verification",
+    "host": "verification.governance.so",
+    "asset": "dapp-logos/verification.governance.so.ico",
+    "source": "https://verification.governance.so/favicon.ico?favicon.9f5151cb.ico",
+    "page": "https://verification.governance.so",
+    "bytes": 15406
+  },
+  {
+    "name": "Access",
+    "host": "access.governance.so",
+    "asset": "dapp-logos/access.governance.so.png",
+    "source": "https://access.governance.so/images/grapelogo512.png",
+    "page": "https://access.governance.so",
+    "bytes": 67067
+  },
+  {
+    "name": "Cetus",
+    "host": "app.cetus.zone",
+    "asset": "dapp-logos/app.cetus.zone.ico",
+    "source": "https://app.cetus.zone/favicon.ico?t=202611131542",
+    "page": "https://app.cetus.zone",
+    "bytes": 4286
+  },
+  {
+    "name": "NAVI Protocol",
+    "host": "app.naviprotocol.io",
+    "asset": "dapp-logos/app.naviprotocol.io.png",
+    "source": "https://app.naviprotocol.io/favicon.png",
+    "page": "https://app.naviprotocol.io",
+    "bytes": 1848
+  },
+  {
+    "name": "Suilend",
+    "host": "app.suilend.fi",
+    "page": "https://app.suilend.fi",
+    "asset": "dapp-logos/suilend.fi.png",
+    "source": "https://suilend.fi/apple-touch-icon.png",
+    "bytes": 15083
+  },
+  {
+    "name": "Bluefin",
+    "host": "trade.bluefin.io",
+    "asset": "dapp-logos/trade.bluefin.io.png",
+    "source": "https://trade.bluefin.io/favicon-192x192.png",
+    "page": "https://trade.bluefin.io",
+    "bytes": 5617
+  },
+  {
+    "name": "Scallop",
+    "host": "app.scallop.io",
+    "asset": "dapp-logos/app.scallop.io.png",
+    "source": "https://app.scallop.io/images/logo-192.png",
+    "page": "https://app.scallop.io",
+    "bytes": 5534
+  },
+  {
+    "name": "Aftermath",
+    "host": "aftermath.finance",
+    "asset": "dapp-logos/aftermath.finance.png",
+    "source": "https://aftermath.finance/apple-touch-icon.png",
+    "page": "https://aftermath.finance",
+    "bytes": 12687
+  },
+  {
+    "name": "Turbos",
+    "host": "app.turbos.finance",
+    "asset": "dapp-logos/app.turbos.finance.ico",
+    "source": "https://app.turbos.finance/favicon.ico?v=11",
+    "page": "https://app.turbos.finance",
+    "bytes": 4286
+  },
+  {
+    "name": "SuiNS",
+    "host": "suins.io",
+    "asset": "dapp-logos/suins.io.png",
+    "source": "https://suins.io/v2/apple-touch-icon.png",
+    "page": "https://suins.io",
+    "bytes": 23209
+  },
+  {
+    "name": "SuiVision",
+    "host": "suivision.xyz",
+    "asset": "dapp-logos/suivision.xyz.png",
+    "source": "https://suivision.xyz/favicon128x128.png",
+    "page": "https://suivision.xyz",
+    "bytes": 4785
+  },
+  {
+    "name": "Sui Explorer",
+    "host": "suiscan.xyz",
+    "asset": "dapp-logos/suiscan.xyz.png",
+    "source": "https://suiscan.xyz/favicon/apple-icon-114x114.png",
+    "page": "https://suiscan.xyz",
+    "bytes": 7531
+  },
+  {
+    "name": "Sui Ecosystem",
+    "host": "www.sui.io",
+    "asset": "dapp-logos/www.sui.io.png",
+    "source": "https://cdn.prod.website-files.com/68e8e0120513ba12c5cd12e0/6943eb0c5363694f8af7eac7_webclipsui.png",
+    "page": "https://www.sui.io/ecosystem",
+    "bytes": 4764
+  },
+  {
+    "name": "Monad App Hub",
+    "host": "app.monad.xyz",
+    "asset": "dapp-logos/app.monad.xyz.ico",
+    "source": "https://app.monad.xyz/favicon.ico?favicon.3s46cp684udoq.ico",
+    "page": "https://app.monad.xyz",
+    "bytes": 15086
+  },
+  {
+    "name": "Kuru",
+    "host": "app.kuru.io",
+    "page": "https://app.kuru.io",
+    "asset": "dapp-logos/kuru.io.png",
+    "source": "https://www.kuru.io/apple-touch-icon.png",
+    "bytes": 5742
+  },
+  {
+    "name": "Uniswap",
+    "host": "app.uniswap.org",
+    "asset": "dapp-logos/app.uniswap.org.png",
+    "source": "https://cdn.app.uniswap.org/images/192x192_App_Icon.png",
+    "page": "https://app.uniswap.org",
+    "bytes": 50878
+  },
+  {
+    "name": "PancakeSwap",
+    "host": "pancakeswap.finance",
+    "asset": "dapp-logos/pancakeswap.finance.png",
+    "source": "https://pancakeswap.finance/logo.png",
+    "page": "https://pancakeswap.finance",
+    "bytes": 22919
+  },
+  {
+    "name": "LFJ",
+    "host": "lfj.gg",
+    "asset": "dapp-logos/lfj.gg.png",
+    "source": "https://lfj.gg/favicon.png",
+    "page": "https://lfj.gg/monad",
+    "bytes": 89730
+  },
+  {
+    "name": "aPriori",
+    "host": "stake.apr.io",
+    "asset": "dapp-logos/stake.apr.io.svg",
+    "source": "https://stake.apr.io/capricorn-symbol.svg",
+    "page": "https://stake.apr.io",
+    "bytes": 7350
+  },
+  {
+    "name": "Magma",
+    "host": "www.magmastaking.xyz",
+    "asset": "dapp-logos/www.magmastaking.xyz.ico",
+    "source": "https://www.magmastaking.xyz/favicon.ico",
+    "page": "https://www.magmastaking.xyz",
+    "bytes": 16958
+  },
+  {
+    "name": "Curvance",
+    "host": "app.curvance.com",
+    "asset": "dapp-logos/app.curvance.com.png",
+    "source": "https://app.curvance.com/apple-touch-icon.png",
+    "page": "https://app.curvance.com",
+    "bytes": 1051
+  },
+  {
+    "name": "Nad.fun",
+    "host": "nad.fun",
+    "asset": "dapp-logos/nad.fun.ico",
+    "source": "https://nad.fun/favicon.ico",
+    "page": "https://nad.fun",
+    "bytes": 41662
+  },
+  {
+    "name": "Monadscan",
+    "host": "monadscan.com",
+    "asset": "dapp-logos/monadscan.com.ico",
+    "source": "https://monadscan.com/assets/generic/html/favicon.ico",
+    "page": "https://monadscan.com",
+    "bytes": 15406
+  },
+  {
+    "name": "MonadVision",
+    "host": "monadvision.com",
+    "asset": "dapp-logos/monadvision.com.png",
+    "source": "https://monadvision.com/favicon.png",
+    "page": "https://monadvision.com",
+    "bytes": 1186
+  },
+  {
+    "name": "Aave",
+    "host": "app.aave.com",
+    "asset": "dapp-logos/app.aave.com.png",
+    "source": "https://app.aave.com/apple-touch-icon.png",
+    "page": "https://app.aave.com",
+    "bytes": 2981
+  },
+  {
+    "name": "Lido",
+    "host": "stake.lido.fi",
+    "asset": "dapp-logos/stake.lido.fi.png",
+    "source": "https://stake.lido.fi/apple-touch-icon.png",
+    "page": "https://stake.lido.fi",
+    "bytes": 5017
+  },
+  {
+    "name": "Safe",
+    "host": "app.safe.global",
+    "asset": "dapp-logos/app.safe.global.png",
+    "source": "https://app.safe.global/favicons/apple-touch-icon.png",
+    "page": "https://app.safe.global",
+    "bytes": 3947
+  },
+  {
+    "name": "Curve",
+    "host": "curve.finance",
+    "asset": "dapp-logos/curve.finance.png",
+    "source": "https://www.curve.finance/apple-touch-icon.png",
+    "page": "https://curve.finance",
+    "bytes": 16657
+  },
+  {
+    "name": "CoW Swap",
+    "host": "swap.cow.fi",
+    "asset": "dapp-logos/swap.cow.fi.png",
+    "source": "https://swap.cow.fi/apple-touch-icon.png",
+    "page": "https://swap.cow.fi",
+    "bytes": 2318
+  },
+  {
+    "name": "1inch",
+    "host": "app.1inch.io",
+    "asset": "dapp-logos/app.1inch.io.png",
+    "source": "https://1inch.com/favicon/apple-touch-icon.png",
+    "page": "https://app.1inch.io",
+    "bytes": 1700
+  },
+  {
+    "name": "OpenSea",
+    "host": "opensea.io",
+    "asset": "dapp-logos/opensea.io.png",
+    "source": "https://opensea.io/icons/rebrand/icon-192x192.png",
+    "page": "https://opensea.io",
+    "bytes": 8199
+  },
+  {
+    "name": "ENS",
+    "host": "app.ens.domains",
+    "asset": "dapp-logos/app.ens.domains.png",
+    "source": "https://app.ens.domains/apple-icon-180x180.png",
+    "page": "https://app.ens.domains",
+    "bytes": 6960
+  },
+  {
+    "name": "Snapshot",
+    "host": "snapshot.box",
+    "asset": "dapp-logos/snapshot.box.svg",
+    "source": "https://snapshot.box/favicon-dark.svg",
+    "page": "https://snapshot.box",
+    "bytes": 562
+  },
+  {
+    "name": "Across",
+    "host": "app.across.to",
+    "asset": "dapp-logos/app.across.to.png",
+    "source": "https://across.to/logo-small.png",
+    "page": "https://app.across.to",
+    "bytes": 349215
+  },
+  {
+    "name": "Etherscan",
+    "host": "etherscan.io",
+    "asset": "dapp-logos/etherscan.io.ico",
+    "source": "https://etherscan.io/images/favicon.ico?v=26.11.2.1",
+    "page": "https://etherscan.io",
+    "bytes": 15406
+  },
+  {
+    "name": "Houdini Swap",
+    "host": "houdiniswap.com",
+    "page": "https://houdiniswap.com",
+    "asset": "dapp-logos/app.houdini.com.ico",
+    "source": "https://app.houdini.com/favicon.ico",
+    "bytes": 3896
+  },
+  {
+    "name": "ChangeNOW",
+    "host": "changenow.io",
+    "asset": "dapp-logos/changenow.io.png",
+    "source": "https://changenow.io/images/icons/apple/apple-touch-icon-114x114-1.png",
+    "page": "https://changenow.io/currencies/zcash",
+    "bytes": 1597
+  },
+  {
+    "name": "Zexplorer",
+    "host": "www.zexplorer.app",
+    "asset": "dapp-logos/www.zexplorer.app.ico",
+    "source": "https://www.zexplorer.app/favicon.ico?603d046c9a6fdfbb",
+    "page": "https://www.zexplorer.app",
+    "bytes": 25931
+  },
+  {
+    "name": "Zcash.me",
+    "host": "zcash.me",
+    "asset": "dapp-logos/zcash.me.png",
+    "source": "https://zcash.me/apple-icon.png",
+    "page": "https://zcash.me",
+    "bytes": 24336
+  },
+  {
+    "name": "ZecHub",
+    "host": "zechub.wiki",
+    "asset": "dapp-logos/zechub.wiki.png",
+    "source": "https://zechub.wiki/ZecHubBlue.png",
+    "page": "https://zechub.wiki",
+    "bytes": 164185
+  },
+  {
+    "name": "Zcash Ecosystem",
+    "host": "z.cash",
+    "asset": "dapp-logos/z.cash.png",
+    "source": "https://z.cash/wp-content/uploads/2023/06/cropped-z-favicon-512-180x180.png",
+    "page": "https://z.cash/ecosystem/",
+    "bytes": 4769
+  },
+  {
+    "name": "Zcash Forum",
+    "host": "forum.zcashcommunity.com",
+    "asset": "dapp-logos/forum.zcashcommunity.com.png",
+    "source": "https://global.discourse-cdn.com/zcash/optimized/2X/2/2e49c52ed4ae155178b3f89440b914f99b85374a_2_180x180.png",
+    "page": "https://forum.zcashcommunity.com",
+    "bytes": 4954
+  },
+  {
+    "name": "Reputation",
+    "host": "vine.governance.so",
+    "asset": "dapp-logos/vine.governance.so.ico",
+    "source": "https://vine.governance.so/favicon.ico",
+    "page": "https://vine.governance.so",
+    "bytes": 57277
+  },
+  {
+    "name": "Bitrefill",
+    "host": "www.bitrefill.com",
+    "asset": "dapp-logos/www.bitrefill.com.png",
+    "source": "https://www.bitrefill.com/apple-touch-icon.png",
+    "page": "https://www.bitrefill.com/",
+    "bytes": 516
+  },
+  {
+    "name": "Zebec",
+    "host": "zebec.io",
+    "asset": "dapp-logos/zebec.io.png",
+    "source": "https://cdn.prod.website-files.com/68caaf537569afdf5b2312c1/68cdcc9586fe0c90ce83407e_fav.png",
+    "page": "https://zebec.io/cards",
+    "bytes": 1177
+  },
+  {
+    "name": "MoonPay",
+    "host": "www.moonpay.com",
+    "asset": "dapp-logos/www.moonpay.com.png",
+    "source": "https://www.moonpay.com/apple-icon.png?apple-icon.1xku-f7qs5jnl.png",
+    "page": "https://www.moonpay.com/sell",
+    "bytes": 4528
+  },
+  {
+    "name": "Transak",
+    "host": "transak.com",
+    "asset": "dapp-logos/transak.com.png",
+    "source": "https://transak.com/favicon/apple-touch-icon.png",
+    "page": "https://transak.com/off-ramp",
+    "bytes": 9479
+  }
+]
