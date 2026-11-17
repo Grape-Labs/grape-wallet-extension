@@ -1,0 +1,624 @@
+{
+  "version": "0.4.1",
+  "name": "staking",
+  "instructions": [
+    {
+      "name": "initFox",
+      "accounts": [
+        {
+          "name": "fox",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "mint",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "owner",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "rent",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "initMissionAccount",
+      "accounts": [
+        {
+          "name": "key",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "missionAccount",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "mission",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "owner",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "rent",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "missionBump",
+          "type": "u8"
+        },
+        {
+          "name": "missionIndex",
+          "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "startMission",
+      "accounts": [
+        {
+          "name": "mission",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "authority",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "missionAccount",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "fox",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "owner",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "fromAccount",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "mint",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "metaplexAcc",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "masterEdition",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "tokenProgram",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "metadata",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "sysvarInstructions",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "ownerTokenRecord",
+          "isMut": true,
+          "isSigner": false,
+          "isOptional": true,
+          "docs": [
+            "OPTIONAL FIELDS ONLY REQUIRED FOR PNFTS"
+          ]
+        },
+        {
+          "name": "rulesAcc",
+          "isMut": false,
+          "isSigner": false,
+          "isOptional": true
+        },
+        {
+          "name": "authRules",
+          "isMut": false,
+          "isSigner": false,
+          "isOptional": true
+        }
+      ],
+      "args": [
+        {
+          "name": "authBump",
+          "type": "u8"
+        }
+      ]
+    },
+    {
+      "name": "endMissionV3",
+      "accounts": [
+        {
+          "name": "mission",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "authority",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "missionAccount",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "fox",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "owner",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "toAccount",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "mint",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "metaplexAcc",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "foxUpgrade",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "masterEdition",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "metadata",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "tokenProgram",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "sysvarInstructions",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "ownerTokenRecord",
+          "isMut": true,
+          "isSigner": false,
+          "isOptional": true,
+          "docs": [
+            "OPTIONAL FIELDS ONLY REQUIRED FOR PNFTS"
+          ]
+        },
+        {
+          "name": "rulesAcc",
+          "isMut": false,
+          "isSigner": false,
+          "isOptional": true
+        },
+        {
+          "name": "authRules",
+          "isMut": false,
+          "isSigner": false,
+          "isOptional": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "claimReward",
+      "accounts": [
+        {
+          "name": "mission",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "authority",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "rewardAccount",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "userRewardAccount",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "missionAccount",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "owner",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "reward",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "tokenProgram",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "claimRareChest",
+      "accounts": [
+        {
+          "name": "missionAccount",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "owner",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "rareVaultAuthority",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "rareVault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "userRareAccount",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "rareMint",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "tokenProgram",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "associatedTokenProgram",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": []
+    }
+  ],
+  "accounts": [
+    {
+      "name": "fox",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "fox",
+            "type": "publicKey"
+          },
+          {
+            "name": "owner",
+            "type": "publicKey"
+          },
+          {
+            "name": "tff",
+            "type": "bool"
+          },
+          {
+            "name": "other",
+            "type": "bool"
+          },
+          {
+            "name": "xp",
+            "type": "u64"
+          },
+          {
+            "name": "missions",
+            "type": "u64"
+          },
+          {
+            "name": "multiplier",
+            "type": "u64"
+          },
+          {
+            "name": "mission",
+            "type": "publicKey"
+          },
+          {
+            "name": "missionIndex",
+            "type": "u8"
+          },
+          {
+            "name": "missionIndexV2",
+            "type": {
+              "option": "u16"
+            }
+          },
+          {
+            "name": "missionAccount",
+            "type": "publicKey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "missionAccount",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "owner",
+            "type": "publicKey"
+          },
+          {
+            "name": "started",
+            "type": "bool"
+          },
+          {
+            "name": "ended",
+            "type": "bool"
+          },
+          {
+            "name": "starttime",
+            "type": "u64"
+          },
+          {
+            "name": "count",
+            "type": "u64"
+          },
+          {
+            "name": "ucount",
+            "type": "u64"
+          },
+          {
+            "name": "other",
+            "type": "bool"
+          },
+          {
+            "name": "v2",
+            "type": "bool"
+          },
+          {
+            "name": "mission",
+            "type": "publicKey"
+          },
+          {
+            "name": "missionIndex",
+            "type": "u8"
+          },
+          {
+            "name": "denRoom",
+            "type": "bool"
+          },
+          {
+            "name": "chestCount",
+            "type": "u8"
+          },
+          {
+            "name": "success",
+            "type": "bool"
+          },
+          {
+            "name": "denMint",
+            "type": "publicKey"
+          },
+          {
+            "name": "consumable",
+            "type": "publicKey"
+          },
+          {
+            "name": "missionIndexV2",
+            "type": {
+              "option": "u16"
+            }
+          },
+          {
+            "name": "partnerMint",
+            "type": "publicKey"
+          },
+          {
+            "name": "rareChestCount",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "mission",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "authority",
+            "type": "publicKey"
+          },
+          {
+            "name": "reward",
+            "type": "publicKey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "id",
+            "type": "u64"
+          },
+          {
+            "name": "timelock",
+            "type": "u64"
+          },
+          {
+            "name": "count",
+            "type": "u64"
+          },
+          {
+            "name": "needother",
+            "type": "bool"
+          },
+          {
+            "name": "limit",
+            "type": "u64"
+          },
+          {
+            "name": "xp",
+            "type": "u64"
+          },
+          {
+            "name": "xpreward",
+            "type": "u64"
+          },
+          {
+            "name": "lockstart",
+            "type": "u64"
+          },
+          {
+            "name": "lockend",
+            "type": "u64"
+          },
+          {
+            "name": "end",
+            "type": "bool"
+          },
+          {
+            "name": "root",
+            "docs": [
+              "The 256-bit merkle root."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "started",
+            "type": "u64"
+          },
+          {
+            "name": "room",
+            "type": "publicKey"
+          },
+          {
+            "name": "edition",
+            "type": "bool"
+          },
+          {
+            "name": "maxxp",
+            "type": "u64"
+          },
+          {
+            "name": "version",
+            "type": "u8"
+          },
+          {
+            "name": "foxCount",
+            "type": "u64"
+          },
+          {
+            "name": "partnerCollection",
+            "type": "publicKey"
+          }
+        ]
+      }
+    }
+  ]
+}

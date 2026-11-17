@@ -1,0 +1,4 @@
+export const FOX_COLLECTIONS = ['BUjZjAS2vbbb65g7Z1Ca9ZRVYoJscURG5L3AkVvHP9ac', 'Gwr8Vc3YG7kzj7BG44bXMCUi8N2P7FygcLECDcWySnop', 'HbPtffcEzzSzZ1VJaTjaAJqTUQpfNeMkPqNG81dWE2Bi'] as const;
+export type FoxMissionStatus = { eligible: boolean; held?: boolean; mint: string; owner: string; fame?: string; completedMissions?: string; state: 'ready' | 'locked' | 'claimable' | 'unavailable'; reason?: string; mission?: { address: string; name: string; opensAt: number; closesAt: number; endsAt: number; fame: string }; canStart: boolean; canClaim: boolean; signature?: string; pending?: boolean; reminderEnabled?: boolean };
+export type FoxMissionPreview = { id: string; action: 'start' | 'claim'; mint: string; mission: string; missionName: string; endsAt: number; networkFeeLamports: number; estimatedDebitLamports: number; expiresAt: number };
+export type FoxMissionResult = { signature: string; confirmed: boolean; error?: string };

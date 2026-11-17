@@ -1,3 +1,74 @@
+# Grape Wallet 0.5.312
+
+**Updated November 17, 2026.** This entry covers extension and mobile changes since 0.5.279. Earlier release notes are preserved below. Mobile source changes require a separate app build.
+
+## Highlights
+
+- Add SOL to an encrypted private balance, send privately to compatible wallets, and withdraw to a public address on Solana mainnet.
+- Manage supported Famous Fox missions from NFT details, see mission status in the gallery, and opt in to mission-end reminders.
+- Compare NFT market references with conservative rent recovery in an on-demand report, with CSV export.
+- Browse redesigned NFT details and governance workspaces, with improved expanded-view and tablet layouts.
+- Open supported Grape ecosystem dApps inside the extension, with bundled Discover logos and an external-browser option.
+- Use a cleaner lock illustration for private-balance previews in both mobile and the extension.
+
+## Private balances
+
+- Added Helius Privacy Rings integration for supported Solana software wallets on mainnet, including setup, private-balance sync, SOL deposits, private sends and public withdrawals.
+- Private balances use the selected wallet's existing address and derived privacy identity; setup does not create a separate public wallet or move funds automatically.
+- Added an opt-in private-balances add-on and a per-wallet/network home visibility setting. Removing the section from home does not withdraw funds, close the private registration or reclaim its setup rent.
+- Uses the configured Helius mainnet RPC without an endpoint/API-key field in the private-balance interface. Updated mobile RPC configuration and EAS environment selection for native builds.
+- Reuses the unlocked wallet session where available, shortens displayed addresses, and fixes decimal amount conversion and extension service-worker loading errors.
+- Added a detailed explainer covering setup, encryption, recovery, fees, recipient compatibility and the remote proving service. Private sends hide the amount and asset; sender, recipient and activity remain visible. Deposits and withdrawals expose their amount and asset.
+- Replaced the grape artwork and crossing paths with a simple lock, straight connectors and subtle motion. Mobile layouts scale with available width, private-send and withdrawal labels follow the actual route, and reduced-motion settings keep the illustration still.
+
+## Famous Fox missions — extension
+
+- Added mission controls for supported, verified Famous Fox Federation, Transdimensional Fox Federation and Friends & Foes NFTs on Solana mainnet.
+- NFT details show FAME, completed missions, eligibility, mission status and the on-chain end time. Gallery badges show **On mission** or **Mission ended · claim**.
+- Supports starting a mission with one unstaked Fox without boosts, and claiming supported missions with their standard chest rewards. Squads, boosts, staking transitions and unsupported rewards remain on the official Famous Foxes site.
+- Actions include fresh state checks, simulation, fee/debit review, wallet confirmation and pending-transaction tracking. Transfers and Tensor actions wait while a Fox is locked, pending or its mission state is unresolved.
+- Added optional per-Fox browser reminders. At the scheduled end, Grape rechecks ownership and mission state before notifying once per mission. Clicking the notification opens that Fox's details, or asks you to select its wallet.
+- Reminders persist locally across browser restarts. When the browser is closed, overdue checks wait until it reopens; browser/OS notification settings still apply. Claiming and deploying again always require your approval.
+
+## NFT details and value report — extension
+
+- Redesigned NFT details around larger artwork, readable collection information, description, traits, shortened copyable addresses and expandable technical data.
+- Improved artwork resource handling for HTTPS, IPFS and Arweave links, with clearer missing-artwork states.
+- Added one discreet **Value & rent report** button beside the gallery filters. The report stays hidden until opened, replacing the oversized banner presentation.
+- Reports scan the loaded gallery on request and show collection floors, the mint's last indexed sale, inspection notes and adjustable fee assumptions. Missing prices remain **unknown**, not zero or worthless.
+- Compares a sale-at-floor scenario with the observed token-account SOL balance after an assumed action cost. Floor prices are reference listings, not executable offers or guaranteed proceeds.
+- Rent estimates cover eligible original Token Program, single-supply NFTs only. Frozen, delegated or externally controlled accounts are flagged for review. Additional metadata/edition refunds and mint rent are excluded; compressed, Core and Token-2022 assets need separate inspection.
+- Added filters, stop-scan controls, retained results when reopening the report, and CSV export. The report never sells, burns or closes an account.
+
+## Governance, settings and tablet layouts
+
+- Reworked the governance overview with searchable community cards, distinct community initials, clearer metrics, summary counts and a compact participation-activity panel.
+- Consolidated duplicate overview controls and added a compact voting-power strip, clearer verification statuses, improved proposal styling and a **View proposals** shortcut inside DAO workspaces.
+- Retained voting information, reputation, community assets, recorded votes, management actions and the **Overview / Full governance** switch.
+- Improved settings presentation in the extension, expanded view and native app, with grouped controls and responsive layouts that use tablet space more effectively.
+- Refined the expanded wallet's public/private balance presentation and centered the native login card on iPad.
+
+## Discover
+
+- Added an extension app viewer for HTTPS pages on governance.so and its subdomains, plus round-trip.ai.studio. These sites continue to use Grape's existing connection and signing approvals.
+- Added a preference for opening supported sites inside the extension, with external-page options. Other third-party dApps continue to open externally.
+- Bundled Discover logos from official site assets, added fallbacks for missing icons, and improved logo reliability.
+
+## Validation and availability
+
+- Targeted mission, reminder, NFT-report, gallery, governance and privacy-route tests passed during development, alongside extension/mobile TypeScript checks and extension production packaging.
+- Mission program/account data was checked with read-only mainnet requests. No Famous Fox start or claim transaction was signed or submitted during implementation; funded mission execution and actual OS notification delivery still require acceptance testing.
+- Governance layout previews were checked at 390px, 834px and 1440px, including community search. The latest mobile privacy changes also passed an iOS Hermes bundle export; this is not a new signed IPA or physical-device acceptance test.
+- Updating the extension does not update an installed iOS/Android app. Mobile UI and configuration changes take effect in a new app build.
+
+## Build to share
+
+- **Extension:** `apps/extension/releases/grape_wallet_extension.0.5.312.zip`
+- **Checksum:** `apps/extension/releases/grape_wallet_extension.0.5.312.zip.sha256`
+- Update the existing extension installation and reload its wallet page to use the new build.
+
+---
+
 # Grape Wallet 0.5.279
 
 This entry covers extension and mobile changes since 0.5.271. Earlier release notes are preserved below.

@@ -1,3 +1,6 @@
+import { inspectNftReport } from './nft-report';
+import { FoxMissionReminders } from './fox-mission-reminders';
+import { buildFoxMission, inspectFoxMission, assertFoxReviewContext } from './fox-missions';
 import { redactRpcDetails } from '@grape/core';
 import { PrivacyRingsReviews } from './privacy-rings';
 import { privacyRpcUrl, readPrivacyWallet, signPrivacyTransaction, privacyRateLimitMessage } from '@grape/solana/privacy';
@@ -91,6 +94,7 @@ import {
   StakeProgram,
   Transaction,
   TransactionInstruction,
+  VersionedTransaction,
   VALIDATOR_INFO_KEY,
   ValidatorInfo
 } from '@solana/web3.js';
@@ -603,6 +607,8 @@ class WalletController {
   }
 
   private async clearUnlockedSecrets() {
+    this.foxEpoch++;
+    this.foxPreviews.clear();
     this.unlockedSecrets = {};
     await Promise.all([
       unlockedSecretSessionStorage.set({}),
@@ -2209,6 +2215,9 @@ class WalletController {
 
   async resetWallet() {
     await this.clearUnlockedSecrets();
+    const reminderKeys = Object.keys(await chrome.storage.local.get(null)).filter(key => key.startsWith('grape:fox-reminder:'));
+    await chrome.storage.local.remove(reminderKeys);
+    await Promise.all(reminderKeys.map(key => chrome.alarms.clear(key)));
 
     for (const [approvalId, pending] of this.pendingApprovals.entries()) {
       pending.reject(new RpcError('WALLET_RESET', 'Wallet was reset.'));
@@ -5312,6 +5321,114 @@ class WalletController {
     };
   }
 
+  readonly foxReminders = new FoxMissionReminders(async (owner, mint) => {
+    const walletState = await this.getWalletState();
+    if (!walletState.wallets.some(w => w.chain === 'solana' && w.accounts.some(a => a.publicKey === owner))) return null;
+    const connection = this.createConnection('mainnet-beta', walletState);
+    const status = (await inspectFoxMission(connection, owner, mint)).status;
+    const key = 'grape:fox:mainnet:' + owner;
+    const saved = (await chrome.storage.local.get(key))[key]?.[mint];
+    if (saved?.signature) {
+      const transaction = (await connection.getSignatureStatuses([saved.signature], { searchTransactionHistory: true })).value[0];
+      status.pending = transaction ? !transaction.err && !['confirmed', 'finalized'].includes(transaction.confirmationStatus ?? '') : await connection.getBlockHeight('confirmed') <= saved.lastValidBlockHeight;
+    }
+    return status;
+  });
+  private readonly foxStatusCache = new Map<string, { expires: number; value: Awaited<ReturnType<typeof inspectFoxMission>>['status'] }>();
+  async foxReminder(mint: string, owner: string, enabled: boolean) {
+    const status = await this.foxStatus(mint, owner);
+    const reminderEnabled = await this.foxReminders.set(status, enabled);
+    this.foxStatusCache.delete(owner + ':' + mint);
+    return { ...status, reminderEnabled };
+  }
+  private foxEpoch = 0;
+  private readonly foxBusy = new Set<string>();
+  private readonly foxPreviews = new Map<string, Awaited<ReturnType<typeof buildFoxMission>> & { owner: string; walletId: string; mint: string; action: 'start' | 'claim'; expiresAt: number; epoch: number; rpc: string }>();
+  async foxStatus(mint: string, owner: string, cached = false) {
+    const cacheKey = owner + ':' + mint;
+    const savedStatus = this.foxStatusCache.get(cacheKey);
+    if (cached && savedStatus && savedStatus.expires > Date.now()) {
+      await this.tensorContext(owner);
+      return savedStatus.value;
+    }
+    const { connection } = await this.tensorContext(owner);
+    const result = (await inspectFoxMission(connection, owner, mint)).status;
+    const saved = (await chrome.storage.local.get('grape:fox:mainnet:' + owner))['grape:fox:mainnet:' + owner] ?? {};
+    const previous = saved[mint];
+    if (previous?.signature) {
+      result.signature = previous.signature;
+      const status = (await connection.getSignatureStatuses([previous.signature], { searchTransactionHistory: true })).value[0];
+      result.pending = status ? !status.err && !['confirmed', 'finalized'].includes(status.confirmationStatus ?? '') : await connection.getBlockHeight('confirmed') <= previous.lastValidBlockHeight;
+      if (result.pending) { result.canStart = false; result.canClaim = false; result.reason = 'A previous mission transaction is still pending. Check its status before retrying.'; }
+    }
+    await this.foxReminders.sync(result);
+    result.reminderEnabled = await this.foxReminders.enabled(owner, mint);
+    for (const [key, entry] of this.foxStatusCache) if (entry.expires < Date.now()) this.foxStatusCache.delete(key);
+    this.foxStatusCache.set(cacheKey, { expires: Date.now() + 30_000, value: result });
+    return result;
+  }
+  async foxPreview(input: { owner: string; mint: string; action: 'start' | 'claim' }) {
+    const { connection, selectedWallet } = await this.tensorContext(input.owner);
+    this.assertInteractiveWallet(selectedWallet);
+    const epoch = this.foxEpoch;
+    const status = await this.foxStatus(input.mint, input.owner);
+    if (status.pending) throw new Error('A mission transaction is still pending.');
+    const built = await buildFoxMission(connection, input.owner, input.mint, input.action);
+    await this.tensorContext(input.owner);
+    if (epoch !== this.foxEpoch) throw new Error('Wallet session changed. Review again.');
+    for (const [id, review] of this.foxPreviews) if (review.expiresAt < Date.now()) this.foxPreviews.delete(id);
+    const id = crypto.randomUUID(), expiresAt = Date.now() + 45_000;
+    this.foxPreviews.set(id, { ...built, ...input, walletId: selectedWallet.id, expiresAt, epoch, rpc: connection.rpcEndpoint });
+    return { id, ...input, mission: built.status.mission!.address, missionName: built.status.mission!.name, endsAt: built.status.mission!.endsAt, networkFeeLamports: built.networkFeeLamports, estimatedDebitLamports: built.estimatedDebitLamports, expiresAt };
+  }
+  async foxExecute(input: { owner: string; previewId: string; password?: string }) {
+    const review = this.foxPreviews.get(input.previewId);
+    this.foxPreviews.delete(input.previewId);
+    if (!review || review.owner !== input.owner || review.expiresAt < Date.now() || review.epoch !== this.foxEpoch) throw new Error('Mission review expired. Review again.');
+    const busyKey = input.owner + ':' + review.mint;
+    if (this.foxBusy.has(busyKey)) throw new Error('A transaction for this Fox is already in progress.');
+    this.foxBusy.add(busyKey);
+    try {
+      const { connection, selectedWallet, account } = await this.tensorContext(input.owner);
+      this.assertInteractiveWallet(selectedWallet);
+      assertFoxReviewContext(review, { owner: account.publicKey, walletId: selectedWallet.id, rpc: connection.rpcEndpoint, epoch: this.foxEpoch });
+      const fresh = await this.foxStatus(review.mint, input.owner);
+      if (fresh.pending || fresh.mission?.address !== review.status.mission?.address || !(review.action === 'start' ? fresh.canStart : fresh.canClaim)) throw new Error('Fox mission state changed. Refresh and review again.');
+      const secret = selectedWallet.signer.kind === 'ledger' ? null : await this.getUnlockedSecret(selectedWallet.id, selectedWallet.vault, input.password);
+      const context = await this.tensorContext(input.owner);
+      if (context.selectedWallet.id !== review.walletId || context.connection.rpcEndpoint !== review.rpc || review.epoch !== this.foxEpoch || Date.now() > review.expiresAt || await connection.getBlockHeight('confirmed') > review.lifetime.lastValidBlockHeight) throw new Error('Mission review expired or wallet session changed.');
+      const transaction = review.transaction;
+      const [simulation, balance, fee] = await Promise.all([
+        connection.simulateTransaction(new VersionedTransaction(transaction.compileMessage()), { sigVerify: false, commitment: 'confirmed', accounts: { encoding: 'base64', addresses: [input.owner] } }),
+        connection.getBalance(new PublicKey(input.owner), 'confirmed'),
+        connection.getFeeForMessage(transaction.compileMessage(), 'confirmed')
+      ]);
+      if (simulation.value.err) throw new Error('Mission state changed; simulation failed. Refresh and review again.');
+      if (!simulation.value.accounts?.[0] || fee.value == null || fee.value > review.networkFeeLamports || Math.max(0, balance - simulation.value.accounts[0].lamports) > review.estimatedDebitLamports) throw new Error('Mission costs changed. Refresh and review again.');
+      let signed = transaction;
+      if (selectedWallet.signer.kind === 'ledger') signed = Transaction.from(Buffer.from(await signLedgerSerializedTransaction(transaction.serialize({ requireAllSignatures: false }).toString('base64'), account.publicKey, selectedWallet.signer.derivationPath), 'base64'));
+      else signed.sign(this.resolveSolanaSignerForWallet(secret as VaultSecret, selectedWallet, account.publicKey));
+      const last = await this.tensorContext(input.owner);
+      assertFoxReviewContext(review, { owner: last.account.publicKey, walletId: last.selectedWallet.id, rpc: last.connection.rpcEndpoint, epoch: this.foxEpoch });
+      if (!signed.serializeMessage().equals(transaction.serializeMessage())) throw new Error('Signed mission transaction changed.');
+      const bytes = signed.serialize(), signature = getBase58Decoder().decode(signed.signature!);
+      const key = 'grape:fox:mainnet:' + input.owner;
+      const saved = (await chrome.storage.local.get(key))[key] ?? {};
+      await chrome.storage.local.set({ [key]: { ...saved, [review.mint]: { signature, lastValidBlockHeight: review.lifetime.lastValidBlockHeight } } });
+      const broadcastContext = await this.tensorContext(input.owner);
+      assertFoxReviewContext(review, { owner: broadcastContext.account.publicKey, walletId: broadcastContext.selectedWallet.id, rpc: broadcastContext.connection.rpcEndpoint, epoch: this.foxEpoch });
+      try {
+        await connection.sendRawTransaction(bytes, { skipPreflight: false, maxRetries: 2 });
+        const confirmed = await connection.confirmTransaction({ signature, ...review.lifetime }, 'confirmed');
+        if (confirmed.value.err) return { signature, confirmed: false, error: 'Mission transaction failed on chain. Refresh before retrying.' };
+      } catch { return { signature, confirmed: false, error: 'Submission is pending or uncertain. Check the saved signature before retrying.' }; }
+      this.foxStatusCache.delete(input.owner + ':' + review.mint);
+      await this.foxReminders.sync({ ...review.status, state: review.action === 'start' ? 'locked' : 'ready', canStart: false, canClaim: false }).catch(() => {});
+      await this.invalidateAssetCache(this.getAssetCacheKey(selectedWallet.id, 'mainnet-beta', account.publicKey));
+      return { signature, confirmed: true };
+    } finally { this.foxBusy.delete(busyKey); }
+  }
+
   private readonly tensorPreviews = new Map<string, Awaited<ReturnType<typeof buildTensorTransaction>> & { owner: string; walletId: string; mint: string; action: 'list' | 'cancel'; expiresAt: number }>();
   private readonly tensorBusy = new Set<string>();
 
@@ -5321,6 +5438,11 @@ class WalletController {
     if (selectedWallet.chain !== 'solana' || walletState.selectedNetwork !== 'mainnet-beta') throw new Error('Tensor trading is available on Solana mainnet only.');
     if (!account || account.publicKey !== expectedOwner) throw new Error('Wallet changed. Reopen the NFT and review again.');
     return { walletState, selectedWallet, account, connection: this.createConnection('mainnet-beta', walletState) };
+  }
+
+  async nftReport(mint: string, owner: string) {
+    const { connection } = await this.tensorContext(owner);
+    return inspectNftReport(connection, owner, mint);
   }
 
   async tensorMarketData(mint: string, owner: string, forceRefresh = false) {
@@ -9308,6 +9430,17 @@ function extractSwapRouteLabels(quoteResponse: JupiterQuoteResponse): string[] {
 }
 
 const controller = new WalletController();
+chrome.alarms.onAlarm.addListener(alarm => { void controller.foxReminders.handle(alarm.name).catch(() => {}); });
+let foxNotificationListenerAdded = false;
+function registerFoxNotificationClicks() {
+  if (foxNotificationListenerAdded || !chrome.notifications?.onClicked) return;
+  chrome.notifications.onClicked.addListener(id => { void controller.foxReminders.clicked(id).catch(() => {}); });
+  foxNotificationListenerAdded = true;
+}
+registerFoxNotificationClicks();
+chrome.permissions.onAdded.addListener(registerFoxNotificationClicks);
+void controller.foxReminders.restore().catch(() => {});
+
 
 const WEB_PROVIDER_TAB_PATTERNS = ['http://*/*', 'https://*/*'];
 
@@ -9696,6 +9829,22 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
             })
           );
           break;
+        case 'wallet_fox_reminder':
+        case 'wallet_fox_status':
+        case 'wallet_fox_preview':
+        case 'wallet_fox_execute': {
+          if (_sender.id !== chrome.runtime.id || !_sender.url?.startsWith(chrome.runtime.getURL(''))) throw new Error('Fox missions require the wallet interface.');
+          if (message.type === 'wallet_fox_reminder') sendResponse(await controller.foxReminder(message.mint, message.owner, message.enabled));
+          else if (message.type === 'wallet_fox_status') sendResponse(await controller.foxStatus(message.mint, message.owner, message.cached));
+          else if (message.type === 'wallet_fox_preview') sendResponse(await controller.foxPreview(message));
+          else sendResponse(await controller.foxExecute(message));
+          break;
+        }
+        case 'wallet_nft_report': {
+          if (_sender.id !== chrome.runtime.id || !_sender.url?.startsWith(chrome.runtime.getURL(''))) throw new Error('NFT reports require the wallet interface.');
+          sendResponse(await controller.nftReport(message.mint, message.owner));
+          break;
+        }
         case 'wallet_tensor_market_data':
         case 'wallet_tensor_status':
         case 'wallet_tensor_listings':

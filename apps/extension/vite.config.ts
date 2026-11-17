@@ -131,7 +131,8 @@ function createManifestPlugin(
         side_panel: {
           default_path: 'sidepanel.html'
         },
-        permissions: ['storage', 'sidePanel', 'identity', 'scripting'],
+        permissions: ['storage', 'sidePanel', 'identity', 'scripting', 'alarms'],
+        optional_permissions: ['notifications'],
         host_permissions: [
           'https://mainnet.helius-rpc.com/*',
           'https://devnet.helius-rpc.com/*',
@@ -146,6 +147,7 @@ function createManifestPlugin(
           'https://api-mainnet.magiceden.dev/*',
           'https://api.geckoterminal.com/*',
           'https://solana.com/*',
+          'https://dens.famousfoxes.com/*',
           'https://blog.ethereum.org/*',
           'https://blog.sui.io/*',
           'https://www.sui.io/*',

@@ -1,3 +1,6 @@
+import { FoxMissionBadge } from './FoxMissionBadge';
+import { FOX_COLLECTIONS } from '../../shared/fox-missions';
+import { NftDetailView, nftResourceUrl, type NftJsonMetadata } from './NftDetailView';
 import { DiscoverAppIcon } from './DiscoverAppIcon';
 import { openDapp as launchDapp, getEmbeddedDappUrl, preferEmbeddedDapps, setPreferEmbeddedDapps } from '../../shared/dapp-launch';
 import { PrivateBalanceExplainer } from './PrivateBalanceExplainer';
@@ -1355,7 +1358,7 @@ function SwapAssetSelectorSummary(props: { option: AssetPickerDisplayOption }) {
   );
 }
 
-function CollectibleCard(props: { item: CollectibleItem; onSelect: () => void }) {
+function CollectibleCard(props: { item: CollectibleItem; onSelect: () => void; missionOwner?: string }) {
   const [imageFailed, setImageFailed] = useState(false);
   useEffect(() => setImageFailed(false), [props.item.imageUri]);
   const title = props.item.name ?? props.item.collectionName ?? 'Collectible';
@@ -1376,6 +1379,7 @@ function CollectibleCard(props: { item: CollectibleItem; onSelect: () => void })
           <div className="collectible-cover-fallback"><span>{title.slice(0, 1).toUpperCase()}</span><small>Artwork unavailable</small></div>
         )}
       </div>
+      {props.missionOwner && (FOX_COLLECTIONS as readonly string[]).includes(props.item.collectionId ?? '') ? <FoxMissionBadge owner={props.missionOwner} mint={props.item.mint} revision={props.item} /> : null}
       <div className="collectible-copy">
         <strong className="collectible-name" title={title}>
           {title}
@@ -1578,7 +1582,7 @@ function PopupPage() {
     setHomePrivateValue(previous => previous?.identity === identity && previous.usd === usd ? previous : { identity, usd });
   }, []);
   const [view, setView] = useState<PopupView>(() => parseInitialView());
-  const [homeTab, setHomeTab] = useState<HomeTab>('tokens');
+  const [homeTab, setHomeTab] = useState<HomeTab>(new URLSearchParams(location.search).has('foxMission') ? 'collectibles' : 'tokens');
   const [discoverQuery, setDiscoverQuery] = useState('');
   const [embedGrapeApps, setEmbedGrapeApps] = useState(preferEmbeddedDapps);
   const [discoverCategory, setDiscoverCategory] = useState<DiscoverCategory>('All');
@@ -1789,13 +1793,7 @@ function PopupPage() {
   const [selectedCollectible, setSelectedCollectible] = useState<CollectibleItem | null>(null);
   const [assetDetailsLoading, setAssetDetailsLoading] = useState(false);
   const [assetDetailsError, setAssetDetailsError] = useState<string | null>(null);
-  const [assetJsonMetadata, setAssetJsonMetadata] = useState<{
-    name?: string;
-    symbol?: string;
-    description?: string;
-    imageUri?: string;
-    externalUrl?: string;
-  } | null>(null);
+  const [assetJsonMetadata, setAssetJsonMetadata] = useState<NftJsonMetadata | null>(null);
   const [assetJsonLoading, setAssetJsonLoading] = useState(false);
   const [assetActionMode, setAssetActionMode] = useState<'burn' | 'close' | null>(null);
   const [tokenActionError, setTokenActionError] = useState<string | null>(null);
@@ -2447,7 +2445,8 @@ function PopupPage() {
   }, [view, assetActionMode]);
 
   useEffect(() => {
-    if (view !== 'asset' || !assetDetails?.metadataUri) {
+    const metadataUrl = nftResourceUrl(assetDetails?.metadataUri);
+    if (view !== 'asset' || !metadataUrl) {
       setAssetJsonMetadata(null);
       setAssetJsonLoading(false);
       return;
@@ -2457,7 +2456,7 @@ function PopupPage() {
     setAssetJsonLoading(true);
     setAssetJsonMetadata(null);
 
-    void fetch(assetDetails.metadataUri, {
+    void fetch(metadataUrl, {
       signal: controller.signal,
       headers: {
         accept: 'application/json'
@@ -2469,6 +2468,12 @@ function PopupPage() {
         }
         const payload = (await response.json()) as Record<string, unknown>;
         setAssetJsonMetadata({
+          attributes: Array.isArray(payload.attributes) ? payload.attributes.slice(0, 150).flatMap((attribute: unknown) => {
+            if (!attribute || typeof attribute !== 'object') return [];
+            const trait = attribute as Record<string, unknown>;
+            const label = typeof trait.trait_type === 'string' ? trait.trait_type : typeof trait.type === 'string' ? trait.type : 'Trait';
+            return ['string', 'number', 'boolean'].includes(typeof trait.value) ? [{ label, value: String(trait.value) }] : [];
+          }) : undefined,
           name: typeof payload.name === 'string' ? payload.name : undefined,
           symbol: typeof payload.symbol === 'string' ? payload.symbol : undefined,
           description: typeof payload.description === 'string' ? payload.description : undefined,
@@ -2775,6 +2780,16 @@ function PopupPage() {
       ),
     [assets.collections]
   );
+  const foxReminderLink = useMemo(() => ({ mint: new URLSearchParams(location.search).get('foxMission'), owner: new URLSearchParams(location.search).get('owner') }), []);
+  const foxReminderOpened = useRef(false);
+  useEffect(() => {
+    if (foxReminderOpened.current || !foxReminderLink.mint || activePublicKey !== foxReminderLink.owner || state?.session.locked || state?.wallet.selectedNetwork !== 'mainnet-beta') return;
+    const item = collectibleItems.find(item => item.mint === foxReminderLink.mint);
+    if (!item) return;
+    foxReminderOpened.current = true;
+    setHomeTab('collectibles');
+    openCollectibleDetails(item);
+  }, [collectibleItems, activePublicKey, state?.session.locked, state?.wallet.selectedNetwork, foxReminderLink]);
   const assetOptions = useMemo<AssetOption[]>(() => {
     if (selectedChainValue === 'sui' || selectedChainValue === 'monad' || selectedChainValue === 'ethereum' || selectedChainValue === 'zcash') {
       const isMonad = selectedChainValue === 'monad';
@@ -5105,7 +5120,7 @@ function PopupPage() {
                     : 'This wallet does not currently have voting power for this proposal.';
 
     return (
-      <div key={proposal.proposalId} className="governance-proposal-card">
+      <div key={proposal.proposalId} className="governance-proposal-card" data-vote-open={canVoteNow ? 'true' : 'false'}>
         <div className="governance-proposal-header">
           <div className="governance-proposal-copy">
             <strong className="governance-proposal-title">{proposal.proposalName}</strong>
@@ -6469,6 +6484,7 @@ function PopupPage() {
                 {governanceError ? <p className="danger-box">{redactRpcDetails(governanceError)}</p> : null}
                 {governance.warnings?.length ? <div className="danger-box">{Array.from(new Set(governance.warnings)).map((warning) => <p key={warning}>{warning}</p>)}</div> : null}
                 {!selectedGovernanceDao && !selectedCommunityId && governance.discoveryWarnings?.length ? <details className="muted governance-discovery-note"><summary>Additional DAO discovery is limited</summary><p>The DAOs shown above were found. Some other programs could not be fully checked.</p>{Array.from(new Set(governance.discoveryWarnings)).map((warning) => <p key={warning}>{warning}</p>)}</details> : null}
+                <div id="wallet-governance-proposals" className="governance-proposals-workspace">
                 {(() => {
                   if (fullGovernanceWorkspace || !selectedGovernanceDao || governanceLoading || governanceError || (governance.warnings?.length && !visibleGovernanceProposals.length)) return null;
                   const nowUnixSeconds = Math.floor(Date.now() / 1000);
@@ -6625,6 +6641,7 @@ function PopupPage() {
                     </>
                   );
                 })()}
+                </div>
               </Card>
               </div>
             </Tabs.Content>
@@ -6632,10 +6649,11 @@ function PopupPage() {
 
           <Tabs.Content value="collectibles">
               <Card className="asset-panel-card nft-gallery-panel">
+              {foxReminderLink.mint && foxReminderLink.owner !== activePublicKey ? <p className="muted">Fox mission reminder: select wallet {formatAddress(foxReminderLink.owner ?? '')} to view and claim your Fox.</p> : null}
               {isSolanaChain && wallet.selectedNetwork === "mainnet-beta" && activePublicKey ? <TensorListings key={activePublicKey} owner={activePublicKey} unlocked={canUseUnlockedSigner || state?.activeWallet?.signerKind === "ledger"} watchOnly={isWatchOnlyWallet} /> : null}
               {collectibleItems.length > 0 ? (
-                <NftGallery key={activePublicKey + ':' + wallet.selectedNetwork} items={collectibleItems} renderItem={(item) => (
-                  <CollectibleCard key={item.mint} item={item} onSelect={() => openCollectibleDetails(item)} />
+                <NftGallery key={activePublicKey + ':' + wallet.selectedNetwork} items={collectibleItems} report={isSolanaChain && wallet.selectedNetwork === 'mainnet-beta' && activePublicKey ? { owner: activePublicKey, onInspect: openCollectibleDetails } : undefined} renderItem={(item) => (
+                  <CollectibleCard key={item.mint} item={item} missionOwner={isSolanaChain && wallet.selectedNetwork === 'mainnet-beta' ? activePublicKey : undefined} onSelect={() => openCollectibleDetails(item)} />
                 )} />
               ) : (
                 <p className="muted">No NFT collections found for this wallet on {wallet.selectedNetwork}.</p>
@@ -7527,8 +7545,19 @@ function PopupPage() {
     const burnConfirmationIsValid =
       !requiresValueConfirmation || burnConfirmation.trim().toUpperCase() === burnConfirmationPhrase;
 
+    if (isCollectibleView && selectedCollectible) return <NftDetailView
+      key={selectedCollectible.mint}
+      missions={{ owner: activePublicKey ?? '', unlocked: canUseUnlockedSigner || state?.activeWallet?.signerKind === 'ledger', watchOnly: isWatchOnlyWallet, onChanged: () => void refresh() }}
+      item={selectedCollectible} details={assetDetails} metadata={assetJsonMetadata} loading={assetJsonLoading}
+      network={wallet.selectedNetwork} onBack={() => setView('home')}
+      onSend={() => openSendForCollectible(selectedCollectible)}
+      canSend={!isWatchOnlyWallet && !!selectedCollectible.accountAddress && !!selectedCollectible.programId}
+      explorer={address => buildExplorerUrl(address, explorerNetwork)}
+      marketplace={<details className="tensor-marketplace-disclosure"><summary>Sell or manage on Tensor<ChevronDown size={16} /></summary><TensorMarketplace key={activePublicKey + selectedCollectible.mint} owner={activePublicKey ?? ''} unlocked={canUseUnlockedSigner || state?.activeWallet?.signerKind === 'ledger'} onChanged={() => void refresh()} mint={selectedCollectible.mint} network={wallet.selectedNetwork} watchOnly={isWatchOnlyWallet} /></details>}
+    />;
+
     return (
-      <div className={isCollectibleView ? "nft-detail-workspace" : "asset-desktop-dashboard"}>
+      <div className="asset-desktop-dashboard">
         <Card className="asset-detail-card">
           <div className="send-flow-header asset-detail-topbar">
             <button type="button" className="send-back-button" onClick={() => setView('home')} aria-label="Back to wallet">
@@ -7539,28 +7568,23 @@ function PopupPage() {
               fallbackLabel={assetDetails.symbol?.slice(0, 1) ?? 'T'}
             />
             <div className="asset-detail-title">
-              <h2>{isCollectibleView ? assetDetails.name ?? 'NFT' : assetDetails.name ?? assetDetails.symbol ?? 'Token'}</h2>
+              <h2>{assetDetails.name ?? assetDetails.symbol ?? 'Token'}</h2>
               <span>{assetDetails.symbol ?? formatAddress(assetDetails.mint)}</span>
             </div>
           </div>
 
           <div className="asset-detail-hero">
             <div className="asset-detail-copy">
-              <span className="asset-detail-kicker">{isCollectibleView ? 'Collectible' : 'Your balance'}</span>
+              <span className="asset-detail-kicker">Your balance</span>
               <div className="hero-balance asset-detail-balance">
-                {isCollectibleView
-                  ? assetDetails.name ?? selectedCollectible?.name ?? 'NFT'
-                  : maskSensitiveValue(formatDecimalAmountString(assetDetails.amount), privacyMode)}
+                {maskSensitiveValue(formatDecimalAmountString(assetDetails.amount), privacyMode)}
               </div>
               <div className="muted">
-                {isCollectibleView
-                  ? selectedCollectible?.collectionSymbol ?? assetDetails.symbol ?? formatAddress(assetDetails.mint)
-                  : `${assetDetails.symbol ?? formatAddress(assetDetails.mint)}${tokenValue ? ` · ${maskSensitiveValue(tokenValue, privacyMode)}` : ''}`}
+                {`${assetDetails.symbol ?? formatAddress(assetDetails.mint)}${tokenValue ? ` · ${maskSensitiveValue(tokenValue, privacyMode)}` : ''}`}
               </div>
             </div>
           </div>
 
-          {!isCollectibleView ? (
             <div className="quick-actions compact asset-detail-actions">
               <button type="button" className="quick-action-card" onClick={() => openSend(assetId)} aria-label="Send token" title="Send" disabled={isWatchOnlyWallet}>
                 <span className="quick-action-icon"><SendHorizontal size={18} /></span>
@@ -7590,21 +7614,7 @@ function PopupPage() {
                 <span>{canBurn ? assessingBurn ? 'Checking…' : 'Burn' : 'Close'}</span>
               </button>
             </div>
-          ) : (
-            <div className="quick-actions compact asset-detail-actions">
-              <button
-                type="button"
-                className="quick-action-card"
-                onClick={() => selectedCollectible && openSendForCollectible(selectedCollectible)}
-                aria-label="Send collectible"
-                title="Send"
-                disabled={isWatchOnlyWallet || !selectedCollectible?.accountAddress || !selectedCollectible?.programId}
-              >
-                <span className="quick-action-icon"><SendHorizontal size={18} /></span>
-                <span>Send</span>
-              </button>
-            </div>
-          )}
+
           {!isCollectibleView && assetDetails.confidentialTransfer?.mintEnabled ? (
             <div className="confidential-transfer-card">
               <div className="confidential-transfer-heading">
@@ -7748,7 +7758,7 @@ function PopupPage() {
           ) : null}
         </Card>
 
-        {isCollectibleView && isSolanaChain && selectedCollectible ? <details className="tensor-marketplace-disclosure"><summary>Sell or manage on Tensor<ChevronDown size={16} /></summary><TensorMarketplace key={activePublicKey + selectedCollectible.mint} owner={activePublicKey ?? ""} unlocked={canUseUnlockedSigner || state?.activeWallet?.signerKind === "ledger"} onChanged={() => void refresh()} mint={selectedCollectible.mint} network={wallet.selectedNetwork} watchOnly={isWatchOnlyWallet} /></details> : null}
+
 
         {!isCollectibleView ? (
           <TokenPriceChart
@@ -7781,12 +7791,6 @@ function PopupPage() {
           </summary>
         <Card title={isCollectibleView ? 'NFT Details' : 'Token details'}>
           <div className="stack asset-detail-info">
-            {isCollectibleView && selectedCollectible?.collectionId ? (
-              <KeyValueRow
-                label="Verified Collection Address"
-                value={<span className="mono asset-detail-mono">{selectedCollectible.collectionId}</span>}
-              />
-            ) : null}
             <KeyValueRow label="Mint" value={<span className="mono asset-detail-mono">{assetDetails.mint}</span>} />
             <KeyValueRow label="Token account" value={<span className="mono asset-detail-mono">{assetDetails.accountAddress}</span>} />
             <div className="inline wrap-actions asset-detail-links">

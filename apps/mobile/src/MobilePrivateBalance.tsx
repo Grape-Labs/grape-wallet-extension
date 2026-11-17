@@ -1,8 +1,8 @@
+import { NativePrivacyFlow } from './NativePrivacyFlow';
 import { NativePrivateBalanceGuide } from './NativePrivateBalanceGuide';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Animated, Linking, Pressable, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, Linking, Pressable, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { Feather } from '@expo/vector-icons';
-import Svg, { Circle, Path } from 'react-native-svg';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { PrivacySnapshot } from '@grape/solana/privacy';
 import type { MobileThemePalette } from './theme';
@@ -11,18 +11,6 @@ import { PrivacyRuntime, type PrivacyRuntimeHandle } from './PrivacyRuntime';
 import { createMobilePrivacyService, privateSol, privacyError, type MobilePrivacyAction } from './solanaPrivacy';
 import { withMobilePrivacySeed, type MobileWallet, type MobileWalletState } from './wallet';
 
-function GrapePrivateMotion({ palette, reverse, reduceMotion }: { palette: MobileThemePalette; reverse: boolean; reduceMotion: boolean }) {
-  const progress = useRef(new Animated.Value(0)).current;
-  useEffect(() => { if (reduceMotion) { progress.setValue(.5); return; } const loop = Animated.loop(Animated.timing(progress, { toValue: 1, duration: 2600, useNativeDriver: true })); loop.start(); return () => loop.stop(); }, [reduceMotion, progress]);
-  return <View accessible accessibilityLabel="Grape privacy preview. An illustration, not transaction progress." style={{ borderWidth: 1, borderColor: palette.panelBorder, borderRadius: 20, padding: 16, minWidth: 0, flex: 1 }}>
-    <Text style={{ color: palette.muted, fontSize: 12, marginBottom: 8 }}>GRAPE · PRIVATE BALANCE</Text>
-    <View style={{ height: 118, justifyContent: 'center' }}>
-      <Svg width="100%" height="110" viewBox="0 0 300 110"><Path d="M22 55 C90 -15 95 125 150 55 S220 -15 278 55 M22 55 C90 125 95 -15 150 55 S220 125 278 55" fill="none" stroke={palette.grape} strokeWidth="1.6" opacity=".6" />{[[138,36],[158,36],[128,54],[149,54],[169,54],[139,73],[159,73],[149,90]].map(([cx,cy], i) => <Circle key={i} cx={cx} cy={cy} r="7" fill={palette.grape} />)}<Path d="M148 22 Q145 5 167 9 Q165 27 148 22" fill={palette.mint} /></Svg>
-      <Animated.View style={{ position: 'absolute', left: '50%', width: 9, height: 9, borderRadius: 5, backgroundColor: palette.mint, opacity: progress.interpolate({ inputRange: [0,.2,.8,1], outputRange: [0,1,1,0] }), transform: [{ translateX: progress.interpolate({ inputRange: [0,1], outputRange: reverse ? [100,-100] : [-100,100] }) }] }} />
-    </View>
-    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}><Feather name={reverse ? 'lock' : 'globe'} color={palette.muted} size={20} /><Feather name="arrow-right" color={palette.grape} size={20} /><Feather name={reverse ? 'globe' : 'lock'} color={palette.grape} size={20} /></View>
-  </View>;
-}
 
 type Props = { wallet: MobileWallet; state: MobileWalletState; palette: MobileThemePalette; reduceMotion: boolean; authorize: () => number; endpoint: string; publicValue: string; solPrice: number; onValue: (walletId: string, usd: number | null) => void; onHide: () => void; onBusy: (busy: boolean) => void; onReview: (title: string, items: TransactionReview['items'], execute: () => Promise<void>) => void; onSubmitted: (signature: string, action: MobilePrivacyAction, uncertain: boolean) => Promise<void> };
 export function MobilePrivateBalance(props: Props) {
@@ -101,7 +89,7 @@ export function MobilePrivateBalance(props: Props) {
       {!service ? <Text style={styles.error}>Private balances need a configured Helius mainnet RPC.</Text> : null}
       {!ready && service && !error ? <ActivityIndicator color={p.grape} /> : null}
       {snapshot?.registered ? <View style={{ flexDirection: 'row', gap: 6 }}>{(['deposit','transfer','withdraw'] as const).map(item => <View key={item} style={{ flex: 1 }}>{button(item === 'deposit' ? 'Add' : item === 'transfer' ? 'Send' : 'Withdraw', () => setAction(item), action === item)}</View>)}</View> : null}
-      {snapshot ? <View style={{ flexDirection: width / fontScale >= 900 ? 'row' : 'column', gap: 18 }}><GrapePrivateMotion palette={p} reverse={action === 'withdraw'} reduceMotion={props.reduceMotion} /><View style={{ flex: 1, gap: 12 }}>
+      {snapshot ? <View style={{ flexDirection: width / fontScale >= 900 ? 'row' : 'column', gap: 18 }}><View style={{ flex: width / fontScale >= 900 ? 1 : undefined, minWidth: 0 }}><NativePrivacyFlow palette={p} action={snapshot.registered ? action : 'register'} reduceMotion={props.reduceMotion} /></View><View style={{ flex: 1, gap: 12 }}>
         {snapshot.registered ? <><Text style={styles.muted}>Amount · SOL</Text><TextInput accessibilityLabel="Private balance amount in SOL" editable={!disabled} value={amount} onChangeText={value => setAmount(value.replace(',', '.'))} keyboardType="decimal-pad" placeholder="0.00" placeholderTextColor={p.muted} style={styles.input} />{action !== 'deposit' ? <><Text style={styles.muted}>{action === 'withdraw' ? 'Recipient (leave blank for this wallet)' : 'Recipient wallet'}</Text><TextInput accessibilityLabel="Private balance recipient" editable={!disabled} value={recipient} onChangeText={setRecipient} autoCapitalize="none" autoCorrect={false} placeholder="Solana address" placeholderTextColor={p.muted} style={[styles.input, { fontSize: 14 }]} /></> : null}</> : <><Text style={[styles.text, { fontWeight: '700', fontSize: 20 }]}>Create your private balance</Text><Text style={styles.muted}>Your wallet address stays the same. Setup registers private keys without moving funds. Setup costs cannot currently be reclaimed.</Text></>}
         <Text style={styles.muted}>{action === 'transfer' && snapshot.registered ? 'Private sends hide the amount and asset. Sender and recipient remain visible. The recipient must have a private balance.' : 'The amount and asset are public when adding or withdrawing SOL.'}</Text>
         {button(busy ? 'Working…' : snapshot.registered ? 'Review transaction' : 'Review setup', () => void review(), true)}

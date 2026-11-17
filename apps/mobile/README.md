@@ -158,7 +158,11 @@ URL into the JS bundle, and Expo carries it in its manifest fallback. There is n
 endpoint or API-key input in the Private balances UI.
 
 For remote EAS builds, configure `EXPO_PUBLIC_PRIVACY_RPC_URL` in the selected EAS
-environment (a Helius HTTPS mainnet URL with `api-key`). EAS builds fail early if
+environment (a Helius HTTPS mainnet URL with `api-key`), using sensitive visibility
+so EAS CLI can resolve the dynamic config without printing the value. The build
+profiles explicitly select `preview`, `production`, or `development`; simulator
+builds use `development`. Local ignored `.env` files are not a replacement for
+these remote project variables. EAS builds fail early if
 no usable Helius privacy endpoint is available, instead of shipping the add-on
 with a non-Helius RPC. Restart Metro or rebuild after changing build-time RPC
 configuration; installed bundles cannot acquire new build-time values by refresh.

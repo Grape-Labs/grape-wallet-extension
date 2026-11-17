@@ -11752,6 +11752,7 @@ function createStyles(palette: MobileThemePalette, tablet = false) {
   },
   lockedCard: {
     width: '100%',
+    alignSelf: 'center',
     maxWidth: 420,
     backgroundColor: palette.panel,
     borderColor: palette.panelBorder,

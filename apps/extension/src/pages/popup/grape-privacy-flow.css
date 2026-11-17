@@ -1,23 +1,18 @@
-.grape-flow { margin: 0; padding: 14px 14px 16px; border: 1px solid var(--theme-input-border); border-radius: 20px; overflow: hidden; background: radial-gradient(ellipse at 50% 60%, color-mix(in srgb, var(--theme-accent-soft) 80%, transparent), transparent 75%); }
-.grape-flow-eyebrow { display: flex; justify-content: center; align-items: center; gap: 7px; font-size: .68rem; color: var(--theme-muted); letter-spacing: .03em; }
-.grape-flow-dot { width: 5px; height: 5px; border-radius: 50%; background: #b58be9; box-shadow: 0 0 9px #b58be955; }
-.grape-flow > svg { display: block; width: 100%; max-width: 440px; height: auto; margin: -3px auto -8px; color: var(--theme-text); }
-.grape-flow-public-node { fill: var(--theme-surface-strong); stroke: var(--theme-input-border); stroke-width: 1.2; }
-.grape-flow-private-node { fill: var(--theme-surface-strong); stroke: #a56bdf; stroke-opacity: .6; stroke-width: 1.2; }
-.grape-flow-lock circle { fill: var(--theme-surface-strong); stroke: #b58be9; stroke-width: 1; }
-.grape-flow-lock path { fill: none; stroke: #c9adf4; stroke-width: 1.2; stroke-linejoin: round; }
-.grape-flow-veil { fill: var(--theme-surface-strong); stroke: #aa73df; stroke-width: .8; }
-.grape-flow-cluster { animation: grape-cluster-breathe 4.8s ease-in-out infinite; }
-.grape-flow-orbit { animation: grape-vine-turn 18s linear infinite; }
-.grape-flow-still { display: none; }
-.grape-flow figcaption { max-width: 440px; margin-inline: auto; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 8px; font-size: .74rem; color: var(--theme-muted); }
+.grape-flow { margin: 0; padding: 16px; min-width: 0; border: 1px solid var(--theme-divider); border-radius: 16px; background: var(--theme-surface-soft); }
+.grape-flow-eyebrow { text-align: center; font-size: 11px; color: var(--theme-muted); }
+.grape-flow-route { display: flex; align-items: center; width: 100%; max-width: 360px; gap: 10px; margin: 22px auto; min-height: 64px; }
+.grape-flow-node { position: relative; display: grid; place-items: center; width: 42px; height: 42px; flex-shrink: 0; border: 1px solid var(--theme-divider); border-radius: 13px; color: var(--theme-muted); background: var(--theme-surface-strong); }
+.grape-flow-node-private { border-color: color-mix(in srgb,var(--theme-accent) 30%,var(--theme-divider)); }
+.grape-flow-node-badge { display: grid; place-items: center; position: absolute; bottom: -3px; right: -3px; width: 17px; height: 17px; border-radius: 6px; color: var(--theme-accent); background: var(--theme-surface-strong); border: 1px solid var(--theme-divider); }
+.grape-flow-lock { position: relative; isolation: isolate; flex-shrink: 0; width: 60px; height: 60px; display: grid; place-items: center; border-radius: 19px; color: var(--theme-accent); background: var(--theme-surface-strong); border: 1px solid color-mix(in srgb,var(--theme-accent) 35%,var(--theme-divider)); }
+.grape-flow-lock::before { content: ''; position: absolute; z-index: -1; inset: -6px; border-radius: 24px; border: 1px solid color-mix(in srgb,var(--theme-accent) 16%,transparent); animation: grape-lock-glow 3.6s ease-in-out infinite; }
+.grape-flow-connection { position: relative; flex: 1; min-width: 12px; height: 1px; background: color-mix(in srgb,var(--theme-accent) 24%,var(--theme-divider)); }
+.grape-flow-connection::after { content: ''; position: absolute; top: -2px; left: 0; height: 5px; width: 5px; border-radius: 50%; background: var(--theme-accent); animation: grape-lock-route 3.6s linear infinite; }
+.grape-flow-connection-out::after { animation-delay: -1.8s; }
+.grape-flow figcaption { max-width: 360px; margin-inline: auto; display: grid; grid-template-columns: minmax(0,1fr) 14px minmax(0,1fr); align-items: center; gap: 8px; font-size: 11px; line-height: 1.5; color: var(--theme-muted); }
 .grape-flow figcaption > span:last-child { text-align: right; }
-.grape-flow figcaption > svg { color: #b58be9; }
-.grape-flow-transfer .grape-flow-public-node { stroke: #a56bdf; }
-@keyframes grape-vine-turn { to { transform: rotate(360deg); } }
-@keyframes grape-cluster-breathe { 0%, 100% { opacity: .72; } 50% { opacity: 1; } }
-@media (prefers-reduced-motion: reduce) {
-  .grape-flow-moving { display: none; }
-  .grape-flow-still { display: block; }
-  .grape-flow-cluster, .grape-flow-orbit { animation: none; }
-}
+.grape-flow figcaption > svg { color: var(--theme-accent); }
+@keyframes grape-lock-glow { 0%,100% { opacity: .35; } 50% { opacity: 1; } }
+@keyframes grape-lock-route { 0% { left: 0; opacity: 0; } 15%,85% { opacity: .75; } 100% { left: calc(100% - 5px); opacity: 0; } }
+@media (max-width: 380px) { .grape-flow-route { gap: 8px; margin-block: 18px; } .grape-flow-node { width: 36px; height: 36px; } .grape-flow-lock { width: 52px; height: 52px; border-radius: 17px; } }
+@media (prefers-reduced-motion: reduce) { .grape-flow-lock::before, .grape-flow-connection::after { animation: none; } .grape-flow-connection::after { left: calc(50% - 2px); opacity: .5; } }
