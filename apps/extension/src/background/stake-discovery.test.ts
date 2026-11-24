@@ -38,3 +38,35 @@ describe('stake authority discovery', () => {
     await expect(discoverStakeAccountsByAuthority(async () => { throw new Error('RPC down'); })).rejects.toThrow('discovery is temporarily unavailable');
   });
 });
+
+import { Keypair, PublicKey, StakeProgram } from '@solana/web3.js';
+import { loadStakeAccounts } from './stake-discovery';
+describe('selected RPC stake account loading', () => {
+  const owner = Keypair.generate().publicKey;
+  const address = Keypair.generate().publicKey;
+  const other = Keypair.generate().publicKey;
+  const entry = (staker = owner.toBase58(), withdrawer = owner.toBase58()) => ({
+    pubkey: address,
+    account: { executable: false, owner: StakeProgram.programId, lamports: 2_000_000_000, data: { program: 'stake', parsed: { type: 'delegated', info: { meta: { authorized: { staker, withdrawer } }, stake: { delegation: { stake: '1997717120', voter: other.toBase58(), deactivationEpoch: '18446744073709551615' } } } }, space: 200 } }
+  });
+  it('loads parsed balances and both authorities in two RPC calls without per-account hydration', async () => {
+    const getParsedProgramAccounts = vi.fn(async () => [entry()]);
+    const result = await loadStakeAccounts({ getParsedProgramAccounts }, owner);
+    expect(getParsedProgramAccounts).toHaveBeenCalledTimes(2);
+    expect(getParsedProgramAccounts.mock.calls.map(call => (call as any)[1].filters[1].memcmp.offset)).toEqual([12, 44]);
+    expect(result.accounts).toHaveLength(1);
+    expect(result.accounts[0]).toMatchObject({ address: address.toBase58(), lamports: 2_000_000_000, delegatedLamports: 1997717120, state: 'delegated', staker: owner.toBase58(), withdrawer: owner.toBase58() });
+  });
+  it('keeps withdraw-only accounts and rejects unrelated authorities', async () => {
+    const getParsedProgramAccounts = vi.fn(async () => [entry(other.toBase58()), { ...entry(other.toBase58(), other.toBase58()), pubkey: other }]);
+    const result = await loadStakeAccounts({ getParsedProgramAccounts }, owner);
+    expect(result.accounts).toHaveLength(1);
+    expect(result.accounts[0].staker).toBe(other.toBase58());
+  });
+  it('reports malformed RPC results as partial instead of silently showing zero stake', async () => {
+    const getParsedProgramAccounts = vi.fn(async () => [{ ...entry(), account: { ...entry().account, owner: PublicKey.default } }]);
+    const result = await loadStakeAccounts({ getParsedProgramAccounts }, owner);
+    expect(result.accounts).toEqual([]);
+    expect(result.warnings[0]).toContain('incomplete');
+  });
+});

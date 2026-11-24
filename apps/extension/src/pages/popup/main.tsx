@@ -2055,33 +2055,24 @@ function PopupPage() {
     }
 
     setStakeLoading(true);
+    const isCurrent = () => requestId === stakeReadRequest.current && context === currentStakingContext.current;
+    // Optional validator metadata must never hold up wallet account discovery.
+    void sendRuntimeMessage<WalletStakeValidatorsResponse>({ type: 'wallet_get_stake_validators' }).then(result => {
+      if (isCurrent()) setStakeValidators(result.validators);
+    }).catch(() => { if (isCurrent()) setStakeValidators([]); });
     try {
-      const [stakeAccountsResult, stakeValidatorsResult] = await Promise.allSettled([
-        sendRuntimeMessage<WalletStakeAccountsResponse>({ type: 'wallet_get_stake_accounts' }),
-        sendRuntimeMessage<WalletStakeValidatorsResponse>({ type: 'wallet_get_stake_validators' })
-      ]);
-
-      if (requestId !== stakeReadRequest.current || context !== currentStakingContext.current) return;
-      if (stakeAccountsResult.status === 'fulfilled') {
-        setStakeAccounts(stakeAccountsResult.value.accounts);
-        setStakeWarnings(stakeAccountsResult.value.warnings ?? []);
-        setStakeError(null);
-      } else {
-        setStakeAccounts([]);
-        setStakeWarnings([]);
-        setStakeError(stakeAccountsResult.reason instanceof Error ? stakeAccountsResult.reason.message : 'Unable to load stake accounts.');
-      }
-
-      if (stakeValidatorsResult.status === 'fulfilled') {
-        setStakeValidators(stakeValidatorsResult.value.validators);
-      } else {
-        setStakeValidators([]);
-      }
+      const result = await sendRuntimeMessage<WalletStakeAccountsResponse>({ type: 'wallet_get_stake_accounts' });
+      if (!isCurrent()) return;
+      setStakeAccounts(result.accounts);
+      setStakeWarnings(result.warnings ?? []);
+      setStakeError(null);
     } catch (error) {
-      if (requestId !== stakeReadRequest.current || context !== currentStakingContext.current) return;
+      if (!isCurrent()) return;
+      setStakeAccounts([]);
+      setStakeWarnings([]);
       setStakeError(error instanceof Error ? error.message : 'Unable to load stake accounts.');
     } finally {
-      if (requestId === stakeReadRequest.current && context === currentStakingContext.current) setStakeLoading(false);
+      if (isCurrent()) setStakeLoading(false);
     }
   };
 

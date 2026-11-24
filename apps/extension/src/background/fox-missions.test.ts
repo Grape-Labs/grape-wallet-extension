@@ -3,7 +3,7 @@ import { Keypair, PublicKey, type Connection, type AccountInfo } from '@solana/w
 import { publicKey } from '@metaplex-foundation/umi';
 import { getMetadataAccountDataSerializer } from '@metaplex-foundation/mpl-token-metadata';
 import { assertFoxReviewContext, buildFoxMission, decodeFoxAccount, foxDiscriminator, FOX_PROGRAM, inspectFoxMission, missionWindow } from './fox-missions';
-import { FOX_COLLECTIONS } from '../shared/fox-missions';
+import { FOX_COLLECTIONS, FOX_POWERUPS } from '../shared/fox-missions';
 import schema from './fox-missions-interface.json';
 const owner = Keypair.generate().publicKey, mint = Keypair.generate().publicKey, mission = Keypair.generate().publicKey, tokenAddress = Keypair.generate().publicKey, activeAccount = Keypair.generate().publicKey;
 const TOKEN = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'), META = new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s');
@@ -19,11 +19,11 @@ async function account(name: string, fields: Record<string, any>): Promise<Accou
   }
   return { owner: FOX_PROGRAM, lamports: 1, executable: false, rentEpoch: 0, data: Buffer.concat([await foxDiscriminator('account', name[0].toUpperCase() + name.slice(1)), ...schema.accounts.find(a => a.name === name)!.type.fields.map(f => encode(f.type, fields[f.name]))]) };
 }
-async function fixture({ active = false, complete = false, verified = true, wrongProfile = false, delegated = false, standard = 0, boosted = false, simulationError = false } = {}) {
+async function fixture({ active = false, complete = false, verified = true, wrongProfile = false, delegated = false, standard = 0, boosted = false, consumable = false, simulationError = false } = {}) {
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => [{ id: 1, name: 'Weekly mission', version: 3, address: mission.toBase58() }] })));
   const missionInfo = await account('mission', { id: 1, version: 3, lockstart: 1000, lockend: 2000, timelock: 600, xpreward: 150, reward: new PublicKey('ChEsTBFtT4PNEDTEfpvREFUoALMjaUhM5HyCh1jJnQn2') });
   const foxInfo = active ? await account('fox', { fox: wrongProfile ? owner : mint, owner, xp: 1000, missions: 4, mission, missionAccount: activeAccount }) : null;
-  const missionAccount = await account('missionAccount', { owner, started: true, count: boosted ? 2 : 1, mission });
+  const missionAccount = await account('missionAccount', { owner, started: true, count: boosted ? 2 : 1, mission, consumable: consumable ? new PublicKey(FOX_POWERUPS[0].mint) : PublicKey.default });
   const mintBytes = Buffer.alloc(82); mintBytes.writeBigUInt64LE(1n, 36); mintBytes[45] = 1;
   const meta = getMetadataAccountDataSerializer().serialize({ updateAuthority: publicKey(owner.toBase58()), mint: publicKey(mint.toBase58()), name: 'Fox', symbol: 'FFF', uri: '', sellerFeeBasisPoints: 0, creators: null, primarySaleHappened: false, isMutable: true, editionNonce: null, tokenStandard: standard, collection: { verified, key: publicKey(FOX_COLLECTIONS[0]) }, uses: null, collectionDetails: null, programmableConfig: null });
   const clock = Buffer.alloc(40); clock.writeBigInt64LE(BigInt(complete ? 2600 : active ? 2300 : 1500), 32);
@@ -65,6 +65,33 @@ describe('Famous Fox program adapter', () => {
     expect(new Set(native.flatMap(x => x.keys.filter(k => k.isSigner).map(k => k.pubkey.toBase58())))).toEqual(new Set([owner.toBase58()]));
     expect(built.networkFeeLamports).toBe(5000); expect(built.estimatedDebitLamports).toBe(1000000);
   });
+  it('skips consumable RPC lookups during gallery scans', async () => {
+    const f = await fixture();
+    const result = await inspectFoxMission(f.connection, owner.toBase58(), mint.toBase58(), { includePowerups: false });
+    expect(result.status.canStart).toBe(true);
+    expect(result.status.powerups).toBeUndefined();
+    expect(f.mocks.getParsedTokenAccountsByOwner).toHaveBeenCalledTimes(1);
+  });
+  it('adds only an owned consumable to the reviewed transaction', async () => {
+    const f = await fixture();
+    const boost = new PublicKey(FOX_POWERUPS[0].mint);
+    const address = PublicKey.findProgramAddressSync([owner.toBuffer(), TOKEN.toBuffer(), boost.toBuffer()], new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL'))[0];
+    const original = f.mocks.getParsedTokenAccountsByOwner.getMockImplementation()!;
+    f.mocks.getParsedTokenAccountsByOwner.mockImplementation(async (...args: any[]) => {
+      if (args[1]?.mint.equals(boost)) return { value: [{ pubkey: address, account: { owner: TOKEN, data: { parsed: { info: { owner: owner.toBase58(), mint: boost.toBase58(), state: 'initialized', tokenAmount: { amount: '2' } } } } } }] } as any;
+      return original();
+    });
+    const built = await buildFoxMission(f.connection, owner.toBase58(), mint.toBase58(), 'start', boost.toBase58());
+    expect(built.powerup?.name).toBe('Basic Fishing Rod');
+    const burn = built.transaction.instructions.at(-1)!;
+    expect(burn.data.subarray(0, 8)).toEqual(await foxDiscriminator('global', 'start_mission_room'));
+    expect(burn.keys[4].pubkey).toEqual(address);
+    expect(burn.keys[5].pubkey).toEqual(boost);
+  });
+  it('rejects unowned and unknown powerups', async () => {
+    const f = await fixture();
+    for (const boost of [FOX_POWERUPS[0].mint, owner.toBase58()]) await expect(buildFoxMission(f.connection, owner.toBase58(), mint.toBase58(), 'start', boost)).rejects.toThrow('powerup is unavailable');
+  });
   it('supplies programmable NFT token records', async () => {
     const built = await buildFoxMission((await fixture({ standard: 4 })).connection, owner.toBase58(), mint.toBase58(), 'start');
     const start = built.transaction.instructions.at(-1)!;
@@ -74,6 +101,11 @@ describe('Famous Fox program adapter', () => {
     const built = await buildFoxMission((await fixture({ active: true, complete: true })).connection, owner.toBase58(), mint.toBase58(), 'claim');
     const native = built.transaction.instructions.filter(x => x.programId.equals(FOX_PROGRAM));
     expect(native.map(x => x.data.subarray(0, 8))).toEqual([await foxDiscriminator('global', 'end_mission_v3'), await foxDiscriminator('global', 'claim_reward')]);
+  });
+  it('claims a single Fox whose consumable was burned at deployment', async () => {
+    const f = await fixture({ active: true, complete: true, consumable: true });
+    expect((await inspectFoxMission(f.connection, owner.toBase58(), mint.toBase58())).status.canClaim).toBe(true);
+    await expect(buildFoxMission(f.connection, owner.toBase58(), mint.toBase58(), 'claim')).resolves.toBeDefined();
   });
   it('does not partially claim boosted multi-asset squads', async () => {
     const f = await fixture({ active: true, complete: true, boosted: true }); expect((await inspectFoxMission(f.connection, owner.toBase58(), mint.toBase58())).status.canClaim).toBe(false);

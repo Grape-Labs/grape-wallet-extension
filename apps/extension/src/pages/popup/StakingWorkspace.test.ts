@@ -80,3 +80,52 @@ describe('focused staking journey', () => {
     expect(element.textContent).not.toContain('$165.20'); expect(element.textContent).not.toContain('2.36 SOL');
   });
 });
+
+
+describe('staking return estimates', () => {
+  it('updates SOL and USD estimates from the amount and selected rate', async () => {
+    const props = { ...defaults(), validators: [{ ...validator, estimatedApr: 6, yieldUpdatedAt: Date.now() }] };
+    await act(() => root.render(createElement(StakingWorkspace, props)));
+    await click('Stake SOL');
+    expect(element.querySelector('.stake-return')?.textContent).toContain('Choose a validator');
+    await input('.stake-amount-input input', '2');
+    await act(() => (element.querySelector('.stake-validator-list button') as HTMLButtonElement).click());
+    expect(element.querySelector('.stake-return-metrics')?.textContent).toContain('6%');
+    expect(element.querySelector('.stake-return-metrics')?.textContent).toContain('0.12 SOL');
+    expect(element.querySelector('.stake-return-metrics')?.textContent).toContain('$8.40');
+    await input('.stake-amount-input input', '4');
+    expect(element.querySelector('.stake-return-metrics')?.textContent).toContain('0.24 SOL');
+    await act(() => root.render(createElement(StakingWorkspace, { ...props, privacy: true })));
+    expect(element.querySelector('.stake-return-metrics')?.textContent).not.toContain('0.24');
+    expect(element.querySelector('.stake-return-metrics')?.textContent).not.toContain('$16.80');
+  });
+  it('shows unavailable estimates for stale rates', async () => {
+    await act(() => root.render(createElement(StakingWorkspace, { ...defaults(), validators: [{ ...validator, estimatedApr: 6, yieldUpdatedAt: Date.now() - 16 * 60_000 }] })));
+    await openAccount();
+    expect(element.querySelector('.stake-return')?.textContent).toContain('Rate unavailable');
+    expect(element.querySelector('.stake-return-metrics')?.textContent).not.toContain('6%');
+  });
+});
+
+describe('validator return comparison', () => {
+  it('compares the same amount and period, including lower and equal returns', async () => {
+    const props = { ...defaults(), validators: [{ ...validator, estimatedApr: 6, yieldUpdatedAt: Date.now() }, { ...validator, voteAccount: 'OtherVote', name: 'Other validator', estimatedApr: 8, yieldUpdatedAt: Date.now() }] };
+    await act(() => root.render(createElement(StakingWorkspace, props)));
+    await click('Stake SOL'); await input('.stake-amount-input input', '2');
+    await act(() => (element.querySelector('.stake-validator-list button') as HTMLButtonElement).click());
+    const comparison = element.querySelector('.stake-comparison')!;
+    expect(comparison.textContent).toContain('0.12 SOL more ($8.40)');
+    const selects = comparison.querySelectorAll('select');
+    await act(() => { selects[0].value = 'OtherVote'; selects[0].dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(comparison.textContent).toContain('0.04 SOL less ($2.80)');
+    await act(() => { selects[1].value = '6'; selects[1].dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(comparison.textContent).toContain('0.02 SOL less ($1.40)');
+    expect(comparison.querySelector('svg title')?.textContent).toContain('over 6 months');
+    await act(() => root.render(createElement(StakingWorkspace, { ...props, privacy: true })));
+    expect(comparison.querySelector('svg')).toBeNull();
+    expect(comparison.textContent).not.toContain('$1.40');
+    expect(props.onStake).not.toHaveBeenCalled();
+    await act(() => root.render(createElement(StakingWorkspace, { ...props, validators: props.validators.map(item => ({ ...item, estimatedApr: 6 })) })));
+    expect(comparison.textContent).toContain('the same SOL rewards');
+  });
+});

@@ -112,3 +112,42 @@
 .stake-balance-shortcut { background: transparent; border: 0; color: var(--theme-accent); padding: 8px 0; text-align: right; font-size: 11px !important; }
 .stake-balance-shortcut:hover { text-decoration: underline; }
 .stake-max-button { flex-shrink: 0; min-width: 44px; min-height: 44px; border: 0; border-radius: 12px; padding: 8px 10px; background: var(--stake-panel); color: var(--theme-accent); font-size: 12px !important; font-weight: 650; }
+
+.stake-return { min-width: 0; padding: 18px 16px; border: 1px solid var(--theme-divider); border-radius: 18px; background: var(--stake-panel); }
+.stake-return-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.stake-return-heading > span:last-child { font-size: 10px; color: var(--theme-muted); }
+.stake-return-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 22px 0 18px; }
+.stake-return-metrics > div { display: flex; flex-direction: column-reverse; gap: 8px; padding: 0 10px; border-left: 1px solid var(--theme-divider); text-align: center; min-width: 0; }
+.stake-return-metrics > div:first-child { padding-left: 0; border-left: 0; }
+.stake-return-metrics > div:last-child { padding-right: 0; }
+.stake-return-metrics dt { color: var(--theme-muted); font-size: 11px; }
+.stake-return-metrics dd { margin: 0; font-size: clamp(16px, 3vw, 23px); font-weight: 650; letter-spacing: -.5px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.stake-return-rate { color: var(--theme-success, #66ce8a); }
+.stake-return-method { margin-top: 12px; color: var(--theme-muted); font-size: 11px; }
+.stake-return-method summary { display: flex; gap: 6px; align-items: center; cursor: pointer; list-style: none; }
+.stake-return-method summary > svg:last-child { margin-left: auto; }
+.stake-return-method p { line-height: 1.6; margin: 12px 0; }
+.stake-return-method small { font-size: 10px; }
+.stake-validator-detail + .stake-return { margin-top: 18px; }
+.stake-comparison { border: 1px solid var(--theme-divider); border-radius: 18px; background: var(--stake-panel); min-width: 0; }
+.stake-comparison > summary { display: flex; justify-content: space-between; gap: 12px; padding: 18px 16px; cursor: pointer; font-size: 13px; list-style: none; }
+.stake-comparison > summary span { color: var(--theme-accent); }
+.stake-comparison-body { display: grid; gap: 18px; padding: 0 16px 18px; }
+.stake-comparison-controls { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr) 105px; }
+.stake-comparison-controls label { display: grid; gap: 8px; color: var(--theme-muted); font-size: 11px; min-width: 0; }
+.stake-comparison-controls select { width: 100%; min-width: 0; padding: 10px 8px; border-radius: 10px; border: 1px solid var(--theme-input-border); background: var(--theme-input-bg); color: var(--theme-text); font: inherit; font-size: 12px; }
+.stake-comparison-controls select:focus-visible { outline: 2px solid var(--theme-accent); outline-offset: 3px; }
+.stake-comparison-difference { margin: 0; font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
+.stake-comparison-difference strong { font-weight: 650; }
+.stake-comparison-legend { display: grid; gap: 10px; margin: 0; font-size: 11px; }
+.stake-comparison-legend > div { display: flex; justify-content: space-between; gap: 12px; }
+.stake-comparison-legend dt { color: var(--theme-muted); overflow-wrap: anywhere; }
+.stake-comparison-legend dd { margin: 0; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.stake-comparison-legend i { display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: var(--theme-accent); }
+.stake-comparison-legend > div:last-child i { background: var(--theme-muted); }
+.stake-comparison-chart { display: block; width: 100%; height: auto; overflow: visible; }
+.stake-comparison-chart text { fill: var(--theme-muted); font-size: 10px; }
+.stake-chart-grid { stroke: var(--theme-divider); stroke-width: 1; }
+.stake-chart-selected, .stake-chart-other { fill: none; stroke: var(--theme-accent); stroke-width: 2.5; }
+.stake-chart-other { stroke: var(--theme-muted); stroke-dasharray: 5 3; }
+@media (max-width: 360px) { .stake-comparison-controls { grid-template-columns: minmax(0, 1fr); } }

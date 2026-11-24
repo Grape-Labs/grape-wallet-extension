@@ -53,3 +53,10 @@ export function stakeWithdrawalMax(lamports: number): string | null {
   const fraction = (value % 1_000_000_000n).toString().padStart(9, '0').replace(/0+$/, '');
   return `${value / 1_000_000_000n}${fraction ? `.${fraction}` : ''}`;
 }
+
+/** Inflation-only annual rate; excludes compounding, MEV and validator performance. */
+export function estimateStakeApr(inflation: number, supply: number, activeStake: number, commission: number): number | null {
+  if (![inflation, supply, activeStake, commission].every(Number.isFinite) || inflation < 0 || inflation > 1 || supply <= 0 || activeStake <= 0 || activeStake > supply || commission < 0 || commission > 100) return null;
+  const apr = inflation * (supply / activeStake) * (1 - commission / 100) * 100;
+  return Number.isFinite(apr) && apr <= 100 ? apr : null;
+}

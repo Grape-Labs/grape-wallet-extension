@@ -495,6 +495,8 @@ export type WalletStakeAccountsResponse = {
 };
 
 export type StakeValidatorRow = {
+  estimatedApr?: number | null;
+  yieldUpdatedAt?: number;
   voteAccount: string;
   nodePubkey: string;
   name?: string | null;

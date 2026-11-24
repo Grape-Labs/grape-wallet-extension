@@ -1,3 +1,5 @@
+import { pacedRpcFetch } from './rpc-fetch';
+import { estimateStakeApr } from '@grape/core';
 import { inspectNftReport } from './nft-report';
 import { FoxMissionReminders } from './fox-mission-reminders';
 import { buildFoxMission, inspectFoxMission, assertFoxReviewContext } from './fox-missions';
@@ -5,7 +7,7 @@ import { redactRpcDetails } from '@grape/core';
 import { PrivacyRingsReviews } from './privacy-rings';
 import { privacyRpcUrl, readPrivacyWallet, signPrivacyTransaction, privacyRateLimitMessage } from '@grape/solana/privacy';
 import { fetchNftMarketData } from './nft-market-data';
-import { discoverStakeAccountsByAuthority } from './stake-discovery';
+import { loadStakeAccounts } from './stake-discovery';
 import { buildTensorTransaction, inspectTensorNft } from './tensor-marketplace';
 import { getBase58Decoder } from '@solana/web3-v2';
 import { describeGovernanceVote } from '../../../../packages/solana/src/governanceVote';
@@ -256,7 +258,6 @@ import { summarizeLifiSwapQuote, type LifiQuoteResponse, fetchLifiSwapQuote, fet
 import { getRpcEndpoint, getPrivacyRpcEndpoint } from '../shared/rpc';
 import {
   fetchShyftCollections,
-  fetchShyftStakeAccounts,
   fetchShyftTransactionHistory,
   fetchShyftWalletTokens,
   hasShyftApiKey
@@ -348,7 +349,6 @@ const INCIDENT_BATCH_SIZE = 6;
 const ASSET_CACHE_TTL_MS = 45_000;
 const TOKEN_METADATA_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const REPUTATION_CACHE_TTL_MS = 120_000;
-const STAKE_RETRY_ATTEMPTS = 3;
 const DEVICE_LINK_TTL_MS = 10 * 60 * 1000;
 const DEVICE_LINK_KDF_ITERATIONS = 20_000;
 const NON_STRICT_IDLE_TIMEOUT_MS = 30 * 24 * 60 * 60 * 1000;
@@ -536,7 +536,7 @@ class WalletController {
         const pendingKey = `grape:privacy:${input.network}:pending:${input.owner}`;
         const pending = (await chrome.storage.local.get(pendingKey))[pendingKey] as { signature: string } | undefined;
         if (!pending) return snapshot;
-        const status = (await new Connection(endpoint, 'confirmed').getSignatureStatuses([pending.signature], { searchTransactionHistory: true })).value[0];
+        const status = (await new Connection(endpoint, { commitment: 'confirmed', fetch: pacedRpcFetch, disableRetryOnRateLimit: true }).getSignatureStatuses([pending.signature], { searchTransactionHistory: true })).value[0];
         return { ...snapshot, submission: { signature: pending.signature, status: status?.err ? 'failed' : status?.confirmationStatus === 'confirmed' || status?.confirmationStatus === 'finalized' ? 'confirmed' : 'unknown' } };
       }
       if (input.operation === 'prepare') {
@@ -676,7 +676,7 @@ class WalletController {
     network: 'mainnet-beta' | 'devnet',
     walletState: Awaited<ReturnType<WalletController['getWalletState']>>
   ) {
-    return new Connection(this.resolveRpcEndpoint(network, walletState), 'confirmed');
+    return new Connection(this.resolveRpcEndpoint(network, walletState), { commitment: 'confirmed', fetch: pacedRpcFetch, disableRetryOnRateLimit: true });
   }
 
   private ensureResolvedSolanaDomainRecipient(domain: string, publicKey: PublicKey) {
@@ -3656,22 +3656,6 @@ class WalletController {
       };
     }
 
-    if (hasShyftApiKey()) {
-      try {
-        const shyftAccounts = await fetchShyftStakeAccounts(walletState.selectedNetwork, activeAccount.publicKey);
-        if (shyftAccounts.length > 0) {
-          return {
-            accounts: shyftAccounts,
-            source: 'shyft' as const,
-            network: walletState.selectedNetwork,
-            refreshedAt: Date.now()
-          };
-        }
-      } catch {
-        // Fall through to RPC discovery.
-      }
-    }
-
     const connection = this.createConnection(walletState.selectedNetwork, walletState);
     const authority = tryParseSolanaPublicKey(activeAccount.publicKey);
     if (!authority) {
@@ -3682,133 +3666,10 @@ class WalletController {
         refreshedAt: Date.now()
       };
     }
-    const getProgramAccountsByAuthority = async (offset: number) => {
-      let lastError: unknown = null;
-      let discoveryConnection = connection;
-      const fallbackEndpoint = walletState.selectedNetwork === 'devnet'
-        ? 'https://api.devnet.solana.com'
-        : 'https://api.mainnet-beta.solana.com';
-
-      for (let attempt = 1; attempt <= STAKE_RETRY_ATTEMPTS; attempt += 1) {
-        try {
-          return await discoveryConnection.getProgramAccounts(StakeProgram.programId, {
-            commitment: 'confirmed',
-            encoding: 'base64',
-            dataSlice: {
-              offset: 0,
-              length: 0
-            },
-            filters: [
-              { dataSize: StakeProgram.space },
-              { memcmp: { offset, bytes: authority.toBase58() } }
-            ]
-          });
-        } catch (error) {
-          lastError = error;
-          // Indexed providers may support staker (12) but not withdrawer (44).
-          // Retry only the rejected lookup against the standard RPC, retaining
-          // both authority checks so withdraw-only accounts are not omitted.
-          if (discoveryConnection === connection && connection.rpcEndpoint !== fallbackEndpoint &&
-              (isLikelyRetryableRpcError(error) || /invalid params|index.*not supported|excluded.*index/i.test(String(error)))) {
-            discoveryConnection = new Connection(fallbackEndpoint, { commitment: 'confirmed', disableRetryOnRateLimit: true });
-            attempt -= 1;
-            continue;
-          }
-          if (!isLikelyRetryableRpcError(error) || attempt === STAKE_RETRY_ATTEMPTS) {
-            throw new Error('Stake account discovery is temporarily unavailable on the RPC providers. Refresh to try again, or choose another Solana RPC in Settings.');
-          }
-          await delay(250 * attempt);
-        }
-      }
-
-      throw lastError;
-    };
-
-    const discovery = await discoverStakeAccountsByAuthority(getProgramAccountsByAuthority);
-
-    const rowsByAddress = new Map<string, StakeAccountRow>();
-    discovery.accounts.forEach((entry) => {
-      const address = entry.pubkey.toBase58();
-      const current = rowsByAddress.get(address);
-      rowsByAddress.set(address, {
-        address,
-        lamports: Math.max(current?.lamports ?? 0, entry.account.lamports),
-        state: 'unknown',
-        delegatedLamports: 0,
-        voter: null,
-        staker: null,
-        withdrawer: null
-      });
-    });
-
-    const baseRows = Array.from(rowsByAddress.values());
-    const enrichedRows = [...baseRows];
-    const chunkSize = 8;
-
-    for (let startIndex = 0; startIndex < enrichedRows.length; startIndex += chunkSize) {
-      const chunkRows = enrichedRows.slice(startIndex, startIndex + chunkSize);
-      const chunkResponses = await Promise.allSettled(
-        chunkRows.map(async (row) => {
-          let accountInfo: Awaited<ReturnType<typeof connection.getParsedAccountInfo>> | null = null;
-          let lastError: unknown = null;
-          for (let attempt = 1; attempt <= STAKE_RETRY_ATTEMPTS; attempt += 1) {
-            try {
-              accountInfo = await connection.getParsedAccountInfo(new PublicKey(row.address), 'confirmed');
-              break;
-            } catch (error) {
-              lastError = error;
-              if (!isLikelyRetryableRpcError(error) || attempt === STAKE_RETRY_ATTEMPTS) {
-                throw error;
-              }
-              await delay(200 * attempt);
-            }
-          }
-          if (!accountInfo) {
-            throw lastError instanceof Error ? lastError : new Error('Unable to load parsed stake account info.');
-          }
-          if (!accountInfo.value) {
-            return null;
-          }
-          const parsedData = accountInfo.value.data as ParsedAccountData;
-          const parsedInfo = parsedData.parsed.info as {
-            meta?: { authorized?: { staker?: string; withdrawer?: string } };
-            stake?: { delegation?: { stake?: string; voter?: string; deactivationEpoch?: string } };
-          };
-
-          return {
-            address: row.address,
-            state: parsedData.parsed.type ?? row.state,
-            delegatedLamports: Number(parsedInfo.stake?.delegation?.stake ?? '0'),
-            deactivationEpoch: parsedInfo.stake?.delegation?.deactivationEpoch ?? null,
-            voter: parsedInfo.stake?.delegation?.voter ?? null,
-            staker: parsedInfo.meta?.authorized?.staker ?? null,
-            withdrawer: parsedInfo.meta?.authorized?.withdrawer ?? null
-          };
-        })
-      );
-
-      chunkResponses.forEach((response, index) => {
-        if (response.status !== 'fulfilled' || !response.value) {
-          return;
-        }
-        const target = enrichedRows.find((candidate) => candidate.address === chunkRows[index]?.address);
-        if (!target) {
-          return;
-        }
-        target.state = response.value.state;
-        target.delegatedLamports = response.value.delegatedLamports;
-        target.deactivationEpoch = response.value.deactivationEpoch;
-        target.voter = response.value.voter;
-        target.staker = response.value.staker;
-        target.withdrawer = response.value.withdrawer;
-      });
-    }
-
-    enrichedRows.sort((left, right) => right.lamports - left.lamports);
+    const result = await loadStakeAccounts(connection, authority);
     return {
-      accounts: enrichedRows,
-      warnings: discovery.warnings,
-      source: enrichedRows.length > 0 ? ('rpc' as const) : ('none' as const),
+      ...result,
+      source: 'rpc' as const,
       network: walletState.selectedNetwork,
       refreshedAt: Date.now()
     };
@@ -3826,7 +3687,12 @@ class WalletController {
     }
 
     const connection = this.createConnection(walletState.selectedNetwork, walletState);
-    const voteAccounts = await connection.getVoteAccounts('confirmed');
+    const [voteAccounts, yieldInputs] = await Promise.all([
+      connection.getVoteAccounts('confirmed'),
+      Promise.all([connection.getInflationRate(), connection.getSupply({ commitment: 'confirmed', excludeNonCirculatingAccountsList: true })]).catch(() => null)
+    ]);
+    const activeStake = [...voteAccounts.current, ...voteAccounts.delinquent].reduce((sum, entry) => sum + Number(entry.activatedStake ?? 0), 0);
+    const yieldUpdatedAt = Date.now();
     const validatorNames = new Map<string, string>();
 
     try {
@@ -3860,6 +3726,8 @@ class WalletController {
         nodePubkey: entry.nodePubkey,
         name: validatorNames.get(entry.nodePubkey) ?? null,
         commission: entry.commission,
+        estimatedApr: yieldInputs ? estimateStakeApr(yieldInputs[0].validator, yieldInputs[1].value.total, activeStake, entry.commission) : null,
+        yieldUpdatedAt,
         activatedStakeLamports: Number(entry.activatedStake ?? 0),
         lastVote: entry.lastVote,
         rootSlot: entry.lastVote
@@ -5325,7 +5193,7 @@ class WalletController {
     const walletState = await this.getWalletState();
     if (!walletState.wallets.some(w => w.chain === 'solana' && w.accounts.some(a => a.publicKey === owner))) return null;
     const connection = this.createConnection('mainnet-beta', walletState);
-    const status = (await inspectFoxMission(connection, owner, mint)).status;
+    const status = (await inspectFoxMission(connection, owner, mint, { includePowerups: false })).status;
     const key = 'grape:fox:mainnet:' + owner;
     const saved = (await chrome.storage.local.get(key))[key]?.[mint];
     if (saved?.signature) {
@@ -5352,7 +5220,7 @@ class WalletController {
       return savedStatus.value;
     }
     const { connection } = await this.tensorContext(owner);
-    const result = (await inspectFoxMission(connection, owner, mint)).status;
+    const result = (await inspectFoxMission(connection, owner, mint, { includePowerups: !cached })).status;
     const saved = (await chrome.storage.local.get('grape:fox:mainnet:' + owner))['grape:fox:mainnet:' + owner] ?? {};
     const previous = saved[mint];
     if (previous?.signature) {
@@ -5367,19 +5235,19 @@ class WalletController {
     this.foxStatusCache.set(cacheKey, { expires: Date.now() + 30_000, value: result });
     return result;
   }
-  async foxPreview(input: { owner: string; mint: string; action: 'start' | 'claim' }) {
+  async foxPreview(input: { owner: string; mint: string; action: 'start' | 'claim'; powerupMint?: string }) {
     const { connection, selectedWallet } = await this.tensorContext(input.owner);
     this.assertInteractiveWallet(selectedWallet);
     const epoch = this.foxEpoch;
     const status = await this.foxStatus(input.mint, input.owner);
     if (status.pending) throw new Error('A mission transaction is still pending.');
-    const built = await buildFoxMission(connection, input.owner, input.mint, input.action);
+    const built = await buildFoxMission(connection, input.owner, input.mint, input.action, input.powerupMint);
     await this.tensorContext(input.owner);
     if (epoch !== this.foxEpoch) throw new Error('Wallet session changed. Review again.');
     for (const [id, review] of this.foxPreviews) if (review.expiresAt < Date.now()) this.foxPreviews.delete(id);
     const id = crypto.randomUUID(), expiresAt = Date.now() + 45_000;
     this.foxPreviews.set(id, { ...built, ...input, walletId: selectedWallet.id, expiresAt, epoch, rpc: connection.rpcEndpoint });
-    return { id, ...input, mission: built.status.mission!.address, missionName: built.status.mission!.name, endsAt: built.status.mission!.endsAt, networkFeeLamports: built.networkFeeLamports, estimatedDebitLamports: built.estimatedDebitLamports, expiresAt };
+    return { id, ...input, powerup: built.powerup, mission: built.status.mission!.address, missionName: built.status.mission!.name, endsAt: built.status.mission!.endsAt, networkFeeLamports: built.networkFeeLamports, estimatedDebitLamports: built.estimatedDebitLamports, expiresAt };
   }
   async foxExecute(input: { owner: string; previewId: string; password?: string }) {
     const review = this.foxPreviews.get(input.previewId);

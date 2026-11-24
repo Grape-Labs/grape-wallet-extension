@@ -31,3 +31,7 @@
 .fox-gallery-status > span { display: flex; align-items: center; gap: 6px; }
 .fox-gallery-status small { font-size: 10px; }
 .fox-gallery-active { color: var(--theme-accent); }
+
+.fox-powerup-select { display: grid; gap: 8px; margin: 12px 0; }
+.fox-powerup-select select { width: 100%; min-width: 0; padding: 10px; border: 1px solid var(--border-color, #494256); border-radius: 8px; background: var(--bg-secondary, #211c2c); color: inherit; }
+.fox-powerup-select small { opacity: .75; }

@@ -113,3 +113,36 @@ describe('Shyft stake account responses', () => {
     expect(accounts[0].delegatedLamports).toBe(1000000000);
   });
 });
+
+describe('Shyft backend stake lookup failures', () => {
+  afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.useRealTimers(); });
+  it('falls through once, then skips the broken endpoint until cooldown expires', async () => {
+    vi.useFakeTimers();
+    vi.stubEnv('VITE_GRAPE_SHYFT_API_KEY', 'stake-backend-failure-test');
+    const fetcher = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ success: false, error: 'failed to get accounts owned by program Stake11111111111111111111111111111111111111: Invalid params' }), { status: 400 })).mockImplementation(async () => new Response(JSON.stringify({ success: true, result: { data: [] } })));
+    vi.stubGlobal('fetch', fetcher);
+    await expect(fetchShyftStakeAccounts('mainnet-beta', 'wallet-one')).rejects.toThrow('400');
+    await expect(fetchShyftStakeAccounts('mainnet-beta', 'wallet-two')).rejects.toThrow('Using RPC discovery');
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    // Other networks and other Shyft APIs remain usable.
+    await expect(fetchShyftStakeAccounts('devnet', 'wallet-one')).resolves.toEqual([]);
+    await expect(fetchShyftCollections('mainnet-beta', 'wallet-one')).resolves.toEqual([]);
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    await expect(fetchShyftStakeAccounts('mainnet-beta', 'wallet-one')).resolves.toEqual([]);
+    expect(fetcher).toHaveBeenCalledTimes(4);
+  });
+  it('does not mistake a rejected successful-HTTP response for an empty wallet', async () => {
+    vi.stubEnv('VITE_GRAPE_SHYFT_API_KEY', 'stake-logical-error-test');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ success: false, error: 'failed to get accounts owned by program Stake11111111111111111111111111111111111111: Invalid params' }))));
+    await expect(fetchShyftStakeAccounts('mainnet-beta', 'wallet')).rejects.toThrow();
+    await expect(fetchShyftStakeAccounts('mainnet-beta', 'wallet')).rejects.toThrow('Using RPC discovery');
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+  it('does not disable stake discovery for unrelated bad requests', async () => {
+    vi.stubEnv('VITE_GRAPE_SHYFT_API_KEY', 'stake-unrelated-error-test');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ success: false, error: 'Invalid wallet address' }), { status: 400 })));
+    await expect(fetchShyftStakeAccounts('mainnet-beta', 'bad-wallet')).rejects.toThrow('400');
+    await expect(fetchShyftStakeAccounts('mainnet-beta', 'another-wallet')).rejects.toThrow('400');
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+});

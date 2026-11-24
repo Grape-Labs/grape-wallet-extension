@@ -1,6 +1,6 @@
 import { Connection, PublicKey, Keypair, Transaction, TransactionInstruction, ComputeBudgetProgram, VersionedTransaction, SystemProgram, SYSVAR_RENT_PUBKEY, SYSVAR_INSTRUCTIONS_PUBKEY, SYSVAR_CLOCK_PUBKEY, type AccountInfo } from '@solana/web3.js';
 import { getMetadataAccountDataSerializer } from '@metaplex-foundation/mpl-token-metadata';
-import { FOX_COLLECTIONS, type FoxMissionStatus } from '../shared/fox-missions';
+import { FOX_COLLECTIONS, FOX_POWERUPS, type FoxMissionStatus } from '../shared/fox-missions';
 import idl from './fox-missions-interface.json';
 
 export const FOX_PROGRAM = new PublicKey('6NcdQ5WTnrPoMLbP4kvpLYa4YSwKqkNHRRE8XVf5hmv9');
@@ -59,7 +59,7 @@ export function missionWindow(mission: Record<string, any>, now: number) {
   if (![opensAt, closesAt, endsAt, now].every(Number.isSafeInteger) || opensAt >= closesAt || closesAt > endsAt) throw new Error('Invalid mission timing.');
   return { opensAt, closesAt, endsAt, accepting: !mission.end && now >= opensAt && now < closesAt, complete: now >= endsAt };
 }
-export async function inspectFoxMission(connection: Connection, ownerString: string, mintString: string) {
+export async function inspectFoxMission(connection: Connection, ownerString: string, mintString: string, { includePowerups = true } = {}) {
   const owner = new PublicKey(ownerString), mint = new PublicKey(mintString), foxAddress = pda(mint, 'fox')[0];
   const [programInfo, mintInfo, metadataInfo, foxInfo, clock] = await connection.getMultipleAccountsInfo([FOX_PROGRAM, mint, metadataPda(mint), foxAddress, SYSVAR_CLOCK_PUBKEY], 'confirmed');
   if (!programInfo?.executable || !clock || clock.data.length < 40) throw new Error('Famous Fox program or chain clock unavailable.');
@@ -102,7 +102,7 @@ export async function inspectFoxMission(connection: Connection, ownerString: str
     const missionAccount = await decodeFoxAccount('missionAccount', await connection.getAccountInfo(account, 'confirmed'));
     if (!missionAccount || !missionAccount.owner.equals(owner) || !missionAccount.mission.equals(missionAddress) || !missionAccount.started || missionAccount.ended) throw new Error('Invalid active Fox mission account.');
     status.state = window.complete ? 'claimable' : 'locked';
-    const solo = missionAccount.count === 1n && missionAccount.denMint.equals(PublicKey.default) && missionAccount.consumable.equals(PublicKey.default) && missionAccount.partnerMint.equals(PublicKey.default) && !missionAccount.denRoom;
+    const solo = missionAccount.count === 1n && missionAccount.denMint.equals(PublicKey.default) && missionAccount.partnerMint.equals(PublicKey.default) && !missionAccount.denRoom;
     status.canClaim = window.complete && solo && missionAccount.rareChestCount === 0 && mission.reward.equals(CHEST);
     if (missionAccount.rareChestCount > 0 || !mission.reward.equals(CHEST)) status.reason = 'This mission includes special rewards. Claim the Fox and rewards on Famous Foxes.';
     if (!solo) status.reason = 'This Fox belongs to a squad with other assets. Claim the complete squad on Famous Foxes.';
@@ -113,11 +113,20 @@ export async function inspectFoxMission(connection: Connection, ownerString: str
   else if (!window.accepting) status.reason = window.complete ? 'This mission has ended. Check back for the next entry window.' : now < window.opensAt ? 'Mission entries have not opened yet.' : 'The entry window is closed. Check back for the next weekly mission.';
   else if (mission.needother || mission.xp > (fox?.xp ?? 0n) || (mission.maxxp > 0n && (fox?.xp ?? 0n) >= mission.maxxp)) status.reason = 'This mission has requirements not supported by the single-Fox flow.';
   else status.canStart = true;
+  if (status.canStart && includePowerups) {
+    status.powerups = await Promise.all(FOX_POWERUPS.map(async boost => {
+      const accounts = await connection.getParsedTokenAccountsByOwner(owner, { mint: new PublicKey(boost.mint) }, 'confirmed');
+      const balance = accounts.value.filter(a => a.pubkey.equals(ata(owner, new PublicKey(boost.mint))) && a.account.owner.equals(TOKEN) && a.account.data.parsed.info.owner === ownerString && a.account.data.parsed.info.mint === boost.mint && a.account.data.parsed.info.state === 'initialized' && !a.account.data.parsed.info.delegate).reduce((sum, a) => sum + BigInt(a.account.data.parsed.info.tokenAmount.amount), 0n);
+      return { ...boost, balance: balance.toString() };
+    }));
+  }
   return base;
 }
-export async function buildFoxMission(connection: Connection, owner: string, mint: string, action: 'start' | 'claim') {
+export async function buildFoxMission(connection: Connection, owner: string, mint: string, action: 'start' | 'claim', powerupMint?: string) {
   const inspected = await inspectFoxMission(connection, owner, mint);
   if (!('tokenAddress' in inspected) || !inspected.status.mission || !(action === 'start' ? inspected.status.canStart : inspected.status.canClaim)) throw new Error(inspected.status.reason || 'This mission action is not available.');
+  const powerup = powerupMint ? inspected.status.powerups?.find(p => p.mint === powerupMint && BigInt(p.balance) > 0n) : undefined;
+  if (powerupMint && (action !== 'start' || !powerup)) throw new Error('Selected powerup is unavailable in this wallet.');
   const x = inspected, ixs: TransactionInstruction[] = [];
   const common: Record<string, PublicKey | undefined> = { mission: x.missionAddress, authority: pda(x.missionAddress, 'auth', x.owner)[0], fox: x.foxAddress, owner: x.owner, fromAccount: x.tokenAddress, toAccount: x.tokenAddress, mint: x.mint, metaplexAcc: META, masterEdition: metadataPda(x.mint, Buffer.from('edition')), metadata: metadataPda(x.mint), tokenProgram: TOKEN, systemProgram: SystemProgram.programId, rent: SYSVAR_RENT_PUBKEY, sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY, foxUpgrade: pda(x.mint, 'upgrade')[0], ownerTokenRecord: x.programmable ? metadataPda(x.mint, Buffer.from('token_record'), x.tokenAddress.toBuffer()) : undefined, rulesAcc: x.rules ? new PublicKey(x.rules) : undefined, authRules: x.programmable ? RULES : undefined };
   if (action === 'start') {
@@ -130,6 +139,7 @@ export async function buildFoxMission(connection: Connection, owner: string, min
     const args = Buffer.alloc(3); args[0] = bump; args.writeUInt16LE(index, 1);
     ixs.push(await instruction('initMissionAccount', { ...common, key, missionAccount: account }, args));
     ixs.push(await instruction('startMission', { ...common, missionAccount: account }, Buffer.from([pda(x.missionAddress, 'auth', x.owner)[1]])));
+    if (powerup) { const room = new PublicKey(powerup.mint); ixs.push(await instruction('startMissionRoom', { ...common, missionAccount: account, room, fromAccount: ata(x.owner, room) }, Buffer.from([pda(x.missionAddress, 'auth', x.owner)[1]]))); }
   } else {
     if (!('activeAccount' in x) || !x.activeAccount || !x.missionAccount) throw new Error('No claimable mission account.');
     ixs.push(await instruction('endMissionV3', { ...common, missionAccount: x.activeAccount }));
@@ -146,7 +156,7 @@ export async function buildFoxMission(connection: Connection, owner: string, min
   const [fee, balance, simulation] = await Promise.all([connection.getFeeForMessage(transaction.compileMessage(), 'confirmed'), connection.getBalance(x.owner, 'confirmed'), connection.simulateTransaction(new VersionedTransaction(transaction.compileMessage()), { sigVerify: false, commitment: 'confirmed', accounts: { encoding: 'base64', addresses: [owner] } })]);
   if (simulation.value.err) throw new Error(`Mission simulation failed (${JSON.stringify(simulation.value.err)}). No transaction was sent. Refresh or use Famous Foxes.`);
   if (fee.value == null || !simulation.value.accounts?.[0]) throw new Error('Unable to estimate mission fees.');
-  return { transaction, lifetime, status: x.status, networkFeeLamports: fee.value, estimatedDebitLamports: Math.max(0, balance - simulation.value.accounts[0].lamports) };
+  return { transaction, lifetime, powerup, status: x.status, networkFeeLamports: fee.value, estimatedDebitLamports: Math.max(0, balance - simulation.value.accounts[0].lamports) };
 }
 
 /** Keep signing bound to the exact wallet session and RPC reviewed by the user. */

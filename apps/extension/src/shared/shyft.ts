@@ -28,6 +28,7 @@ type ShyftWalletTokenEntry = {
 type ShyftResponse = {
   success?: boolean;
   message?: string;
+  error?: string;
   result?: unknown;
 };
 
@@ -184,6 +185,18 @@ function delay(ms: number) {
   });
 }
 
+function isStakeLookupFailure(payload: ShyftResponse): boolean {
+  if (!payload || typeof payload !== 'object') return false;
+  const message = typeof payload.error === 'string' ? payload.error : payload.message;
+  return typeof message === 'string' && message.includes('Stake11111111111111111111111111111111111111') && /invalid params/i.test(message);
+}
+class ShyftHttpError extends Error {
+  constructor(readonly status: number, readonly stakeLookupFailed: boolean) {
+    super(`Shyft request failed with ${status}.`);
+  }
+}
+const stakeLookupCooldown = new Map<string, number>();
+
 async function fetchShyftJsonWithRetry(url: URL, init?: RequestInit, maxAttempts = 3): Promise<ShyftResponse> {
   let lastStatus: number | null = null;
 
@@ -196,7 +209,9 @@ async function fetchShyftJsonWithRetry(url: URL, init?: RequestInit, maxAttempts
 
     lastStatus = response.status;
     if (!SHYFT_RETRYABLE_STATUS_CODES.has(response.status) || attempt === maxAttempts) {
-      throw new Error(`Shyft request failed with ${response.status}.`);
+      // Keep provider details internal: responses can contain request credentials.
+      const payload = await response.json().catch(() => ({})) as ShyftResponse;
+      throw new ShyftHttpError(response.status, isStakeLookupFailure(payload));
     }
 
     await delay(250 * attempt);
@@ -646,7 +661,19 @@ export async function fetchShyftCollections(
     .sort((left, right) => right.itemCount - left.itemCount);
 }
 
-export async function fetchShyftStakeAccounts(
+/** A rejected backend Stake Program query affects every wallet on that network. */
+export async function fetchShyftStakeAccounts(network: 'mainnet-beta' | 'devnet', walletAddress: string): Promise<ShyftStakeAccount[]> {
+  const key = `${network}:${getShyftApiKey() ?? ''}`;
+  if ((stakeLookupCooldown.get(key) ?? 0) > Date.now()) throw new Error('Shyft stake discovery is temporarily unavailable. Using RPC discovery.');
+  try {
+    return await fetchShyftStakeAccountPages(network, walletAddress);
+  } catch (error) {
+    if (error instanceof ShyftHttpError && error.stakeLookupFailed) stakeLookupCooldown.set(key, Date.now() + 5 * 60_000);
+    throw error;
+  }
+}
+
+async function fetchShyftStakeAccountPages(
   network: 'mainnet-beta' | 'devnet',
   walletAddress: string
 ): Promise<ShyftStakeAccount[]> {
@@ -668,6 +695,9 @@ export async function fetchShyftStakeAccounts(
     const payload = await fetchShyftJsonWithRetry(url, {
       headers: getShyftHeaders()
     });
+    if (payload.success === false) {
+      throw new ShyftHttpError(200, isStakeLookupFailure(payload));
+    }
     const pageItems = Array.isArray(payload.result)
       ? payload.result
       : Array.isArray((payload.result as { data?: unknown } | undefined)?.data)
